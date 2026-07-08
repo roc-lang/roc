@@ -11,68 +11,100 @@ type=expr
 }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:1:15:1:17
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:2:8:2:9
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:2:9:2:10
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_builder.md:3:8:3:9
-UNEXPECTED TOKEN IN EXPRESSION - record_builder.md:3:9:3:10
+UNEXPECTED EXPRESSION SYNTAX - record_builder.md:1:15:1:17
+UNEXPECTED TYPE SYNTAX - record_builder.md:2:8:2:9
+UNEXPECTED EXPRESSION SYNTAX - record_builder.md:2:9:2:10
+UNEXPECTED TYPE SYNTAX - record_builder.md:3:8:3:9
+UNEXPECTED EXPRESSION SYNTAX - record_builder.md:3:9:3:10
 DECLARATION HAS NO VALUE - record_builder.md:2:5:2:9
 DECLARATION HAS NO VALUE - record_builder.md:3:5:3:9
 # PROBLEMS
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token <- is not expected in an ───────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  { Foo.Bar.baz <-                                                          │
  │                ‾‾                                                          │
  └──────────────────────────────────────────────────── record_builder.md:1:15 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `<-` here.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 5 is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  x: 5,                                                                     │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── record_builder.md:2:8 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `5` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  x: 5,                                                                     │
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── record_builder.md:2:9 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 0 is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  y: 0,                                                                     │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── record_builder.md:3:8 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `0` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  y: 0,                                                                     │
  │      ‾                                                                     │
  └───────────────────────────────────────────────────── record_builder.md:3:9 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
 ┌──────────────────────────┐

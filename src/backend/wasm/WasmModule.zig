@@ -1261,6 +1261,16 @@ pub const BuiltinSymbols = struct {
     i64_mod_by: u32, // roc_builtins_i64_mod_by
     u64_mod_by: u32, // roc_builtins_u64_mod_by
 
+    // --- Crypto ---
+    crypto_sha256_hash_bytes: u32, // roc_builtins_crypto_sha256_hash_bytes
+    crypto_sha256_hasher_empty: u32, // roc_builtins_crypto_sha256_hasher_empty
+    crypto_sha256_hasher_write: u32, // roc_builtins_crypto_sha256_hasher_write
+    crypto_sha256_hasher_finish: u32, // roc_builtins_crypto_sha256_hasher_finish
+    crypto_blake3_hash_bytes: u32, // roc_builtins_crypto_blake3_hash_bytes
+    crypto_blake3_hasher_empty: u32, // roc_builtins_crypto_blake3_hasher_empty
+    crypto_blake3_hasher_write: u32, // roc_builtins_crypto_blake3_hasher_write
+    crypto_blake3_hasher_finish: u32, // roc_builtins_crypto_blake3_hasher_finish
+
     /// Name → field mapping used by `populate` to fill this struct.
     const mapping = .{
         .{ "roc_builtins_dec_mul", "dec_mul" },
@@ -1319,6 +1329,14 @@ pub const BuiltinSymbols = struct {
         .{ "roc_builtins_u32_mod_by", "u32_mod_by" },
         .{ "roc_builtins_i64_mod_by", "i64_mod_by" },
         .{ "roc_builtins_u64_mod_by", "u64_mod_by" },
+        .{ "roc_builtins_crypto_sha256_hash_bytes", "crypto_sha256_hash_bytes" },
+        .{ "roc_builtins_crypto_sha256_hasher_empty", "crypto_sha256_hasher_empty" },
+        .{ "roc_builtins_crypto_sha256_hasher_write", "crypto_sha256_hasher_write" },
+        .{ "roc_builtins_crypto_sha256_hasher_finish", "crypto_sha256_hasher_finish" },
+        .{ "roc_builtins_crypto_blake3_hash_bytes", "crypto_blake3_hash_bytes" },
+        .{ "roc_builtins_crypto_blake3_hasher_empty", "crypto_blake3_hasher_empty" },
+        .{ "roc_builtins_crypto_blake3_hasher_write", "crypto_blake3_hasher_write" },
+        .{ "roc_builtins_crypto_blake3_hasher_finish", "crypto_blake3_hasher_finish" },
     };
 
     pub const PopulateError = error{MissingBuiltinSymbol};

@@ -99,7 +99,7 @@ fn handleRocAccessViolation(fault_addr: usize, _: base.signal_handler.AccessViol
         _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
     } else {
-        // POSIX (and WASI fallback)
+        // POSIX and WASI signal reporting
         const msg = "\nSegmentation fault (SIGSEGV) in this Roc program.\nFault address: ";
         std.debug.print("{s}", .{msg});
 
@@ -386,7 +386,7 @@ const ModuleTypeInfoRoc = extern struct {
 };
 
 /// ProvidesEntry := { ffi_symbol : Str, name : Str, type_id : U64 }
-/// Fields ordered by alignment descending, then alphabetically
+/// Field order matches src/glue/platform/ProvidesEntry.roc as compiled by Roc.
 const ProvidesEntry = extern struct {
     ffi_symbol: RocStr,
     name: RocStr,
@@ -394,13 +394,13 @@ const ProvidesEntry = extern struct {
 };
 
 /// Types opaque type internals (matches Types.roc)
-/// Fields ordered by alignment descending, then alphabetically
-/// Types record: { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), type_table : List(TypeRepr) }
+/// Types record: { entrypoints : List(EntryPoint), modules : List(ModuleTypeInfo), provides_entries : List(ProvidesEntry), types : List(TypeInfo) }
+/// Field order matches src/glue/platform/Types.roc as compiled by Roc.
 const TypesInner = extern struct {
     entrypoints: RocList, // List({ name : Str, type_id : U64 })
     modules: RocList, // List(ModuleTypeInfo)
     provides_entries: RocList, // List(ProvidesEntry)
-    type_table: RocList, // List(TypeRepr)
+    types: RocList, // List(TypeInfo)
 };
 
 /// Result (List File) Str - Roc Result type
@@ -873,7 +873,7 @@ fn platform_main(args: [][*:0]u8, std_io: std.Io) (Allocator.Error || error{ Mis
         .entrypoints = entrypoints_list,
         .modules = modules_list,
         .provides_entries = provides_list,
-        .type_table = RocList.empty(),
+        .types = RocList.empty(),
     };
 
     // Create a List Types with one element (the Types structure)

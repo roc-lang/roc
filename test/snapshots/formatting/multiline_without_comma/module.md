@@ -13,54 +13,85 @@ a = 'a'
 b = 'a'
 ~~~
 # EXPECTED
-PARSE ERROR - module.md:1:2:1:3
-PARSE ERROR - module.md:1:3:1:4
-PARSE ERROR - module.md:2:2:2:3
-PARSE ERROR - module.md:3:1:3:2
+UNEXPECTED STATEMENT - module.md:1:2:1:3
+UNEXPECTED STATEMENT - module.md:1:3:1:4
+UNEXPECTED STATEMENT - module.md:2:2:2:3
+UNEXPECTED STATEMENT - module.md:3:1:3:2
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────────────── module.md:1:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  a,                                                                        │
  │   ‾                                                                        │
  └───────────────────────────────────────────────────────────── module.md:1:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  b                                                                         │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────────────── module.md:2:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ]                                                                         │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────────────── module.md:3:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 # TOKENS
 ~~~zig

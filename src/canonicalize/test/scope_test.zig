@@ -10,7 +10,9 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 const Scope = @import("../Scope.zig");
 const BuiltinTestContext = @import("./BuiltinTestContext.zig").BuiltinTestContext;
 const Ident = base.Ident;
+const Region = base.Region;
 const Pattern = CIR.Pattern;
+const Statement = CIR.Statement;
 const TypeAnno = CIR.TypeAnno;
 const CoreCtx = @import("ctx").CoreCtx;
 
@@ -47,6 +49,33 @@ const ScopeTestContext = struct {
         ctx.builtin_ctx.deinit();
     }
 };
+
+fn zeroRegion() Region {
+    return .{ .start = Region.Position.zero(), .end = Region.Position.zero() };
+}
+
+fn externalTypeBinding(
+    module_ident: Ident.Idx,
+    original_ident: Ident.Idx,
+) Scope.ExternalTypeBinding {
+    return .{
+        .module_ident = module_ident,
+        .original_ident = original_ident,
+        .target_node_idx = null,
+        .import_idx = null,
+        .origin_region = zeroRegion(),
+        .module_not_found = false,
+    };
+}
+
+fn expectTypeBinding(
+    scope: *const Scope,
+    name: Ident.Idx,
+    expected: Scope.TypeBinding,
+) error{TestExpectedEqual}!void {
+    const actual = scope.type_bindings.get(name) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(expected, actual);
+}
 
 test "basic scope initialization" {
     const gpa = std.testing.allocator;
@@ -281,4 +310,222 @@ test "aliases work separately from idents" {
 
     try std.testing.expectEqual(Scope.LookupResult{ .found = ident_pattern }, ident_lookup);
     try std.testing.expectEqual(Scope.LookupResult{ .found = alias_pattern }, alias_lookup);
+}
+
+test "type binding introduction handles same-scope local conflicts" {
+    const gpa = std.testing.allocator;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    var scopes = [_]Scope{Scope.init(false)};
+    defer scopes[0].deinit(gpa);
+
+    const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
+    const first_stmt: Statement.Idx = @enumFromInt(1);
+    const second_stmt: Statement.Idx = @enumFromInt(2);
+
+    const inserted = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        0,
+        type_ident,
+        Scope.TypeBindingInput{ .local_nominal = first_stmt },
+    );
+    try std.testing.expectEqual(Scope.TypeBindingDecision.inserted, inserted);
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .local_nominal = first_stmt });
+
+    const idempotent = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        0,
+        type_ident,
+        Scope.TypeBindingInput{ .local_nominal = first_stmt },
+    );
+    try std.testing.expectEqual(Scope.TypeBindingDecision.idempotent_current, idempotent);
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .local_nominal = first_stmt });
+
+    const redeclared = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        0,
+        type_ident,
+        Scope.TypeBindingInput{ .local_alias = second_stmt },
+    );
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision{ .redeclared_current = Scope.TypeBinding{ .local_nominal = first_stmt } },
+        redeclared,
+    );
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .local_nominal = first_stmt });
+}
+
+test "type binding introduction reports parent shadowing without changing parent" {
+    const gpa = std.testing.allocator;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    var scopes = [_]Scope{ Scope.init(false), Scope.init(false) };
+    defer {
+        scopes[1].deinit(gpa);
+        scopes[0].deinit(gpa);
+    }
+
+    const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
+    const parent_stmt: Statement.Idx = @enumFromInt(1);
+    const child_stmt: Statement.Idx = @enumFromInt(2);
+
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision.inserted,
+        try Scope.introduceTypeBinding(
+            gpa,
+            scopes[0..],
+            0,
+            type_ident,
+            Scope.TypeBindingInput{ .local_nominal = parent_stmt },
+        ),
+    );
+
+    const child_decision = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        1,
+        type_ident,
+        Scope.TypeBindingInput{ .local_alias = child_stmt },
+    );
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision{ .inserted_shadowing_parent = Scope.TypeBinding{ .local_nominal = parent_stmt } },
+        child_decision,
+    );
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .local_nominal = parent_stmt });
+    try expectTypeBinding(&scopes[1], type_ident, Scope.TypeBinding{ .local_alias = child_stmt });
+}
+
+test "local type bindings replace current external imports" {
+    const gpa = std.testing.allocator;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    var scopes = [_]Scope{Scope.init(false)};
+    defer scopes[0].deinit(gpa);
+
+    const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
+    const module_ident = try ctx.module_env.insertIdent(Ident.for_text("Imported"));
+    const external = externalTypeBinding(module_ident, type_ident);
+    const local_stmt: Statement.Idx = @enumFromInt(1);
+
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision.inserted,
+        try Scope.introduceTypeBinding(
+            gpa,
+            scopes[0..],
+            0,
+            type_ident,
+            Scope.TypeBindingInput{ .external_nominal = external },
+        ),
+    );
+
+    const replaced = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        0,
+        type_ident,
+        Scope.TypeBindingInput{ .local_nominal = local_stmt },
+    );
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision{ .replaced_current_external = external },
+        replaced,
+    );
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .local_nominal = local_stmt });
+}
+
+test "external type bindings are idempotent only for the same imported type" {
+    const gpa = std.testing.allocator;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    var scopes = [_]Scope{Scope.init(false)};
+    defer scopes[0].deinit(gpa);
+
+    const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
+    const module_ident = try ctx.module_env.insertIdent(Ident.for_text("Imported"));
+    const other_module_ident = try ctx.module_env.insertIdent(Ident.for_text("Other"));
+    const external = externalTypeBinding(module_ident, type_ident);
+    const different_external = externalTypeBinding(other_module_ident, type_ident);
+
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision.inserted,
+        try Scope.introduceTypeBinding(
+            gpa,
+            scopes[0..],
+            0,
+            type_ident,
+            Scope.TypeBindingInput{ .external_nominal = external },
+        ),
+    );
+
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision.idempotent_current,
+        try Scope.introduceTypeBinding(
+            gpa,
+            scopes[0..],
+            0,
+            type_ident,
+            Scope.TypeBindingInput{ .external_nominal = external },
+        ),
+    );
+
+    const rejected = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        0,
+        type_ident,
+        Scope.TypeBindingInput{ .external_nominal = different_external },
+    );
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision{ .rejected_current_conflict = Scope.TypeBinding{ .external_nominal = external } },
+        rejected,
+    );
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .external_nominal = external });
+}
+
+test "associated type aliases do not replace current external imports" {
+    const gpa = std.testing.allocator;
+
+    var ctx = try ScopeTestContext.init(gpa);
+    defer ctx.deinit();
+
+    var scopes = [_]Scope{Scope.init(false)};
+    defer scopes[0].deinit(gpa);
+
+    const type_ident = try ctx.module_env.insertIdent(Ident.for_text("Thing"));
+    const module_ident = try ctx.module_env.insertIdent(Ident.for_text("Imported"));
+    const external = externalTypeBinding(module_ident, type_ident);
+    const associated_stmt: Statement.Idx = @enumFromInt(1);
+
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision.inserted,
+        try Scope.introduceTypeBinding(
+            gpa,
+            scopes[0..],
+            0,
+            type_ident,
+            Scope.TypeBindingInput{ .external_nominal = external },
+        ),
+    );
+
+    const rejected = try Scope.introduceTypeBinding(
+        gpa,
+        scopes[0..],
+        0,
+        type_ident,
+        Scope.TypeBindingInput{ .associated_nominal = associated_stmt },
+    );
+    try std.testing.expectEqual(
+        Scope.TypeBindingDecision{ .redeclared_current = Scope.TypeBinding{ .external_nominal = external } },
+        rejected,
+    );
+    try expectTypeBinding(&scopes[0], type_ident, Scope.TypeBinding{ .external_nominal = external });
 }

@@ -8,32 +8,27 @@ type=snippet
 nums : List U8
 ~~~
 # EXPECTED
-PARSE ERROR - type_annotation_missing_parens.md:2:1:2:1
+TYPE APPLICATION NEEDS PARENTHESES - type_annotation_missing_parens.md:2:1:2:1
 TOO FEW ARGS - type_annotation_missing_parens.md:1:8:1:12
 DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └───────────────────────────────────── type_annotation_missing_parens.md:2:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I reached the end of the file before this construct was complete.
 
 
 ┌──────────────┐

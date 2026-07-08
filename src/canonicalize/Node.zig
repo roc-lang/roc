@@ -257,6 +257,7 @@ pub const Tag = enum {
     diag_unused_variable,
     diag_used_underscore_variable,
     diag_duplicate_record_field,
+    diag_duplicate_tag,
     diag_crash_expects_string,
     diag_f64_pattern_literal,
     diag_unused_type_var_name,
@@ -275,12 +276,17 @@ pub const Tag = enum {
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
-/// This is an extern union of exactly 12 bytes (3 × u32).
+/// This is an extern union of exactly 16 bytes (4 × u32).
 /// Each variant corresponds to a Node.Tag and provides semantic field names.
 ///
 /// IMPORTANT: This must be an extern union to ensure consistent size across debug/release builds.
-/// All variants must be exactly 12 bytes (3 × u32).
+/// All variants must fit in exactly 16 bytes (4 × u32).
 pub const Payload = extern union {
+    /// Explicit opt-in for checked-cache raw-byte serialization. `Node.tag`
+    /// stores the active variant outside this union; the native+wasm
+    /// serialization-size check asserts the fixed physical size.
+    pub const serialized_portable_extern_union = true;
+
     // === Statement payloads ===
     statement_decl: StatementDecl,
     statement_var: StatementVar,
@@ -1075,7 +1081,7 @@ pub const Payload = extern union {
     };
 
     /// Diagnostics with an identifier and inline region offsets.
-    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, etc.
+    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, diag_duplicate_tag, etc.
     pub const DiagIdentWithRegion = extern struct {
         ident: u32, // @bitCast(Ident.Idx)
         region_start: u32, // offset

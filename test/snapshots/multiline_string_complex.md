@@ -270,7 +270,7 @@ x = {
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 148)
+			(e-interpolation (constraint-fn-var 151)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -286,7 +286,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 204)
+			(e-interpolation (constraint-fn-var 207)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -315,13 +315,13 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 318)
+					(e-dispatch-call (method "minus") (constraint-fn-var 321)
 						(receiver
 							(e-num (value "0")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-dispatch-call (method "not") (constraint-fn-var 333)
+					(e-dispatch-call (method "not") (constraint-fn-var 336)
 						(receiver
 							(e-string))
 						(args))))))

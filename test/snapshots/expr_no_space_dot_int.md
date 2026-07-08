@@ -8,18 +8,18 @@ type=snippet
 foo = asd.0
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - expr_no_space_dot_int.md:1:7:1:10
+NAME NOT IN SCOPE - expr_no_space_dot_int.md:1:7:1:10
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `asd` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `asd` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  foo = asd.0                                                               │
  │        ‾‾‾                                                                 │
  └────────────────────────────────────────────── expr_no_space_dot_int.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

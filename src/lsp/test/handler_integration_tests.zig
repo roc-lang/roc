@@ -561,7 +561,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecErr
     const initialized_msg = try frame(allocator, initialized_body);
     defer allocator.free(initialized_msg);
 
-    // Document with undefined variable usage
+    // Document with a name-not-in-scope usage
     const open_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"app [x] {{ pf: platform \"{s}\" }}\\n\\nx = undefined_var"}}}}}}
     , .{ file_uri, platform_path });
@@ -569,7 +569,7 @@ pub fn definitionHandlerReturnsNullForUndefinedSymbol() integration_spec.SpecErr
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request definition for undefined variable (line 2, character 4).
+    // Request definition for a name not in scope (line 2, character 4).
     const definition_body = try std.fmt.allocPrint(allocator,
         \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":4}}}}}}
     , .{file_uri});
@@ -1496,15 +1496,15 @@ pub fn completionHandlerReturnsModuleNamesInExpressionContext() integration_spec
 
     // Simple document - completion at beginning of expression
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\\n\\nx = "}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"x = "}}}}}}
     , .{file_uri});
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request completion at the end (line 2, character 4)
+    // Request completion at the end (line 0, character 4)
     const completion_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":4}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":4}}}}}}
     , .{file_uri});
     defer allocator.free(completion_body);
     const completion_msg = try frame(allocator, completion_body);
@@ -1953,15 +1953,15 @@ pub fn completionHandlerReturnsTopLevelDefinitions() integration_spec.SpecError!
     // Document with multiple top-level definitions
     // Request completion at beginning of third line (similar to the passing test)
     const open_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"module []\n\nmy_constant = 42\nmy_function = |x| x * 2\nresult = my_constant"}}}}}}
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"my_constant = 42\nmy_function = |x| x * 2\nmain! = |_| my_constant"}}}}}}
     , .{file_uri});
     defer allocator.free(open_body);
     const open_msg = try frame(allocator, open_body);
     defer allocator.free(open_msg);
 
-    // Request completion at line 4, character 0 (beginning of result line)
+    // Request completion at line 2, character 0 (beginning of main! line)
     const completion_body = try std.fmt.allocPrint(allocator,
-        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":4,"character":0}}}}}}
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":0}}}}}}
     , .{file_uri});
     defer allocator.free(completion_body);
     const completion_msg = try frame(allocator, completion_body);

@@ -8,19 +8,19 @@ type=snippet
 foo = if tru 0
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - expr_if_missing_else.md:1:10:1:13
+NAME NOT IN SCOPE - expr_if_missing_else.md:1:10:1:13
 MISSING METHOD - expr_if_missing_else.md:1:14:1:15
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `tru` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `tru` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  foo = if tru 0                                                            │
  │           ‾‾‾                                                              │
  └────────────────────────────────────────────── expr_if_missing_else.md:1:10 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌────────────────┐

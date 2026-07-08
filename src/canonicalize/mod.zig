@@ -19,8 +19,12 @@ pub const DependencyGraph = @import("DependencyGraph.zig");
 pub const HostedCompiler = @import("HostedCompiler.zig");
 /// Builtin.roc low-level operation transform
 pub const BuiltinLowLevel = @import("BuiltinLowLevel.zig");
+/// Static embedded Builtin module views and validation
+pub const BuiltinStatic = @import("BuiltinStatic.zig");
 /// Roc code emitter - converts CIR to valid Roc source code
 pub const RocEmitter = @import("RocEmitter.zig");
+/// Shared syntactic refutability rules for Roc patterns.
+pub const PatternRefutability = @import("pattern_refutability.zig");
 /// Node storage for CIR nodes (used internally by ModuleEnv)
 pub const NodeStore = @import("NodeStore.zig");
 
@@ -87,6 +91,7 @@ test "compile tests" {
 
     std.testing.refAllDecls(@import("Can.zig"));
     std.testing.refAllDecls(@import("CIR.zig"));
+    std.testing.refAllDecls(@import("DependencyGraph.zig"));
     std.testing.refAllDecls(@import("Diagnostic.zig"));
     std.testing.refAllDecls(@import("Expression.zig"));
     std.testing.refAllDecls(@import("ExternalDecl.zig"));
@@ -100,7 +105,6 @@ test "compile tests" {
 
     std.testing.refAllDecls(@import("test/anno_only_test.zig"));
     std.testing.refAllDecls(@import("test/bool_test.zig"));
-    std.testing.refAllDecls(@import("test/exposed_shadowing_test.zig"));
     std.testing.refAllDecls(@import("test/frac_test.zig"));
     std.testing.refAllDecls(@import("test/if_statement_test.zig"));
     std.testing.refAllDecls(@import("test/import_validation_test.zig"));
@@ -112,6 +116,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/record_test.zig"));
     std.testing.refAllDecls(@import("test/string_pattern_test.zig"));
     std.testing.refAllDecls(@import("test/type_decl_stmt_test.zig"));
+    std.testing.refAllDecls(@import("test/try_suffix_test.zig"));
     std.testing.refAllDecls(@import("test/local_let_scoping_test.zig"));
     std.testing.refAllDecls(@import("test/uninitialized_var_test.zig"));
     std.testing.refAllDecls(@import("test/while_loop_test.zig"));

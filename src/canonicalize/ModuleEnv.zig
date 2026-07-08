@@ -54,33 +54,27 @@ pub const ModuleKind = union(enum) {
         malformed,
     };
 
-    /// Extern-compatible payload union for serialization
-    pub const Payload = extern union {
-        type_module_ident: Ident.Idx,
-        none: u32,
-    };
-
     /// Extern-compatible serialized form
     pub const Serialized = extern struct {
         tag: Tag,
-        payload: Payload,
+        payload: u32,
 
         pub fn encode(kind: ModuleKind) @This() {
             return switch (kind) {
-                .type_module => |idx| .{ .tag = .type_module, .payload = .{ .type_module_ident = idx } },
-                .default_app => .{ .tag = .default_app, .payload = .{ .none = 0 } },
-                .app => .{ .tag = .app, .payload = .{ .none = 0 } },
-                .package => .{ .tag = .package, .payload = .{ .none = 0 } },
-                .platform => .{ .tag = .platform, .payload = .{ .none = 0 } },
-                .hosted => .{ .tag = .hosted, .payload = .{ .none = 0 } },
-                .module => .{ .tag = .module, .payload = .{ .none = 0 } },
-                .malformed => .{ .tag = .malformed, .payload = .{ .none = 0 } },
+                .type_module => |idx| .{ .tag = .type_module, .payload = @as(u32, @bitCast(idx)) },
+                .default_app => .{ .tag = .default_app, .payload = 0 },
+                .app => .{ .tag = .app, .payload = 0 },
+                .package => .{ .tag = .package, .payload = 0 },
+                .platform => .{ .tag = .platform, .payload = 0 },
+                .hosted => .{ .tag = .hosted, .payload = 0 },
+                .module => .{ .tag = .module, .payload = 0 },
+                .malformed => .{ .tag = .malformed, .payload = 0 },
             };
         }
 
         pub fn decode(self: @This()) ModuleKind {
             return switch (self.tag) {
-                .type_module => .{ .type_module = self.payload.type_module_ident },
+                .type_module => .{ .type_module = @as(Ident.Idx, @bitCast(self.payload)) },
                 .default_app => .default_app,
                 .app => .app,
                 .package => .package,
@@ -121,7 +115,7 @@ pub const CommonIdents = extern struct {
     is_eq: Ident.Idx,
     to_hash: Ident.Idx,
     parser_for: Ident.Idx,
-    encode_to: Ident.Idx,
+    encoder_for: Ident.Idx,
 
     // Type/module names
     @"try": Ident.Idx,
@@ -132,6 +126,8 @@ pub const CommonIdents = extern struct {
     list: Ident.Idx,
     iter: Ident.Idx,
     box: Ident.Idx,
+    dict: Ident.Idx,
+    set: Ident.Idx,
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
     num: Ident.Idx,
@@ -157,10 +153,16 @@ pub const CommonIdents = extern struct {
     builtin_str: Ident.Idx,
     builtin_list: Ident.Idx,
     builtin_box: Ident.Idx,
-    builtin_parse_tag_union_spec: Ident.Idx,
-    builtin_str_field_names: Ident.Idx,
-    builtin_str_field_name: Ident.Idx,
+    builtin_dict: Ident.Idx,
+    builtin_set: Ident.Idx,
+    builtin_encoding_parse_tag_union_spec: Ident.Idx,
+    builtin_encoding_field_names: Ident.Idx,
+    builtin_encoding_field_name: Ident.Idx,
     builtin_str_inspect: Ident.Idx,
+    builtin_crypto_sha256_digest: Ident.Idx,
+    builtin_crypto_sha256_hasher: Ident.Idx,
+    builtin_crypto_blake3_digest: Ident.Idx,
+    builtin_crypto_blake3_hasher: Ident.Idx,
     u8_type: Ident.Idx,
     i8_type: Ident.Idx,
     u16_type: Ident.Idx,
@@ -234,7 +236,7 @@ pub const CommonIdents = extern struct {
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
             .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
             .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
-            .encode_to = try common.insertIdent(gpa, Ident.for_text("encode_to")),
+            .encoder_for = try common.insertIdent(gpa, Ident.for_text("encoder_for")),
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
@@ -243,6 +245,8 @@ pub const CommonIdents = extern struct {
             .list = try common.insertIdent(gpa, Ident.for_text("List")),
             .iter = try common.insertIdent(gpa, Ident.for_text("Iter")),
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
+            .dict = try common.insertIdent(gpa, Ident.for_text("Dict")),
+            .set = try common.insertIdent(gpa, Ident.for_text("Set")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
             .bool = try common.insertIdent(gpa, Ident.for_text("Bool")),
@@ -265,10 +269,16 @@ pub const CommonIdents = extern struct {
             .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
             .builtin_list = try common.insertIdent(gpa, Ident.for_text("Builtin.List")),
             .builtin_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box")),
-            .builtin_parse_tag_union_spec = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.ParseTagUnionSpec")),
-            .builtin_str_field_names = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.FieldName.FieldNames")),
-            .builtin_str_field_name = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.FieldName")),
+            .builtin_dict = try common.insertIdent(gpa, Ident.for_text("Builtin.Dict")),
+            .builtin_set = try common.insertIdent(gpa, Ident.for_text("Builtin.Set")),
+            .builtin_encoding_parse_tag_union_spec = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.ParseTagUnionSpec")),
+            .builtin_encoding_field_names = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.FieldName.FieldNames")),
+            .builtin_encoding_field_name = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.FieldName")),
             .builtin_str_inspect = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.inspect")),
+            .builtin_crypto_sha256_digest = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.SHA256.Digest")),
+            .builtin_crypto_sha256_hasher = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.SHA256.Hasher")),
+            .builtin_crypto_blake3_digest = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.BLAKE3.Digest")),
+            .builtin_crypto_blake3_hasher = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.BLAKE3.Hasher")),
             .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
             .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
             .u16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16")),
@@ -343,7 +353,7 @@ pub const CommonIdents = extern struct {
             .is_eq = common.findIdent("is_eq") orelse unreachable,
             .to_hash = common.findIdent("to_hash") orelse unreachable,
             .parser_for = common.findIdent("parser_for") orelse unreachable,
-            .encode_to = common.findIdent("encode_to") orelse unreachable,
+            .encoder_for = common.findIdent("encoder_for") orelse unreachable,
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
@@ -352,6 +362,8 @@ pub const CommonIdents = extern struct {
             .list = common.findIdent("List") orelse unreachable,
             .iter = common.findIdent("Iter") orelse unreachable,
             .box = common.findIdent("Box") orelse unreachable,
+            .dict = common.findIdent("Dict") orelse unreachable,
+            .set = common.findIdent("Set") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
             .bool = common.findIdent("Bool") orelse unreachable,
@@ -374,10 +386,16 @@ pub const CommonIdents = extern struct {
             .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
             .builtin_list = common.findIdent("Builtin.List") orelse unreachable,
             .builtin_box = common.findIdent("Builtin.Box") orelse unreachable,
-            .builtin_parse_tag_union_spec = common.findIdent("Builtin.Str.ParseTagUnionSpec") orelse unreachable,
-            .builtin_str_field_names = common.findIdent("Builtin.Str.FieldName.FieldNames") orelse unreachable,
-            .builtin_str_field_name = common.findIdent("Builtin.Str.FieldName") orelse unreachable,
+            .builtin_dict = common.findIdent("Builtin.Dict") orelse unreachable,
+            .builtin_set = common.findIdent("Builtin.Set") orelse unreachable,
+            .builtin_encoding_parse_tag_union_spec = common.findIdent("Builtin.Encoding.ParseTagUnionSpec") orelse unreachable,
+            .builtin_encoding_field_names = common.findIdent("Builtin.Encoding.FieldName.FieldNames") orelse unreachable,
+            .builtin_encoding_field_name = common.findIdent("Builtin.Encoding.FieldName") orelse unreachable,
             .builtin_str_inspect = common.findIdent("Builtin.Str.inspect") orelse unreachable,
+            .builtin_crypto_sha256_digest = common.findIdent("Builtin.Crypto.SHA256.Digest") orelse unreachable,
+            .builtin_crypto_sha256_hasher = common.findIdent("Builtin.Crypto.SHA256.Hasher") orelse unreachable,
+            .builtin_crypto_blake3_digest = common.findIdent("Builtin.Crypto.BLAKE3.Digest") orelse unreachable,
+            .builtin_crypto_blake3_hasher = common.findIdent("Builtin.Crypto.BLAKE3.Hasher") orelse unreachable,
             .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
             .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
             .u16_type = common.findIdent("Builtin.Num.U16") orelse unreachable,
@@ -431,16 +449,50 @@ pub const CommonIdents = extern struct {
     }
 };
 
-/// Key for method lookup: (owner type declaration, method_ident) pair.
+/// Owner identity for static-dispatch method lookup.
+pub const MethodOwner = extern struct {
+    owner_module_ident_bits: u32,
+    owner: CIR.Statement.Idx,
+
+    pub fn init(owner_module_ident: Ident.Idx, owner: CIR.Statement.Idx) MethodOwner {
+        return .{
+            .owner_module_ident_bits = @bitCast(owner_module_ident),
+            .owner = owner,
+        };
+    }
+
+    pub fn moduleIdent(self: MethodOwner) Ident.Idx {
+        return @bitCast(self.owner_module_ident_bits);
+    }
+
+    pub fn eql(a: MethodOwner, b: MethodOwner) bool {
+        return a.owner_module_ident_bits == b.owner_module_ident_bits and a.owner == b.owner;
+    }
+};
+
+/// Key for method lookup: (receiver owner declaration, method_ident) pair.
 pub const MethodKey = extern struct {
+    owner_module_ident_bits: u32,
     owner: CIR.Statement.Idx,
     method_ident_bits: u32,
 
-    pub fn init(owner: CIR.Statement.Idx, method_ident: Ident.Idx) MethodKey {
+    pub fn init(owner: MethodOwner, method_ident: Ident.Idx) MethodKey {
         return .{
-            .owner = owner,
+            .owner_module_ident_bits = owner.owner_module_ident_bits,
+            .owner = owner.owner,
             .method_ident_bits = @bitCast(method_ident),
         };
+    }
+
+    pub fn ownerIdent(self: MethodKey) MethodOwner {
+        return .{
+            .owner_module_ident_bits = self.owner_module_ident_bits,
+            .owner = self.owner,
+        };
+    }
+
+    pub fn ownerModuleIdent(self: MethodKey) Ident.Idx {
+        return @bitCast(self.owner_module_ident_bits);
     }
 
     pub fn methodIdent(self: MethodKey) Ident.Idx {
@@ -448,6 +500,12 @@ pub const MethodKey = extern struct {
     }
 
     pub fn order(a: MethodKey, b: MethodKey) std.math.Order {
+        const a_module = a.owner_module_ident_bits;
+        const b_module = b.owner_module_ident_bits;
+        if (a_module != b_module) {
+            return if (a_module < b_module) .lt else .gt;
+        }
+
         const a_owner = @intFromEnum(a.owner);
         const b_owner = @intFromEnum(b.owner);
         if (a_owner != b_owner) {
@@ -461,7 +519,7 @@ pub const MethodKey = extern struct {
     }
 };
 
-/// Mapping from (owner declaration, method_ident) pairs to their qualified
+/// Mapping from (receiver owner declaration, method_ident) pairs to their qualified
 /// method ident.
 ///
 /// This is populated during canonicalization when methods are defined in associated blocks.
@@ -474,7 +532,7 @@ pub const MethodBinding = extern struct {
     def_idx: CIR.Def.Idx,
 };
 
-/// Mapping from (owner declaration, method_ident) pairs to the method binding.
+/// Mapping from (receiver owner declaration, method_ident) pairs to the method binding.
 /// This keeps method implementation lookup explicit without requiring local
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
@@ -504,12 +562,13 @@ pub const NumeralLiteral = extern struct {
     digits_start: u32,
     before_len: u32,
     after_len: u32,
-    after_decimal_digit_count: u32,
+    after_decimal_digit_count: u64,
     flags: u32,
 
     pub const negative_flag: u32 = 1;
     pub const fractional_flag: u32 = 2;
     pub const decimal_point_flag: u32 = 4;
+    pub const materialized_flag: u32 = 8;
     pub const SafeList = collections.SafeList(@This());
 
     pub fn isNegative(self: NumeralLiteral) bool {
@@ -523,6 +582,10 @@ pub const NumeralLiteral = extern struct {
     pub fn hadDecimalPoint(self: NumeralLiteral) bool {
         return (self.flags & decimal_point_flag) != 0;
     }
+
+    pub fn isMaterialized(self: NumeralLiteral) bool {
+        return (self.flags & materialized_flag) != 0;
+    }
 };
 
 /// Checked dispatch metadata for a numeric literal that must call
@@ -531,6 +594,53 @@ pub const NumeralDispatchPlan = extern struct {
     node_idx: u32,
     target_var: u32,
     fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One constrained-scheme instantiation recorded by checking for static-dispatch
+/// evidence. It names the source node whose checking instantiated the scheme, the
+/// pristine (never-unified) scheme root that was copied, and — via
+/// `scheme_instantiation_pairs` — the fresh var each constrained scheme var was
+/// copied to. Publication resolves the fresh vars after checking settles to
+/// decide how each of the callee's dispatch constraints was satisfied at this
+/// site.
+pub const SchemeInstantiationRecord = extern struct {
+    node_idx: u32,
+    /// `Slot` — distinguishes several schemes instantiated at one node (a value
+    /// use vs. the target of a dispatch constraint).
+    slot_kind: u32,
+    /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
+    /// discharge instantiated this scheme — unique per constraint
+    /// instantiation, so nested evidence chains resolve without ambiguity.
+    /// 0 for `value_use` slots (keyed by `node_idx` instead).
+    slot_data: u32,
+    /// The pristine scheme root `Var` that was instantiated. For imported
+    /// schemes this is the local copy, which stays structurally intact.
+    scheme_root: u32,
+    /// Range into `scheme_instantiation_pairs`.
+    pairs_start: u32,
+    pairs_len: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const Slot = enum(u32) {
+        /// The scheme of a value that was referenced (e.g. an `e_lookup` of a
+        /// generalized definition).
+        value_use,
+        /// The scheme of the method target chosen while discharging a static
+        /// dispatch constraint originating at this node.
+        dispatch_target,
+    };
+};
+
+/// One (constrained scheme var → fresh instantiated var) pair of a
+/// `SchemeInstantiationRecord`.
+pub const SchemeInstantiationPair = extern struct {
+    /// Constrained var in the pristine scheme (`Var`).
+    old_var: u32,
+    /// The fresh copy created for this instantiation (`Var`).
+    fresh_var: u32,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -627,9 +737,24 @@ module_name: []const u8,
 /// The module's bare name as an interned identifier (e.g., "Color").
 /// Used for display, type module validation, and method name construction.
 display_module_name_idx: Ident.Idx,
-/// Package-qualified module identity (e.g., "pf.Color"). Used as origin_module on types
-/// for identity comparisons across packages. Set by the coordinator after parse or cache hit.
+/// Package-qualified module display name (e.g., "pf.Color"). Display-only; identity
+/// comparisons use content-based module identities (see `module_identities`).
+/// Set by the coordinator after parse or cache hit.
 qualified_module_ident: Ident.Idx,
+/// Env-local module identity table: dense `base.ModuleIdentity.Idx` -> 32-byte
+/// deep content hash (see `base.module_identity`). Entry ids are the
+/// `origin_module` values stored on nominal/alias types in this env's type
+/// store. Populated by `setContentIdentity` (self) and by cross-store type
+/// copies rebasing imported origins into this table.
+module_identities: base.SerialStringInterner,
+/// Display ident (into this env's ident store) for each `module_identities`
+/// entry, parallel by index. Display-only by itself; identity decisions must
+/// read the paired content hash from `module_identities`.
+module_identity_displays: collections.SafeList(Ident.Idx),
+/// This module's own entry in `module_identities`; `NONE` until the deep
+/// content identity has been computed (after import resolution, before
+/// type-checking).
+self_module_identity: base.ModuleIdentity.Idx,
 /// Diagnostics collected during canonicalization (optional)
 diagnostics: CIR.Diagnostic.Span,
 /// Stores the raw nodes which represent the intermediate representation
@@ -639,6 +764,12 @@ store: NodeStore,
 /// Dependency analysis results (evaluation order for defs)
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
+
+/// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
+/// checked-artifact consumption. Serialized user modules intentionally do not
+/// preserve this flag; the baked builtin module does, because its static env is
+/// prepared before embedding and must not allocate/copy on compiler startup.
+runtime_prepared: bool,
 
 /// Well-known identifiers for type checking, operator desugaring, and layout generation.
 /// Interned once during init to avoid repeated string comparisons.
@@ -670,6 +801,11 @@ numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
 quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
+/// Constrained-scheme instantiations recorded by checking for static-dispatch
+/// evidence; consumed at checked-module publication.
+scheme_instantiations: SchemeInstantiationRecord.SafeList,
+/// Flat pool of (scheme var → fresh var) pairs backing `scheme_instantiations`.
+scheme_instantiation_pairs: SchemeInstantiationPair.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -759,6 +895,8 @@ pub fn relocate(self: *Self, offset: isize) void {
     // Relocate all sub-structures that contain pointers
     self.common.relocate(offset);
     self.types.relocate(offset);
+    self.module_identities.relocate(offset);
+    self.module_identity_displays.relocate(offset);
     self.external_decls.relocate(offset);
     self.requires_types.relocate(offset);
     self.for_clause_aliases.relocate(offset);
@@ -798,6 +936,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
+    self.runtime_prepared = false;
 }
 
 /// Alias for initCIRFields for backwards compatibility with tests
@@ -839,9 +978,13 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .module_name = "", // May be set later during canonicalization
         .display_module_name_idx = Ident.Idx.NONE, // Will be set later during canonicalization
         .qualified_module_ident = Ident.Idx.NONE, // Will be set by coordinator
+        .module_identities = .{},
+        .module_identity_displays = .{},
+        .self_module_identity = base.ModuleIdentity.Idx.NONE,
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
+        .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
@@ -852,6 +995,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
+        .scheme_instantiations = try SchemeInstantiationRecord.SafeList.initCapacity(gpa, 8),
+        .scheme_instantiation_pairs = try SchemeInstantiationPair.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -859,6 +1004,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
 pub fn deinit(self: *Self) void {
     self.common.deinit(self.gpa);
     self.types.deinit();
+    self.module_identities.deinit(self.gpa);
+    self.module_identity_displays.deinit(self.gpa);
     self.external_decls.deinit(self.gpa);
     self.requires_types.deinit(self.gpa);
     self.for_clause_aliases.deinit(self.gpa);
@@ -875,6 +1022,8 @@ pub fn deinit(self: *Self) void {
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
+    self.scheme_instantiations.deinit(self.gpa);
+    self.scheme_instantiation_pairs.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -916,11 +1065,18 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeral_dispatch_plans.deinit(self.gpa);
     self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
+    self.scheme_instantiations.deinit(self.gpa);
+    self.scheme_instantiation_pairs.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
     // and will only free if memory was actually allocated (not for pure cached data).
     self.common.idents.interner.deinit(self.gpa);
+
+    // Same pattern for the module identity table: frozen (buffer-aliased) data is
+    // a no-op to deinit; runtime-grown data is freed.
+    self.module_identities.deinit(self.gpa);
+    self.module_identity_displays.deinit(self.gpa);
 }
 
 /// Record a relative file dependency before its final read state is known.
@@ -1004,6 +1160,7 @@ fn getDiagnosticRegion(diagnostic: CIR.Diagnostic) Region {
         .type_alias_redeclared => |data| data.redeclared_region,
         .nominal_type_redeclared => |data| data.redeclared_region,
         .duplicate_record_field => |data| data.duplicate_region,
+        .duplicate_tag => |data| data.duplicate_region,
         inline else => |data| data.region,
     };
 }
@@ -1098,16 +1255,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
             const ident_name = self.getIdent(data.ident);
 
-            var report = try Report.init(allocator, "Undefined Variable", "", .runtime_error);
+            var report = try Report.init(allocator, "Name Not In Scope", "", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Nothing is named ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" in this scope.");
-            try report.document.addReflowingText("Is there an ");
-            try report.document.addKeyword("import");
-            try report.document.addReflowingText(" or ");
-            try report.document.addKeyword("exposing");
-            try report.document.addReflowingText(" missing up-top?");
+            try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1664,6 +1817,21 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
 
             break :blk report;
+        },
+        .duplicate_tag => |data| blk: {
+            const tag_name = self.getIdent(data.tag_name);
+            const duplicate_region_info = self.calcRegionInfo(data.duplicate_region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+
+            break :blk try CIR.Diagnostic.buildDuplicateTagReport(
+                allocator,
+                tag_name,
+                duplicate_region_info,
+                original_region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
         },
         .redundant_exposed => |data| blk: {
             const ident_name = self.getIdent(data.ident);
@@ -3046,9 +3214,15 @@ pub const Serialized = extern struct {
     module_name: [2]u64, // Reserve space for slice (ptr + len), provided during deserialization
     display_module_name_idx_reserved: u32, // Reserved space for display_module_name_idx field (interned during deserialization)
     qualified_module_ident_reserved: u32, // Reserved space for qualified_module_ident field
+    module_identities: base.SerialStringInterner.Serialized,
+    module_identity_displays: collections.SafeList(Ident.Idx).Serialized,
+    self_module_identity_reserved: u32,
+    self_module_identity_padding: u32 = 0,
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
+    runtime_prepared: bool,
+    runtime_prepared_padding: [7]u8,
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
@@ -3060,9 +3234,40 @@ pub const Serialized = extern struct {
     numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
+    scheme_instantiations: SchemeInstantiationRecord.SafeList.Serialized,
+    scheme_instantiation_pairs: SchemeInstantiationPair.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
+
+    comptime {
+        const renamed_fields = [_]collections.serde_validation.FieldRename{
+            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
+            .{ .owner = "qualified_module_ident", .serialized = "qualified_module_ident_reserved" },
+            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
+            .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
+            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
+        };
+        const serialized_only_fields = [_][]const u8{
+            "self_module_identity_padding", // Fixed-width padding for the reserved identity slot.
+            "runtime_prepared_padding", // Fixed-width padding for the serialized bool.
+            "_reserved_flags", // Format-reserved bytes for fields removed from ModuleEnv.
+            "_padding", // Tail padding kept explicit and zeroed for deterministic bytes.
+        };
+        collections.serde_validation.assertBidirectionalFieldSet(
+            Self,
+            Serialized,
+            &.{},
+            &serialized_only_fields,
+            &renamed_fields,
+        );
+        collections.serde_validation.assertSerializedRelocatable(Serialized);
+    }
+
+    pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
+        if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
+        try collections.validateSerializedRelocations(Serialized, self, backing_len);
+    }
 
     /// Serialize a ModuleEnv into this Serialized struct, appending data to the writer
     pub fn serialize(
@@ -3105,7 +3310,13 @@ pub const Serialized = extern struct {
         self.module_name = .{ 0, 0 };
         self.display_module_name_idx_reserved = @bitCast(env.display_module_name_idx);
         self.qualified_module_ident_reserved = @bitCast(env.qualified_module_ident);
+        try self.module_identities.serialize(&env.module_identities, allocator, writer);
+        try self.module_identity_displays.serialize(&env.module_identity_displays, allocator, writer);
+        self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
+        self.self_module_identity_padding = 0;
         self.evaluation_order_reserved = 0;
+        self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
+        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0, 0 };
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
@@ -3124,6 +3335,8 @@ pub const Serialized = extern struct {
         try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
         try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
+        try self.scheme_instantiations.serialize(&env.scheme_instantiations, allocator, writer);
+        try self.scheme_instantiation_pairs.serialize(&env.scheme_instantiation_pairs, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3166,9 +3379,13 @@ pub const Serialized = extern struct {
             .module_name = module_name,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .module_identities = self.module_identities.deserialize(base_addr),
+            .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
+            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
@@ -3179,9 +3396,70 @@ pub const Serialized = extern struct {
             .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
             .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
+            .scheme_instantiations = self.scheme_instantiations.deserializeInto(base_addr),
+            .scheme_instantiation_pairs = self.scheme_instantiation_pairs.deserializeInto(base_addr),
         };
 
         return env;
+    }
+
+    /// Materialize a non-owning view over statically embedded serialized bytes.
+    /// This is for the compiler's baked Builtin module: every list/slice points
+    /// into the executable's aligned static data and no backing bytes are copied.
+    pub fn viewStatic(
+        self: *const Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) error{CorruptSerializedModuleEnv}!Self {
+        if (self.imports.imports.len != 0) return error.CorruptSerializedModuleEnv;
+        if (self.imports.import_idents.len != 0) return error.CorruptSerializedModuleEnv;
+        if (self.imports.resolved_modules.len != 0) return error.CorruptSerializedModuleEnv;
+
+        return Self{
+            .gpa = gpa,
+            .common = self.common.deserializeInto(base_addr, source),
+            .types = self.types.deserializeInto(base_addr, gpa),
+            .module_kind = self.module_kind.decode(),
+            .module_role = self.module_role,
+            .all_defs = self.all_defs,
+            .global_value_defs = self.global_value_defs,
+            .all_statements = self.all_statements,
+            .type_decls = self.type_decls,
+            .forward_type_decls = self.forward_type_decls,
+            .exports = self.exports,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
+            .provides_entries = self.provides_entries.deserializeInto(base_addr),
+            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
+            .builtin_statements = self.builtin_statements,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = CIR.Import.Store.init(),
+            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
+            .module_name = module_name,
+            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
+            .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .module_identities = self.module_identities.deserialize(base_addr),
+            .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
+            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
+            .diagnostics = self.diagnostics,
+            .store = self.store.deserializeInto(base_addr, gpa),
+            .evaluation_order = null,
+            .runtime_prepared = self.runtime_prepared,
+            .idents = self.idents,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = self.method_idents.deserializeInto(base_addr),
+            .method_defs = self.method_defs.deserializeInto(base_addr),
+            .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
+            .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
+            .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
+            .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
+            .scheme_instantiations = self.scheme_instantiations.deserializeInto(base_addr),
+            .scheme_instantiation_pairs = self.scheme_instantiation_pairs.deserializeInto(base_addr),
+        };
     }
 
     /// Deserialize with mutable type store and node store for cache modules.
@@ -3223,10 +3501,15 @@ pub const Serialized = extern struct {
             .module_name = module_name,
             .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
             .qualified_module_ident = @bitCast(self.qualified_module_ident_reserved),
+            .module_identities = self.module_identities.deserialize(base_addr),
+            // Copy so the display list can grow if runtime type copies add identities.
+            .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
+            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
             .diagnostics = self.diagnostics,
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
+            .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
             .method_idents = self.method_idents.deserializeInto(base_addr),
@@ -3237,6 +3520,8 @@ pub const Serialized = extern struct {
             .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
+            .scheme_instantiations = try self.scheme_instantiations.deserializeWithCopy(base_addr, gpa),
+            .scheme_instantiation_pairs = try self.scheme_instantiation_pairs.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3300,10 +3585,11 @@ pub fn recordNumeralLiteral(
     node_idx: Node.Idx,
     before: []const u8,
     after: []const u8,
-    after_decimal_digit_count: u32,
+    after_decimal_digit_count: u64,
     is_negative: bool,
     is_fractional: bool,
     had_decimal_point: bool,
+    is_materialized: bool,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
     const digits_start: u32 = @intCast(self.numeral_digit_bytes.len());
@@ -3318,7 +3604,8 @@ pub fn recordNumeralLiteral(
         .after_decimal_digit_count = after_decimal_digit_count,
         .flags = (if (is_negative) NumeralLiteral.negative_flag else 0) |
             (if (is_fractional) NumeralLiteral.fractional_flag else 0) |
-            (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0),
+            (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0) |
+            (if (is_materialized) NumeralLiteral.materialized_flag else 0),
     };
     for (self.numeral_literals.items.items) |*existing| {
         if (existing.node_idx == raw_node) {
@@ -3403,6 +3690,31 @@ pub fn recordQuoteDispatchPlan(
         .node_idx = raw_node,
         .target_var = @intFromEnum(target_var),
         .fn_var = @intFromEnum(fn_var),
+    });
+}
+
+/// Record a constrained-scheme instantiation for static-dispatch evidence.
+/// `slot_data` is the raw fn `Var` of the discharged constraint for
+/// `dispatch_target` slots and 0 for `value_use` slots.
+pub fn recordSchemeInstantiation(
+    self: *Self,
+    node_idx: u32,
+    slot: SchemeInstantiationRecord.Slot,
+    slot_data: u32,
+    scheme_root: TypeVar,
+    pairs: []const SchemeInstantiationPair,
+) std.mem.Allocator.Error!void {
+    const pairs_start: u32 = @intCast(self.scheme_instantiation_pairs.items.items.len);
+    for (pairs) |pair| {
+        _ = try self.scheme_instantiation_pairs.append(self.gpa, pair);
+    }
+    _ = try self.scheme_instantiations.append(self.gpa, .{
+        .node_idx = node_idx,
+        .slot_kind = @intFromEnum(slot),
+        .slot_data = slot_data,
+        .scheme_root = @intFromEnum(scheme_root),
+        .pairs_start = pairs_start,
+        .pairs_len = @intCast(pairs.len),
     });
 }
 
@@ -4075,32 +4387,181 @@ pub fn insertQualifiedIdent(
     return try self.insertIdent(Ident.for_text(qualified));
 }
 
+// Module identity table --------------------------------------------------
+//
+// See `base.module_identity` for the identity model. The table maps dense
+// env-local ids to 32-byte deep content hashes; `origin_module` fields on
+// nominal/alias types in this env's type store are indices into this table.
+
+/// Intern a 32-byte module content identity into this env's identity table,
+/// recording `display` (an ident in this env's ident store, used only for
+/// diagnostics) when the hash is new. Returns the dense env-local index.
+pub fn internModuleIdentity(
+    self: *Self,
+    hash: *const base.ModuleIdentity.Hash,
+    display: Ident.Idx,
+) std.mem.Allocator.Error!base.ModuleIdentity.Idx {
+    const before = self.module_identities.count();
+    const id = try self.module_identities.insert(self.gpa, hash);
+    if (id == before) {
+        _ = try self.module_identity_displays.append(self.gpa, display);
+    }
+    std.debug.assert(self.module_identity_displays.len() == self.module_identities.count());
+    return @enumFromInt(id);
+}
+
+/// Look up a module content identity in this env's table without inserting.
+pub fn lookupModuleIdentity(self: *const Self, hash: *const base.ModuleIdentity.Hash) ?base.ModuleIdentity.Idx {
+    const id = self.module_identities.lookup(hash) orelse return null;
+    return @enumFromInt(id);
+}
+
+/// The 32-byte content identity hash for an env-local identity index.
+pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *const base.ModuleIdentity.Hash {
+    std.debug.assert(!idx.isNone());
+    const bytes = self.module_identities.getText(@intFromEnum(idx));
+    std.debug.assert(bytes.len == 32);
+    return @ptrCast(bytes.ptr);
+}
+
+/// Display ident for an env-local identity index. Diagnostics only — never
+/// use for identity decisions.
+pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
+    std.debug.assert(!idx.isNone());
+    return self.module_identity_displays.items.items[@intFromEnum(idx)];
+}
+
+/// Look up an env-local module identity entry by its env-local display ident.
+/// Callers must use the returned identity's content hash for identity decisions.
+pub fn moduleIdentityForDisplayIdent(self: *const Self, display: Ident.Idx) ?base.ModuleIdentity.Idx {
+    for (self.module_identity_displays.items.items, 0..) |candidate, i| {
+        if (candidate.eql(display)) return @enumFromInt(i);
+    }
+    return null;
+}
+
+/// Display text for an env-local identity index. Diagnostics only.
+pub fn moduleIdentityDisplayText(self: *const Self, idx: base.ModuleIdentity.Idx) []const u8 {
+    const display = self.moduleIdentityDisplayIdent(idx);
+    if (display.isNone()) return "";
+    return self.getIdent(display);
+}
+
+/// This module's own deep content identity hash; null until finalized.
+pub fn contentIdentityHash(self: *const Self) ?*const base.ModuleIdentity.Hash {
+    if (self.self_module_identity.isNone()) return null;
+    return self.moduleIdentityHash(self.self_module_identity);
+}
+
+/// This module's own identity table entry. Panics if not yet finalized:
+/// callers run after import resolution, where the identity must exist.
+pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
+    if (self.self_module_identity.isNone()) {
+        std.debug.panic("module content identity not finalized for module '{s}'", .{self.module_name});
+    }
+    return self.self_module_identity;
+}
+
+/// Record this module's deep content identity. Idempotent for an equal hash;
+/// panics if a different identity was already recorded.
+pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.Allocator.Error!void {
+    if (self.contentIdentityHash()) |existing| {
+        if (!std.mem.eql(u8, existing, &hash)) {
+            std.debug.panic("conflicting module content identity for module '{s}'", .{self.module_name});
+        }
+        return;
+    }
+    self.self_module_identity = try self.internModuleIdentity(&hash, self.display_module_name_idx);
+}
+
+/// Compute and record this module's deep content identity from its resolved
+/// direct imports: H(module name, source bytes, import identity hashes).
+/// Idempotent. Every imported env must already be finalized — imports are
+/// checked (or at least identity-finalized) before their dependents.
+pub fn ensureContentIdentity(
+    self: *Self,
+    imported_envs: []const *const Self,
+) std.mem.Allocator.Error!void {
+    if (!self.self_module_identity.isNone()) return;
+
+    var import_hashes = try std.ArrayList(base.ModuleIdentity.Hash).initCapacity(self.gpa, imported_envs.len);
+    defer import_hashes.deinit(self.gpa);
+    for (imported_envs) |imported_env| {
+        if (imported_env == @as(*const Self, self)) continue;
+        // An import that is this module's own content (same name, same source
+        // bytes — e.g. the baked Builtin env while `roc check Builtin.roc`
+        // checks the identical source) contributes nothing to the transitive
+        // closure; folding it in would make byte-identical modules disagree
+        // on identity depending on which copy was loaded first.
+        if (std.mem.eql(u8, imported_env.module_name, self.module_name) and
+            std.mem.eql(u8, imported_env.common.source, self.common.source))
+        {
+            continue;
+        }
+        const import_hash = imported_env.contentIdentityHash() orelse {
+            std.debug.panic(
+                "module content identity missing for import '{s}' of module '{s}'",
+                .{ imported_env.module_name, self.module_name },
+            );
+        };
+        import_hashes.appendAssumeCapacity(import_hash.*);
+    }
+
+    const hash = try base.ModuleIdentity.computeDeep(
+        self.gpa,
+        self.module_name,
+        self.common.source,
+        import_hashes.items,
+    );
+    try self.setContentIdentity(hash);
+}
+
 /// Registers a method identifier mapping for an explicit owner declaration.
 pub fn registerMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, qualified_ident: Ident.Idx) Allocator.Error!void {
+    try self.registerMethodIdentForMethodOwner(MethodOwner.init(self.qualified_module_ident, owner), method_ident, qualified_ident);
+}
+
+/// Registers a method identifier mapping for an explicit receiver owner declaration.
+pub fn registerMethodIdentForMethodOwner(self: *Self, owner: MethodOwner, method_ident: Ident.Idx, qualified_ident: Ident.Idx) Allocator.Error!void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_idents.put(self.gpa, key, qualified_ident);
 }
 
 /// Registers a method definition mapping for an explicit owner declaration.
 pub fn registerMethodDefForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx, binding: MethodBinding) Allocator.Error!void {
+    try self.registerMethodDefForMethodOwner(MethodOwner.init(self.qualified_module_ident, owner), method_ident, binding);
+}
+
+/// Registers a method definition mapping for an explicit receiver owner declaration.
+pub fn registerMethodDefForMethodOwner(self: *Self, owner: MethodOwner, method_ident: Ident.Idx, binding: MethodBinding) Allocator.Error!void {
     const key = MethodKey.init(owner, method_ident);
     try self.method_defs.put(self.gpa, key, binding);
 }
 
 /// Looks up a qualified method ident for an explicit owner declaration.
 pub fn lookupMethodIdentForOwner(self: *Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
-    const key = MethodKey.init(owner, method_ident);
+    const key = MethodKey.init(MethodOwner.init(self.qualified_module_ident, owner), method_ident);
     return self.method_idents.get(self.gpa, key);
 }
 
 /// Looks up a qualified method ident in finalized tables for an explicit owner declaration.
 pub fn lookupMethodIdentForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?Ident.Idx {
+    return self.lookupMethodIdentForMethodOwnerConst(MethodOwner.init(self.qualified_module_ident, owner), method_ident);
+}
+
+/// Looks up a qualified method ident in finalized tables for an explicit receiver owner declaration.
+pub fn lookupMethodIdentForMethodOwnerConst(self: *const Self, owner: MethodOwner, method_ident: Ident.Idx) ?Ident.Idx {
     const key = MethodKey.init(owner, method_ident);
     return self.method_idents.getFinalized(key);
 }
 
 /// Looks up method type/check metadata in finalized tables for an explicit owner declaration.
 pub fn lookupMethodBindingForOwnerConst(self: *const Self, owner: CIR.Statement.Idx, method_ident: Ident.Idx) ?MethodBinding {
+    return self.lookupMethodBindingForMethodOwnerConst(MethodOwner.init(self.qualified_module_ident, owner), method_ident);
+}
+
+/// Looks up method type/check metadata in finalized tables for an explicit receiver owner declaration.
+pub fn lookupMethodBindingForMethodOwnerConst(self: *const Self, owner: MethodOwner, method_ident: Ident.Idx) ?MethodBinding {
     const key = MethodKey.init(owner, method_ident);
     return self.method_defs.getFinalized(key);
 }
@@ -4114,12 +4575,7 @@ pub fn finalizeMethodTables(self: *Self) void {
 /// Looks up method metadata using a type declaration owner from one environment
 /// and a method ident from the same source environment.
 pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
-    const method_name = source_env.getIdent(method_ident);
-
-    const local_method_ident = self.common.findIdent(method_name) orelse return null;
-    const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
-
-    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
+    return self.lookupMethodBindingFromOwnerAndMethodEnvsConst(source_env, source_decl, source_env, method_ident);
 }
 
 /// Looks up method metadata using a type declaration owner and a method ident
@@ -4130,12 +4586,26 @@ pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     method_source_env: *const Self,
     method_ident: Ident.Idx,
 ) ?MethodBinding {
+    return self.lookupMethodBindingFromOwnerAndMethodEnvsConst(self, source_decl, method_source_env, method_ident);
+}
+
+/// Looks up method metadata using an owner declaration and method ident that may
+/// both come from different source environments.
+pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
+    self: *const Self,
+    owner_source_env: *const Self,
+    source_decl: ?u32,
+    method_source_env: *const Self,
+    method_ident: Ident.Idx,
+) ?MethodBinding {
     const method_name = method_source_env.getIdent(method_ident);
+    const owner_module_name = owner_source_env.getIdent(owner_source_env.qualified_module_ident);
 
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
+    const local_owner_module_ident = self.common.findIdent(owner_module_name) orelse return null;
     const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
 
-    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
+    return self.lookupMethodBindingForMethodOwnerConst(MethodOwner.init(local_owner_module_ident, owner), local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

@@ -31,10 +31,10 @@ pub fn main(init: std.process.Init) !void {
     try stdout.print("Checking test wiring in src/ directory...\n\n", .{});
 
     try stdout.print("Step 1: Finding all potential test files...\n", .{});
-    var test_files : PathList = .empty;
+    var test_files: PathList = .empty;
     defer freePathList(&test_files, gpa);
 
-    var mod_files : PathList = .empty;
+    var mod_files: PathList = .empty;
     defer freePathList(&mod_files, gpa);
 
     try walkTree(gpa, io, "src", &test_files, &mod_files);
@@ -95,7 +95,7 @@ pub fn main(init: std.process.Init) !void {
     );
 
     try stdout.print("Step 3: Checking if all test files are properly wired...\n\n", .{});
-    var unwired : PathList = .empty;
+    var unwired: PathList = .empty;
     defer freePathList(&unwired, gpa);
 
     for (test_files.items) |test_path| {

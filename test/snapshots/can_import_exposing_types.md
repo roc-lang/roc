@@ -54,41 +54,57 @@ handleResponse = |response|
 combineTrys : Try(Value, Error), Status -> Try(Response, Error)
 combineTrys = |jsonTry, httpStatus|
     match jsonTry {
-        Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+        Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
         Err(error) => Err(error)
     }
 ~~~
 # EXPECTED
+DUPLICATE DEFINITION - can_import_exposing_types.md:1:1:1:49
 UNDECLARED TYPE - can_import_exposing_types.md:6:24:6:29
 UNDECLARED TYPE - can_import_exposing_types.md:6:31:6:36
-UNDEFINED VARIABLE - can_import_exposing_types.md:7:21:7:31
+NAME NOT IN SCOPE - can_import_exposing_types.md:7:21:7:31
 UNDECLARED TYPE - can_import_exposing_types.md:10:17:10:24
 UNDECLARED TYPE - can_import_exposing_types.md:10:28:10:36
-UNDEFINED VARIABLE - can_import_exposing_types.md:12:14:12:25
-UNDEFINED VARIABLE - can_import_exposing_types.md:14:22:14:29
-UNDEFINED VARIABLE - can_import_exposing_types.md:15:23:15:38
+NAME NOT IN SCOPE - can_import_exposing_types.md:12:14:12:25
+NAME NOT IN SCOPE - can_import_exposing_types.md:14:22:14:29
+NAME NOT IN SCOPE - can_import_exposing_types.md:15:23:15:38
 UNDECLARED TYPE - can_import_exposing_types.md:20:15:20:21
 UNDECLARED TYPE - can_import_exposing_types.md:20:28:20:33
 UNDECLARED TYPE - can_import_exposing_types.md:20:47:20:52
 UNDECLARED TYPE - can_import_exposing_types.md:20:55:20:60
 DOES NOT EXIST - can_import_exposing_types.md:22:5:22:16
-UNDEFINED VARIABLE - can_import_exposing_types.md:24:13:24:30
+NAME NOT IN SCOPE - can_import_exposing_types.md:24:13:24:30
 UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
 UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
 MODULE NOT FOUND - can_import_exposing_types.md:35:30:35:37
-UNDEFINED VARIABLE - can_import_exposing_types.md:36:25:36:40
+NAME NOT IN SCOPE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
-UNDEFINED VARIABLE - can_import_exposing_types.md:42:23:42:42
+NAME NOT IN SCOPE - can_import_exposing_types.md:42:23:42:42
 DOES NOT EXIST - can_import_exposing_types.md:43:23:43:37
 UNDECLARED TYPE - can_import_exposing_types.md:47:19:47:24
 UNDECLARED TYPE - can_import_exposing_types.md:47:26:47:31
 UNDECLARED TYPE - can_import_exposing_types.md:47:34:47:40
 UNDECLARED TYPE - can_import_exposing_types.md:47:48:47:56
 UNDECLARED TYPE - can_import_exposing_types.md:47:58:47:63
-UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
+NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 # PROBLEMS
+
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json exposing [Value, Error, Config]                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
+ └────────────────────────────────────────── can_import_exposing_types.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json exposing [Value, Error, Config]                     │
+      │  ‾                                                                    │
+      └───────────────────────────────────── can_import_exposing_types.md:1:1 ┘
+
 
 ┌─────────────────┐
 │ UNDECLARED TYPE ├─ The type `Value` is not declared in this scope. ─────────┐
@@ -110,15 +126,15 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `parse` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  parseJson = |input| Json.parse(input)                                     │
  │                      ‾‾‾‾‾‾‾‾‾‾                                            │
  └───────────────────────────────────────── can_import_exposing_types.md:7:21 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -141,37 +157,37 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  result = Json.decode(req.body)                                            │
  │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────── can_import_exposing_types.md:12:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ok` in this scope. ─────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ok` in this scope. ──────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Ok(value) => Http.ok(value)                                               │
  │               ‾‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────── can_import_exposing_types.md:14:22 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `badRequest` in this scope. ─────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `badRequest` in this scope. ──────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Err(error) => Http.badRequest(error)                                      │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └──────────────────────────────────────── can_import_exposing_types.md:15:23 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -225,15 +241,15 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
     `List` is in scope, but it has no associated `mapTry`.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `validateWith` in this scope. ───────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `validateWith` in this scope. ────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  |v| Json.validateWith(config, v),                                         │
  │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────── can_import_exposing_types.md:24:13 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -286,15 +302,15 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `clientWith` in this scope. ─────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `clientWith` in this scope. ──────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  createClient = |config| Http.clientWith(config)                           │
  │                          ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
  └──────────────────────────────────────── can_import_exposing_types.md:36:25 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -307,15 +323,15 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `statusToString` in this scope. ─────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `statusToString` in this scope. ──────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Ok(status) => Http.statusToString(status)                                 │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └──────────────────────────────────────── can_import_exposing_types.md:42:23 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌────────────────┐
@@ -378,15 +394,15 @@ UNDEFINED VARIABLE - can_import_exposing_types.md:50:33:50:44
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `encode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
- │  Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })         │
+ │  Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })         │
  │                          ‾‾‾‾‾‾‾‾‾‾‾                                       │
  └──────────────────────────────────────── can_import_exposing_types.md:50:33 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -600,7 +616,7 @@ EndOfFile,
 								(e-record
 									(field (field "body")
 										(e-apply
-											(e-ident (raw "Json.encode"))
+											(e-ident (raw "Json.to_str"))
 											(e-ident (raw "value"))))
 									(field (field "status")
 										(e-ident (raw "httpStatus"))))))
@@ -662,7 +678,7 @@ handleResponse = |response|
 combineTrys : Try(Value, Error), Status -> Try(Response, Error)
 combineTrys = |jsonTry, httpStatus|
 	match jsonTry {
-		Ok(value) => Ok({ body: Json.encode(value), status: httpStatus })
+		Ok(value) => Ok({ body: Json.to_str(value), status: httpStatus })
 		Err(error) => Err(error)
 	}
 ~~~

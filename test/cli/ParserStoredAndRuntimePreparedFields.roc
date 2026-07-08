@@ -17,10 +17,10 @@ Format := [Identity, Kebab].{
 		}
 
 	parse_record_field : Format,
-	Str.FieldName.FieldNames(_shape),
+	Encoding.FieldName.FieldNames(_shape),
 	State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -62,12 +62,12 @@ State := [
 	Done,
 ]
 
-emit_field : Str.FieldName.FieldNames(_shape),
+emit_field : Encoding.FieldName.FieldNames(_shape),
 Str,
 State,
 State -> Try(
 	[
-		Field({ field : Str.FieldName(_shape), rest : State }),
+		Field({ field : Encoding.FieldName(_shape), rest : State }),
 		TryField({ name : Str, rest : State }),
 		TryFieldCaseless({ name : Str, rest : State }),
 		Continue({ rest : State }),
@@ -78,9 +78,9 @@ State -> Try(
 emit_field = |fields, name, value_state, next_state| {
 	name_len = Str.count_utf8_bytes(name)
 
-	if name_len < Str.FieldName.FieldNames.shortest_name(fields) {
+	if name_len < Encoding.FieldName.FieldNames.shortest_name(fields) {
 		Ok(Continue({ rest: next_state }))
-	} else if name_len > Str.FieldName.FieldNames.longest_name(fields) {
+	} else if name_len > Encoding.FieldName.FieldNames.longest_name(fields) {
 		Ok(Continue({ rest: next_state }))
 	} else {
 		match find_field(fields, name) {
@@ -90,14 +90,14 @@ emit_field = |fields, name, value_state, next_state| {
 	}
 }
 
-find_field : Str.FieldName.FieldNames(_shape), Str -> Try(Str.FieldName(_shape), [NotFound])
+find_field : Encoding.FieldName.FieldNames(_shape), Str -> Try(Encoding.FieldName(_shape), [NotFound])
 find_field = |fields, name| {
-	var $remaining = Str.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
+	var $remaining = Encoding.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
 
 	while True {
 		match Iter.next($remaining) {
 			One({ item, rest }) =>
-				if Str.is_eq(Str.FieldName.name(item), name) {
+				if Str.is_eq(Encoding.FieldName.name(item), name) {
 					return Ok(item)
 				} else {
 					$remaining = rest

@@ -18,12 +18,12 @@ broken_fn3 : a -> b
   where [c.method : c -> d]
 ~~~
 # EXPECTED
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:3:10:3:11
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:3:3:3:21
-PARSE ERROR - where_clauses_error_cases.md:3:22:3:23
-PARSE ERROR - where_clauses_error_cases.md:3:23:3:24
-WHERE CLAUSE ERROR - where_clauses_error_cases.md:7:3:7:10
-PARSE ERROR - where_clauses_error_cases.md:7:10:7:11
+EXPECTED CONSTRAINT TYPE - where_clauses_error_cases.md:3:10:3:11
+EXPECTED WHERE CLAUSE END - where_clauses_error_cases.md:3:3:3:21
+UNEXPECTED STATEMENT - where_clauses_error_cases.md:3:22:3:23
+UNEXPECTED STATEMENT - where_clauses_error_cases.md:3:23:3:24
+EXPECTED WHERE CONSTRAINT - where_clauses_error_cases.md:7:3:7:10
+UNEXPECTED STATEMENT - where_clauses_error_cases.md:7:10:7:11
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:3:10:3:21
 MALFORMED WHERE CLAUSE - where_clauses_error_cases.md:7:3:7:10
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:2:1:3:21
@@ -31,74 +31,115 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:6:1:7:10
 DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
 # PROBLEMS
 
-┌────────────────────┐
-│ WHERE CLAUSE ERROR ├─ Expected a colon : after the method name in this ─────┐
-└┬───────────────────┘  where clause constraint.                              │
+┌──────────────────────────┐
+│ EXPECTED CONSTRAINT TYPE ├─ I was parsing a `where` method constraint, ─────┐
+└┬─────────────────────────┘  and I expected `:` before the method type.      │
  │                                                                            │
  │  where [a.method -> b]                                                     │
  │         ‾                                                                  │
  └───────────────────────────────────────── where_clauses_error_cases.md:3:10 ┘
 
-    Method constraints require a colon to separate the method name from its
-    type.
-    For example:     a.method : a -> b
+    Method constraints use a colon between the method name and its type.
+
+    For example:
+        where [a.hash : a -> U64]
+
+    I found `a` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌────────────────────┐
-│ WHERE CLAUSE ERROR ├─ Expected a closing bracket ] after the where clause ──┐
-└┬───────────────────┘  constraints.                                          │
+┌───────────────────────────┐
+│ EXPECTED WHERE CLAUSE END ├─ I was parsing a `where` clause, and I ─────────┐
+└┬──────────────────────────┘  expected `]`.                                  │
  │                                                                            │
  │  where [a.method -> b]                                                     │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └────────────────────────────────────────── where_clauses_error_cases.md:3:3 ┘
 
-    Where clauses should look like:     where [a.method : Type]
+    Close the where constraint list after the final constraint.
+
+    For example:
+        where [a.hash : a -> U64]
+
+    I found `where [a.method ->` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  where [a.method -> b]                                                     │
  │                     ‾                                                      │
  └───────────────────────────────────────── where_clauses_error_cases.md:3:22 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `b` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  where [a.method -> b]                                                     │
  │                      ‾                                                     │
  └───────────────────────────────────────── where_clauses_error_cases.md:3:23 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────┐
-│ WHERE CLAUSE ERROR ├─ A where clause cannot be empty. ──────────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────────────┐
+│ EXPECTED WHERE CONSTRAINT ├─ I was parsing a `where` clause, and I ─────────┐
+└┬──────────────────────────┘  expected at least one constraint.              │
  │                                                                            │
  │  where []                                                                  │
  │  ‾‾‾‾‾‾‾                                                                   │
  └────────────────────────────────────────── where_clauses_error_cases.md:7:3 ┘
 
-    Where clauses must contain at least one constraint.
+    Remove the empty `where` clause or add a constraint inside the brackets.
+
     For example:
-            where [a.method : a -> b]
+        where [a.hash : a -> U64]
+
+    I found `where [` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  where []                                                                  │
  │         ‾                                                                  │
  └───────────────────────────────────────── where_clauses_error_cases.md:7:10 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
 ┌────────────────────────┐

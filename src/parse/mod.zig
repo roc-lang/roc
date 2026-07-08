@@ -116,12 +116,26 @@ fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     return @intFromEnum(idx);
 }
 
+fn topLevelStatementRootNode(parser: *Parser) Allocator.Error!u32 {
+    const idx = try parser.runTopLevelStatement();
+    return @intFromEnum(idx);
+}
+
 /// Parses a single Roc statement - for use in REPL and snapshots.
 ///
 /// The caller must call `ast.deinit()` when done, which frees all internal
 /// allocations AND the AST struct itself.
 pub fn statement(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, statementRootNode);
+}
+
+/// Parses a single top-level Roc statement - for use in the REPL, which
+/// synthesizes a module and so accepts top-level-only statements like `import`.
+///
+/// The caller must call `ast.deinit()` when done, which frees all internal
+/// allocations AND the AST struct itself.
+pub fn statementTopLevel(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
+    return try runTokenDispatch(gpa, env, topLevelStatementRootNode);
 }
 
 test "parser tests" {
@@ -187,6 +201,51 @@ test "bare .. in expression position is a helpful parse error" {
         AST.Diagnostic.Tag.expr_double_dot_is_not_range,
         ast.parse_diagnostics.items[0].tag,
     );
+}
+
+test "dollar-prefixed record field names are rejected with a single diagnostic" {
+    const gpa = std.testing.allocator;
+
+    const Case = struct {
+        source: []const u8,
+        parse: *const fn (Allocator, *CommonEnv) Allocator.Error!*AST,
+    };
+
+    for ([_]Case{
+        .{
+            .source = "{ $field : \"value\" }",
+            .parse = expr,
+        },
+        .{
+            .source = "value : { $field : Str }",
+            .parse = statement,
+        },
+        .{
+            .source = "match value { { $field } => \"matched\" }",
+            .parse = expr,
+        },
+        .{
+            .source = "app [main!] { $pf: platform \"./platform/main.roc\" }",
+            .parse = header,
+        },
+        .{
+            .source = "package [Foo] { $dep: \"../dep/main.roc\" }",
+            .parse = header,
+        },
+    }) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+
+        const ast = try case.parse(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+        try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+        try std.testing.expectEqual(
+            AST.Diagnostic.Tag.record_field_name_cannot_be_var,
+            ast.parse_diagnostics.items[0].tag,
+        );
+    }
 }
 
 fn vmExprAllocationFailureImpl(allocator: Allocator, tokens: tokenize.TokenizedBuffer) Allocator.Error!void {
@@ -259,8 +318,6 @@ test "double question operator parses after static dispatch" {
 
 test "where clause method function types parse stack-safely" {
     try expectFileParsesWithoutDiagnostics(
-        \\module []
-        \\
         \\A(a) : a where [a.a1 : (a, a) -> Str, a.a2 : (a, a) -> Str]
     );
 }
@@ -326,11 +383,9 @@ test "parse diagnostic report handles invalid mutable identifier spelling" {
     }
 }
 
-test "bughunt B212: parameterized type arguments accept bare function types" {
+test "regression B212: parameterized type arguments accept bare function types" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\BoxedFn : Box(Str -> Str)
         \\BoxedParenFn : Box((Str -> Str))
         \\ResultFn : Result(Str -> Str, Str -> Str)
@@ -352,8 +407,6 @@ test "bughunt B212: parameterized type arguments accept bare function types" {
 test "parser records top-level type declaration dependencies" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\A : (B, Mod.C) -> D
         \\B : {}
         \\D : {}
@@ -400,8 +453,6 @@ test "parser records top-level type declaration dependencies" {
 test "parser records nested associated owner paths" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\Parent := [P].{
         \\    Nested := [N].{
         \\        val = 1
@@ -442,8 +493,6 @@ test "parser records nested associated owner paths" {
 test "parser keeps block-local type paths lexically distinct" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\first = {
         \\    T := [First].{
         \\        Inner := [FirstInner]
@@ -503,8 +552,6 @@ test "parser keeps block-local type paths lexically distinct" {
 test "parser does not create a type path for malformed associated type headers" {
     const gpa = std.testing.allocator;
     const source =
-        \\module []
-        \\
         \\Outer := [Outer].{
         \\    Broken(a := [Broken]
         \\    ok = 1

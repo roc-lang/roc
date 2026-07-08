@@ -1047,6 +1047,26 @@ pub const tests = [_]TestCase{
         .returned,
         0,
     ),
+    // Repro for https://github.com/roc-lang/roc/issues/9953:
+    // successful Json.parse should release a runtime-allocated input string.
+    exprTestWithLiveAllocations(
+        "rc balance: Json.parse releases runtime string input after success",
+        \\{
+        \\    json = Str.concat("{ \"name\": \"", "a value long enough to force a heap allocation for the whole json string\" }")
+        \\    result : Try({ name : Str }, _)
+        \\    result = Json.parse(json)
+        \\    n = match result {
+        \\        Ok(rec) => Str.count_utf8_bytes(rec.name)
+        \\        Err(_) => 0
+        \\    }
+        \\    expect n > 0
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
     moduleTestWithLiveAllocations(
         "rc balance: recursive tag union with boxed children is fully released",
         \\Tree := [Leaf(Str), Node(Box(Tree), Box(Tree))]

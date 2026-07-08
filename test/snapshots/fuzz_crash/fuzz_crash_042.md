@@ -8,20 +8,28 @@ type=snippet
 import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_042.md:1:11:1:12
+UNEXPECTED STATEMENT - fuzz_crash_042.md:1:11:1:12
 MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  import u.R}g:r->R.a.E                                                     │
  │            ‾                                                               │
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:11 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
 ┌──────────────────┐

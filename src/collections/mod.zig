@@ -30,6 +30,7 @@ pub const SafeList = @import("safe_list.zig").SafeList;
 pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
+pub const GuardedList = @import("GuardedList.zig");
 
 pub const SafeStringHashMap = @import("safe_hash_map.zig").SafeStringHashMap;
 
@@ -37,6 +38,8 @@ pub const SortedArrayBuilder = @import("SortedArrayBuilder.zig").SortedArrayBuil
 pub const ExposedItems = @import("ExposedItems.zig").ExposedItems;
 pub const ExposedItemTarget = @import("ExposedItems.zig").ExposedItemTarget;
 pub const CompactWriter = @import("CompactWriter.zig");
+pub const serde_validation = @import("serde_validation.zig");
+pub const validateSerializedRelocations = serde_validation.validateSerializedRelocations;
 
 /// Single-threaded arena allocator; the non-atomic counterpart to
 /// `std.heap.ArenaAllocator`.
@@ -134,6 +137,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_hash_map.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
+    std.testing.refAllDecls(@import("GuardedList.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));

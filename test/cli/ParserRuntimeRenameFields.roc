@@ -11,9 +11,9 @@ Format := [Default].{
 			Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -24,7 +24,7 @@ Format := [Default].{
 	parse_record_field = |_, fields, state|
 		match state {
 			Present(_) => {
-				renamed = Str.FieldName.FieldNames.rename_fields(fields, |name|
+				renamed = Encoding.FieldName.FieldNames.rename_fields(fields, |name|
 					if Str.is_eq(name, "foo_bar") {
 						"foo-bar"
 					} else {
@@ -49,14 +49,14 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-find_field : Str.FieldName.FieldNames(_shape), Str -> Try(Str.FieldName(_shape), [NotFound])
+find_field : Encoding.FieldName.FieldNames(_shape), Str -> Try(Encoding.FieldName(_shape), [NotFound])
 find_field = |fields, name| {
-	var $remaining = Str.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
+	var $remaining = Encoding.FieldName.FieldNames.for_size(fields, Str.count_utf8_bytes(name))
 
 	while True {
 		match Iter.next($remaining) {
 			One({ item, rest }) =>
-				if Str.is_eq(Str.FieldName.name(item), name) {
+				if Str.is_eq(Encoding.FieldName.name(item), name) {
 					return Ok(item)
 				} else {
 					$remaining = rest

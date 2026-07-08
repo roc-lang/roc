@@ -168,25 +168,26 @@ expect {
 # EXPECTED
 LEADING ZERO - :0:0:0:0
 UNCLOSED STRING - fuzz_crash_027.md:118:8:118:22
-PARSE ERROR - fuzz_crash_027.md:40:5:40:6
-PARSE ERROR - fuzz_crash_027.md:40:7:40:8
-PARSE ERROR - fuzz_crash_027.md:40:9:40:10
-PARSE ERROR - fuzz_crash_027.md:41:1:41:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:124:3:124:4
-LIST NOT CLOSED - fuzz_crash_027.md:125:3:125:4
-PARSE ERROR - fuzz_crash_027.md:126:2:126:3
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:131:9:131:10
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:132:8:132:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:133:10:133:11
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:141:8:141:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:142:8:142:9
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:148:1:148:2
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:150:7:150:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:151:7:151:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:153:7:153:8
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_027.md:155:1:155:7
-LIST NOT CLOSED - fuzz_crash_027.md:160:1:160:1
-PARSE ERROR - fuzz_crash_027.md:160:1:160:1
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_027.md:40:5:40:6
+UNEXPECTED STATEMENT - fuzz_crash_027.md:40:7:40:8
+UNEXPECTED STATEMENT - fuzz_crash_027.md:40:9:40:10
+UNEXPECTED STATEMENT - fuzz_crash_027.md:41:1:41:2
+EXPECTED RECORD ACCESSOR - fuzz_crash_027.md:110:2:110:5
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:124:3:124:4
+EXPECTED LIST SEPARATOR - fuzz_crash_027.md:125:3:125:4
+EXPECTED CALL ARGUMENT END - fuzz_crash_027.md:126:2:126:3
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:131:9:131:10
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:132:8:132:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:133:10:133:11
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:141:8:141:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:142:8:142:9
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:148:1:148:2
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:150:7:150:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:151:7:151:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:153:7:153:8
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_027.md:155:1:155:7
+EXPECTED LIST SEPARATOR - fuzz_crash_027.md:160:1:160:1
+EXPECTED CLOSING BRACE - fuzz_crash_027.md:160:1:160:1
 MODULE NOT FOUND - fuzz_crash_027.md:6:1:8:4
 MODULE NOT FOUND - fuzz_crash_027.md:12:1:12:19
 MODULE NOT FOUND - fuzz_crash_027.md:13:1:14:4
@@ -201,23 +202,25 @@ UNDECLARED TYPE - fuzz_crash_027.md:38:8:38:11
 UNDECLARED TYPE - fuzz_crash_027.md:43:11:43:16
 UNDECLARED TYPE - fuzz_crash_027.md:43:26:43:31
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_027.md:52:1:52:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:4:65:5
-UNDEFINED VARIABLE - fuzz_crash_027.md:65:6:65:7
-UNDEFINED VARIABLE - fuzz_crash_027.md:71:7:71:11
+NAME NOT IN SCOPE - fuzz_crash_027.md:65:4:65:5
+NAME NOT IN SCOPE - fuzz_crash_027.md:65:6:65:7
+NAME NOT IN SCOPE - fuzz_crash_027.md:71:7:71:11
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 NOT IMPLEMENTED - fuzz_crash_027.md:74:7:74:12
 UNUSED VARIABLE - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:76:1:76:4
 NOT IMPLEMENTED - fuzz_crash_027.md:81:7:81:12
-UNDEFINED VARIABLE - fuzz_crash_027.md:82:37:82:40
+NAME NOT IN SCOPE - fuzz_crash_027.md:82:37:82:40
 UNUSED VARIABLE - fuzz_crash_027.md:82:21:82:27
 NOT IMPLEMENTED - fuzz_crash_027.md:89:18:89:23
 UNUSED VARIABLE - fuzz_crash_027.md:62:2:62:3
-UNDEFINED VARIABLE - fuzz_crash_027.md:97:2:97:6
+NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
-UNDEFINED VARIABLE - fuzz_crash_027.md:103:9:103:13
-UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
+NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
+UNRECOGNIZED SYNTAX - fuzz_crash_027.md:110:2:110:5
+NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
 UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
+UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
@@ -228,7 +231,6 @@ TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
 MISSING METHOD - fuzz_crash_027.md:68:3:68:8
 MISSING METHOD - fuzz_crash_027.md:70:3:70:8
 TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
-TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 # PROBLEMS
 
@@ -248,227 +250,359 @@ Numbers cannot have leading zeros.
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:40:5 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │        ‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:40:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Maya) : [ #                                                               │
  │          ‾                                                                 │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:40:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ] #se                                                                     │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:41:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
+
+
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  e[, # afarg                                                               │
  │    ‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:124:3 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────────┐
-│ LIST NOT CLOSED ├─ This list is missing a closing bracket or has a syntax ──┐
-└┬────────────────┘  error.                                                   │
+┌─────────────────────────┐
+│ EXPECTED LIST SEPARATOR ├─ I was parsing a list expression, and I ──────────┐
+└┬────────────────────────┘  expected `,` or `]`.                             │
  │                                                                            │
  │  ), 456, # ee                                                              │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:125:3 ┘
 
-    Lists must be closed with ] and list items must be separated by commas.
-    For example:     [1, 2, 3]
+    Separate list elements with commas and close the list with `]`.
+
+    For example:
+        [1, 2, 3]
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_expr_apply_close_round ───┐
-└┬────────────┘                                                               │
+┌────────────────────────────┐
+│ EXPECTED CALL ARGUMENT END ├─ I was parsing function or method call ────────┐
+└┬───────────────────────────┘  arguments, and I expected `)`.                │
  │                                                                            │
  │  ]                                                                         │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:126:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Function call arguments go inside parentheses and are separated with commas.
+
+    For example:
+        add(1, 2)
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }     │
  │         ‾                                                                  │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:131:9 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])        │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:132:8 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  m_tuple = (                                                               │
  │          ‾                                                                 │
  └────────────────────────────────────────────────── fuzz_crash_027.md:133:10 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  bsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3… │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:141:8 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  stale = some_fn(arg1)?.statod()?.ned()?.recd?                             │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:142:8 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token } is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  } # Commenl decl                                                          │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:148:1 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  empty : {}                                                                │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:150:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token = is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  empty = {}                                                                │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:151:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `=` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  tuple : Value((a, b, c))                                                  │
  │        ‾                                                                   │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:153:7 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token expect is not expected in an ───┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  expect {                                                                  │
  │  ‾‾‾‾‾‾                                                                    │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:155:1 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `expect` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────────┐
-│ LIST NOT CLOSED ├─ This list is missing a closing bracket or has a syntax ──┐
-└┬────────────────┘  error.                                                   │
+┌─────────────────────────┐
+│ EXPECTED LIST SEPARATOR ├─ I was parsing a list expression, and I ──────────┐
+└┬────────────────────────┘  expected `,` or `]`.                             │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
-    Lists must be closed with ] and list items must be separated by commas.
-    For example:     [1, 2, 3]
+    Separate list elements with commas and close the list with `]`.
+
+    For example:
+        [1, 2, 3]
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_expr_close_curly ─────────┐
-└┬────────────┘                                                               │
+┌────────────────────────┐
+│ EXPECTED CLOSING BRACE ├─ I was parsing a block expression, and I ──────────┐
+└┬───────────────────────┘  expected `}` before the file ended.               │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:160:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Close the block after its final statement or expression.
+
+    For example:
+        {
+            answer = 42
+            answer
+        }
+
+    I reached the end of the file before this construct was complete.
 
 
 ┌──────────────────┐
@@ -617,37 +751,37 @@ Numbers cannot have leading zeros.
     If you want to represent nothing, try using an empty record: `{}`.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  x x                                                                       │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:65:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  x x                                                                       │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:65:6 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ment` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ment` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  => ment                                                                   │
  │     ‾‾‾‾                                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:71:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -710,15 +844,15 @@ Numbers cannot have leading zeros.
     want to help improve Roc's error messages!
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `add` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `add` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  { foo: 1, bar: 2, ..rest } => 12->add(34)                                 │
  │                                    ‾‾‾                                     │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:82:37 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -757,15 +891,15 @@ Numbers cannot have leading zeros.
     suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  blah == 1 # Commnt                                                        │
  │  ‾‾‾‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_027.md:97:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -778,26 +912,37 @@ Numbers cannot have leading zeros.
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blah` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blah` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  expect blah == 1                                                          │
  │         ‾‾‾‾                                                               │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:103:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `some_func` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:110:2 ┘
+
+    This might be a syntax error, an unsupported language feature, or a typo.
+
+
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `some_func` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  some_func(                                                                │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── fuzz_crash_027.md:114:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────────┐
@@ -809,6 +954,18 @@ Numbers cannot have leading zeros.
  └───────────────────────────────────────────────────── fuzz_crash_027.md:1:1 ┘
 
     This might be a syntax error, an unsupported language feature, or a typo.
+
+
+┌─────────────────┐
+│ UNUSED VARIABLE ├─ Variable `tag` is defined here and then never used. ─────┐
+└┬────────────────┘                                                           │
+ │                                                                            │
+ │  tag = Blue                                                                │
+ │  ‾‾‾                                                                       │
+ └─────────────────────────────────────────────────── fuzz_crash_027.md:104:2 ┘
+
+    If you don't need this variable, prefix it with an underscore like `_tag`
+    to suppress this warning.
 
 
 ┌─────────────────┐
@@ -1016,26 +1173,6 @@ Numbers cannot have leading zeros.
         [Blue, Red, ..]
 
     These can never match! Either the pattern or expression has a problem.
-
-
-┌───────────────┐
-│ TYPE MISMATCH ├─ This `return` does not match the function's return type. ──┐
-└┬──────────────┘                                                             │
- │                                                                            │
- │  tag                                                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────────────────────── fuzz_crash_027.md:106:3 ┘
-
-    It has the type:
-
-        [Blue, ..]
-
-    But the function's return type is:
-
-        Try({}, _d)
-
-    Hint: All `return` statements and the final expression in a function must
-    have the same type.
 
 
 ┌──────────────┐
@@ -1485,8 +1622,7 @@ EndOfFile,
 							(p-ident (raw "tag"))
 							(e-tag (raw "Blue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "match_time"))
 							(e-ellipsis))
@@ -1533,7 +1669,8 @@ MapML( # Cere
 	b,
 ) # Ag
 	: # Aon
-		List(),
+		List( # rg
+		),
 		(a -> b) -> # row
 			List(b) #
 
@@ -1621,12 +1758,11 @@ main! = |_| { # Yeah Ie
 	var number = 123
 	expect blah == 1
 	tag = Blue
-	return # Comd
-		tag
+	return
 
 	# Jusnt!
 
-	...
+		
 	match_time(
 		..., #
 	)
@@ -1888,12 +2024,9 @@ main! = |_| { # Yeah Ie
 					(p-assign (ident "tag"))
 					(e-tag (name "Blue")))
 				(s-return
-					(e-lookup-local
-						(p-assign (ident "tag"))))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
-				(s-expr
-					(e-call (constraint-fn-var 3592)
+					(e-call (constraint-fn-var 3608)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -1916,7 +2049,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 3683)
+						(e-interpolation (constraint-fn-var 3699)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

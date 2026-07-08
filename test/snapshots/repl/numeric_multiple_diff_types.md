@@ -31,9 +31,9 @@ But the function needs the first argument to be:
 
     Dec
 ---
-**Undefined Variable**
+**Name Not In Scope**
 Nothing is named `b` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Is it misspelled, or is there an import missing?
 
 **repl:3:22:3:23:**
 ```roc

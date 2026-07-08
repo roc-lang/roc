@@ -15,9 +15,16 @@ import pf.Stdout
 # 5. The underscore wildcard in Try annotations caused fresh vars at rank 2
 # 6. When processing f2, the fresh_vars from f1 were still in the list
 
+# NOTE: `run!` performs the success print itself so the program is genuinely
+# effectful: under dependency-ordered def checking, `run!`/`f1`/`f2` are
+# checked before `main!`, and a pure `run!()` would be recognized as a
+# compile-time-known match value (an UNCONDITIONAL CONDITION warning, which
+# makes `roc build` exit nonzero). The regression shape — nested lambda,
+# forward-referenced defs with `Try(_, _)` annotations, two `?`s — is
+# unchanged.
 main! = || {
     match run!() {
-        Ok(_) => Stdout.line!("ok")
+        Ok(_) => {}
         Err(_) => {}
     }
 }
@@ -25,6 +32,7 @@ main! = || {
 run! = || {
     _x = f1(0)?
     _y = f2(0)?
+    Stdout.line!("ok")
     Ok({})
 }
 

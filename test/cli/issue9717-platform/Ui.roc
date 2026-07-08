@@ -10,6 +10,7 @@ import Signal exposing [Signal]
 ## referenced de-Bruijn style (distance out to the enclosing `Ui.state`), so the
 ## same helper composes correctly wherever it is mounted.
 Ui := [].{
+
 	## A handle to a state binder, given to the `Ui.state` body. `signal` reads the
 	## current value; `send` builds a `Node.Msg` that, when its event fires, applies
 	## the given reducer to the current value.
@@ -21,7 +22,7 @@ Ui := [].{
 		## next value, ignoring the (unit) payload.
 		on_unit : State(a), (a -> a) -> Node.Msg
 			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.encoder_for : NodeValue -> (a, NodeValue -> Try(NodeValue, [])),
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			]
 		on_unit = |st, f| {
@@ -38,9 +39,7 @@ Ui := [].{
 					}
 				next : a
 				next = f(current)
-				match next.encode(NodeValue.format) {
-					Ok(encoded) => encoded
-				}
+				NodeValue.encode_value(next)
 			}
 			{ binder: st.ref, payload_kind: Node.unit_payload_kind, transform: Box.box(wrapped) }
 		}
@@ -48,7 +47,7 @@ Ui := [].{
 		## Build a payload-carrying reducer: `f` maps (current, payload) to next.
 		on_value : State(a), U64, (a, p -> a) -> Node.Msg
 			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.encoder_for : NodeValue -> (a, NodeValue -> Try(NodeValue, [])),
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 				p.decode : NodeValue, NodeValue -> (Try(p, [TypeMismatch]), NodeValue),
 			]
@@ -75,23 +74,21 @@ Ui := [].{
 					}
 				next : a
 				next = f(current, payload)
-				match next.encode(NodeValue.format) {
-					Ok(encoded) => encoded
-				}
+				NodeValue.encode_value(next)
 			}
 			{ binder: st.ref, payload_kind, transform: Box.box(wrapped) }
 		}
 
 		on_str : State(a), (a, Str -> a) -> Node.Msg
 			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.encoder_for : NodeValue -> (a, NodeValue -> Try(NodeValue, [])),
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			]
 		on_str = |st, f| st.on_value(Node.str_payload_kind, f)
 
 		on_bool : State(a), (a, Bool -> a) -> Node.Msg
 			where [
-				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.encoder_for : NodeValue -> (a, NodeValue -> Try(NodeValue, [])),
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			]
 		on_bool = |st, f| st.on_value(Node.bool_payload_kind, f)
@@ -104,14 +101,11 @@ Ui := [].{
 		a, (State(a) -> Elem) -> Elem
 			where [
 				a.is_eq : a, a -> Bool,
-				a.encode : a, NodeValue -> Try(NodeValue, []),
+				a.encoder_for : NodeValue -> (a, NodeValue -> Try(NodeValue, [])),
 				a.decode : NodeValue, NodeValue -> (Try(a, [TypeMismatch]), NodeValue),
 			]
 	state = |init, body| {
-		initial_nv =
-			match init.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+		initial_nv = NodeValue.encode_value(init)
 		eq : NodeValue, NodeValue -> Bool
 		eq = |left, right| {
 			A : a
@@ -160,7 +154,7 @@ Ui := [].{
 		Signal(List(item)), (item -> k), (k, Signal(item) -> Elem) -> Elem
 			where [
 				item.decode : NodeValue, NodeValue -> (Try(item, [TypeMismatch]), NodeValue),
-				k.encode : k, NodeValue -> Try(NodeValue, []),
+				k.encoder_for : NodeValue -> (k, NodeValue -> Try(NodeValue, [])),
 				k.decode : NodeValue, NodeValue -> (Try(k, [TypeMismatch]), NodeValue),
 				k.to_hash : k, Hasher -> Hasher,
 				k.is_eq : k, k -> Bool,
@@ -179,9 +173,7 @@ Ui := [].{
 		key_of_nv : NodeValue -> NodeValue
 		key_of_nv = |nv| {
 			key = key_of(decode_item(nv))
-			match key.encode(NodeValue.format) {
-				Ok(encoded) => encoded
-			}
+			NodeValue.encode_value(key)
 		}
 		key_eq_nv : NodeValue, NodeValue -> Bool
 		key_eq_nv = |left, right| {
@@ -201,7 +193,7 @@ Ui := [].{
 					(Err(_), _) => {
 						crash "Ui.each key equality received a right key that does not match the key type"
 					}
-			}
+				}
 			left_k.is_eq(right_k)
 		}
 		row_nv : NodeValue, NodeValue -> Elem
@@ -214,7 +206,7 @@ Ui := [].{
 					(Err(_), _) => {
 						crash "Ui.each received a key value that does not match the key type"
 					}
-			}
+				}
 			row(key, Signal.from_expr(Node.SignalExpr.ConstValue(item_nv)))
 		}
 		Elem.Each(

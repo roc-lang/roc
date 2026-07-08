@@ -8,54 +8,65 @@ type=file
 module P]F
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_011.md:1:8:1:9
-PARSE ERROR - fuzz_crash_011.md:1:9:1:10
-PARSE ERROR - fuzz_crash_011.md:2:1:2:1
+EXPECTED EXPOSING LIST - fuzz_crash_011.md:1:8:1:9
+UNEXPECTED STATEMENT - fuzz_crash_011.md:1:9:1:10
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_011.md:2:1:2:1
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
-└┬────────────┘                                                               │
+┌────────────────────────┐
+│ EXPECTED EXPOSING LIST ├─ I was parsing a module or hosted header, and I ───┐
+└┬───────────────────────┘  expected an opening `[`.                          │
  │                                                                            │
  │  module P]F                                                                │
  │         ‾                                                                  │
  └───────────────────────────────────────────────────── fuzz_crash_011.md:1:8 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    The names exposed by this module are written in square brackets after the
+    header keyword.
+
+    For example:
+        module [main, helper]
+
+    I found `P` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  module P]F                                                                │
  │          ‾                                                                 │
  └───────────────────────────────────────────────────── fuzz_crash_011.md:1:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_011.md:2:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I reached the end of the file before this construct was complete.
 
 # TOKENS
 ~~~zig

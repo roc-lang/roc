@@ -265,6 +265,8 @@ pub const Resolver = struct {
 
         switch (backing_ref) {
             .canonical => {
+                // `internGraph` validates every reserved node, even when the caller returns a canonical ref.
+                build_state.graph.setNode(placeholder_id, .{ .nominal = backing_ref });
                 try build_state.refs_by_var.put(cache_key, backing_ref);
                 return backing_ref;
             },
@@ -698,19 +700,19 @@ pub const Resolver = struct {
         }
 
         const env = self.envFor(module_idx);
-        return nominal_type.origin_module.eql(env.idents.builtin_module) and
+        return nominal_type.originIsBuiltin() and
             nominal_type.ident.ident_idx.eql(env.idents.str);
     }
 
     fn isBuiltinList(self: *const Resolver, module_idx: u32, nominal_type: types.NominalType) bool {
         const env = self.envFor(module_idx);
-        return nominal_type.origin_module.eql(env.idents.builtin_module) and
+        return nominal_type.originIsBuiltin() and
             nominal_type.ident.ident_idx.eql(env.idents.list);
     }
 
     fn isBuiltinBox(self: *const Resolver, module_idx: u32, nominal_type: types.NominalType) bool {
         const env = self.envFor(module_idx);
-        return nominal_type.origin_module.eql(env.idents.builtin_module) and
+        return nominal_type.originIsBuiltin() and
             nominal_type.ident.ident_idx.eql(env.idents.box);
     }
 
@@ -720,7 +722,7 @@ pub const Resolver = struct {
         nominal_type: types.NominalType,
     ) ?Idx {
         const env = self.envFor(module_idx);
-        if (!nominal_type.origin_module.eql(env.idents.builtin_module)) return null;
+        if (!nominal_type.originIsBuiltin()) return null;
 
         const ident_idx = nominal_type.ident.ident_idx;
         if (ident_idx.eql(env.idents.u8_type)) return .u8;
@@ -783,7 +785,7 @@ pub const Resolver = struct {
         if (other_flat != .nominal_type) return false;
         const other_nominal = other_flat.nominal_type;
 
-        if (!nominal_type.origin_module.eql(other_nominal.origin_module)) return false;
+        if (nominal_type.origin_module != other_nominal.origin_module) return false;
         if (!nominal_type.ident.ident_idx.eql(other_nominal.ident.ident_idx)) return false;
 
         const lhs_args = ts.sliceNominalArgs(nominal_type);

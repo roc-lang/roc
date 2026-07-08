@@ -21,9 +21,9 @@ Format := [Default].{
 			Key(_, _) | Value(_) | Start | FooName | FooValue | CacheName | CacheValue | ContentLengthName | RequestCountName | Done => Err(MissingRequired)
 		}
 
-	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),
@@ -35,7 +35,7 @@ Format := [Default].{
 		match state {
 			Key(name, value) => Ok(TryFieldCaseless({ name, rest: Value(value) }))
 			Start =>
-				if Str.FieldName.FieldNames.shortest_name(fields) == 3 and Str.FieldName.FieldNames.longest_name(fields) == 14 {
+				if Encoding.FieldName.FieldNames.shortest_name(fields) == 3 and Encoding.FieldName.FieldNames.longest_name(fields) == 14 {
 					Ok(Continue({ rest: FooName }))
 				} else {
 					Ok(Done({ rest: Done }))

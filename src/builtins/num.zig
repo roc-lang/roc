@@ -295,7 +295,7 @@ pub fn exportPow(
                             return value;
                         } else |err| switch (err) {
                             error.Overflow => {
-                                roc_ops.crash("Integer raised to power overflowed!");
+                                roc_ops.crash("Integer exponentiation overflowed");
                             },
                             error.Underflow => return 0,
                         }
@@ -304,7 +304,7 @@ pub fn exportPow(
                             return value;
                         } else |err| switch (err) {
                             error.Overflow => {
-                                roc_ops.crash("Integer raised to power overflowed!");
+                                roc_ops.crash("Integer exponentiation overflowed");
                             },
                             error.Underflow => return 0,
                         }
@@ -767,7 +767,7 @@ pub fn exportAddOrPanic(
         ) callconv(.c) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_ops.crash("Integer addition overflowed!");
+                roc_ops.crash("Integer addition overflowed");
             } else {
                 return result.value;
             }
@@ -845,7 +845,7 @@ pub fn exportSubOrPanic(
         ) callconv(.c) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_ops.crash("Integer subtraction overflowed!");
+                roc_ops.crash("Integer subtraction overflowed");
             } else {
                 return result.value;
             }
@@ -1053,7 +1053,7 @@ pub fn exportMulOrPanic(
         ) callconv(.c) T {
             const result = @call(.always_inline, mulWithOverflow, .{ T, self, other });
             if (result.has_overflowed) {
-                roc_ops.crash("Integer multiplication overflowed!");
+                roc_ops.crash("Integer multiplication overflowed");
             } else {
                 return result.value;
             }

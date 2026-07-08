@@ -106,11 +106,11 @@ NO CHANGE
 		(e-nominal-external
 			(builtin)
 			(e-tag (name "False")))
-		(e-dispatch-call (method "not") (constraint-fn-var 47)
+		(e-dispatch-call (method "not") (constraint-fn-var 50)
 			(receiver
 				(e-tag (name "True")))
 			(args))
-		(e-dispatch-call (method "not") (constraint-fn-var 51)
+		(e-dispatch-call (method "not") (constraint-fn-var 54)
 			(receiver
 				(e-tag (name "False")))
 			(args))
@@ -126,7 +126,7 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-dispatch-call (method "not") (constraint-fn-var 67)
+					(e-dispatch-call (method "not") (constraint-fn-var 70)
 						(receiver
 							(e-tag (name "True")))
 						(args))
@@ -134,7 +134,7 @@ NO CHANGE
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "not") (constraint-fn-var 79)
+				(e-dispatch-call (method "not") (constraint-fn-var 82)
 					(receiver
 						(e-tag (name "True")))
 					(args))))))

@@ -8,18 +8,23 @@ type=snippet
 import#\
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_078.md:2:1:2:1
+INCOMPLETE IMPORT - fuzz_crash_078.md:2:1:2:1
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: incomplete_import ─────────────────┐
-└┬────────────┘                                                               │
+┌───────────────────┐
+│ INCOMPLETE IMPORT ├─ I was parsing an import, and the module path is ───────┐
+└┬──────────────────┘  incomplete.                                            │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_078.md:2:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Imports must name a module, optionally with a qualifier and exposing list.
+
+    For example:
+        import Json.Decode exposing [decode]
+
+    I reached the end of the file before this construct was complete.
 
 # TOKENS
 ~~~zig

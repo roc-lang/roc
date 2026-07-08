@@ -8,18 +8,23 @@ type=file
 platform""requires{}{}exposes[]packages{}provides[
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_045.md:1:50:1:51
+EXPECTED OPENING BRACE - fuzz_crash_045.md:1:50:1:51
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_provides_open_curly ──────┐
-└┬────────────┘                                                               │
+┌────────────────────────┐
+│ EXPECTED OPENING BRACE ├─ I was parsing a `provides` section, and I ────────┐
+└┬───────────────────────┘  expected an opening `{`.                          │
  │                                                                            │
  │  platform""requires{}{}exposes[]packages{}provides[                        │
  │                                                   ‾                        │
  └──────────────────────────────────────────────────── fuzz_crash_045.md:1:50 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Host symbol mappings are written as record-like entries inside braces.
+
+    For example:
+        provides { "roc_main": main }
+
+    I found `[` here.
 
 # TOKENS
 ~~~zig

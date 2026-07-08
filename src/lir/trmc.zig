@@ -56,6 +56,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const build_options = @import("build_options");
 const core = @import("lir_core");
@@ -64,6 +65,7 @@ const debug_print = @import("debug_print.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
+const GuardedList = collections.GuardedList;
 const LocalId = LIR.LocalId;
 const CFStmtId = LIR.CFStmtId;
 const JoinPointId = LIR.JoinPointId;
@@ -79,10 +81,10 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     // Every statement a proc's walk can reach exists before the pass runs;
     // statements appended by earlier transforms belong to already-processed
     // procs, so sizing the stamp array once up front is safe.
-    var scratch = try Scratch.init(store.allocator, store.cf_stmts.items.len);
+    var scratch = try Scratch.init(store.allocator, store.cfStmtCount());
     defer scratch.deinit();
 
-    const proc_count = store.proc_specs.items.len;
+    const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
@@ -340,7 +342,7 @@ const Detection = struct {
         const limit = self.joins.count() + 1;
         while (steps < limit) : (steps += 1) {
             const params = self.store.getLocalSpan(join.params);
-            if (params.len != 1 or params[0] != local) return false;
+            if (params.len != 1 or GuardedList.at(params, 0) != local) return false;
             switch (self.store.getCFStmt(join.body)) {
                 .ret => |s| return s.value == local,
                 .jump => |s| join = self.joins.get(s.target) orelse return false,
@@ -421,7 +423,7 @@ const Detection = struct {
                     var i = branches.len;
                     while (i > 0) {
                         i -= 1;
-                        try work.append(gpa, .{ .stmt = branches[i].body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
+                        try work.append(gpa, .{ .stmt = GuardedList.at(branches, i).body, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
                 .switch_initialized_payload => |s| {
@@ -438,7 +440,7 @@ const Detection = struct {
                     var i = arms.len;
                     while (i > 0) {
                         i -= 1;
-                        try work.append(gpa, .{ .stmt = arms[i].on_match, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
+                        try work.append(gpa, .{ .stmt = GuardedList.at(arms, i).on_match, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
                 .boxy_tag_match => |s| {
@@ -495,9 +497,7 @@ const Detection = struct {
                 }
                 try self.appendSharedSuccessor(work, s.default_branch);
                 const branches = self.store.getCFSwitchBranches(s.branches);
-                for (branches) |branch| {
-                    try self.appendSharedSuccessor(work, branch.body);
-                }
+                for (0..branches.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(branches, index).body);
             },
             .switch_initialized_payload => |s| {
                 try self.appendSharedSuccessor(work, s.initialized_branch);
@@ -508,9 +508,8 @@ const Detection = struct {
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .str_match_set => |s| {
-                for (self.store.getStrMatchArms(s.arms)) |arm| {
-                    try self.appendSharedSuccessor(work, arm.on_match);
-                }
+                const arms = self.store.getStrMatchArms(s.arms);
+                for (0..arms.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(arms, index).on_match);
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .boxy_tag_match => |s| {
@@ -577,7 +576,7 @@ const Detection = struct {
                 if (candidate.state != .active) return false;
                 if (s.op != .box_box) return false;
                 const args = self.store.getLocalSpan(s.args);
-                if (args.len != 1 or args[0] != candidate.current()) return false;
+                if (args.len != 1 or GuardedList.at(args, 0) != candidate.current()) return false;
                 if (!self.eligible_trmc) return false;
                 if (!self.isBoxOfRetLayout(s.target)) return false;
                 if (!candidate.push(s.target)) {
@@ -591,8 +590,9 @@ const Detection = struct {
             .assign_struct => |s| {
                 if (candidate.state != .boxed) return false;
                 var occurrences: usize = 0;
-                for (self.store.getLocalSpan(s.fields)) |field| {
-                    if (field == candidate.current()) occurrences += 1;
+                const fields = self.store.getLocalSpan(s.fields);
+                for (0..fields.len) |index| {
+                    if (GuardedList.at(fields, index) == candidate.current()) occurrences += 1;
                 }
                 if (occurrences == 0) return false;
                 if (occurrences > 1) {
@@ -751,9 +751,8 @@ const Detection = struct {
     }
 
     fn spanTouchesChain(self: *const Detection, span: LIR.LocalSpan, candidate: *const Candidate) bool {
-        for (self.store.getLocalSpan(span)) |local| {
-            if (candidate.chainContains(local)) return true;
-        }
+        const locals = self.store.getLocalSpan(span);
+        for (0..locals.len) |index| if (candidate.chainContains(GuardedList.at(locals, index))) return true;
         return false;
     }
 
@@ -883,7 +882,7 @@ const Transform = struct {
     fn applyTrmc(self: *Transform) ResourceError!void {
         const proc = self.store.getProcSpec(self.proc_id);
         const ret_layout = proc.ret_layout;
-        self.old_args = try self.gpa.dupe(LocalId, self.store.getLocalSpan(proc.args));
+        self.old_args = try GuardedList.dupe(self.gpa, LocalId, self.store.getLocalSpan(proc.args));
 
         const ptr_ret = try self.layouts.insertPtr(ret_layout);
         self.hole = try self.addLocal(ptr_ret);
@@ -911,7 +910,7 @@ const Transform = struct {
 
     fn applyTce(self: *Transform) ResourceError!void {
         const proc = self.store.getProcSpec(self.proc_id);
-        self.old_args = try self.gpa.dupe(LocalId, self.store.getLocalSpan(proc.args));
+        self.old_args = try GuardedList.dupe(self.gpa, LocalId, self.store.getLocalSpan(proc.args));
 
         for (self.detection.scratch.candidates.items) |*candidate| {
             if (candidate.state == .confirmed_tail) {
@@ -1025,9 +1024,8 @@ const Transform = struct {
     /// sequential writes would otherwise clobber a param another arg reads.
     fn buildLoopBack(self: *Transform, candidate: *const Candidate, extras: []const ExtraParamWrite) ResourceError!CFStmtId {
         const arg_view = self.store.getLocalSpan(candidate.call_args);
-        const args = try self.gpa.alloc(LocalId, arg_view.len);
+        const args = try GuardedList.dupe(self.gpa, LocalId, arg_view);
         defer self.gpa.free(args);
-        @memcpy(args, arg_view);
 
         var copy_head: ?CFStmtId = null;
         var copy_tail: ?CFStmtId = null;
@@ -1185,7 +1183,7 @@ const Transform = struct {
         const old = self.store.getLocalSpan(old_span);
         var merged = try std.ArrayList(LocalId).initCapacity(self.gpa, old.len + self.new_locals.items.len);
         defer merged.deinit(self.gpa);
-        merged.appendSliceAssumeCapacity(old);
+        for (0..old.len) |index| merged.appendAssumeCapacity(GuardedList.at(old, index));
         merged.appendSliceAssumeCapacity(self.new_locals.items);
         std.mem.sort(LocalId, merged.items, {}, localIdLessThan);
         var unique_len: usize = 0;
@@ -1224,7 +1222,7 @@ const Transform = struct {
             .join_remainder => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.remainder = replacement,
             .switch_branch => |info| {
                 const span = self.store.getCFStmt(info.stmt).switch_stmt.branches;
-                self.store.getCFSwitchBranchesMut(span)[info.index].body = replacement;
+                GuardedList.atPtr(self.store.getCFSwitchBranchesMut(span), info.index).body = replacement;
             },
             .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,
             .switch_continuation => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.continuation = replacement,

@@ -298,8 +298,6 @@ test "canonicalization records explicit type declaration tables" {
     defer builtin_ctx.deinit();
 
     const source =
-        \\module []
-        \\
         \\A : B
         \\B : U64
         \\C := [C]
@@ -335,8 +333,6 @@ test "nested type redeclarations are detected after previous associated scope ex
     defer builtin_ctx.deinit();
 
     const source =
-        \\module []
-        \\
         \\T := [A].{
         \\    L2 := [B].{
         \\        L3 := [C]
@@ -383,8 +379,6 @@ test "nested type redeclarations are detected after previous associated scope ex
 
 test "block-local type paths with the same text do not redeclare each other" {
     const source =
-        \\module []
-        \\
         \\first = {
         \\    T := [First].{
         \\        Inner := [FirstInner]
@@ -409,8 +403,6 @@ test "block-local type paths with the same text do not redeclare each other" {
 
 test "block-local associated value lookup resolves through the visible local owner" {
     const source =
-        \\module []
-        \\
         \\first = {
         \\    T := [First].{
         \\        marker = 1
@@ -436,8 +428,6 @@ test "block-local associated value lookup resolves through the visible local own
 
 test "same-named aliases in separate block scopes are not mutually recursive" {
     const source =
-        \\module []
-        \\
         \\first = {
         \\    A : B
         \\    B : U64
@@ -460,8 +450,6 @@ test "same-named aliases in separate block scopes are not mutually recursive" {
 
 test "module-qualified type lookup ignores same-named block-local type roots" {
     const source =
-        \\module []
-        \\
         \\T := [ModuleT].{
         \\    marker = 1
         \\}
@@ -484,8 +472,6 @@ test "module-qualified type lookup ignores same-named block-local type roots" {
 
 test "block-local type use before declaration does not forward resolve" {
     const source =
-        \\module []
-        \\
         \\value = {
         \\    x : T
         \\    x = 1
@@ -503,8 +489,6 @@ test "block-local type use before declaration does not forward resolve" {
 
 test "block-local lambda use before declaration does not forward resolve" {
     const source =
-        \\module []
-        \\
         \\value = {
         \\    before = later(1)
         \\    later = |n| n
@@ -521,8 +505,6 @@ test "block-local lambda use before declaration does not forward resolve" {
 
 test "block-local lambdas cannot be mutually recursive through forward declaration" {
     const source =
-        \\module []
-        \\
         \\value = {
         \\    first = |n| second(n)
         \\    second = |n| first(n)
@@ -539,8 +521,6 @@ test "block-local lambdas cannot be mutually recursive through forward declarati
 
 test "block-local lambda declaration does not capture earlier use of same-named outer lambda" {
     const source =
-        \\module []
-        \\
         \\later = |n| n + 10
         \\
         \\value = {
@@ -560,8 +540,6 @@ test "block-local lambda declaration does not capture earlier use of same-named 
 
 test "malformed associated type header does not suppress later associated value" {
     const source =
-        \\module [use]
-        \\
         \\Outer := [Outer].{
         \\    Broken(a := [Broken]
         \\    ok = 1

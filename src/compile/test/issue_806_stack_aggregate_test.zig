@@ -3,6 +3,7 @@
 const std = @import("std");
 const layout = @import("layout");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 
 const harness = @import("lower_to_lir_harness.zig");
 
@@ -249,7 +250,7 @@ fn hasLargeStackStructAssign(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_struct => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
             else => {},
@@ -262,7 +263,7 @@ fn hasLargeStackTagAssign(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_tag => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
             else => {},
@@ -275,7 +276,7 @@ fn hasLargeStackCallReturn(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_call => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
             .assign_call_erased => |assign| if (isUnsafeLargeAggregateLocal(store, layouts, assign.target)) return true,
@@ -289,11 +290,11 @@ fn hasLargeStackCallArgument(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.proc_specs.items) |proc| {
+    for (store.getProcSpecs()) |proc| {
         if (spanHasUnsafeLargeAggregateLocal(store, layouts, proc.args)) return true;
     }
 
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_call => |assign| if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) return true,
             .assign_call_erased => |assign| if (spanHasUnsafeLargeAggregateLocal(store, layouts, assign.args)) return true,
@@ -307,11 +308,11 @@ fn hasLargeStackReturn(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.proc_specs.items) |proc| {
+    for (store.getProcSpecs()) |proc| {
         if (isUnsafeLargeAggregateLayoutIdx(layouts, proc.ret_layout)) return true;
     }
 
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .ret => |ret| if (isUnsafeLargeAggregateLocal(store, layouts, ret.value)) return true,
             else => {},
@@ -342,7 +343,7 @@ fn rejectConsumerOwnedLargeStackClosureCaptures(
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasPackedErasedFn(store));
 
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_packed_erased_fn => |assign| {
                 if (assign.capture) |capture| {
@@ -362,7 +363,7 @@ fn rejectConsumerOwnedLargeStackClosureCaptures(
 }
 
 fn hasPackedErasedFn(store: *const lir.LirStore) bool {
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .assign_packed_erased_fn => return true,
             else => {},
@@ -377,13 +378,13 @@ fn rejectConsumerOwnedLargeStackPatternPayloads(
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeDiscriminatedTagLocal(store, layouts));
 
-    for (store.patterns.items, 0..) |_, index| {
+    for (store.getPatterns(), 0..) |_, index| {
         if (patternHasUnsafeLargeAggregate(store, layouts, @enumFromInt(@as(u32, @intCast(index))))) {
             return error.Issue806UnsafeLargeStackPatternPayload;
         }
     }
 
-    for (store.cf_stmts.items) |stmt| {
+    for (store.getCFStmts()) |stmt| {
         switch (stmt) {
             .switch_initialized_payload => |switch_payload| {
                 if (isUnsafeLargeAggregateLocal(store, layouts, switch_payload.payload)) {
@@ -399,7 +400,7 @@ fn expectLargeAggregateProcsRequireStackProbe(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) harness.LowerToLirHarnessError!void {
-    for (store.proc_specs.items) |proc| {
+    for (store.getProcSpecs()) |proc| {
         if (!procHasUnsafeLargeAggregate(store, layouts, proc)) continue;
 
         if (proc.stack_probe != .required) {
@@ -424,7 +425,7 @@ fn hasLargeAggregateLocal(
     layouts: *const layout.Store,
     aggregate_tag: layout.LayoutTag,
 ) bool {
-    for (store.locals.items) |local| {
+    for (store.getLocals()) |local| {
         const local_layout = layouts.getLayout(local.layout_idx);
         if (local_layout.tag == aggregate_tag and layoutIsLargerThanGuardPages(layouts, local_layout)) {
             return true;
@@ -437,7 +438,7 @@ fn hasLargeDiscriminatedTagLocal(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.locals.items) |local| {
+    for (store.getLocals()) |local| {
         const local_layout = layouts.getLayout(local.layout_idx);
         if (local_layout.tag != .tag_union or !layoutIsLargerThanGuardPages(layouts, local_layout)) continue;
 
@@ -453,7 +454,7 @@ fn hasLargeMixedStructLocal(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
 ) bool {
-    for (store.locals.items) |local| {
+    for (store.getLocals()) |local| {
         const local_layout = layouts.getLayout(local.layout_idx);
         if (local_layout.tag != .struct_ or !layoutIsLargerThanGuardPages(layouts, local_layout)) continue;
 
@@ -486,7 +487,9 @@ fn spanHasUnsafeLargeAggregateLocal(
     layouts: *const layout.Store,
     span: lir.LocalSpan,
 ) bool {
-    for (store.getLocalSpan(span)) |local| {
+    const locals = store.getLocalSpan(span);
+    for (0..locals.len) |i| {
+        const local = GuardedList.at(locals, i);
         if (isUnsafeLargeAggregateLocal(store, layouts, local)) return true;
     }
     return false;
@@ -536,7 +539,9 @@ fn patternSpanHasUnsafeLargeAggregate(
     layouts: *const layout.Store,
     span: lir.LirPatternSpan,
 ) bool {
-    for (store.getPatternSpan(span)) |pattern_id| {
+    const pattern_ids = store.getPatternSpan(span);
+    for (0..pattern_ids.len) |i| {
+        const pattern_id = GuardedList.at(pattern_ids, i);
         if (patternHasUnsafeLargeAggregate(store, layouts, pattern_id)) return true;
     }
     return false;

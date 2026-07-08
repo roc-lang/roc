@@ -78,7 +78,7 @@ pub const SnapshotTuple = struct {
 pub const SnapshotNominalType = struct {
     ident: types.TypeIdent,
     vars: SnapshotContentIdxSafeList.Range,
-    origin_module: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
 };
 
 /// A snapshotted function type with argument types, return type, and instantiation flag.

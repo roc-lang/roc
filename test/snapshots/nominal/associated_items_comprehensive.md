@@ -438,126 +438,126 @@ errTryLeaf = leaf1Val        # ERROR: not in scope
 errTryGrand = grandchildVal  # ERROR: not in scope
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - associated_items_comprehensive.md:350:24:350:29
-UNDEFINED VARIABLE - associated_items_comprehensive.md:361:17:361:26
-UNDEFINED VARIABLE - associated_items_comprehensive.md:372:28:372:35
-UNDEFINED VARIABLE - associated_items_comprehensive.md:387:31:387:39
-UNDEFINED VARIABLE - associated_items_comprehensive.md:401:27:401:40
-UNDEFINED VARIABLE - associated_items_comprehensive.md:423:25:423:33
-UNDEFINED VARIABLE - associated_items_comprehensive.md:428:15:428:24
-UNDEFINED VARIABLE - associated_items_comprehensive.md:429:14:429:21
-UNDEFINED VARIABLE - associated_items_comprehensive.md:430:14:430:22
-UNDEFINED VARIABLE - associated_items_comprehensive.md:431:15:431:28
+NAME NOT IN SCOPE - associated_items_comprehensive.md:350:24:350:29
+NAME NOT IN SCOPE - associated_items_comprehensive.md:361:17:361:26
+NAME NOT IN SCOPE - associated_items_comprehensive.md:372:28:372:35
+NAME NOT IN SCOPE - associated_items_comprehensive.md:387:31:387:39
+NAME NOT IN SCOPE - associated_items_comprehensive.md:401:27:401:40
+NAME NOT IN SCOPE - associated_items_comprehensive.md:423:25:423:33
+NAME NOT IN SCOPE - associated_items_comprehensive.md:428:15:428:24
+NAME NOT IN SCOPE - associated_items_comprehensive.md:429:14:429:21
+NAME NOT IN SCOPE - associated_items_comprehensive.md:430:14:430:22
+NAME NOT IN SCOPE - associated_items_comprehensive.md:431:15:431:28
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `value` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `value` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  …ified = value  # ERROR: 'value' not in scope at module level             │
  │           ‾‾‾‾‾                                                            │
  └────────────────────────────────── associated_items_comprehensive.md:350:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `innerItem` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `innerItem` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badAccess = innerItem  # ERROR: 'innerItem' not in scope here             │
  │              ‾‾‾‾‾‾‾‾‾                                                     │
  └────────────────────────────────── associated_items_comprehensive.md:361:17 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `sibAVal` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `sibAVal` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badSiblingAccess = sibAVal  # ERROR: 'sibAVal' not in scope               │
  │                     ‾‾‾‾‾‾‾                                                │
  └────────────────────────────────── associated_items_comprehensive.md:372:28 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `leaf1Val` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `leaf1Val` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badCousinAccess = leaf1Val  # ERROR: 'leaf1Val' not in scope              │
  │                    ‾‾‾‾‾‾‾‾                                                │
  └────────────────────────────────── associated_items_comprehensive.md:387:31 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `grandchildVal` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `grandchildVal` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badGrandchildAccess = grandchildVal  # ERROR: 'grandchildVal' not in scope│
  │                        ‾‾‾‾‾‾‾‾‾‾‾‾‾                                       │
  └────────────────────────────────── associated_items_comprehensive.md:401:27 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `otherVal` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `otherVal` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  badDeepAccess = otherVal  # ERROR: 'otherVal' not in scope                │
  │                  ‾‾‾‾‾‾‾‾                                                  │
  └────────────────────────────────── associated_items_comprehensive.md:423:25 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `outerItem` in this scope. ──────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `outerItem` in this scope. ───────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTryOuter = outerItem      # ERROR: not in scope                        │
  │                ‾‾‾‾‾‾‾‾‾                                                   │
  └────────────────────────────────── associated_items_comprehensive.md:428:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `sibAVal` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `sibAVal` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTrySibA = sibAVal         # ERROR: not in scope                        │
  │               ‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────── associated_items_comprehensive.md:429:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `leaf1Val` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `leaf1Val` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTryLeaf = leaf1Val        # ERROR: not in scope                        │
  │               ‾‾‾‾‾‾‾‾                                                     │
  └────────────────────────────────── associated_items_comprehensive.md:430:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `grandchildVal` in this scope. ──────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `grandchildVal` in this scope. ───────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  errTryGrand = grandchildVal  # ERROR: not in scope                        │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────── associated_items_comprehensive.md:431:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -2317,7 +2317,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "10")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.b"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1000)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1028)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Multi.a"))))
@@ -2325,7 +2325,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "5")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Multi.c"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1035)
+		(e-dispatch-call (method "times") (constraint-fn-var 1063)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Multi.b"))))
@@ -2370,7 +2370,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(p-assign (ident "associated_items_comprehensive.Outer2.shared"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.doubled"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1169)
+		(e-dispatch-call (method "times") (constraint-fn-var 1197)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Outer2.Inner2.usesOuter"))))
@@ -2411,7 +2411,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "2")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Outer4.InnerB.valB"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1303)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1331)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Outer4.InnerA.valA"))))
@@ -2455,7 +2455,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))
-		(e-dispatch-call (method "times") (constraint-fn-var 1470)
+		(e-dispatch-call (method "times") (constraint-fn-var 1498)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.CrossRef.top"))))
@@ -2463,7 +2463,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.Deep.deep"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1472)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1500)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.CrossRef.Mid.middle"))))
@@ -2548,7 +2548,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1771)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1799)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.val1"))))
@@ -2556,7 +2556,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1806)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1834)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.L2.val2"))))
@@ -2564,7 +2564,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1841)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1869)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.val3"))))
@@ -2572,7 +2572,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "1")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.L5.val5"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 1876)
+		(e-dispatch-call (method "plus") (constraint-fn-var 1904)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Full.L2.L3.L4.val4"))))
@@ -2650,7 +2650,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 		(e-num (value "1")))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2261)
+		(e-dispatch-call (method "times") (constraint-fn-var 2289)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.start"))))
@@ -2658,7 +2658,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2296)
+		(e-dispatch-call (method "times") (constraint-fn-var 2324)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.Mid.step1"))))
@@ -2666,7 +2666,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "3")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2331)
+		(e-dispatch-call (method "times") (constraint-fn-var 2359)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.step2"))))
@@ -2674,7 +2674,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 				(e-num (value "4")))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))
-		(e-dispatch-call (method "times") (constraint-fn-var 2366)
+		(e-dispatch-call (method "times") (constraint-fn-var 2394)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.step3"))))
@@ -2702,9 +2702,9 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(p-assign (ident "associated_items_comprehensive.Chain.Mid.Deep.Deeper.Deepest.final"))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Circular.sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2469)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2497)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2434)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2495)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "associated_items_comprehensive.Circular.a"))))
@@ -2734,7 +2734,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.b1val"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2689)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2717)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
@@ -2743,7 +2743,7 @@ errTryGrand = grandchildVal # ERROR: not in scope
 					(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.b2forward"))))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch1.Branch1Inner.innerSum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2705)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2733)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))
@@ -2759,11 +2759,11 @@ errTryGrand = grandchildVal # ERROR: not in scope
 			(ty-lookup (name "U64") (builtin))))
 	(d-let
 		(p-assign (ident "associated_items_comprehensive.Ultimate.Branch2.Branch2Inner.usesEverything"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 2735)
+		(e-dispatch-call (method "plus") (constraint-fn-var 2763)
 			(receiver
-				(e-dispatch-call (method "plus") (constraint-fn-var 2725)
+				(e-dispatch-call (method "plus") (constraint-fn-var 2753)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 2715)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2743)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "associated_items_comprehensive.Ultimate.base"))))

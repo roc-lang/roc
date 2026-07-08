@@ -22,7 +22,7 @@ TYPE MISMATCH - destructure_closed_fn_arg.md:2:12:2:20
 
     It has the type:
 
-        { x: _field, y: _field2 }
+        { x: _field, y: U64 }
 
     But the annotation says it should be:
 
@@ -81,7 +81,7 @@ NO CHANGE
 						(record-destruct (label "y") (ident "y")
 							(required
 								(p-assign (ident "y")))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 54)
+			(e-dispatch-call (method "plus") (constraint-fn-var 81)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

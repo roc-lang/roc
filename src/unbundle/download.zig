@@ -64,6 +64,7 @@ fn getTempDir(allocator: std.mem.Allocator, io: std.Io) Allocator.Error!std.Io.D
 pub const DownloadError = error{
     InvalidUrl,
     InvalidVersion,
+    AmbiguousVersion,
     LocalhostWasNotLoopback,
     InvalidHash,
     HttpError,

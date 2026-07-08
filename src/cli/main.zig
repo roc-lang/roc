@@ -61,6 +61,7 @@ const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 const echo_platform = @import("echo_platform");
 const lsp = @import("lsp");
 const ansi_term = @import("ansi_term.zig");
@@ -115,6 +116,7 @@ comptime {
         std.testing.refAllDecls(cli_problem);
         std.testing.refAllDecls(@import("embedded_lld").stack_probe);
         std.testing.refAllDecls(@import("ReplLine.zig"));
+        std.testing.refAllDecls(@import("ReplSession.zig"));
     }
 }
 const libc_finder = @import("libc_finder.zig");
@@ -139,6 +141,7 @@ const cache_config_mod = compile.config;
 const backend = @import("backend");
 const layout = @import("layout");
 const docs = @import("docs");
+const bump = @import("bump");
 const RocTarget = @import("target.zig").RocTarget;
 
 const CliMainError =
@@ -957,8 +960,8 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         if (use_debug_allocator) {
             // Under Valgrind, use libc's malloc instead: Valgrind can't see the
             // debug allocator's sub-allocations (it carves them out of mmap'd
-            // pages) but tracks every malloc/free. Debug builds carry the client
-            // requests, so this auto-switches with no flag.
+            // pages) but tracks every malloc/free. Builds with Valgrind support
+            // carry the client requests, so this can auto-switch under Valgrind.
             if (builtin.link_libc and std.valgrind.runningOnValgrind() != 0) {
                 break :gpa .{ std.heap.c_allocator, false };
             }
@@ -1017,7 +1020,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
 fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
     return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .glue, .experimental_lsp => true,
+        .run, .build, .check, .test_cmd, .docs, .bump, .glue, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
@@ -1083,6 +1086,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .fmt => .fmt,
         .bundle => .bundle,
         .unbundle => .unbundle,
+        .bump => .bump,
         else => .unknown,
     };
 
@@ -1145,6 +1149,12 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .glue => |glue_args| try rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
+        .bump => |bump_args| rocBump(&ctx, bump_args) catch |err| switch (err) {
+            error.CliError => {
+                // Problems already recorded in context, render them below
+            },
+            else => return err,
+        },
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -1196,7 +1206,8 @@ fn buildShimEntrypoints(
         const spec = store.getProcSpec(entrypoint.root_proc);
         const arg_locals = store.getLocalSpan(spec.args);
         const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
-        for (arg_locals, 0..) |local_id, i| {
+        for (0..arg_locals.len) |i| {
+            const local_id = GuardedList.at(arg_locals, i);
             arg_layouts[i] = store.getLocal(local_id).layout_idx;
         }
         shim_entrypoints[ordinal] = .{
@@ -1762,16 +1773,20 @@ fn updatePlatformAppRelationIdentity(
     hasher: *std.crypto.hash.sha2.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) void {
-    updateHashBytes(hasher, "platform-app-relations-v1");
+    // Host-boundary fingerprint: hash the relation/binding SHAPE only, never
+    // checked type keys. Type keys are deep content digests (they embed the
+    // app module's content identity), so hashing them would change the host
+    // interface fingerprint on every app source edit and break hot reload of
+    // unchanged interfaces. Interface compatibility itself is enforced by the
+    // rebuild's type check, and ABI stability by the host callable layout
+    // identity hashed alongside this.
+    updateHashBytes(hasher, "platform-app-relations-v2");
 
     const relations = root_artifact.platform_requirement_relations.relations;
     updateHashU32(hasher, @intCast(relations.len));
     for (relations) |relation| {
         updateHashU32(hasher, @intFromEnum(relation.declaration));
         updateHashU32(hasher, relation.requires_idx);
-        hasher.update(&relation.declared_source_ty.bytes);
-        hasher.update(&relation.requested_source_ty.bytes);
-        hasher.update(&relation.app_value_source_scheme.bytes);
         updateHashU32(hasher, @intFromEnum(relation.value_kind));
     }
 
@@ -1780,7 +1795,6 @@ fn updatePlatformAppRelationIdentity(
     for (bindings) |binding| {
         updateHashU32(hasher, @intFromEnum(binding.declaration));
         updateHashU32(hasher, binding.requires_idx);
-        hasher.update(&binding.requested_source_ty.bytes);
         updateHashU32(hasher, @intFromEnum(binding.checked_relation));
         updateHashU32(hasher, @intFromEnum(std.meta.activeTag(binding.value_use)));
     }
@@ -1928,7 +1942,8 @@ fn entrypointAbiDigestFromLirData(
         const spec = store.getProcSpec(entrypoint.root_proc);
         const arg_locals = store.getLocalSpan(spec.args);
         const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
-        for (arg_locals, 0..) |local_id, i| {
+        for (0..arg_locals.len) |i| {
+            const local_id = GuardedList.at(arg_locals, i);
             arg_layouts[i] = store.getLocal(local_id).layout_idx;
         }
         const lowered = layout.abi.lower(ctx.arena, layouts, abi_target, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
@@ -2324,6 +2339,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 ctx.gpa,
                 args.path,
                 null,
+                false,
                 args.max_threads,
                 inlineExpectModeForOpt(args.opt),
                 currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
@@ -2344,6 +2360,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 ctx,
                 args.path,
                 null,
+                false,
                 args.max_threads,
                 inlineExpectModeForOpt(args.opt),
                 currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
@@ -2981,6 +2998,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         ctx,
         app_path,
         original_source_dir,
+        true,
         args.max_threads,
         inlineExpectModeForOpt(args.opt),
         currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
@@ -3103,6 +3121,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         ctx.gpa,
         app_path,
         original_source_dir,
+        true,
         args.max_threads,
         inlineExpectModeForOpt(args.opt),
         currentRuntimeSpecializationStrategy(args.opt, args.specialization_strategy),
@@ -5152,6 +5171,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         ctx.gpa,
         args.path,
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
+        source_rewrite != null,
         args.max_threads,
         inlineExpectModeForOpt(.dev),
         .lss,
@@ -5413,8 +5433,9 @@ fn argLayoutsForProc(
     const arg_layouts = try allocator.alloc(layout.Idx, arg_ids.len);
     errdefer allocator.free(arg_layouts);
 
-    for (arg_ids, 0..) |local_id, i| {
-        arg_layouts[i] = store.locals.items[@intFromEnum(local_id)].layout_idx;
+    for (0..arg_ids.len) |i| {
+        const local_id = GuardedList.at(arg_ids, i);
+        arg_layouts[i] = store.getLocal(local_id).layout_idx;
     }
 
     return arg_layouts;
@@ -5470,6 +5491,7 @@ fn lowerLirWithCoordinator(
     lir_allocator: Allocator,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
+    synthetic_default_app: bool,
     max_threads: ?usize,
     inline_expects: lir.CheckedPipeline.InlineExpectMode,
     specialization_strategy: base.SpecializationStrategy,
@@ -5506,25 +5528,19 @@ fn lowerLirWithCoordinator(
 
     // Run global package version resolution: downloads every (transitive)
     // URL dependency, solves versions, and yields the final package graph.
-    // Use a logical absolute path (cwd-based) rather than a realpath syscall,
-    // matching how the rest of the build resolves paths and avoiding musl's
-    // realpath reading uninitialized bytes under valgrind.
+    // Resolution still receives a logical absolute path; package identities
+    // are canonicalized separately by compile.package_identity.
     const roc_file_abs = std.fs.path.resolve(ctx.arena, &.{roc_file_path}) catch
         try ctx.arena.dupe(u8, roc_file_path);
     var resolved = try resolvePackages(ctx, roc_file_abs, resolution_config);
     defer resolved.deinit();
     const resolved_packages = resolved.packages;
 
-    const package_names = try ctx.gpa.alloc([]const u8, resolved_packages.len);
-    defer ctx.gpa.free(package_names);
-    for (package_names, resolved_packages, 0..) |*package_name, package, i| {
-        package_name.* = if (i == compile.package_resolution.Resolved.root_index) "app" else package.identity;
-    }
-    for (resolved_packages[compile.package_resolution.Resolved.root_index].deps) |dep| {
-        if (dep.is_platform) {
-            package_names[dep.target] = "pf";
-        }
-    }
+    var package_keys = try compile.package_identity.buildPackageKeys(ctx.gpa, ctx.coreCtx(), &resolved, .{
+        .synthetic_root = synthetic_default_app,
+        .synthetic_platform = synthetic_default_app,
+    });
+    defer package_keys.deinit();
     if (reporter) |r| r.end();
 
     const thread_count: usize = max_threads orelse (std.Thread.getCpuCount() catch 1);
@@ -5546,7 +5562,8 @@ fn lowerLirWithCoordinator(
 
     try coord.start();
 
-    const app_pkg = try coord.ensurePackage("app", app_dir);
+    const app_pkg = try coord.ensurePackage(package_keys.identity(compile.package_resolution.Resolved.root_index), app_dir);
+    coord.markAppPackage(app_pkg.name);
     const root_package = resolved_packages[compile.package_resolution.Resolved.root_index];
     try app_pkg.setRootInput(ctx.gpa, root_package.root_file, try currentCompilerWatchInputState(ctx, root_package.root_file));
     const app_module_name = base.module_path.getModuleName(roc_file_path);
@@ -5559,12 +5576,10 @@ fn lowerLirWithCoordinator(
     app_pkg.remaining_modules += 1;
     coord.total_remaining += 1;
 
-    // Register resolved packages under the coordinator package names that
-    // participate in checked module identity. Non-platform packages keep their
-    // resolved identities; the root platform package uses the stable "pf" name,
-    // matching Coordinator.discoverAppFromPath.
+    // Register resolved packages under the package identities that participate
+    // in checked module identity.
     for (resolved_packages[1..], 1..) |package, package_idx| {
-        const package_name = package_names[package_idx];
+        const package_name = package_keys.identity(package_idx);
         const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
             .url = url.url,
             .url_id = url.url_id,
@@ -5580,7 +5595,7 @@ fn lowerLirWithCoordinator(
     {
         // Record notes for packages whose declared dependency versions were
         // bumped by solving, so errors inside them can explain the bump.
-        const bump_notes = try compile.package_resolution.versionBumpNotes(&resolved, ctx.gpa);
+        const bump_notes = try compile.package_identity.versionBumpNotesForPackageKeys(&resolved, package_keys, ctx.gpa);
         defer ctx.gpa.free(bump_notes);
         for (bump_notes) |note| {
             const gop = try coord.version_notes.getOrPut(note.package_identity);
@@ -5598,11 +5613,11 @@ fn lowerLirWithCoordinator(
         const from_pkg = if (i == compile.package_resolution.Resolved.root_index)
             app_pkg
         else
-            coord.packages.get(package_names[i]) orelse return error.CliError;
+            coord.packages.get(package_keys.identity(i)) orelse return error.CliError;
 
         for (package.deps) |dep| {
             const target = resolved_packages[dep.target];
-            const target_name = package_names[dep.target];
+            const target_name = package_keys.identity(dep.target);
             try from_pkg.shorthands.put(
                 try ctx.gpa.dupe(u8, dep.alias),
                 try ctx.gpa.dupe(u8, target_name),
@@ -5612,6 +5627,7 @@ fn lowerLirWithCoordinator(
             // provides/hosted declarations are available to the build.
             if (i == compile.package_resolution.Resolved.root_index and dep.is_platform) {
                 const pf_pkg = coord.packages.get(target_name) orelse return error.CliError;
+                coord.markPlatformPackage(pf_pkg.name);
                 if (pf_pkg.root_module_id == null) {
                     const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", target.root_file);
                     pf_pkg.root_module_id = pf_module_id;
@@ -5625,7 +5641,7 @@ fn lowerLirWithCoordinator(
     }
 
     if (reporter) |r| r.begin("Type Checking");
-    try coord.enqueueParseTask("app", app_module_id);
+    try coord.enqueueParseTask(app_pkg.name, app_module_id);
     coord.coordinatorLoop() catch |err| {
         if (reporter) |r| r.fail();
         _ = renderCoordinatorReports(ctx, &coord, roc_file_path);
@@ -5742,6 +5758,7 @@ pub fn buildLirImageWithCoordinator(
     ctx: *CliCtx,
     roc_file_path: []const u8,
     source_dir_override: ?[]const u8,
+    synthetic_default_app: bool,
     max_threads: ?usize,
     inline_expects: lir.CheckedPipeline.InlineExpectMode,
     specialization_strategy: base.SpecializationStrategy,
@@ -5764,6 +5781,7 @@ pub fn buildLirImageWithCoordinator(
         shm_allocator,
         roc_file_path,
         source_dir_override,
+        synthetic_default_app,
         max_threads,
         inline_expects,
         specialization_strategy,
@@ -5807,7 +5825,7 @@ pub fn buildLirImageWithCoordinator(
 /// Wrapper around buildLirImageWithCoordinator for callers that pass allow_errors.
 /// The allow_errors flag is handled by the caller; this function ignores it.
 pub fn setupSharedMemoryWithCoordinator(ctx: *CliCtx, roc_file_path: []const u8, _: bool) CliMainError!SharedMemoryResult {
-    return buildLirImageWithCoordinator(ctx, roc_file_path, null, null, .run, .lss, .{}, null, null, true);
+    return buildLirImageWithCoordinator(ctx, roc_file_path, null, false, null, .run, .lss, .{}, null, null, true);
 }
 
 /// Platform resolution result containing the platform source path
@@ -6080,11 +6098,19 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     const download = unbundle.download;
 
     // 1. Validate URL and extract hash
-    const parsed_url = download.validateUrl(url) catch {
-        return ctx.fail(.{ .invalid_url = .{
+    const parsed_url = download.validateUrl(url) catch |err| switch (err) {
+        error.InvalidVersion => return ctx.fail(.{ .invalid_url = .{
+            .url = url,
+            .reason = "This URL uses the reserved version 0.0.0, which means \"no version\". The lowest publishable version is 0.0.1.",
+        } }),
+        error.AmbiguousVersion => return ctx.fail(.{ .invalid_url = .{
+            .url = url,
+            .reason = "This URL contains more than one version number. A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash.",
+        } }),
+        else => return ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
-        } });
+        } }),
     };
     const base58_hash = parsed_url.hash;
 
@@ -6864,7 +6890,8 @@ fn nativeBuildEntrypoints(
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
         const arg_locals = lowered.lir_result.store.getLocalSpan(proc_spec.args);
         const arg_layouts = try ctx.arena.alloc(layout.Idx, arg_locals.len);
-        for (arg_locals, 0..) |local_id, i| {
+        for (0..arg_locals.len) |i| {
+            const local_id = GuardedList.at(arg_locals, i);
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
@@ -11433,7 +11460,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     // it before printing the greeting so the greeting and the first prompt appear
     // together and the REPL is immediately interactive — otherwise the greeting
     // shows with no prompt until this finishes.
-    var session = try ReplSession.init(ctx.gpa, ctx.io.std_io, backend_kind);
+    var session = try ReplSession.init(ctx.gpa, ctx.coreCtx(), backend_kind);
     defer session.deinit();
 
     if (mode == .interactive) {
@@ -12792,6 +12819,396 @@ fn sendResponse(
     try w.flush();
 }
 
+fn rocBump(ctx: *CliCtx, args: cli_args.BumpArgs) CliMainError!void {
+    const stdout = ctx.io.stdout();
+
+    // Resolve the old package's version, from --old-version or the URL.
+    var old_version: ?base.url.Version = null;
+    if (args.old_version) |raw| {
+        const version = base.url.parseVersionComponent(raw) orelse {
+            return ctx.fail(.{ .bump_failed = .{
+                .title = "Invalid Old Version",
+                .message = try std.fmt.allocPrint(ctx.arena, "`{s}` is not a valid version. Versions are MAJOR.MINOR.PATCH, e.g. 1.2.3.", .{raw}),
+            } });
+        };
+        if (!version.isPresent()) {
+            return ctx.fail(.{ .bump_failed = .{
+                .title = "Invalid Old Version",
+                .message = "The version 0.0.0 is reserved to mean \"no version\". The lowest publishable version is 0.0.1.",
+            } });
+        }
+        old_version = version;
+    }
+
+    // Parse --expect up front so a malformed version fails before compiling.
+    var expect_version: ?base.url.Version = null;
+    if (args.expect) |raw| {
+        expect_version = base.url.parseVersionComponent(raw) orelse {
+            return ctx.fail(.{ .bump_failed = .{
+                .title = "Invalid Expected Version",
+                .message = try std.fmt.allocPrint(ctx.arena, "`{s}` is not a valid version. Versions are MAJOR.MINOR.PATCH, e.g. 1.2.3.", .{raw}),
+            } });
+        };
+    }
+
+    // Resolve the old package source to a local main.roc path.
+    const old_path: []const u8 = blk: {
+        if (std.mem.find(u8, args.old, "://") != null) {
+            if (old_version == null) {
+                if (base.url.parseUrlPath(args.old)) |parsed| {
+                    if (parsed.version.isPresent()) old_version = parsed.version;
+                } else |_| {}
+            }
+            const resolved = try resolveUrlBundle(ctx, args.old);
+            break :blk resolved.source_path;
+        }
+        if (std.mem.endsWith(u8, args.old, ".tar.zst")) {
+            break :blk try extractBundleForBump(ctx, args.old);
+        }
+        if (std.mem.endsWith(u8, args.old, ".roc")) break :blk args.old;
+        break :blk try std.fs.path.join(ctx.arena, &.{ args.old, "main.roc" });
+    };
+
+    const old_version_value = old_version orelse {
+        return ctx.fail(.{ .bump_failed = .{
+            .title = "Missing Old Version",
+            .message = "The old package's version could not be determined. Pass it with --old-version <MAJOR.MINOR.PATCH>; it can only be inferred when --old is a URL with a version path segment.",
+        } });
+    };
+
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = args.verbose,
+        .roc_ctx = ctx.coreCtx(),
+    };
+
+    var old_result = try bumpCheckSide(ctx, old_path, cache_config, args, "old");
+    defer old_result.deinit(ctx.gpa);
+    var new_result = try bumpCheckSide(ctx, args.path, cache_config, args, "new");
+    defer new_result.deinit(ctx.gpa);
+
+    var old_api = try bumpExtractApi(ctx, &old_result.build_env, "old");
+    defer old_api.deinit();
+    var new_api = try bumpExtractApi(ctx, &new_result.build_env, "new");
+    defer new_api.deinit();
+
+    var result = try bump.diff.diff(ctx.gpa, &old_api, &new_api);
+    defer result.deinit();
+
+    stdout.print("Comparing {s} (old, {f}) with {s} (new)...\n", .{ args.old, old_version_value, args.path }) catch {};
+
+    if (result.changes.len == 0) {
+        stdout.print("\nNo API changes detected.\n", .{}) catch {};
+    } else {
+        // Changes arrive grouped by module (the differ merge-walks sorted
+        // module lists), so a simple current-module tracker renders sections.
+        var current_module: []const u8 = "";
+        for (result.changes) |change| {
+            if (!std.mem.eql(u8, change.module, current_module)) {
+                current_module = change.module;
+                var module_magnitude = bump.diff.Magnitude.patch;
+                for (result.changes) |other| {
+                    if (std.mem.eql(u8, other.module, change.module)) {
+                        module_magnitude = module_magnitude.combine(other.magnitude);
+                    }
+                }
+                stdout.print("\n---- {s} - {s} ----\n\n", .{ change.module, module_magnitude.name() }) catch {};
+            }
+            switch (change.kind) {
+                .module_added => stdout.print("    Added module\n", .{}) catch {},
+                .module_removed => stdout.print("    Removed module\n", .{}) catch {},
+                .item_added => stdout.print("    + {s} : {s}\n", .{ change.path, change.new_rendered orelse "" }) catch {},
+                .item_removed => stdout.print("    - {s} : {s}\n", .{ change.path, change.old_rendered orelse "" }) catch {},
+                .item_changed => {
+                    stdout.print("    - {s} : {s}\n", .{ change.path, change.old_rendered orelse "" }) catch {};
+                    stdout.print("    + {s} : {s}\n", .{ change.path, change.new_rendered orelse "" }) catch {};
+                },
+            }
+        }
+    }
+
+    const next = bump.diff.nextVersion(old_version_value, result.magnitude);
+    stdout.print("\nThis is a {s} change.\n", .{result.magnitude.name()}) catch {};
+    stdout.print("\n{f} -> {f}\n", .{ old_version_value, next }) catch {};
+    if (old_version_value.major == 0) {
+        stdout.print("\n(Pre-1.0.0 versions are 0.X.Y: breaking changes bump X, everything else bumps Y.)\n", .{}) catch {};
+    }
+
+    // With --expect, fail unless the declared version bumps at least as far
+    // as the API diff requires. Bumping further than required is allowed.
+    if (expect_version) |expected| {
+        const declared = bump.diff.declaredMagnitude(old_version_value, expected) orelse {
+            return ctx.fail(.{ .bump_failed = .{
+                .title = "Insufficient Version Bump",
+                .message = try std.fmt.allocPrint(ctx.arena, "The expected version {f} does not move forward from {f}.", .{ expected, old_version_value }),
+            } });
+        };
+        if (@intFromEnum(declared) < @intFromEnum(result.magnitude)) {
+            return ctx.fail(.{ .bump_failed = .{
+                .title = "Insufficient Version Bump",
+                .message = try std.fmt.allocPrint(
+                    ctx.arena,
+                    "This is a {s} change, so the next version must be at least {f}, but --expect was {f}.",
+                    .{ result.magnitude.name(), next, expected },
+                ),
+            } });
+        }
+        stdout.print("\n{f} satisfies the required {s} bump.\n", .{ expected, result.magnitude.name() }) catch {};
+    }
+}
+
+/// Check one side of a bump comparison, keeping its BuildEnv alive so the
+/// public API can be extracted from the checked artifacts afterwards.
+fn bumpCheckSide(
+    ctx: *CliCtx,
+    path: []const u8,
+    cache_config: CacheConfig,
+    args: cli_args.BumpArgs,
+    side: []const u8,
+) CliMainError!CheckResultWithBuildEnv {
+    const stderr = ctx.io.stderr();
+    var result = checkFileWithBuildEnvPreserved(
+        ctx,
+        path,
+        null,
+        false,
+        cache_config,
+        null,
+        resolutionConfigFromLimits(args.resolve_limits),
+        null,
+        false,
+    ) catch |err| {
+        try handleProcessFileError(err, stderr, path);
+        return error.CliError;
+    };
+    errdefer result.deinit(ctx.gpa);
+
+    for (result.check_result.reports) |module| {
+        for (module.reports) |*report| {
+            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, ctx.terminalReportConfig()) catch {};
+        }
+    }
+    if (result.check_result.error_count > 0) {
+        return ctx.fail(.{ .bump_failed = .{
+            .title = "Package Does Not Compile",
+            .message = try std.fmt.allocPrint(
+                ctx.arena,
+                "The {s} package ({s}) does not compile with this compiler. roc bump needs both packages to compile so their public APIs can be compared.",
+                .{ side, path },
+            ),
+        } });
+    }
+    return result;
+}
+
+/// Extract a local .tar.zst bundle into the content-addressed package cache
+/// (keyed by the hash in its filename) and return the path to its main.roc.
+fn extractBundleForBump(ctx: *CliCtx, archive_path: []const u8) CliMainError![]const u8 {
+    const basename = std.fs.path.basename(archive_path);
+    const hash = basename[0 .. basename.len - ".tar.zst".len];
+
+    const cache_dir_path = getRocCacheDir(ctx.arena) catch {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = "Could not determine cache directory" } });
+    };
+    const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, hash });
+    const main_roc_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
+
+    // The cache is content-addressed by the archive's hash, so an existing
+    // extraction can be reused as-is.
+    const already_cached = blk: {
+        std.Io.Dir.cwd().access(ctx.io.std_io, main_roc_path, .{}) catch break :blk false;
+        break :blk true;
+    };
+    if (already_cached) return main_roc_path;
+
+    var output_dir = try std.Io.Dir.cwd().createDirPathOpen(ctx.io.std_io, package_dir_path, .{});
+    defer output_dir.close(ctx.io.std_io);
+
+    const archive_file = std.Io.Dir.cwd().openFile(ctx.io.std_io, archive_path, .{}) catch {
+        return ctx.fail(.{ .file_not_found = .{ .path = archive_path } });
+    };
+    defer archive_file.close(ctx.io.std_io);
+
+    var error_ctx: unbundle.ErrorContext = undefined;
+    var archive_reader_buffer: [4096]u8 = undefined;
+    var archive_reader = archive_file.reader(ctx.io.std_io, &archive_reader_buffer);
+    unbundle.unbundleFiles(
+        ctx.gpa,
+        &archive_reader.interface,
+        output_dir,
+        ctx.io.std_io,
+        basename,
+        &error_ctx,
+    ) catch |err| {
+        return ctx.fail(.{ .bump_failed = .{
+            .title = "Cannot Extract Old Bundle",
+            .message = try std.fmt.allocPrint(ctx.arena, "Failed to extract {s}: {s}.", .{ archive_path, @errorName(err) }),
+        } });
+    };
+
+    std.Io.Dir.cwd().access(ctx.io.std_io, main_roc_path, .{}) catch {
+        return ctx.fail(.{ .bump_failed = .{
+            .title = "Cannot Extract Old Bundle",
+            .message = try std.fmt.allocPrint(ctx.arena, "The bundle {s} does not contain a main.roc at its root.", .{archive_path}),
+        } });
+    };
+    return main_roc_path;
+}
+
+/// Extract the public API of the root package of a finished build.
+fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) CliMainError!bump.PackageApi {
+    const root_name = build_env.discovered_pkg_name orelse return error.Internal;
+    const root_pkg = build_env.packages.getPtr(root_name) orelse return error.Internal;
+
+    switch (root_pkg.kind) {
+        .package, .platform => {},
+        else => return ctx.fail(.{ .bump_failed = .{
+            .title = "Not A Package",
+            .message = try std.fmt.allocPrint(
+                ctx.arena,
+                "roc bump compares package APIs, but the {s} module ({s}) has neither a package nor a platform header.",
+                .{ side, root_pkg.root_file },
+            ),
+        } }),
+    }
+
+    // Map every compiled module's identity to the package that owns it, so type
+    // origins in public signatures resolve to stable package identities.
+    var origins = bump.extract.OriginMap{};
+    defer origins.deinit(ctx.gpa);
+    {
+        var sched_iter = build_env.schedulers.iterator();
+        while (sched_iter.next()) |sched_entry| {
+            const pkg_name = sched_entry.key_ptr.*;
+            const origin_kind: bump.extract.OriginMap.Origin.Kind = origin_blk: {
+                if (std.mem.eql(u8, pkg_name, root_name)) break :origin_blk .self;
+                const pkg = build_env.packages.getPtr(pkg_name) orelse break :origin_blk .{ .unstable = pkg_name };
+                if (pkg.url) |*url_source| {
+                    const parsed = base.url.parseUrlPath(url_source.url) catch break :origin_blk .{ .unstable = url_source.url };
+                    if (!parsed.version.isPresent()) break :origin_blk .{ .unstable = url_source.url };
+                    const url_id = try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{
+                        parsed.urlIdPrefix(url_source.url),
+                        parsed.urlIdSuffix(url_source.url),
+                    });
+                    break :origin_blk .{ .external = .{
+                        .url_id = url_id,
+                        .major = parsed.version.major,
+                        .minor = parsed.version.minor,
+                    } };
+                }
+                // Path dependencies have no stable published identity.
+                break :origin_blk .{ .unstable = pkg.root_file };
+            };
+            const package_env = sched_entry.value_ptr.*;
+            for (package_env.modules.items) |*module_state| {
+                if (module_state.moduleEnv()) |mod_env| {
+                    // Checked types record origins under the package-qualified
+                    // module name; register the bare name too for roots whose
+                    // modules are referenced unqualified.
+                    const origin = bump.extract.OriginMap.Origin{
+                        .kind = origin_kind,
+                        .module_name = mod_env.module_name,
+                    };
+                    const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
+                    try origins.putIdentity(ctx.gpa, identity_hash, origin);
+                    try origins.put(ctx.gpa, mod_env.module_name, origin);
+                    try origins.put(ctx.gpa, mod_env.getIdentText(mod_env.qualified_module_ident), origin);
+                }
+            }
+        }
+    }
+
+    // The exposed module list comes from the root module's header.
+    const root_env = build_env.schedulers.get(root_name) orelse return error.Internal;
+    const root_mod_env: *ModuleEnv = root_blk: {
+        for (root_env.modules.items) |*module_state| {
+            if (module_state.moduleEnv()) |mod_env| {
+                if (mod_env.module_kind == .package or mod_env.module_kind == .platform) {
+                    break :root_blk mod_env;
+                }
+            }
+        }
+        return error.Internal;
+    };
+
+    var inputs = std.ArrayListUnmanaged(bump.extract.ModuleInput).empty;
+    defer inputs.deinit(ctx.gpa);
+
+    var exposed_iter = root_mod_env.common.exposed_items.iterator();
+    while (exposed_iter.next()) |entry| {
+        const exposed_name = root_mod_env.getIdentText(@bitCast(entry.ident_idx));
+        var found = false;
+        for (root_env.modules.items) |*module_state| {
+            const data = module_state.semanticData() orelse continue;
+            if (!std.mem.eql(u8, data.env.module_name, exposed_name)) continue;
+            const artifact = data.checked_artifact orelse return error.Internal;
+            try inputs.append(ctx.gpa, .{
+                .exposed_name = exposed_name,
+                .module_env = data.env,
+                .artifact = artifact,
+            });
+            found = true;
+            break;
+        }
+        // Platform headers put their `provides` value idents in the exposed
+        // scope alongside exposed modules; those have no matching module and
+        // are not part of the comparison (provides/requires are out of scope).
+        if (!found and root_pkg.kind == .package) {
+            return ctx.fail(.{ .bump_failed = .{
+                .title = "Missing Exposed Module",
+                .message = try std.fmt.allocPrint(
+                    ctx.arena,
+                    "The {s} package header exposes `{s}`, but no module with that name was compiled.",
+                    .{ side, exposed_name },
+                ),
+            } });
+        }
+    }
+
+    if (inputs.items.len == 0) {
+        return ctx.fail(.{ .bump_failed = .{
+            .title = "No Exposed Modules",
+            .message = try std.fmt.allocPrint(
+                ctx.arena,
+                "The {s} package does not expose any modules, so there is no public API to compare.",
+                .{side},
+            ),
+        } });
+    }
+
+    var extract_failure: ?bump.extract.Failure = null;
+    return bump.extract.extractPackageApi(ctx.gpa, inputs.items, &origins, &extract_failure) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.ExtractFailed => {
+            const info = extract_failure.?;
+            defer info.deinit(ctx.gpa);
+            const message = switch (info.kind) {
+                .unpublished_public_type => try std.fmt.allocPrint(
+                    ctx.arena,
+                    "Missing checked type data for the public item `{s}` in module `{s}`: {s}.",
+                    .{ info.item_path, info.module_name, info.detail },
+                ),
+                .unknown_origin_module => try std.fmt.allocPrint(
+                    ctx.arena,
+                    "A public signature of `{s}` in module `{s}` references a type from module `{s}`, which does not belong to any package in this build.",
+                    .{ info.item_path, info.module_name, info.detail },
+                ),
+                .unstable_dependency_in_public_api => try std.fmt.allocPrint(
+                    ctx.arena,
+                    "The public API (item `{s}` in module `{s}`) exposes a type from an unstable dependency:\n\n    {s}\n\nA publishable package may only expose types from versioned URL dependencies, because consumers need a stable package identity to compare versions against. Either stop exposing this type, or publish the dependency and depend on its URL.",
+                    .{ info.item_path, info.module_name, info.detail },
+                ),
+                .private_type_in_public_api => try std.fmt.allocPrint(
+                    ctx.arena,
+                    "The {s} package's public API references the type `{s}`, which is not itself part of the exposed API.",
+                    .{ side, info.detail },
+                ),
+            };
+            return ctx.fail(.{ .bump_failed = .{ .title = "Cannot Extract Public API", .message = message } });
+        },
+    };
+}
+
 fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -12812,7 +13229,7 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
     var result_with_env = checkFileWithBuildEnvPreserved(
         ctx,
         args.path,
-        null,
+        args.main,
         args.time,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
@@ -12889,63 +13306,42 @@ fn generateDocs(
     const DocModel = docs.DocModel;
     const extract = docs.extract;
 
-    // Determine if we're documenting a platform or something else by checking the module path
-    // If the path contains "platform", we're documenting a platform directly
-    const is_documenting_platform = std.mem.find(u8, module_path, "platform") != null;
-
-    // Collect ModuleDocs from all compiled modules
+    // Collect ModuleDocs from the explicit documentation surface.
     var module_docs_list = std.ArrayList(DocModel.ModuleDocs).empty;
     defer {
         for (module_docs_list.items) |*mod| mod.deinit(ctx.gpa);
         module_docs_list.deinit(ctx.gpa);
     }
 
-    var is_package = false;
+    const is_package = build_env.rootIsPackage();
 
-    // Track why modules were dropped so a zero-module result can explain itself
+    // Track why docs extraction produced nothing so a zero-module result can
+    // explain itself.
     // instead of silently writing an empty docs site.
     var modules_seen: usize = 0;
-    var skipped_platform: usize = 0;
-    var skipped_package: usize = 0;
     var extract_failed: usize = 0;
 
-    var sched_iter = build_env.schedulers.iterator();
-    while (sched_iter.next()) |sched_entry| {
+    const modules = build_env.getDocumentationModules(ctx.gpa) catch |err| {
+        std.debug.print("Error: failed to collect documentable modules for '{s}': {}\n", .{ module_path, err });
+        return error.DocsFailed;
+    };
+    defer ctx.gpa.free(modules);
+
+    for (modules) |module_info| {
         // Docs show the alias the root uses for a package, not its internal
         // identity name (full URL or absolute path).
-        const sched_pkg_name = build_env.rootAliasForPackage(sched_entry.key_ptr.*) orelse sched_entry.key_ptr.*;
-        const package_env = sched_entry.value_ptr.*;
+        const sched_pkg_name = build_env.rootAliasForPackage(module_info.package_name) orelse module_info.package_name;
+        modules_seen += 1;
 
-        for (package_env.modules.items) |*module_state| {
-            if (module_state.moduleEnv()) |mod_env| {
-                modules_seen += 1;
-
-                // Skip platform main.roc modules when documenting an app
-                // Platform modules are still included when documenting a platform directly
-                if (mod_env.module_kind == .platform and !is_documenting_platform) {
-                    skipped_platform += 1;
-                    continue;
-                }
-
-                // Skip package definition files — they just declare which modules
-                // are exposed and don't contain docs of their own.
-                if (mod_env.module_kind == .package) {
-                    is_package = true;
-                    skipped_package += 1;
-                    continue;
-                }
-
-                var mod_docs = extract.extractModuleDocs(ctx.gpa, mod_env, sched_pkg_name, module_state.path) catch |err| {
-                    std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_state.name, err });
-                    extract_failed += 1;
-                    continue;
-                };
-                module_docs_list.append(ctx.gpa, mod_docs) catch {
-                    mod_docs.deinit(ctx.gpa);
-                    continue;
-                };
-            }
-        }
+        var mod_docs = extract.extractModuleDocs(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path) catch |err| {
+            std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
+            extract_failed += 1;
+            continue;
+        };
+        module_docs_list.append(ctx.gpa, mod_docs) catch {
+            mod_docs.deinit(ctx.gpa);
+            continue;
+        };
     }
 
     // If no documentable modules were collected, fail loudly instead of
@@ -12969,15 +13365,15 @@ fn generateDocs(
             // Modules existed but every one was filtered out; report the
             // breakdown so the user knows which filter dropped them.
             std.debug.print(
-                "  Saw {d} module(s), all skipped: {d} platform, {d} package definition, {d} failed extraction.\n",
-                .{ modules_seen, skipped_platform, skipped_package, extract_failed },
+                "  Saw {d} documentable module candidate(s), {d} failed extraction.\n",
+                .{ modules_seen, extract_failed },
             );
         }
         return error.DocsFailed;
     }
 
-    // Modules are collected in package hash-map order, which is not
-    // deterministic; docs output must be.
+    // Module collection can still depend on package hash-map order for
+    // non-platform roots, and docs output must be deterministic.
     std.mem.sort(DocModel.ModuleDocs, module_docs_list.items, {}, DocModel.moduleDocsLessThan);
 
     // Determine the package name for the docs header.
@@ -13005,6 +13401,7 @@ fn generateDocs(
     // Promote the builtin types (Str, Num, …) to top-level modules so the
     // internal `Builtin` container never surfaces in the generated docs.
     try package_docs.reshapeBuiltin(ctx.gpa);
+    try package_docs.resolveDocRefs(ctx.gpa);
 
     // Remove existing output directory to ensure a clean build
     try std.Io.Dir.cwd().deleteTree(ctx.io.std_io, base_output_dir);
@@ -13291,7 +13688,7 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     const tmp_root = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", tmp.sub_path[0..] });
     defer allocator.free(tmp_root);
 
-    const markers = "module []\n\nStr :: [ProvidedByCompiler].{\n}\n";
+    const markers = "Str :: [ProvidedByCompiler].{\n}\n";
 
     const expectClassified = struct {
         fn check(gpa: Allocator, t_io: std.Io, root: []const u8, dir: std.Io.Dir, name: []const u8, data: []const u8, expected: bool) CliMainError!void {
@@ -13306,7 +13703,7 @@ test "isCompilerOwnedBuiltinSourcePath detects builtin by filename and content m
     try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", markers, true);
     // Correct filename but missing the markers (a user file that happens to be
     // named Builtin.roc) must not be classified as compiler-owned.
-    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "module []\n\nfoo = 1\n", false);
+    try expectClassified(allocator, io, tmp_root, tmp.dir, "Builtin.roc", "foo = 1\n", false);
     // The markers in a file that isn't named Builtin.roc must not match.
     try expectClassified(allocator, io, tmp_root, tmp.dir, "NotBuiltin.roc", markers, false);
 

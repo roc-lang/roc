@@ -9,6 +9,7 @@ const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
 const check = @import("check");
+const collections = @import("collections");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
 
@@ -24,6 +25,7 @@ const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;
 const RootMetadata = lir_core.RootMetadata.RootMetadata;
 const static_dispatch = check.StaticDispatchRegistry;
+const GuardedList = collections.GuardedList;
 
 pub const RuntimeSchemaStore = solved_lir_lower.RuntimeSchemaStore;
 
@@ -377,7 +379,7 @@ fn resolveConstFnValue(
         .imported_hosted,
         => |template| resolveProcedureTemplate(modules, worker, template),
         .parser_runtime,
-        .encode_to_runtime,
+        .encoder_for_runtime,
         => boxyLowerInvariant("generated parser/encoder stored function reached runtime boxy worker resolution before generated runtime support"),
     };
 }
@@ -573,44 +575,18 @@ fn methodOwnerForProcedurePayload(payload: checked.CheckedTypePayload) ?static_d
     return switch (payload) {
         .nominal => |nominal| if (nominal.builtin) |builtin|
             .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) }
-        else if (nominal.source_decl) |source_decl|
-            .{ .source_decl = .{
-                .module_name = nominal.origin_module,
-                .statement = source_decl,
-            } }
         else
             .{ .nominal = .{
-                .module_name = nominal.origin_module,
+                .module = nominal.origin_module,
                 .type_name = nominal.name,
-                .source_decl = null,
+                .source_decl = nominal.source_decl,
             } },
         else => null,
     };
 }
 
 fn builtinOwnerForCheckedBuiltin(builtin: checked.CheckedBuiltinNominal) static_dispatch.BuiltinOwner {
-    return switch (builtin) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .list => .list,
-        .box => .box,
-        .fields => .fields,
-        .field => .field,
-        .parse_tag_union_spec => .parse_tag_union_spec,
-    };
+    return static_dispatch.builtinOwnerForCheckedBuiltin(builtin);
 }
 
 fn methodOwnerInProcedureNames(
@@ -620,12 +596,8 @@ fn methodOwnerInProcedureNames(
 ) ?static_dispatch.MethodOwner {
     return switch (owner) {
         .builtin => |builtin| .{ .builtin = builtin },
-        .source_decl => |decl| .{ .source_decl = .{
-            .module_name = target_names.lookupModuleName(source_names.moduleNameText(decl.module_name)) orelse return null,
-            .statement = decl.statement,
-        } },
         .nominal => |nominal| .{ .nominal = .{
-            .module_name = target_names.lookupModuleName(source_names.moduleNameText(nominal.module_name)) orelse return null,
+            .module = target_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
             .type_name = target_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
             .source_decl = nominal.source_decl,
         } },
@@ -1988,17 +1960,13 @@ const ProcedureBuilder = struct {
         }
 
         const variant = variants[0];
-        // Build the payload descriptors BEFORE reserving this variant's slot:
-        // they can recursively append nested descriptors' variants to the same
-        // pool, which would land inside a span captured too early.
-        const payload_descs = try self.staticPayloadDescRefsForTagVariant(variant, .zst);
         const name = try self.result.store.insertString(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.result.boxy_tag_variants.items.len);
         try self.result.boxy_tag_variants.append(self.allocator, .{
             .name = name,
             .discriminant = 0,
             .payload_layout = .zst,
-            .payload_descs = payload_descs,
+            .payload_descs = .{},
         });
         return .{ .start = start, .len = 1 };
     }
@@ -2149,7 +2117,10 @@ const ProcedureBuilder = struct {
         ) orelse return null;
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
-            .local_proc => boxyLowerInvariant("static boxy dictionary local-proc method target reached dictionary construction"),
+            .local_proc,
+            .generated_structural_parser,
+            .generated_structural_encoder,
+            => boxyLowerInvariant("static boxy dictionary non-procedure method target reached dictionary construction"),
         };
         return self.plan.workerForSourceType(source, .{
             .module = target_lookup.module.key,
@@ -3423,13 +3394,15 @@ const ProcedureBuilder = struct {
         const worker_proc_args = self.result.store.getLocalSpan(self.result.store.getProcSpec(worker_proc).args);
         const hidden_desc_params = self.plan.hiddenDescriptorParamSlice(worker_plan.hidden_descs);
         const hidden_dict_params = self.plan.hiddenDictionaryParamSlice(worker_plan.hidden_dicts);
+        const root_plan = self.plan.roots.items[@intFromEnum(root_layout.root)];
         if (host_args.len + hidden_desc_params.len + hidden_dict_params.len != worker_proc_args.len) {
             boxyLowerInvariant("boxy host wrapper needed argument adaptation before adapters were emitted");
         }
 
         const arg_locals = try self.allocator.alloc(LIR.LocalId, host_args.len);
         defer self.allocator.free(arg_locals);
-        for (host_args, worker_proc_args[0..host_args.len], arg_locals) |host_arg, worker_arg, *local| {
+        for (host_args, arg_locals, 0..) |host_arg, *local, arg_index| {
+            const worker_arg = GuardedList.at(worker_proc_args, arg_index);
             if (host_arg.layoutIdx() != self.result.store.getLocal(worker_arg).layout_idx) {
                 boxyLowerInvariant("boxy host wrapper needed argument layout adaptation before adapters were emitted");
             }
@@ -3446,6 +3419,22 @@ const ProcedureBuilder = struct {
         // The worker's hidden descriptor and dictionary parameters are
         // materialized statically: a root's platform-facing types are fixed,
         // so the requirements resolve to static table entries.
+        var descriptor_sources = StaticDescriptorSourceMap{};
+        defer descriptor_sources.deinit(self.allocator);
+        if (hidden_desc_params.len != 0) {
+            var source_seen = std.AutoHashMap(u64, void).init(self.allocator);
+            defer source_seen.deinit();
+            try self.collectStaticDescriptorSourcesForWorkerSource(
+                worker_plan.rep,
+                root_plan.host_rep,
+                hidden_desc_params,
+                &descriptor_sources,
+                &source_seen,
+            );
+        }
+        var desc_context = StaticDescInstantiationContext{};
+        defer desc_context.deinit(self.allocator);
+
         const call_arg_count = host_args.len + hidden_desc_params.len + hidden_dict_params.len;
         const call_locals = try self.allocator.alloc(LIR.LocalId, call_arg_count);
         defer self.allocator.free(call_locals);
@@ -3483,7 +3472,7 @@ const ProcedureBuilder = struct {
             const param = hidden_desc_params[desc_index];
             continuation = try self.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = call_locals[host_args.len + desc_index],
-                .desc = try self.staticDescRefForRep(param.rep),
+                .desc = try self.staticDescRefForWorkerRepWithSourceMap(param.rep, null, &descriptor_sources, &desc_context),
                 .next = continuation,
             } });
         }
@@ -4115,6 +4104,14 @@ const ProcBodyBuilder = struct {
                 else => {},
             }
         }
+        if (expected_ty != expr.ty) {
+            switch (expr.data) {
+                .call => |call| return try self.lowerDirectCallIntoWithRetType(target, expr_id, call, expected_ty, next),
+                .dispatch_call => |maybe_plan| return try self.lowerDispatchCallIntoWithRetType(target, expr_id, maybe_plan, expected_ty, next),
+                .type_dispatch_call => |maybe_plan| return try self.lowerDispatchCallIntoWithRetType(target, expr_id, maybe_plan, expected_ty, next),
+                else => {},
+            }
+        }
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         if (target_layout == source_layout and self.canonicalDescriptorRep(target_rep) == self.canonicalDescriptorRep(source_rep)) {
@@ -4210,12 +4207,16 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("checked method equality reached boxy lowering without structural equality permission");
         }
         switch (plan.resolution) {
-            .unresolved_checked_plan => {},
-            .resolved_target => {
+            .direct => {
                 if (!checkedTypeUsesBuiltinStructuralEquality(self.module, plan.dispatcher_ty)) {
                     return try self.lowerDispatchCallInto(target, plan.expr, maybe_plan, next);
                 }
             },
+            .constraint,
+            .structural,
+            => {},
+            .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
+            .unreachable_dispatch => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }
 
         const operands = plan.argsSlice(self.module.static_dispatch_plans);
@@ -4334,6 +4335,8 @@ const ProcBodyBuilder = struct {
 
         var pre_arg_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer pre_arg_descriptor_initializers.deinit(self.parent.allocator);
+        const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(call_plan.hidden_desc_args);
+        const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(call_plan.hidden_dict_args);
 
         var continuation = try self.lowerWorkerCallLocalsInto(
             target,
@@ -4341,8 +4344,8 @@ const ProcBodyBuilder = struct {
             &.{},
             &.{},
             worker_id,
-            call_plan.hidden_desc_args,
-            call_plan.hidden_dict_args,
+            hidden_desc_args,
+            hidden_dict_args,
             &pre_arg_descriptor_initializers,
             next,
         );
@@ -5033,12 +5036,21 @@ const ProcBodyBuilder = struct {
     }
 
     fn workerSourceForProcedureValueRef(self: *ProcBodyBuilder, ref_id: checked.ResolvedValueRefId) Plan.WorkerSource {
-        const record = self.resolvedValueRecord(ref_id);
+        return self.workerSourceForProcedureValueRefInModule(self.module, ref_id) orelse
+            boxyLowerInvariant("resolved value did not reference a procedure value");
+    }
+
+    fn workerSourceForProcedureValueRefInModule(
+        self: *ProcBodyBuilder,
+        module: ProcedureModuleView,
+        ref_id: checked.ResolvedValueRefId,
+    ) ?Plan.WorkerSource {
+        const record = resolvedValueRecordInModule(module, ref_id);
         return switch (record.ref) {
-            .local_proc => |local| if (topLevelProcedureBindingForExpr(self.module, local.expr)) |binding|
+            .local_proc => |local| if (topLevelProcedureBindingForExpr(module, local.expr)) |binding|
                 .{ .procedure_binding = binding }
             else
-                .{ .nested_expr = .{ .module = self.module.key, .expr = nestedCallableSiteExprForExpr(self.module, local.expr) orelse local.expr } },
+                .{ .nested_expr = .{ .module = module.key, .expr = nestedCallableSiteExprForExpr(module, local.expr) orelse local.expr } },
             .top_level_proc,
             .promoted_top_level_proc,
             => |procedure| self.workerSourceForProcedureUse(procedure),
@@ -5054,20 +5066,73 @@ const ProcBodyBuilder = struct {
             .imported_const,
             .platform_required_declaration,
             .platform_required_const,
-            => boxyLowerInvariant("resolved value did not reference a procedure value"),
+            => null,
         };
     }
 
     fn workerSourceForProcedureUse(self: *ProcBodyBuilder, procedure: checked.ProcedureUseTemplate) Plan.WorkerSource {
-        _ = self;
         return switch (procedure.binding) {
-            .top_level => |top_level| .{ .procedure_binding = top_level },
-            .platform_required => |required| .{ .procedure_binding = .{
+            .top_level => |top_level| self.workerSourceForTopLevelProcedureBinding(top_level),
+            .platform_required => |required| self.workerSourceForTopLevelProcedureBinding(.{
                 .artifact = required.app_value.artifact,
                 .binding = required.procedure_binding,
-            } },
+            }),
             .imported => .{ .procedure_use = procedure },
             .hosted => .{ .procedure_use = procedure },
+        };
+    }
+
+    fn workerSourceForTopLevelProcedureBinding(
+        self: *ProcBodyBuilder,
+        binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
+    ) Plan.WorkerSource {
+        const module = procedureModuleByKey(self.parent.modules, binding_ref.artifact);
+        const binding = module.top_level_procedure_bindings.get(binding_ref.binding);
+        switch (binding.body) {
+            .callable_eval_template => |template| if (self.workerSourceForPendingCallableEvalTemplate(module, template)) |source| {
+                return source;
+            },
+            .direct_template => {},
+        }
+        return .{ .procedure_binding = binding_ref };
+    }
+
+    fn workerSourceForPendingCallableEvalTemplate(
+        self: *ProcBodyBuilder,
+        module: ProcedureModuleView,
+        template_id: checked.CallableEvalTemplateId,
+    ) ?Plan.WorkerSource {
+        const raw = @intFromEnum(template_id);
+        if (raw >= module.callable_eval_templates.templates.len) {
+            boxyLowerInvariant("callable eval binding referenced a missing checked template");
+        }
+        const template = module.callable_eval_templates.templates[raw];
+        const root = module.compile_time_roots.root(template.root);
+        if (root.payload != .pending) return null;
+        return self.workerSourceForCallableRootExpr(module, root.expr);
+    }
+
+    fn workerSourceForCallableRootExpr(
+        self: *ProcBodyBuilder,
+        module: ProcedureModuleView,
+        expr_id: checked.CheckedExprId,
+    ) ?Plan.WorkerSource {
+        const expr = module.checked_bodies.expr(expr_id);
+        return switch (expr.data) {
+            .lookup_local => |lookup| if (lookup.resolved) |ref_id|
+                self.workerSourceForProcedureValueRefInModule(module, ref_id)
+            else
+                null,
+            .lookup_external,
+            .lookup_required,
+            => |maybe_ref| if (maybe_ref) |ref_id|
+                self.workerSourceForProcedureValueRefInModule(module, ref_id)
+            else
+                null,
+            .lambda,
+            .closure,
+            => .{ .nested_expr = .{ .module = module.key, .expr = expr_id } },
+            else => null,
         };
     }
 
@@ -5079,15 +5144,26 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const checked_ret_ty = self.module.checked_bodies.expr(call_expr).ty;
+        return try self.lowerDirectCallIntoWithRetType(target, call_expr, call, checked_ret_ty, next);
+    }
+
+    fn lowerDirectCallIntoWithRetType(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        call_expr: checked.CheckedExprId,
+        call: anytype,
+        ret_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         if (call.direct_target == null) {
-            return try self.lowerErasedCallInto(target, checked_ret_ty, call.func, call.args, next);
+            return try self.lowerErasedCallInto(target, ret_ty, call.func, call.args, next);
         }
         if (self.directTargetIsLocalProc(call.direct_target.?)) {
-            return try self.lowerErasedCallInto(target, checked_ret_ty, call.func, call.args, next);
+            return try self.lowerErasedCallInto(target, ret_ty, call.func, call.args, next);
         }
         const direct_plan = self.parent.plan.directCallPlanForCall(.{ .module = self.module.key, .expr = call_expr }) orelse
             boxyLowerInvariant("checked direct call reached boxy lowering without a planned worker");
-        return try self.lowerPlannedWorkerCallInto(target, checked_ret_ty, call.args, direct_plan, next);
+        return try self.lowerPlannedWorkerCallInto(target, ret_ty, call.args, direct_plan, next);
     }
 
     fn directTargetIsLocalProc(self: *const ProcBodyBuilder, target: checked.ResolvedValueId) bool {
@@ -5197,10 +5273,26 @@ const ProcBodyBuilder = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const checked_ret_ty = self.module.checked_bodies.expr(call_expr).ty;
+        return try self.lowerDispatchCallIntoWithRetType(target, call_expr, maybe_plan, checked_ret_ty, next);
+    }
+
+    fn lowerDispatchCallIntoWithRetType(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        call_expr: checked.CheckedExprId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        ret_ty: checked.CheckedTypeId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
         const dispatch = self.staticDispatchPlan(maybe_plan);
         switch (dispatch.resolution) {
-            .resolved_target => {},
-            .unresolved_checked_plan => return try self.lowerUnresolvedDispatchCallInto(target, dispatch, next),
+            .direct => {},
+            .constraint,
+            .structural,
+            => return try self.lowerUnresolvedDispatchCallInto(target, dispatch, ret_ty, next),
+            .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
+            .unreachable_dispatch => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }
 
         const args = try self.checkedArgsForDispatchCall(dispatch);
@@ -5208,7 +5300,6 @@ const ProcBodyBuilder = struct {
 
         const direct_plan = self.parent.plan.directCallPlanForCall(.{ .module = self.module.key, .expr = call_expr }) orelse
             boxyLowerInvariant("checked static dispatch call reached boxy lowering without a planned worker");
-        const checked_ret_ty = self.module.checked_bodies.expr(call_expr).ty;
 
         var continuation = next;
         var call_target = target;
@@ -5227,22 +5318,23 @@ const ProcBodyBuilder = struct {
             .value,
             .hash,
             .parser_for,
-            .encode_to,
+            .encoder_for,
             => {},
         }
 
-        return try self.lowerPlannedWorkerCallInto(call_target, checked_ret_ty, args, direct_plan, continuation);
+        return try self.lowerPlannedWorkerCallInto(call_target, ret_ty, args, direct_plan, continuation);
     }
 
     fn lowerUnresolvedDispatchCallInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         dispatch: static_dispatch.StaticDispatchCallPlan,
+        ret_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const dispatcher_rep = self.repForType(dispatch.dispatcher_ty);
         if (self.dispatcherRepHasDictionary(dispatcher_rep, dispatch.method)) {
-            return try self.lowerDictionaryDispatchCallInto(target, dispatch, dispatcher_rep, next);
+            return try self.lowerDictionaryDispatchCallInto(target, dispatch, dispatcher_rep, ret_ty, next);
         }
 
         return switch (dispatch.result_mode) {
@@ -5259,9 +5351,18 @@ const ProcBodyBuilder = struct {
             else
                 boxyLowerInvariant("unresolved value dispatch reached boxy lowering without dictionary support for that method"),
             .parser_for,
-            .encode_to,
+            .encoder_for,
             => boxyLowerInvariant("unresolved parser or encoder dispatch reached boxy lowering before structural parser/encoder support"),
         };
+    }
+
+    fn lowerUnexecutableDispatchInto(
+        self: *ProcBodyBuilder,
+        comptime message: []const u8,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.parent.result.store.insertString(message),
+        } });
     }
 
     fn lowerStructuralEqDispatchInto(
@@ -5329,6 +5430,7 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         dispatch: static_dispatch.StaticDispatchCallPlan,
         dispatcher_rep: Plan.TypeRepId,
+        ret_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const match = self.dictionaryMethodForRep(dispatcher_rep, dispatch.method) orelse
@@ -5349,7 +5451,7 @@ const ProcBodyBuilder = struct {
         for (args, arg_types) |arg, *arg_type| {
             arg_type.* = .{ .module = self.module.key, .ty = self.module.checked_bodies.expr(arg).ty };
         }
-        const ret_type = Plan.TypeRef{ .module = self.module.key, .ty = self.module.checked_bodies.expr(dispatch.expr).ty };
+        const ret_type = Plan.TypeRef{ .module = self.module.key, .ty = ret_ty };
         const method_function_rep = self.dictionaryMethodFunctionRepForCall(dispatcher_rep, match.requirement, dispatch.callable_ty);
         const method_function = self.functionChildrenForRep(method_function_rep) orelse
             boxyLowerInvariant("dictionary dispatch method representation was not a function");
@@ -5383,7 +5485,7 @@ const ProcBodyBuilder = struct {
             .value,
             .hash,
             .parser_for,
-            .encode_to,
+            .encoder_for,
             => {},
         }
         const result_desc_info = if (call_target == target)
@@ -5502,15 +5604,20 @@ const ProcBodyBuilder = struct {
 
         var pre_arg_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer pre_arg_descriptor_initializers.deinit(self.parent.allocator);
+        const ret_type = Plan.TypeRef{ .module = self.module.key, .ty = checked_ret_ty };
+        const hidden_desc_args = try self.workerCallHiddenDescriptorArgs(direct_plan.worker, arg_types, ret_type);
+        defer self.parent.allocator.free(hidden_desc_args);
+        const hidden_dict_args = try self.workerCallHiddenDictionaryArgs(direct_plan.worker, arg_types, ret_type);
+        defer self.parent.allocator.free(hidden_dict_args);
 
         var continuation = try self.lowerWorkerCallLocalsInto(
             target,
-            .{ .module = self.module.key, .ty = checked_ret_ty },
+            ret_type,
             arg_types,
             lowered,
             direct_plan.worker,
-            direct_plan.hidden_desc_args,
-            direct_plan.hidden_dict_args,
+            hidden_desc_args,
+            hidden_dict_args,
             &pre_arg_descriptor_initializers,
             next,
         );
@@ -5526,8 +5633,8 @@ const ProcBodyBuilder = struct {
         arg_types: []const Plan.TypeRef,
         source_args: []const LIR.LocalId,
         worker_id: Plan.WorkerPlanId,
-        hidden_desc_args_span: Plan.Span,
-        hidden_dict_args_span: Plan.Span,
+        hidden_desc_args: []const Plan.DirectCallHiddenDescriptorArg,
+        hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg,
         pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -5560,11 +5667,9 @@ const ProcBodyBuilder = struct {
                 try self.addFrameBoundaryTargetLocalForRep(worker_arg.rep);
         }
 
-        const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(hidden_desc_args_span);
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, source_args, pre_arg_descriptor_initializers);
         defer self.parent.allocator.free(hidden_desc_locals);
 
-        const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(hidden_dict_args_span);
         const hidden_dict_locals = try self.lowerDirectCallHiddenDictionaryArgs(hidden_dict_args);
         defer self.parent.allocator.free(hidden_dict_locals);
 
@@ -8617,14 +8722,22 @@ const ProcBodyBuilder = struct {
         const iterator_type = if (iter_call_plan) |call_plan|
             call_plan.ret_type
         else switch (plan.iter.resolution) {
-            .resolved_target => boxyLowerInvariant("checked iterator iter dispatch reached boxy lowering without a planned worker"),
-            .unresolved_checked_plan => Plan.TypeRef{ .module = self.module.key, .ty = plan.iterator_ty },
+            .direct => boxyLowerInvariant("checked iterator iter dispatch reached boxy lowering without a planned worker"),
+            .constraint,
+            .structural,
+            .checked_error,
+            .unreachable_dispatch,
+            => Plan.TypeRef{ .module = self.module.key, .ty = plan.iterator_ty },
         };
         const step_type = if (next_call_plan) |call_plan|
             call_plan.ret_type
         else switch (plan.next.resolution) {
-            .resolved_target => boxyLowerInvariant("checked iterator next dispatch reached boxy lowering without a planned worker"),
-            .unresolved_checked_plan => Plan.TypeRef{ .module = self.module.key, .ty = plan.step_ty },
+            .direct => boxyLowerInvariant("checked iterator next dispatch reached boxy lowering without a planned worker"),
+            .constraint,
+            .structural,
+            .checked_error,
+            .unreachable_dispatch,
+            => Plan.TypeRef{ .module = self.module.key, .ty = plan.step_ty },
         };
         _ = try self.reserveRuntimeDescriptorLocalForRep(self.repForTypeRef(iterator_type));
         const iterator_param = try self.addFrameLocalForTypeRef(iterator_type);
@@ -8795,8 +8908,11 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         switch (call.resolution) {
-            .resolved_target => {},
-            .unresolved_checked_plan => return try self.lowerUnresolvedIteratorDispatchCallInto(target, plan, kind, call, loop_iterator, next),
+            .direct => {},
+            .constraint => return try self.lowerUnresolvedIteratorDispatchCallInto(target, plan, kind, call, loop_iterator, next),
+            .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
+            .checked_error => return try self.lowerUnexecutableDispatchInto("method dispatch failed to check"),
+            .unreachable_dispatch => return try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
         }
 
         const call_plan = self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, kind) orelse
@@ -8825,6 +8941,8 @@ const ProcBodyBuilder = struct {
 
         var pre_arg_descriptor_initializers = std.ArrayList(DescriptorArgLocal).empty;
         defer pre_arg_descriptor_initializers.deinit(self.parent.allocator);
+        const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(call_plan.hidden_desc_args);
+        const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(call_plan.hidden_dict_args);
 
         var continuation = try self.lowerWorkerCallLocalsInto(
             target,
@@ -8832,8 +8950,8 @@ const ProcBodyBuilder = struct {
             arg_types,
             arg_locals,
             call_plan.worker,
-            call_plan.hidden_desc_args,
-            call_plan.hidden_dict_args,
+            hidden_desc_args,
+            hidden_dict_args,
             &pre_arg_descriptor_initializers,
             next,
         );
@@ -9376,6 +9494,60 @@ const ProcBodyBuilder = struct {
         return try pending.toOwnedSlice(self.parent.allocator);
     }
 
+    fn workerCallHiddenDescriptorArgs(
+        self: *ProcBodyBuilder,
+        worker_id: Plan.WorkerPlanId,
+        arg_types: []const Plan.TypeRef,
+        ret_type: Plan.TypeRef,
+    ) Allocator.Error![]Plan.DirectCallHiddenDescriptorArg {
+        const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
+        const worker_function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("boxy direct call worker was not a function");
+        if (worker_function.arg_count != arg_types.len) {
+            boxyLowerInvariant("boxy direct call hidden descriptor mapping saw mismatched function arity");
+        }
+
+        const params = self.parent.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+        if (params.len == 0) return try self.parent.allocator.alloc(Plan.DirectCallHiddenDescriptorArg, 0);
+
+        var pending = std.ArrayList(Plan.DirectCallHiddenDescriptorArg).empty;
+        errdefer pending.deinit(self.parent.allocator);
+        var seen_reps = std.AutoHashMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen_reps.deinit();
+        var next_param: usize = 0;
+
+        const worker_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+        const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
+        for (worker_args, arg_types, 0..) |worker_arg, arg_type, arg_index| {
+            const arg_rep = self.repForTypeRef(arg_type);
+            try self.collectDictionaryCallHiddenDescriptorArgs(
+                worker_arg.rep,
+                arg_rep,
+                @intCast(arg_index),
+                params,
+                &next_param,
+                &pending,
+                &seen_reps,
+            );
+        }
+        const ret_rep = self.repForTypeRef(ret_type);
+        try self.collectDictionaryCallHiddenDescriptorArgs(
+            worker_function.ret,
+            ret_rep,
+            null,
+            params,
+            &next_param,
+            &pending,
+            &seen_reps,
+        );
+
+        if (next_param != params.len or pending.items.len != params.len) {
+            boxyLowerInvariant("boxy direct call hidden descriptor mapping did not cover every worker descriptor param");
+        }
+
+        return try pending.toOwnedSlice(self.parent.allocator);
+    }
+
     fn dictionaryMethodFunctionRepForCall(
         self: *ProcBodyBuilder,
         dispatcher_rep: Plan.TypeRepId,
@@ -9442,6 +9614,58 @@ const ProcBodyBuilder = struct {
 
         if (next_param != params.items.len or pending.items.len != params.items.len) {
             boxyLowerInvariant("boxy dictionary call hidden dictionary mapping did not cover every method dictionary param");
+        }
+
+        return try pending.toOwnedSlice(self.parent.allocator);
+    }
+
+    fn workerCallHiddenDictionaryArgs(
+        self: *ProcBodyBuilder,
+        worker_id: Plan.WorkerPlanId,
+        arg_types: []const Plan.TypeRef,
+        ret_type: Plan.TypeRef,
+    ) Allocator.Error![]Plan.DirectCallHiddenDictionaryArg {
+        const worker = self.parent.plan.workers.items[@intFromEnum(worker_id)];
+        const worker_function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("boxy direct call worker was not a function");
+        if (worker_function.arg_count != arg_types.len) {
+            boxyLowerInvariant("boxy direct call hidden dictionary mapping saw mismatched function arity");
+        }
+
+        const params = self.parent.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
+        if (params.len == 0) return try self.parent.allocator.alloc(Plan.DirectCallHiddenDictionaryArg, 0);
+
+        var pending = std.ArrayList(Plan.DirectCallHiddenDictionaryArg).empty;
+        errdefer pending.deinit(self.parent.allocator);
+        var seen_reps = std.AutoHashMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen_reps.deinit();
+        var next_param: usize = 0;
+
+        const worker_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+        const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
+        for (worker_args, arg_types) |worker_arg, arg_type| {
+            const arg_rep = self.repForTypeRef(arg_type);
+            try self.collectDictionaryCallHiddenDictionaryArgs(
+                worker_arg.rep,
+                arg_rep,
+                params,
+                &next_param,
+                &pending,
+                &seen_reps,
+            );
+        }
+        const ret_rep = self.repForTypeRef(ret_type);
+        try self.collectDictionaryCallHiddenDictionaryArgs(
+            worker_function.ret,
+            ret_rep,
+            params,
+            &next_param,
+            &pending,
+            &seen_reps,
+        );
+
+        if (next_param != params.len or pending.items.len != params.len) {
+            boxyLowerInvariant("boxy direct call hidden dictionary mapping did not cover every worker dictionary param");
         }
 
         return try pending.toOwnedSlice(self.parent.allocator);
@@ -9933,11 +10157,11 @@ const ProcBodyBuilder = struct {
     ) ResultDescriptorRef {
         const desc = info.desc orelse return info;
         const target_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return info;
-        const target_desc_local = target_desc.localOrNull() orelse return info;
         if (std.meta.eql(desc, target_desc)) return info;
 
         var result = info;
         result.desc = target_desc;
+        const target_desc_local = target_desc.localOrNull() orelse return info;
         if (info.materialize) |materialize| {
             const materialized_desc = materialize.materialize orelse
                 boxyLowerInvariant("boxy call result descriptor materialization had no descriptor");
@@ -10088,6 +10312,7 @@ const ProcBodyBuilder = struct {
         }
 
         if (!source_is_box and target_is_box) {
+            const source_desc = try self.descriptorRefForSourceStorageLocalRep(source, rep_id);
             const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep_id);
             const target_desc = target_desc_info.desc orelse
                 boxyLowerInvariant("boxy tag payload storage box had no target descriptor");
@@ -10096,6 +10321,7 @@ const ProcBodyBuilder = struct {
                 .target = target,
                 .payload = source,
                 .payload_layout = source_layout,
+                .source_desc = if (std.meta.eql(source_desc, target_desc)) null else source_desc,
                 .payload_desc = target_desc,
                 .payload_mode = .borrow,
                 .next = next,
@@ -10203,6 +10429,45 @@ const ProcBodyBuilder = struct {
         if (self.parent.result.store.getLocal(source).boxy_desc) |source_desc| return source_desc;
         const canonical_rep = self.canonicalDescriptorRep(rep_id);
         const source_desc = try self.descriptorRefForKnownRep(canonical_rep);
+        self.parent.result.store.replaceLocalBoxyDesc(source, source_desc);
+        return source_desc;
+    }
+
+    fn staticDescriptorPayloadLayout(
+        self: *const ProcBodyBuilder,
+        desc: LIR.BoxyDescRef,
+    ) ?layout.Idx {
+        return switch (desc) {
+            .static => |desc_id| blk: {
+                const index = @intFromEnum(desc_id);
+                if (index >= self.parent.result.boxy_type_descs.items.len) {
+                    boxyLowerInvariant("static boxy descriptor id exceeded descriptor table");
+                }
+                break :blk self.parent.result.boxy_type_descs.items[index].payload_layout;
+            },
+            .local,
+            .runtime,
+            => null,
+        };
+    }
+
+    fn descriptorRefForSourceStorageLocalRep(
+        self: *ProcBodyBuilder,
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+    ) Allocator.Error!LIR.BoxyDescRef {
+        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+        if (self.parent.result.store.getLocal(source).boxy_desc) |existing| {
+            if (self.staticDescriptorPayloadLayout(existing)) |payload_layout| {
+                if (payload_layout == source_layout) return existing;
+            } else {
+                return existing;
+            }
+        }
+
+        const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(rep_id, source_layout, true) orelse
+            boxyLowerInvariant("boxy tag payload storage source descriptor did not match source layout");
+        const source_desc = try self.descriptorRefForKnownRep(source_desc_rep);
         self.parent.result.store.replaceLocalBoxyDesc(source, source_desc);
         return source_desc;
     }
@@ -10687,6 +10952,9 @@ const ProcBodyBuilder = struct {
         captures: *std.ArrayList(LIR.LocalId),
         context: *DescriptorTemplateContext,
     ) Allocator.Error!LIR.BoxySpan {
+        _ = current_desc;
+        _ = captures;
+        _ = context;
         const rep = self.parent.plan.representations.items[@intFromEnum(tag_rep_id)];
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         if (variants.len == 0) return .{};
@@ -10695,23 +10963,13 @@ const ProcBodyBuilder = struct {
         }
 
         const variant = variants[0];
-        // Build the payload descriptors BEFORE reserving this variant's slot:
-        // they can recursively append nested descriptors' variants to the same
-        // pool, which would land inside a span captured too early.
-        const payload_descs = try self.templatePayloadDescRefsForTagVariant(
-            variant,
-            .zst,
-            current_desc,
-            captures,
-            context,
-        );
         const name = try self.parent.result.store.insertString(self.tagVariantNameText(variant));
         const start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
         try self.parent.result.boxy_tag_variants.append(self.parent.allocator, .{
             .name = name,
             .discriminant = 0,
             .payload_layout = .zst,
-            .payload_descs = payload_descs,
+            .payload_descs = .{},
         });
         return .{ .start = start, .len = 1 };
     }
@@ -10936,7 +11194,9 @@ const ProcBodyBuilder = struct {
         visit[index] = .visiting;
         const hidden = hidden_args[index];
         if (hidden.materialize) |_| {
-            for (self.parent.result.store.getLocalSpan(hidden.captures)) |capture| {
+            const captures = self.parent.result.store.getLocalSpan(hidden.captures);
+            for (0..GuardedList.borrowLen(captures)) |capture_index| {
+                const capture = GuardedList.at(captures, capture_index);
                 if (self.hiddenDescriptorMaterializationIndexForLocal(hidden_args, capture)) |dependency| {
                     try self.appendHiddenDescriptorMaterializationOrder(hidden_args, dependency, visit, order);
                 }
@@ -16268,11 +16528,15 @@ const ProcBodyBuilder = struct {
     }
 
     fn resolvedValueRecord(self: *const ProcBodyBuilder, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
+        return resolvedValueRecordInModule(self.module, ref_id);
+    }
+
+    fn resolvedValueRecordInModule(module: ProcedureModuleView, ref_id: checked.ResolvedValueRefId) checked.ResolvedValueRefRecord {
         const raw = @intFromEnum(ref_id);
-        if (raw >= self.module.resolved_value_refs.records.len) {
+        if (raw >= module.resolved_value_refs.records.len) {
             boxyLowerInvariant("checked lookup referenced a missing resolved value");
         }
-        return self.module.resolved_value_refs.records[raw];
+        return module.resolved_value_refs.records[raw];
     }
 
     fn workerReturnLayout(self: *const ProcBodyBuilder) @import("layout").Idx {
@@ -17978,7 +18242,7 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
     var out = try run(gpa, .{ .root = undefined }, .{}, &plan, .{});
     defer out.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), out.lir_result.store.proc_specs.items.len);
+    try std.testing.expectEqual(@as(usize, 0), out.lir_result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 0), out.lir_result.root_procs.items.len);
 }
 
@@ -18108,6 +18372,7 @@ test "boxy lowerer resolves callable eval bindings to finalized const function e
         .fn_def = .{ .nested = .{
             .owner = template_ref,
             .site = @enumFromInt(0),
+            .context_fn_key = typeKey(1),
         } },
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = typeKey(1),
@@ -18660,7 +18925,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
     defer out.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
-    try std.testing.expectEqual(@as(usize, 2), out.lir_result.store.proc_specs.items.len);
+    try std.testing.expectEqual(@as(usize, 2), out.lir_result.store.procSpecCount());
 
     const root_proc_id = out.lir_result.root_procs.items[0];
     const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
@@ -18673,7 +18938,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
     try std.testing.expect(call.proc != root_proc_id);
     const call_args = out.lir_result.store.getLocalSpan(call.args);
     try std.testing.expectEqual(@as(usize, 1), call_args.len);
-    try std.testing.expectEqual(arg.target, call_args[0]);
+    try std.testing.expectEqual(arg.target, GuardedList.at(call_args, 0));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = call.target } }, out.lir_result.store.getCFStmt(call.next));
 
     const callee_proc = out.lir_result.store.getProcSpec(call.proc);
@@ -18681,7 +18946,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
     try std.testing.expectEqual(@as(usize, 1), callee_args.len);
     const callee_copy = out.lir_result.store.getCFStmt(callee_proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (callee_copy.op) {
-        .local => |local| try std.testing.expectEqual(callee_args[0], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(callee_args, 0), local),
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = callee_copy.target } }, out.lir_result.store.getCFStmt(callee_copy.next));
@@ -18964,14 +19229,19 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     defer out.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
-    try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.proc_specs.items.len);
+    try std.testing.expectEqual(@as(usize, 3), out.lir_result.store.procSpecCount());
 
     const root_proc_id = out.lir_result.root_procs.items[0];
     const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
     const call = out.lir_result.store.getCFStmt(root_proc.body orelse return error.TestUnexpectedResult).assign_call;
     try std.testing.expect(call.proc != root_proc_id);
     try std.testing.expect(call.args.isEmpty());
-    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = call.target } }, out.lir_result.store.getCFStmt(call.next));
+    const return_copy = out.lir_result.store.getCFStmt(call.next).assign_ref;
+    switch (return_copy.op) {
+        .local => |local| try std.testing.expectEqual(call.target, local),
+        else => return error.TestUnexpectedResult,
+    }
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = return_copy.target } }, out.lir_result.store.getCFStmt(return_copy.next));
 
     const imported_proc_id = call.proc;
     const imported_proc = out.lir_result.store.getProcSpec(imported_proc_id);
@@ -19111,7 +19381,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
     defer out.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), out.lir_result.store.proc_specs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), out.lir_result.store.procSpecCount());
 
     const proc_id = out.lir_result.root_procs.items[0];
     const proc = out.lir_result.store.getProcSpec(proc_id);
@@ -19742,9 +20012,9 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
     try std.testing.expectEqual(cond.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const body_unit = out.lir_result.store.getCFStmt(branches[0].body).assign_struct;
+    const body_unit = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_struct;
     try std.testing.expect(body_unit.fields.isEmpty());
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = loop_join.id } }, out.lir_result.store.getCFStmt(body_unit.next));
 
@@ -19871,9 +20141,9 @@ test "boxy lowerer emits checked break as the active loop exit" {
     const switch_stmt = out.lir_result.store.getCFStmt(cond.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const break_unit = out.lir_result.store.getCFStmt(branches[0].body).assign_struct;
+    const break_unit = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_struct;
     try std.testing.expect(break_unit.fields.isEmpty());
     try std.testing.expectEqual(switch_stmt.default_branch, break_unit.next);
 
@@ -19992,7 +20262,7 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     const join = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).join;
     const join_params = out.lir_result.store.getLocalSpan(join.params);
     try std.testing.expectEqual(@as(usize, 1), join_params.len);
-    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = join_params[0] } }, out.lir_result.store.getCFStmt(join.body));
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = GuardedList.at(join_params, 0) } }, out.lir_result.store.getCFStmt(join.body));
 
     const cond = out.lir_result.store.getCFStmt(join.remainder).assign_tag;
     try std.testing.expectEqual(@as(u16, 1), cond.variant_index);
@@ -20002,9 +20272,9 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     try std.testing.expectEqual(cond.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const then_value = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    const then_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (then_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         else => return error.TestUnexpectedResult,
@@ -20159,8 +20429,8 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const first_switch = out.lir_result.store.getCFStmt(first_disc.next).switch_stmt;
     const first_branches = out.lir_result.store.getCFSwitchBranches(first_switch.branches);
     try std.testing.expectEqual(@as(usize, 1), first_branches.len);
-    try std.testing.expectEqual(@as(u64, 0), first_branches[0].value);
-    const first_value = out.lir_result.store.getCFStmt(first_branches[0].body).assign_literal;
+    try std.testing.expectEqual(@as(u64, 0), GuardedList.at(first_branches, 0).value);
+    const first_value = out.lir_result.store.getCFStmt(GuardedList.at(first_branches, 0).body).assign_literal;
     switch (first_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         else => return error.TestUnexpectedResult,
@@ -20175,8 +20445,8 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const second_switch = out.lir_result.store.getCFStmt(second_disc.next).switch_stmt;
     const second_branches = out.lir_result.store.getCFSwitchBranches(second_switch.branches);
     try std.testing.expectEqual(@as(usize, 1), second_branches.len);
-    try std.testing.expectEqual(@as(u64, 1), second_branches[0].value);
-    const second_value = out.lir_result.store.getCFStmt(second_branches[0].body).assign_literal;
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
+    const second_value = out.lir_result.store.getCFStmt(GuardedList.at(second_branches, 0).body).assign_literal;
     switch (second_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
         else => return error.TestUnexpectedResult,
@@ -20347,9 +20617,9 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     const disc = out.lir_result.store.getCFStmt(first_join.remainder).assign_ref;
     const switch_stmt = out.lir_result.store.getCFStmt(disc.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
-    try std.testing.expectEqual(@as(u64, 0), branches[0].value);
+    try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 
-    const payload_read = out.lir_result.store.getCFStmt(branches[0].body).assign_ref;
+    const payload_read = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_ref;
     switch (payload_read.op) {
         .tag_payload_struct => |payload| {
             try std.testing.expectEqual(cond_tag.target, payload.source);
@@ -20533,7 +20803,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     const miss_join = out.lir_result.store.getCFStmt(list.next).join;
     const len = out.lir_result.store.getCFStmt(miss_join.remainder).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_len, len.op);
-    try std.testing.expectEqual(list.target, out.lir_result.store.getLocalSpan(len.args)[0]);
+    try std.testing.expectEqual(list.target, GuardedList.at(out.lir_result.store.getLocalSpan(len.args), 0));
 
     const required = out.lir_result.store.getCFStmt(len.next).assign_literal;
     switch (required.value) {
@@ -20547,15 +20817,15 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     const cmp = out.lir_result.store.getCFStmt(required.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, cmp.op);
     const cmp_args = out.lir_result.store.getLocalSpan(cmp.args);
-    try std.testing.expectEqual(len.target, cmp_args[0]);
-    try std.testing.expectEqual(required.target, cmp_args[1]);
+    try std.testing.expectEqual(len.target, GuardedList.at(cmp_args, 0));
+    try std.testing.expectEqual(required.target, GuardedList.at(cmp_args, 1));
 
     const switch_stmt = out.lir_result.store.getCFStmt(cmp.next).switch_stmt;
     try std.testing.expectEqual(cmp.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
 
-    const item_index = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    const item_index = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (item_index.value) {
         .i64_literal => |literal| try std.testing.expectEqual(@as(i64, 1), literal.value),
         else => return error.TestUnexpectedResult,
@@ -20563,8 +20833,8 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     const item = out.lir_result.store.getCFStmt(item_index.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_get_unsafe, item.op);
     const item_args = out.lir_result.store.getLocalSpan(item.args);
-    try std.testing.expectEqual(list.target, item_args[0]);
-    try std.testing.expectEqual(item_index.target, item_args[1]);
+    try std.testing.expectEqual(list.target, GuardedList.at(item_args, 0));
+    try std.testing.expectEqual(item_index.target, GuardedList.at(item_args, 1));
 
     const bind = out.lir_result.store.getCFStmt(item.next).assign_ref;
     try std.testing.expectEqual(item.target, bind.op.local);
@@ -20718,8 +20988,8 @@ test "boxy lowerer emits checked string interpolation match patterns" {
 
     const steps = out.lir_result.store.getStrMatchSteps(str_match.steps);
     try std.testing.expectEqual(@as(usize, 1), steps.len);
-    try std.testing.expectEqualStrings("post", out.lir_result.store.getStringLiteral(steps[0].delimiter));
-    const capture = switch (steps[0].capture) {
+    try std.testing.expectEqualStrings("post", out.lir_result.store.getStringLiteral(GuardedList.at(steps, 0).delimiter));
+    const capture = switch (GuardedList.at(steps, 0).capture) {
         .view => |local| local,
         .discard => return error.TestUnexpectedResult,
     };
@@ -20904,9 +21174,9 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     const second_disc = out.lir_result.store.getCFStmt(second_alt_join.remainder).assign_ref;
     const second_switch = out.lir_result.store.getCFStmt(second_disc.next).switch_stmt;
     const second_branches = out.lir_result.store.getCFSwitchBranches(second_switch.branches);
-    try std.testing.expectEqual(@as(u64, 1), second_branches[0].value);
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
 
-    const payload_read = out.lir_result.store.getCFStmt(second_branches[0].body).assign_ref;
+    const payload_read = out.lir_result.store.getCFStmt(GuardedList.at(second_branches, 0).body).assign_ref;
     switch (payload_read.op) {
         .tag_payload_struct => |payload| try std.testing.expectEqual(cond_tag.target, payload.source),
         else => return error.TestUnexpectedResult,
@@ -21050,15 +21320,15 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(cond_literal.target, args[0]);
-    try std.testing.expectEqual(pattern_literal.target, args[1]);
+    try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
+    try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
 
     const switch_stmt = out.lir_result.store.getCFStmt(compare.next).switch_stmt;
     try std.testing.expectEqual(compare.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
-    const matched_value = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
+    const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         else => return error.TestUnexpectedResult,
@@ -21208,15 +21478,15 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(cond_literal.target, args[0]);
-    try std.testing.expectEqual(pattern_literal.target, args[1]);
+    try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
+    try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
 
     const switch_stmt = out.lir_result.store.getCFStmt(compare.next).switch_stmt;
     try std.testing.expectEqual(compare.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
-    const matched_value = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
+    const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         else => return error.TestUnexpectedResult,
@@ -21355,8 +21625,8 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
     try std.testing.expectEqual(LIR.LowLevel.str_is_eq, compare.op);
     const args = out.lir_result.store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(cond_literal.target, args[0]);
-    try std.testing.expectEqual(pattern_literal.target, args[1]);
+    try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
+    try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
 }
 
 test "boxy lowerer emits checked unary not as bool low-level call" {
@@ -21447,7 +21717,7 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .bool_not), not.op);
     const args = out.lir_result.store.getLocalSpan(not.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
-    try std.testing.expectEqual(literal.target, args[0]);
+    try std.testing.expectEqual(literal.target, GuardedList.at(args, 0));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = not.target } }, out.lir_result.store.getCFStmt(not.next));
 }
 
@@ -21552,9 +21822,9 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     try std.testing.expectEqual(lhs.target, switch_stmt.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
-    const true_branch = out.lir_result.store.getCFStmt(branches[0].body).assign_tag;
+    const true_branch = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_tag;
     try std.testing.expectEqual(@as(u16, 1), true_branch.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = true_branch.target } }, out.lir_result.store.getCFStmt(true_branch.next));
 
@@ -21665,8 +21935,8 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
     const args = out.lir_result.store.getLocalSpan(eq.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(lhs.target, args[0]);
-    try std.testing.expectEqual(rhs.target, args[1]);
+    try std.testing.expectEqual(lhs.target, GuardedList.at(args, 0));
+    try std.testing.expectEqual(rhs.target, GuardedList.at(args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = eq.target } }, out.lir_result.store.getCFStmt(eq.next));
 }
 
@@ -21816,13 +22086,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     try std.testing.expectEqual(compare_field0.target, switch_field0.cond);
     const branches = out.lir_result.store.getCFSwitchBranches(switch_field0.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), branches[0].value);
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
 
     const failed = out.lir_result.store.getCFStmt(switch_field0.default_branch).assign_tag;
     try std.testing.expectEqual(@as(u16, 0), failed.variant_index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = failed.target } }, out.lir_result.store.getCFStmt(failed.next));
 
-    const read_lhs_field1 = out.lir_result.store.getCFStmt(branches[0].body).assign_ref;
+    const read_lhs_field1 = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_ref;
     try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
     try std.testing.expectEqual(@as(u16, 1), read_lhs_field1.op.field.field_idx);
 }
@@ -21925,8 +22195,8 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash.op);
     const args = out.lir_result.store.getLocalSpan(hash.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(seed.target, args[0]);
-    try std.testing.expectEqual(value.target, args[1]);
+    try std.testing.expectEqual(seed.target, GuardedList.at(args, 0));
+    try std.testing.expectEqual(value.target, GuardedList.at(args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = hash.target } }, out.lir_result.store.getCFStmt(hash.next));
 }
 
@@ -22049,8 +22319,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     const hash_field0 = out.lir_result.store.getCFStmt(read_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field0.op);
     const first_args = out.lir_result.store.getLocalSpan(hash_field0.args);
-    try std.testing.expectEqual(seed.target, first_args[0]);
-    try std.testing.expectEqual(read_field0.target, first_args[1]);
+    try std.testing.expectEqual(seed.target, GuardedList.at(first_args, 0));
+    try std.testing.expectEqual(read_field0.target, GuardedList.at(first_args, 1));
 
     const read_field1 = out.lir_result.store.getCFStmt(hash_field0.next).assign_ref;
     try std.testing.expectEqual(tuple.target, read_field1.op.field.source);
@@ -22058,8 +22328,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     const hash_field1 = out.lir_result.store.getCFStmt(read_field1.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field1.op);
     const second_args = out.lir_result.store.getLocalSpan(hash_field1.args);
-    try std.testing.expectEqual(hash_field0.target, second_args[0]);
-    try std.testing.expectEqual(read_field1.target, second_args[1]);
+    try std.testing.expectEqual(hash_field0.target, GuardedList.at(second_args, 0));
+    try std.testing.expectEqual(read_field1.target, GuardedList.at(second_args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = hash_field1.target } }, out.lir_result.store.getCFStmt(hash_field1.next));
 }
 
@@ -22342,8 +22612,8 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), first_concat.op);
     const first_args = out.lir_result.store.getLocalSpan(first_concat.args);
     try std.testing.expectEqual(@as(usize, 2), first_args.len);
-    try std.testing.expectEqual(first.target, first_args[0]);
-    try std.testing.expectEqual(second.target, first_args[1]);
+    try std.testing.expectEqual(first.target, GuardedList.at(first_args, 0));
+    try std.testing.expectEqual(second.target, GuardedList.at(first_args, 1));
 
     const third = out.lir_result.store.getCFStmt(first_concat.next).assign_literal;
     switch (third.value) {
@@ -22355,8 +22625,8 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), second_concat.op);
     const second_args = out.lir_result.store.getLocalSpan(second_concat.args);
     try std.testing.expectEqual(@as(usize, 2), second_args.len);
-    try std.testing.expectEqual(first_concat.target, second_args[0]);
-    try std.testing.expectEqual(third.target, second_args[1]);
+    try std.testing.expectEqual(first_concat.target, GuardedList.at(second_args, 0));
+    try std.testing.expectEqual(third.target, GuardedList.at(second_args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = second_concat.target } }, out.lir_result.store.getCFStmt(second_concat.next));
 }
 
@@ -22445,7 +22715,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
     const args = out.lir_result.store.getLocalSpan(message.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
-    try std.testing.expectEqual(value.target, args[0]);
+    try std.testing.expectEqual(value.target, GuardedList.at(args, 0));
     const debug = out.lir_result.store.getCFStmt(message.next).debug;
     try std.testing.expectEqual(message.target, debug.message);
     const unit = out.lir_result.store.getCFStmt(debug.next).assign_struct;
@@ -22645,14 +22915,14 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), rendered.op);
     const rendered_args = out.lir_result.store.getLocalSpan(rendered.args);
     try std.testing.expectEqual(@as(usize, 1), rendered_args.len);
-    try std.testing.expectEqual(payload.target, rendered_args[0]);
+    try std.testing.expectEqual(payload.target, GuardedList.at(rendered_args, 0));
 
     const with_value = out.lir_result.store.getCFStmt(rendered.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), with_value.op);
     const with_value_args = out.lir_result.store.getLocalSpan(with_value.args);
     try std.testing.expectEqual(@as(usize, 2), with_value_args.len);
-    try std.testing.expectEqual(prefix.target, with_value_args[0]);
-    try std.testing.expectEqual(rendered.target, with_value_args[1]);
+    try std.testing.expectEqual(prefix.target, GuardedList.at(with_value_args, 0));
+    try std.testing.expectEqual(rendered.target, GuardedList.at(with_value_args, 1));
 
     const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
     switch (suffix.value) {
@@ -22664,8 +22934,8 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), message.op);
     const message_args = out.lir_result.store.getLocalSpan(message.args);
     try std.testing.expectEqual(@as(usize, 2), message_args.len);
-    try std.testing.expectEqual(with_value.target, message_args[0]);
-    try std.testing.expectEqual(suffix.target, message_args[1]);
+    try std.testing.expectEqual(with_value.target, GuardedList.at(message_args, 0));
+    try std.testing.expectEqual(suffix.target, GuardedList.at(message_args, 1));
 
     const terminal = out.lir_result.store.getCFStmt(message.next).expect_err;
     try std.testing.expectEqual(message.target, terminal.message);
@@ -22773,7 +23043,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
     const args = out.lir_result.store.getLocalSpan(message.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
-    try std.testing.expectEqual(value.target, args[0]);
+    try std.testing.expectEqual(value.target, GuardedList.at(args, 0));
     const debug = out.lir_result.store.getCFStmt(message.next).debug;
     try std.testing.expectEqual(message.target, debug.message);
     const final_unit = out.lir_result.store.getCFStmt(debug.next).assign_struct;
@@ -23537,7 +23807,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
     }
     try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
     try std.testing.expectEqual(@as(u16, 1), read_rest_field.op.field.field_idx);
-    try std.testing.expectEqual(read_rest_field.target, out.lir_result.store.getLocalSpan(rest_record.fields)[0]);
+    try std.testing.expectEqual(read_rest_field.target, GuardedList.at(out.lir_result.store.getLocalSpan(rest_record.fields), 0));
     try std.testing.expectEqual(rest_record.target, bind_rest.op.local);
     try std.testing.expectEqual(bind_rest.target, final_receiver.op.local);
     try std.testing.expectEqual(final_receiver.target, final_read.op.field.source);
@@ -23810,8 +24080,8 @@ test "boxy lowerer emits tuple construction in element order" {
     const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
     try std.testing.expectEqual(@as(usize, 2), fields.len);
-    try std.testing.expectEqual(first.target, fields[0]);
-    try std.testing.expectEqual(second.target, fields[1]);
+    try std.testing.expectEqual(first.target, GuardedList.at(fields, 0));
+    try std.testing.expectEqual(second.target, GuardedList.at(fields, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
 }
 
@@ -24043,8 +24313,8 @@ test "boxy lowerer emits record construction in layout order after source-order 
     const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
     try std.testing.expectEqual(@as(usize, 2), fields.len);
-    try std.testing.expectEqual(second.target, fields[0]);
-    try std.testing.expectEqual(first.target, fields[1]);
+    try std.testing.expectEqual(second.target, GuardedList.at(fields, 0));
+    try std.testing.expectEqual(first.target, GuardedList.at(fields, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
 }
 
@@ -24162,7 +24432,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), extension_message.op);
     const extension_args = out.lir_result.store.getLocalSpan(extension_message.args);
     try std.testing.expectEqual(@as(usize, 1), extension_args.len);
-    try std.testing.expectEqual(extension_value.target, extension_args[0]);
+    try std.testing.expectEqual(extension_value.target, GuardedList.at(extension_args, 0));
     const extension_debug = out.lir_result.store.getCFStmt(extension_message.next).debug;
     try std.testing.expectEqual(extension_message.target, extension_debug.message);
     const extension_unit = out.lir_result.store.getCFStmt(extension_debug.next).assign_struct;
@@ -24175,7 +24445,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const build = out.lir_result.store.getCFStmt(field_value.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
     try std.testing.expectEqual(@as(usize, 1), fields.len);
-    try std.testing.expectEqual(field_value.target, fields[0]);
+    try std.testing.expectEqual(field_value.target, GuardedList.at(fields, 0));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = build.target } }, out.lir_result.store.getCFStmt(build.next));
 }
 
@@ -24307,8 +24577,9 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     defer artifact.checked_types.deinit(gpa);
     defer artifact.checked_bodies.deinit(gpa);
 
+    const nominal_module = try artifact.canonical_names.internModuleIdentity(&([_]u8{0x31} ** 32));
     const nominal_key = names.NominalTypeKey{
-        .module_name = @enumFromInt(1),
+        .module = nominal_module,
         .type_name = @enumFromInt(2),
         .source_decl = 3,
     };
@@ -24319,6 +24590,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     try artifact.checked_types.nominal_declarations.append(gpa, .{
         .id = @enumFromInt(0),
         .nominal = nominal_key,
+        .source_statement = 3,
         .declaration_root = @enumFromInt(1),
         .backing = @enumFromInt(0),
         .pf_start = 0,
@@ -24329,7 +24601,8 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     try artifact.checked_types.payloads.append(gpa, .{
         .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = artifact.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(0),
@@ -24441,9 +24714,9 @@ fn expectDeclaredNominalRecordBoundary(
     }
     const assembled = store.getCFStmt(cursor).assign_struct;
     const fields = store.getLocalSpan(assembled.fields);
-    try std.testing.expectEqual(@as(usize, 2), fields.len);
-    try std.testing.expectEqual(field_locals[0], fields[0]);
-    try std.testing.expectEqual(field_locals[1], fields[1]);
+    try std.testing.expectEqual(@as(usize, 2), GuardedList.borrowLen(fields));
+    try std.testing.expectEqual(field_locals[0], GuardedList.at(fields, 0));
+    try std.testing.expectEqual(field_locals[1], GuardedList.at(fields, 1));
     return .{ .target = assembled.target, .next = assembled.next };
 }
 
@@ -24457,8 +24730,9 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(1);
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @enumFromInt(2);
+    const nominal_module = try artifact.canonical_names.internModuleIdentity(&([_]u8{0x32} ** 32));
     const nominal_key = names.NominalTypeKey{
-        .module_name = @enumFromInt(3),
+        .module = nominal_module,
         .type_name = @enumFromInt(4),
         .source_decl = 5,
     };
@@ -24486,6 +24760,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     try artifact.checked_types.nominal_declarations.append(gpa, .{
         .id = @enumFromInt(0),
         .nominal = nominal_key,
+        .source_statement = 5,
         .declaration_root = @enumFromInt(4),
         .backing = @enumFromInt(3),
         .pf_start = 0,
@@ -24496,7 +24771,8 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     try artifact.checked_types.payloads.append(gpa, .{
         .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = artifact.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
@@ -24696,8 +24972,9 @@ test "boxy lowerer inspects declared-field nominals through backing projection" 
 
     const field_a = try artifact.canonical_names.internRecordFieldLabel("a");
     const field_b = try artifact.canonical_names.internRecordFieldLabel("b");
+    const nominal_module = try artifact.canonical_names.internModuleIdentity(&([_]u8{0x33} ** 32));
     const nominal_key = names.NominalTypeKey{
-        .module_name = try artifact.canonical_names.internModuleName("Test"),
+        .module = nominal_module,
         .type_name = try artifact.canonical_names.internTypeName("WithPadding"),
         .source_decl = 5,
     };
@@ -24725,6 +25002,7 @@ test "boxy lowerer inspects declared-field nominals through backing projection" 
     try artifact.checked_types.nominal_declarations.append(gpa, .{
         .id = @enumFromInt(0),
         .nominal = nominal_key,
+        .source_statement = 5,
         .declaration_root = @enumFromInt(4),
         .backing = @enumFromInt(3),
         .pf_start = 0,
@@ -24735,7 +25013,8 @@ test "boxy lowerer inspects declared-field nominals through backing projection" 
     try artifact.checked_types.payloads.append(gpa, .{
         .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = artifact.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
@@ -24889,8 +25168,9 @@ test "boxy lowerer hashes declared-field nominals through backing projection" {
 
     const field_a = try artifact.canonical_names.internRecordFieldLabel("a");
     const field_b = try artifact.canonical_names.internRecordFieldLabel("b");
+    const nominal_module = try artifact.canonical_names.internModuleIdentity(&([_]u8{0x34} ** 32));
     const nominal_key = names.NominalTypeKey{
-        .module_name = try artifact.canonical_names.internModuleName("Test"),
+        .module = nominal_module,
         .type_name = try artifact.canonical_names.internTypeName("WithPadding"),
         .source_decl = 5,
     };
@@ -24918,6 +25198,7 @@ test "boxy lowerer hashes declared-field nominals through backing projection" {
     try artifact.checked_types.nominal_declarations.append(gpa, .{
         .id = @enumFromInt(0),
         .nominal = nominal_key,
+        .source_statement = 5,
         .declaration_root = @enumFromInt(4),
         .backing = @enumFromInt(3),
         .pf_start = 0,
@@ -24928,7 +25209,8 @@ test "boxy lowerer hashes declared-field nominals through backing projection" {
     try artifact.checked_types.payloads.append(gpa, .{
         .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = artifact.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
@@ -25277,8 +25559,8 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(first.target, out.lir_result.store.getLocalSpan(payload.fields)[0]);
-    try std.testing.expectEqual(second.target, out.lir_result.store.getLocalSpan(payload.fields)[1]);
+    try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 0));
+    try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 1));
     try std.testing.expectEqual(@as(u16, 0), tag.variant_index);
     try std.testing.expectEqual(@as(u16, 0), tag.discriminant);
     try std.testing.expectEqual(payload.target, tag.payload.?);
@@ -25386,8 +25668,8 @@ test "boxy lowerer emits list construction with committed element layout" {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 9), value.value),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(first.target, out.lir_result.store.getLocalSpan(list.elems)[0]);
-    try std.testing.expectEqual(second.target, out.lir_result.store.getLocalSpan(list.elems)[1]);
+    try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 0));
+    try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
 }
 
@@ -25515,17 +25797,17 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const args = out.lir_result.store.getLocalSpan(proc.args);
     try std.testing.expectEqual(@as(usize, 4), args.len);
-    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[2]).layout_idx);
-    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[3]).layout_idx);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(GuardedList.at(args, 2)).layout_idx);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(GuardedList.at(args, 3)).layout_idx);
 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (first.op) {
-        .local => |local| try std.testing.expectEqual(args[0], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
         else => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_ref;
     switch (second.op) {
-        .local => |local| try std.testing.expectEqual(args[1], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 1), local),
         else => return error.TestUnexpectedResult,
     }
     const list = out.lir_result.store.getCFStmt(second.next).assign_list;
@@ -25533,8 +25815,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     try std.testing.expectEqual(layout.LayoutTag.list, list_layout.tag);
     try std.testing.expectEqual(list_layout.getIdx(), out.lir_result.store.getLocal(first.target).layout_idx);
     try std.testing.expectEqual(list_layout.getIdx(), out.lir_result.store.getLocal(second.target).layout_idx);
-    try std.testing.expectEqual(first.target, out.lir_result.store.getLocalSpan(list.elems)[0]);
-    try std.testing.expectEqual(second.target, out.lir_result.store.getLocalSpan(list.elems)[1]);
+    try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 0));
+    try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = list.target } }, out.lir_result.store.getCFStmt(list.next));
 }
 
@@ -25641,28 +25923,28 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     const join = out.lir_result.store.getCFStmt(list.next).join;
     const params = out.lir_result.store.getLocalSpan(join.params);
     try std.testing.expectEqual(@as(usize, 2), params.len);
-    try std.testing.expectEqual(@as(layout.Idx, .u64), out.lir_result.store.getLocal(params[0]).layout_idx);
-    try std.testing.expectEqual(@as(layout.Idx, .str), out.lir_result.store.getLocal(params[1]).layout_idx);
+    try std.testing.expectEqual(@as(layout.Idx, .u64), out.lir_result.store.getLocal(GuardedList.at(params, 0)).layout_idx);
+    try std.testing.expectEqual(@as(layout.Idx, .str), out.lir_result.store.getLocal(GuardedList.at(params, 1)).layout_idx);
 
     const len = out.lir_result.store.getCFStmt(join.remainder).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .list_len), len.op);
     const len_args = out.lir_result.store.getLocalSpan(len.args);
     try std.testing.expectEqual(@as(usize, 1), len_args.len);
-    try std.testing.expectEqual(list.target, len_args[0]);
+    try std.testing.expectEqual(list.target, GuardedList.at(len_args, 0));
 
     const done = out.lir_result.store.getCFStmt(join.body).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), done.op);
     const done_args = out.lir_result.store.getLocalSpan(done.args);
     try std.testing.expectEqual(@as(usize, 2), done_args.len);
-    try std.testing.expectEqual(params[0], done_args[0]);
-    try std.testing.expectEqual(len.target, done_args[1]);
+    try std.testing.expectEqual(GuardedList.at(params, 0), GuardedList.at(done_args, 0));
+    try std.testing.expectEqual(len.target, GuardedList.at(done_args, 1));
 
     const switch_stmt = out.lir_result.store.getCFStmt(done.next).switch_stmt;
     const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u128, 1), branches[0].value);
+    try std.testing.expectEqual(@as(u128, 1), GuardedList.at(branches, 0).value);
 
-    const close = out.lir_result.store.getCFStmt(branches[0].body).assign_literal;
+    const close = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (close.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
         else => return error.TestUnexpectedResult,
@@ -25865,8 +26147,8 @@ test "boxy lowerer emits ordinary low-level calls after source-order argument lo
     try std.testing.expectEqual(LIR.LowLevel.num_plus.rcEffect(), add.rc_effect);
     const args = out.lir_result.store.getLocalSpan(add.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(first.target, args[0]);
-    try std.testing.expectEqual(second.target, args[1]);
+    try std.testing.expectEqual(first.target, GuardedList.at(args, 0));
+    try std.testing.expectEqual(second.target, GuardedList.at(args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = add.target } }, out.lir_result.store.getCFStmt(add.next));
 }
 
@@ -25963,7 +26245,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
     const args = out.lir_result.store.getLocalSpan(boxed.args);
     try std.testing.expectEqual(@as(usize, 1), args.len);
-    try std.testing.expectEqual(value.target, args[0]);
+    try std.testing.expectEqual(value.target, GuardedList.at(args, 0));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = boxed.target } }, out.lir_result.store.getCFStmt(boxed.next));
 }
 
@@ -26067,12 +26349,12 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const args = out.lir_result.store.getLocalSpan(proc.args);
     try std.testing.expectEqual(@as(usize, 3), args.len);
-    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[1]).layout_idx);
-    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(args[2]).layout_idx);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
+    try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(GuardedList.at(args, 2)).layout_idx);
 
     const from_arg = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (from_arg.op) {
-        .local => |local| try std.testing.expectEqual(args[0], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
         else => return error.TestUnexpectedResult,
     }
 
@@ -26189,13 +26471,13 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
     const boxed_args = out.lir_result.store.getLocalSpan(boxed.args);
     try std.testing.expectEqual(@as(usize, 1), boxed_args.len);
-    try std.testing.expectEqual(value.target, boxed_args[0]);
+    try std.testing.expectEqual(value.target, GuardedList.at(boxed_args, 0));
 
     const unboxed = out.lir_result.store.getCFStmt(boxed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
     const unboxed_args = out.lir_result.store.getLocalSpan(unboxed.args);
     try std.testing.expectEqual(@as(usize, 1), unboxed_args.len);
-    try std.testing.expectEqual(boxed.target, unboxed_args[0]);
+    try std.testing.expectEqual(boxed.target, GuardedList.at(unboxed_args, 0));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = unboxed.target } }, out.lir_result.store.getCFStmt(unboxed.next));
 }
 
@@ -26307,13 +26589,13 @@ test "boxy lowerer inspects concrete Box payloads" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
     const unbox_args = out.lir_result.store.getLocalSpan(unboxed.args);
     try std.testing.expectEqual(@as(usize, 1), unbox_args.len);
-    try std.testing.expectEqual(boxed.target, unbox_args[0]);
+    try std.testing.expectEqual(boxed.target, GuardedList.at(unbox_args, 0));
 
     const rendered = out.lir_result.store.getCFStmt(unboxed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), rendered.op);
     const rendered_args = out.lir_result.store.getLocalSpan(rendered.args);
     try std.testing.expectEqual(@as(usize, 1), rendered_args.len);
-    try std.testing.expectEqual(unboxed.target, rendered_args[0]);
+    try std.testing.expectEqual(unboxed.target, GuardedList.at(rendered_args, 0));
 
     const with_value = out.lir_result.store.getCFStmt(rendered.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), with_value.op);
@@ -26349,13 +26631,13 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
 
     const list_arg = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (list_arg.op) {
-        .local => |local| try std.testing.expectEqual(proc_args[0], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 0), local),
         else => return error.TestUnexpectedResult,
     }
 
     const transform_arg = out.lir_result.store.getCFStmt(list_arg.next).assign_ref;
     switch (transform_arg.op) {
-        .local => |local| try std.testing.expectEqual(proc_args[1], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 1), local),
         else => return error.TestUnexpectedResult,
     }
 
@@ -26367,8 +26649,8 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
 
     const reuse_args = out.lir_result.store.getLocalSpan(reuse.args);
     try std.testing.expectEqual(@as(usize, 2), reuse_args.len);
-    try std.testing.expectEqual(list_arg.target, reuse_args[0]);
-    try std.testing.expectEqual(transform_arg.target, reuse_args[1]);
+    try std.testing.expectEqual(list_arg.target, GuardedList.at(reuse_args, 0));
+    try std.testing.expectEqual(transform_arg.target, GuardedList.at(reuse_args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = reuse.target } }, out.lir_result.store.getCFStmt(reuse.next));
 }
 
@@ -26485,15 +26767,15 @@ test "boxy lowerer expands checked integer division low-level calls" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
     const eq_args = out.lir_result.store.getLocalSpan(eq.args);
     try std.testing.expectEqual(@as(usize, 2), eq_args.len);
-    try std.testing.expectEqual(rhs.target, eq_args[0]);
-    try std.testing.expectEqual(zero.target, eq_args[1]);
+    try std.testing.expectEqual(rhs.target, GuardedList.at(eq_args, 0));
+    try std.testing.expectEqual(zero.target, GuardedList.at(eq_args, 1));
 
     const zero_check = out.lir_result.store.getCFStmt(eq.next).switch_stmt;
     const zero_check_branches = out.lir_result.store.getCFSwitchBranches(zero_check.branches);
     try std.testing.expectEqual(eq.target, zero_check.cond);
     try std.testing.expectEqual(@as(usize, 1), zero_check_branches.len);
-    try std.testing.expectEqual(@as(u64, 1), zero_check_branches[0].value);
-    switch (out.lir_result.store.getCFStmt(zero_check_branches[0].body)) {
+    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(zero_check_branches, 0).value);
+    switch (out.lir_result.store.getCFStmt(GuardedList.at(zero_check_branches, 0).body)) {
         .crash => {},
         else => return error.TestUnexpectedResult,
     }
@@ -26502,8 +26784,8 @@ test "boxy lowerer expands checked integer division low-level calls" {
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_div_trunc_by), div.op);
     const div_args = out.lir_result.store.getLocalSpan(div.args);
     try std.testing.expectEqual(@as(usize, 2), div_args.len);
-    try std.testing.expectEqual(lhs.target, div_args[0]);
-    try std.testing.expectEqual(rhs.target, div_args[1]);
+    try std.testing.expectEqual(lhs.target, GuardedList.at(div_args, 0));
+    try std.testing.expectEqual(rhs.target, GuardedList.at(div_args, 1));
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = div.target } }, out.lir_result.store.getCFStmt(div.next));
 }
 
@@ -26590,7 +26872,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     defer out.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), out.lir_result.root_procs.items.len);
-    try std.testing.expectEqual(@as(usize, 2), out.lir_result.store.proc_specs.items.len);
+    try std.testing.expectEqual(@as(usize, 2), out.lir_result.store.procSpecCount());
     const wrapper_id = out.lir_result.root_procs.items[0];
     const wrapper = out.lir_result.store.getProcSpec(wrapper_id);
     const wrapper_args = out.lir_result.store.getLocalSpan(wrapper.args);
@@ -26598,7 +26880,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     const call = out.lir_result.store.getCFStmt(wrapper.body orelse return error.TestUnexpectedResult).assign_call;
     const call_args = out.lir_result.store.getLocalSpan(call.args);
     try std.testing.expectEqual(@as(usize, 1), call_args.len);
-    try std.testing.expectEqual(wrapper_args[0], call_args[0]);
+    try std.testing.expectEqual(GuardedList.at(wrapper_args, 0), GuardedList.at(call_args, 0));
     try std.testing.expect(call.proc != wrapper_id);
     try std.testing.expectEqual(@as(@TypeOf(wrapper.ret_layout), .u64), wrapper.ret_layout);
     try std.testing.expectEqualStrings("exported_main", out.lir_result.store.procDebugName(wrapper_id) orelse return error.TestUnexpectedResult);
@@ -26608,7 +26890,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     try std.testing.expectEqual(@as(usize, 1), worker_args.len);
     const worker_copy = out.lir_result.store.getCFStmt(worker.body orelse return error.TestUnexpectedResult).assign_ref;
     switch (worker_copy.op) {
-        .local => |local| try std.testing.expectEqual(worker_args[0], local),
+        .local => |local| try std.testing.expectEqual(GuardedList.at(worker_args, 0), local),
         else => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = worker_copy.target } }, out.lir_result.store.getCFStmt(worker_copy.next));
@@ -26834,6 +27116,7 @@ fn builtinNominal(
     return .{
         .name = @enumFromInt(0),
         .origin_module = @enumFromInt(0),
+        .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
         .backing = backing,

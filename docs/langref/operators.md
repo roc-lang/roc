@@ -2,7 +2,25 @@
 
 ## Desugaring
 
-TODO
+Several operators are syntax for [well-known static-dispatch methods](static-dispatch.md#well-known-methods).
+The method is selected at compile time from the operand types.
+
+| Operator | Method |
+| --- | --- |
+| `+` | `plus` |
+| `-` | `minus` |
+| `*` | `times` |
+| `/` | `div_by` |
+| `//` | `div_trunc_by` |
+| `%` | `rem_by` |
+| `==` | `is_eq` |
+| `!=` | `is_eq`, then `Bool.not` |
+| `<` | `is_lt` |
+| `<=` | `is_lte` |
+| `>` | `is_gt` |
+| `>=` | `is_gte` |
+| `-x` | `negate` |
+| `!x` | `not` |
 
 ## Binary Infix Operations
 
@@ -16,11 +34,16 @@ TODO
 
 ### Arithmetic Operators
 
-TODO
+Arithmetic operators dispatch to methods on the left operand. Their result type
+is the left operand's type, but the right operand can have a different type if
+the method signature allows it. See [Operators](static-dispatch.md#operators)
+in the static dispatch page.
 
 ### Comparison Operators
 
-TODO
+Comparison operators dispatch to methods that return `Bool`. Both operands must
+have the same type. See [Operators](static-dispatch.md#operators) in the static
+dispatch page.
 
 ### `??` (default value on `Err`)
 
@@ -52,11 +75,12 @@ Unlike the `?` operator which propagates errors via early return, `??` handles t
 
 ### `-` (`.negate()`)
 
-TODO
+Unary `-x` dispatches to `x.negate()`. The operand and result have the same
+type.
 
 ### `!` (`.not()`)
 
-TODO
+Unary `!x` dispatches to `x.not()`. The operand and result have the same type.
 
 ## Unary Postfix Operators
 

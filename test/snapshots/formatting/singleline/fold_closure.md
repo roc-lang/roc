@@ -8,18 +8,18 @@ type=snippet
 sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - fold_closure.md:1:13:1:17
+NAME NOT IN SCOPE - fold_closure.md:1:13:1:17
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `fold` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `fold` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  sumResult = fold([1, 2, 3, 4], 0, |acc, x| acc + x)                       │
  │              ‾‾‾‾                                                          │
  └────────────────────────────────────────────────────── fold_closure.md:1:13 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -71,7 +71,7 @@ NO CHANGE
 				(args
 					(p-assign (ident "acc"))
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 190)
+				(e-dispatch-call (method "plus") (constraint-fn-var 193)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "acc"))))

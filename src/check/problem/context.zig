@@ -271,6 +271,8 @@ pub const Context = union(enum) {
     pub const PlatformRequirementContext = struct {
         /// The identifier that the platform requires
         required_ident: Ident.Idx,
+        /// Where the platform's requires clause declares this requirement.
+        platform_region: base.Region,
     };
 
     /// Context for method type mismatch (where clause)

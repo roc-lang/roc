@@ -20,7 +20,11 @@ A loop body only includes statements; it does not have a final expression. The l
 
 ### Iterating over types that have `iter`
 
-`for` can also be used on types that have an `iter` method, as long as that method returns an [`Iter`](builtins/Iter). For example, [`List`](builtins/list) has (`List.iter`)[builtins/List#iter], so you can do a `for` loop over a list:
+`for` can also be used on types that have an
+[`iter`](static-dispatch.md#iteration) method, as long as that method returns an
+[`Iter`](../builtins/Iter). The loop then calls `next` on the returned iterator.
+For example, [`List`](../builtins/List) has `List.iter`, so you can do a `for`
+loop over a list:
 
 ```roc
 var $sum = 0

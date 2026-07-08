@@ -5,13 +5,6 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-module [
-    Color,
-    ModuleA.ModuleB.TypeC,
-    Try,
-    ExternalModule,
-]
-
 import Basics.Try
 import Color
 import ModuleA.ModuleB exposing [TypeC]
@@ -51,55 +44,30 @@ transform = |result|
     }
 ~~~
 # EXPECTED
-MODULE HEADER DEPRECATED - qualified_type_canonicalization.md:1:1:6:2
-DUPLICATE DEFINITION - qualified_type_canonicalization.md:8:1:8:18
-MODULE NOT FOUND - qualified_type_canonicalization.md:8:1:8:18
-MODULE NOT FOUND - qualified_type_canonicalization.md:9:1:9:13
-MODULE NOT FOUND - qualified_type_canonicalization.md:10:1:10:40
-MODULE NOT FOUND - qualified_type_canonicalization.md:11:1:11:32
-MODULE NOT FOUND - qualified_type_canonicalization.md:14:24:14:28
-MODULE NOT FOUND - qualified_type_canonicalization.md:15:19:15:24
-MODULE NOT FOUND - qualified_type_canonicalization.md:18:26:18:35
-MODULE NOT FOUND - qualified_type_canonicalization.md:19:26:19:35
-MODULE NOT FOUND - qualified_type_canonicalization.md:22:38:22:44
-DOES NOT EXIST - qualified_type_canonicalization.md:23:23:23:32
-MISSING NESTED TYPE - qualified_type_canonicalization.md:26:14:26:21
-MODULE NOT FOUND - qualified_type_canonicalization.md:30:23:30:27
-MODULE NOT FOUND - qualified_type_canonicalization.md:31:16:31:21
-MODULE NOT FOUND - qualified_type_canonicalization.md:34:21:34:25
-UNUSED VARIABLE - qualified_type_canonicalization.md:35:17:35:22
-MISSING NESTED TYPE - qualified_type_canonicalization.md:39:13:39:20
-MODULE NOT FOUND - qualified_type_canonicalization.md:39:26:39:30
-MODULE NOT FOUND - qualified_type_canonicalization.md:39:38:39:44
-MODULE NOT FOUND - qualified_type_canonicalization.md:39:64:39:70
-UNDECLARED TYPE - qualified_type_canonicalization.md:42:9:42:12
-DOES NOT EXIST - qualified_type_canonicalization.md:42:24:42:39
-UNDECLARED TYPE - qualified_type_canonicalization.md:43:9:43:12
-DOES NOT EXIST - qualified_type_canonicalization.md:43:25:43:38
-UNUSED VARIABLE - qualified_type_canonicalization.md:43:17:43:20
-EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:3:5:3:26
-EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
+DUPLICATE DEFINITION - qualified_type_canonicalization.md:1:1:1:18
+MODULE NOT FOUND - qualified_type_canonicalization.md:1:1:1:18
+MODULE NOT FOUND - qualified_type_canonicalization.md:2:1:2:13
+MODULE NOT FOUND - qualified_type_canonicalization.md:3:1:3:40
+MODULE NOT FOUND - qualified_type_canonicalization.md:4:1:4:32
+MODULE NOT FOUND - qualified_type_canonicalization.md:7:24:7:28
+MODULE NOT FOUND - qualified_type_canonicalization.md:8:19:8:24
+MODULE NOT FOUND - qualified_type_canonicalization.md:11:26:11:35
+MODULE NOT FOUND - qualified_type_canonicalization.md:12:26:12:35
+MODULE NOT FOUND - qualified_type_canonicalization.md:15:38:15:44
+DOES NOT EXIST - qualified_type_canonicalization.md:16:23:16:32
+MISSING NESTED TYPE - qualified_type_canonicalization.md:19:14:19:21
+MODULE NOT FOUND - qualified_type_canonicalization.md:23:23:23:27
+MODULE NOT FOUND - qualified_type_canonicalization.md:24:16:24:21
+MODULE NOT FOUND - qualified_type_canonicalization.md:27:21:27:25
+UNUSED VARIABLE - qualified_type_canonicalization.md:28:17:28:22
+MISSING NESTED TYPE - qualified_type_canonicalization.md:32:13:32:20
+MODULE NOT FOUND - qualified_type_canonicalization.md:32:26:32:30
+MODULE NOT FOUND - qualified_type_canonicalization.md:32:38:32:44
+MODULE NOT FOUND - qualified_type_canonicalization.md:32:64:32:70
+DOES NOT EXIST - qualified_type_canonicalization.md:35:24:35:39
+DOES NOT EXIST - qualified_type_canonicalization.md:36:25:36:38
+UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
 # PROBLEMS
-
-┌──────────────────────────┐
-│ MODULE HEADER DEPRECATED ├─ The `module` header is deprecated. ─────────────┐
-└┬─────────────────────────┘                                                  │
- │                                                                            │
- │  module [                                                                  │
- │      Color,                                                                │
- │      ModuleA.ModuleB.TypeC,                                                │
- │      Try,                                                                  │
- │      ExternalModule,                                                       │
- │  ]                                                                         │
- │                                                                            │
- └──────────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
-
-    Type modules (headerless files with a top-level type matching the filename)
-    are now the preferred way to define modules.
-
-    Remove the `module` header and ensure your file defines a type that matches
-    the filename.
-
 
 ┌──────────────────────┐
 │ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
@@ -107,11 +75,11 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  import Basics.Try                                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
- └──────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
+ └──────────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
     In this scope, `Try` was already defined here:
       ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  module [                                                             │
+    1 │  import Basics.Try                                                    │
       │  ‾                                                                    │
       └─────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
@@ -122,7 +90,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  import Basics.Try                                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                         │
- └──────────────────────────────────── qualified_type_canonicalization.md:8:1 ┘
+ └──────────────────────────────────── qualified_type_canonicalization.md:1:1 ┘
 
 
 
@@ -132,7 +100,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  import Color                                                              │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └──────────────────────────────────── qualified_type_canonicalization.md:9:1 ┘
+ └──────────────────────────────────── qualified_type_canonicalization.md:2:1 ┘
 
 
 
@@ -142,7 +110,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  import ModuleA.ModuleB exposing [TypeC]                                   │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                   │
- └─────────────────────────────────── qualified_type_canonicalization.md:10:1 ┘
+ └──────────────────────────────────── qualified_type_canonicalization.md:3:1 ┘
 
 
 
@@ -152,7 +120,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  import ExternalModule as ExtMod                                           │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
- └─────────────────────────────────── qualified_type_canonicalization.md:11:1 ┘
+ └──────────────────────────────────── qualified_type_canonicalization.md:4:1 ┘
 
 
 
@@ -162,7 +130,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  simpleQualified : Color.RGB                                               │
  │                         ‾‾‾‾                                               │
- └────────────────────────────────── qualified_type_canonicalization.md:14:24 ┘
+ └─────────────────────────────────── qualified_type_canonicalization.md:7:24 ┘
 
 
 
@@ -172,7 +140,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  simpleQualified = Color.RGB({ r: 255, g: 0, b: 0 })                       │
  │                    ‾‾‾‾‾                                                   │
- └────────────────────────────────── qualified_type_canonicalization.md:15:19 ┘
+ └─────────────────────────────────── qualified_type_canonicalization.md:8:19 ┘
 
 
 
@@ -182,7 +150,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  aliasedQualified : ExtMod.DataType                                        │
  │                           ‾‾‾‾‾‾‾‾‾                                        │
- └────────────────────────────────── qualified_type_canonicalization.md:18:26 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:11:26 ┘
 
 
 
@@ -192,7 +160,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  aliasedQualified = ExtMod.DataType.Default                                │
  │                           ‾‾‾‾‾‾‾‾‾                                        │
- └────────────────────────────────── qualified_type_canonicalization.md:19:26 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:12:26 ┘
 
 
 
@@ -202,7 +170,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  multiLevelQualified : ModuleA.ModuleB.TypeC                               │
  │                                       ‾‾‾‾‾‾                               │
- └────────────────────────────────── qualified_type_canonicalization.md:22:38 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:15:38 ┘
 
 
 
@@ -212,7 +180,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  multiLevelQualified = TypeC.new                                           │
  │                        ‾‾‾‾‾‾‾‾‾                                           │
- └────────────────────────────────── qualified_type_canonicalization.md:23:23 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:16:23 ┘
 
 
 
@@ -222,7 +190,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  resultType : Try.Try(I32, Str)                                            │
  │               ‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────── qualified_type_canonicalization.md:26:14 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:19:14 ┘
 
 
 
@@ -232,7 +200,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  getColor : {} -> Color.RGB                                                │
  │                        ‾‾‾‾                                                │
- └────────────────────────────────── qualified_type_canonicalization.md:30:23 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:23:23 ┘
 
 
 
@@ -242,7 +210,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  getColor = |_| Color.RGB({ r: 0, g: 255, b: 0 })                          │
  │                 ‾‾‾‾‾                                                      │
- └────────────────────────────────── qualified_type_canonicalization.md:31:16 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:24:16 ┘
 
 
 
@@ -252,7 +220,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  processColor : Color.RGB -> Str                                           │
  │                      ‾‾‾‾                                                  │
- └────────────────────────────────── qualified_type_canonicalization.md:34:21 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:27:21 ┘
 
 
 
@@ -262,7 +230,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  processColor = |color|                                                    │
  │                  ‾‾‾‾‾                                                     │
- └────────────────────────────────── qualified_type_canonicalization.md:35:17 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:28:17 ┘
 
     If you don't need this variable, prefix it with an underscore like `_color`
     to suppress this warning.
@@ -274,7 +242,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │              ‾‾‾‾‾‾‾                                                       │
- └────────────────────────────────── qualified_type_canonicalization.md:39:13 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:32:13 ┘
 
 
 
@@ -284,7 +252,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │                           ‾‾‾‾                                             │
- └────────────────────────────────── qualified_type_canonicalization.md:39:26 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:32:26 ┘
 
 
 
@@ -294,7 +262,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │                                       ‾‾‾‾‾‾                               │
- └────────────────────────────────── qualified_type_canonicalization.md:39:38 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:32:38 ┘
 
 
 
@@ -304,17 +272,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  transform : Try.Try(Color.RGB, ExtMod.Error) -> ModuleA.ModuleB.TypeC     │
  │                                                                 ‾‾‾‾‾‾     │
- └────────────────────────────────── qualified_type_canonicalization.md:39:64 ┘
-
-
-
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────── qualified_type_canonicalization.md:42:9 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:32:64 ┘
 
 
 
@@ -324,17 +282,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  Try.Ok(rgb) => TypeC.fromColor(rgb)                                       │
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └────────────────────────────────── qualified_type_canonicalization.md:42:24 ┘
-
-
-
-┌─────────────────┐
-│ UNDECLARED TYPE ├─ The type `Try` is not declared in this scope. ───────────┐
-└┬────────────────┘                                                           │
- │                                                                            │
- │  Try.Err(err) => TypeC.default                                             │
- │  ‾‾‾                                                                       │
- └─────────────────────────────────── qualified_type_canonicalization.md:43:9 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:35:24 ┘
 
 
 
@@ -344,7 +292,7 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  Try.Err(err) => TypeC.default                                             │
  │                  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └────────────────────────────────── qualified_type_canonicalization.md:43:25 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:36:25 ┘
 
 
 
@@ -354,44 +302,13 @@ EXPOSED BUT NOT DEFINED - qualified_type_canonicalization.md:4:5:4:8
  │                                                                            │
  │  Try.Err(err) => TypeC.default                                             │
  │          ‾‾‾                                                               │
- └────────────────────────────────── qualified_type_canonicalization.md:43:17 ┘
+ └────────────────────────────────── qualified_type_canonicalization.md:36:17 ┘
 
     If you don't need this variable, prefix it with an underscore like `_err`
     to suppress this warning.
 
-
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `.TypeC` is ─────────┐
-└┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this module.                                     │
- │                                                                            │
- │  ModuleA.ModuleB.TypeC,                                                    │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └──────────────────────────────────── qualified_type_canonicalization.md:3:5 ┘
-
-    You can fix this by either defining `.TypeC` in this module, or by removing
-    it from the list of exposed values.
-
-
-┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `Try` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
- │                                                                            │
- │  Try,                                                                      │
- │  ‾‾‾                                                                       │
- └──────────────────────────────────── qualified_type_canonicalization.md:4:5 ┘
-
-    You can fix this by either defining `Try` in this module, or by removing it
-    from the list of exposed values.
-
 # TOKENS
 ~~~zig
-KwModule,OpenSquare,
-UpperIdent,Comma,
-UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotUpperIdent,Comma,
-UpperIdent,Comma,
-UpperIdent,Comma,
-CloseSquare,
 KwImport,UpperIdent,NoSpaceDotUpperIdent,
 KwImport,UpperIdent,
 KwImport,UpperIdent,NoSpaceDotUpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
@@ -420,12 +337,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(module
-		(exposes
-			(exposed-upper-ident (text "Color"))
-			(exposed-upper-ident (text "TypeC"))
-			(exposed-upper-ident (text "Try"))
-			(exposed-upper-ident (text "ExternalModule"))))
+	(type-module)
 	(statements
 		(s-import (raw "Basics")
 			(exposing
@@ -525,13 +437,6 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-module [
-	Color,
-	TypeC,
-	Try,
-	ExternalModule,
-]
-
 import Basics exposing [Try]
 import Color
 import ModuleA.ModuleB exposing [TypeC]
@@ -620,33 +525,32 @@ transform = |result|
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "transform"))
-		(e-closure
-			(captures
-				(capture (ident "rgb")))
-			(e-lambda
-				(args
-					(p-assign (ident "result")))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-call
-										(e-runtime-error (tag "qualified_ident_does_not_exist"))
-										(e-lookup-local
-											(p-assign (ident "rgb"))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-runtime-error (tag "undeclared_type"))))
-								(value
-									(e-runtime-error (tag "qualified_ident_does_not_exist")))))))))
+		(e-lambda
+			(args
+				(p-assign (ident "result")))
+			(e-match
+				(match
+					(cond
+						(e-lookup-local
+							(p-assign (ident "result"))))
+					(branches
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal-external (builtin)
+										(p-applied-tag))))
+							(value
+								(e-call
+									(e-runtime-error (tag "qualified_ident_does_not_exist"))
+									(e-lookup-local
+										(p-assign (ident "rgb"))))))
+						(branch
+							(patterns
+								(pattern (degenerate false)
+									(p-nominal-external (builtin)
+										(p-applied-tag))))
+							(value
+								(e-runtime-error (tag "qualified_ident_does_not_exist"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

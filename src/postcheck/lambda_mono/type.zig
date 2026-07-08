@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const check = @import("check");
+const collections = @import("collections");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
@@ -13,6 +14,16 @@ const MonoType = @import("../monotype/type.zig");
 /// Checked boundary name module used by Lambda Mono types.
 pub const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
+const GuardedList = collections.GuardedList;
+
+fn StoreList(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.List(T, "lambda_mono.Type.Store." ++ field_name);
+}
+
+/// Guarded immutable span borrow for a named Lambda Mono type-store list.
+pub fn StoreSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
+    return GuardedList.BorrowSpan(T, "lambda_mono.Type.Store." ++ field_name);
+}
 
 /// Identifier for a Lambda Mono type in this store.
 pub const TypeId = enum(u32) { _ };
@@ -41,7 +52,7 @@ pub const Field = struct {
 pub const CaptureField = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
-    capture_id: ?u32 = null,
+    capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeId,
 };
 
@@ -102,13 +113,13 @@ pub const Content = union(enum) {
 /// Store for Lambda Mono types and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    types: std.ArrayList(Content),
-    spans: std.ArrayList(TypeId),
-    fields: std.ArrayList(Field),
-    capture_fields: std.ArrayList(CaptureField),
-    tags: std.ArrayList(Tag),
-    fn_variants: std.ArrayList(FnVariant),
-    declared_fields: std.ArrayList(DeclaredField),
+    types: StoreList(Content, "types"),
+    spans: StoreList(TypeId, "spans"),
+    fields: StoreList(Field, "fields"),
+    capture_fields: StoreList(CaptureField, "capture_fields"),
+    tags: StoreList(Tag, "tags"),
+    fn_variants: StoreList(FnVariant, "fn_variants"),
+    declared_fields: StoreList(DeclaredField, "declared_fields"),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -134,50 +145,54 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
-        const id: TypeId = @enumFromInt(@as(u32, @intCast(self.types.items.len)));
+        const id: TypeId = @enumFromInt(@as(u32, @intCast(self.types.len())));
         try self.types.append(self.allocator, content);
         return id;
     }
 
     pub fn set(self: *Store, id: TypeId, content: Content) void {
-        self.types.items[@intFromEnum(id)] = content;
+        self.types.set(@intFromEnum(id), content);
     }
 
     pub fn get(self: *const Store, id: TypeId) Content {
-        return self.types.items[@intFromEnum(id)];
+        return self.types.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn typeCount(self: *const Store) usize {
+        return self.types.len();
     }
 
     pub fn addSpan(self: *Store, values: []const TypeId) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.spans.items.len);
+        const start: u32 = @intCast(self.spans.len());
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.fields.items.len);
+        const start: u32 = @intCast(self.fields.len());
         try self.fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addCaptureFields(self: *Store, values: []const CaptureField) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.capture_fields.items.len);
+        const start: u32 = @intCast(self.capture_fields.len());
         try self.capture_fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.tags.items.len);
+        const start: u32 = @intCast(self.tags.len());
         try self.tags.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
     pub fn addFnVariants(self: *Store, values: []const FnVariant) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.fn_variants.items.len);
+        const start: u32 = @intCast(self.fn_variants.len());
         for (values, 0..) |variant, i| {
             var stored = variant;
             stored.id = @enumFromInt(@as(u32, @intCast(start + i)));
@@ -186,35 +201,57 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn span(self: *const Store, span_: Span) []const TypeId {
-        return self.spans.items[span_.start..][0..span_.len];
+    pub fn span(self: *const Store, span_: Span) StoreSpanBorrow(TypeId, "spans") {
+        return self.spans.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fieldSpan(self: *const Store, span_: Span) []const Field {
-        return self.fields.items[span_.start..][0..span_.len];
+    pub fn fieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(Field, "fields") {
+        return self.fields.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn captureFieldSpan(self: *const Store, span_: Span) []const CaptureField {
-        return self.capture_fields.items[span_.start..][0..span_.len];
+    pub fn captureFieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(CaptureField, "capture_fields") {
+        return self.capture_fields.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn tagSpan(self: *const Store, span_: Span) []const Tag {
-        return self.tags.items[span_.start..][0..span_.len];
+    pub fn tagSpan(self: *const Store, span_: Span) StoreSpanBorrow(Tag, "tags") {
+        return self.tags.borrowSpan(span_.start, span_.len);
     }
 
     pub fn addDeclaredFields(self: *Store, values: []const DeclaredField) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
-        const start: u32 = @intCast(self.declared_fields.items.len);
+        const start: u32 = @intCast(self.declared_fields.len());
         try self.declared_fields.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn declaredFieldSpan(self: *const Store, span_: Span) []const DeclaredField {
-        return self.declared_fields.items[span_.start..][0..span_.len];
+    pub fn declaredFieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(DeclaredField, "declared_fields") {
+        return self.declared_fields.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fnVariantSpan(self: *const Store, span_: Span) []const FnVariant {
-        return self.fn_variants.items[span_.start..][0..span_.len];
+    pub fn fnVariantSpan(self: *const Store, span_: Span) StoreSpanBorrow(FnVariant, "fn_variants") {
+        return self.fn_variants.borrowSpan(span_.start, span_.len);
+    }
+
+    pub const View = struct {
+        types: []const Content,
+        spans: []const TypeId,
+        fields: []const Field,
+        capture_fields: []const CaptureField,
+        tags: []const Tag,
+        fn_variants: []const FnVariant,
+        declared_fields: []const DeclaredField,
+    };
+
+    pub fn view(self: *const Store) View {
+        return .{
+            .types = self.types.unsafeRawItemsForView(),
+            .spans = self.spans.unsafeRawItemsForView(),
+            .fields = self.fields.unsafeRawItemsForView(),
+            .capture_fields = self.capture_fields.unsafeRawItemsForView(),
+            .tags = self.tags.unsafeRawItemsForView(),
+            .fn_variants = self.fn_variants.unsafeRawItemsForView(),
+            .declared_fields = self.declared_fields.unsafeRawItemsForView(),
+        };
     }
 
     pub fn typeDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
@@ -237,7 +274,8 @@ pub const Store = struct {
             .named => |named| {
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
-                writeBytes(hasher, name_store.moduleNameText(named.def.module_name));
+                writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
+                writeOptionalU32(hasher, named.def.source_decl);
                 writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
@@ -252,7 +290,8 @@ pub const Store = struct {
                 writeBytes(hasher, "record");
                 const field_slice = self.fieldSpan(fields);
                 writeU32(hasher, @intCast(field_slice.len));
-                for (field_slice) |field| {
+                for (0..field_slice.len) |index| {
+                    const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
                     self.writeTypeDigest(name_store, hasher, field.ty);
                 }
@@ -261,7 +300,8 @@ pub const Store = struct {
                 writeBytes(hasher, "capture_record");
                 const field_slice = self.captureFieldSpan(fields);
                 writeU32(hasher, @intCast(field_slice.len));
-                for (field_slice) |field| {
+                for (0..field_slice.len) |index| {
+                    const field = GuardedList.at(field_slice, index);
                     writeU32(hasher, @intFromEnum(field.symbol));
                     self.writeTypeDigest(name_store, hasher, field.ty);
                 }
@@ -274,7 +314,8 @@ pub const Store = struct {
                 writeBytes(hasher, "tag_union");
                 const tag_slice = self.tagSpan(tags);
                 writeU32(hasher, @intCast(tag_slice.len));
-                for (tag_slice) |tag| {
+                for (0..tag_slice.len) |index| {
+                    const tag = GuardedList.at(tag_slice, index);
                     writeBytes(hasher, name_store.tagLabelText(tag.name));
                     self.writeTypeSpanDigest(name_store, hasher, tag.payloads);
                 }
@@ -283,7 +324,8 @@ pub const Store = struct {
                 writeBytes(hasher, "callable");
                 const variant_slice = self.fnVariantSpan(variants);
                 writeU32(hasher, @intCast(variant_slice.len));
-                for (variant_slice) |variant| {
+                for (0..variant_slice.len) |index| {
+                    const variant = GuardedList.at(variant_slice, index);
                     writeU32(hasher, @intFromEnum(variant.source));
                     writeU32(hasher, @intFromEnum(variant.target));
                     if (variant.capture_ty) |capture_ty| {
@@ -307,7 +349,8 @@ pub const Store = struct {
                 hasher.update(&erased.source_fn_ty.bytes);
                 const variant_slice = self.fnVariantSpan(erased.members);
                 writeU32(hasher, @intCast(variant_slice.len));
-                for (variant_slice) |variant| {
+                for (0..variant_slice.len) |index| {
+                    const variant = GuardedList.at(variant_slice, index);
                     writeU32(hasher, @intFromEnum(variant.source));
                     writeU32(hasher, @intFromEnum(variant.target));
                     if (variant.capture_ty) |capture_ty| {
@@ -331,7 +374,8 @@ pub const Store = struct {
     ) void {
         const values = self.span(span_);
         writeU32(hasher, @intCast(values.len));
-        for (values) |child| {
+        for (0..values.len) |index| {
+            const child = GuardedList.at(values, index);
             self.writeTypeDigest(name_store, hasher, child);
         }
     }
@@ -340,6 +384,15 @@ pub const Store = struct {
 fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
+}
+
+fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+    if (value) |v| {
+        hasher.update(&[_]u8{1});
+        writeU32(hasher, v);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
 }
 
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
@@ -369,9 +422,9 @@ test "lambda mono callable variants receive store-local ids" {
     const callable = try store.add(.{ .callable = variants });
 
     const stored_variants = store.fnVariantSpan(store.get(callable).callable);
-    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(variants.start)), stored_variants[0].id);
-    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(1)), stored_variants[1].id);
-    try std.testing.expectEqual(capture_ty, stored_variants[0].capture_ty.?);
+    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(variants.start)), GuardedList.at(stored_variants, 0).id);
+    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(1)), GuardedList.at(stored_variants, 1).id);
+    try std.testing.expectEqual(capture_ty, GuardedList.at(stored_variants, 0).capture_ty.?);
 }
 
 test "lambda mono empty spans use shared empty descriptor" {

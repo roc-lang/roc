@@ -23,150 +23,233 @@ ar,
 		]
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_030.md:8:5:8:6
+EXPECTED EXPOSED NAME - fuzz_crash_030.md:8:5:8:6
 EXPECTED CLOSING BRACE - fuzz_crash_030.md:11:3:11:4
-PARSE ERROR - fuzz_crash_030.md:12:9:12:12
-PARSE ERROR - fuzz_crash_030.md:12:12:12:13
-PARSE ERROR - fuzz_crash_030.md:12:13:12:14
-PARSE ERROR - fuzz_crash_030.md:12:15:12:17
-PARSE ERROR - fuzz_crash_030.md:12:17:12:18
-PARSE ERROR - fuzz_crash_030.md:13:2:13:10
-PARSE ERROR - fuzz_crash_030.md:14:3:14:4
-PARSE ERROR - fuzz_crash_030.md:15:1:15:3
-PARSE ERROR - fuzz_crash_030.md:15:3:15:4
-PARSE ERROR - fuzz_crash_030.md:16:3:16:4
+EXPECTED PROVIDES - fuzz_crash_030.md:12:9:12:12
+UNEXPECTED STATEMENT - fuzz_crash_030.md:12:12:12:13
+UNEXPECTED STATEMENT - fuzz_crash_030.md:12:13:12:14
+UNEXPECTED STATEMENT - fuzz_crash_030.md:12:15:12:17
+UNEXPECTED STATEMENT - fuzz_crash_030.md:12:17:12:18
+UNEXPECTED STATEMENT - fuzz_crash_030.md:13:2:13:10
+UNEXPECTED STATEMENT - fuzz_crash_030.md:14:3:14:4
+UNEXPECTED STATEMENT - fuzz_crash_030.md:15:1:15:3
+UNEXPECTED STATEMENT - fuzz_crash_030.md:15:3:15:4
+UNEXPECTED STATEMENT - fuzz_crash_030.md:16:3:16:4
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: exposed_item_unexpected_token ─────┐
-└┬────────────┘                                                               │
+┌───────────────────────┐
+│ EXPECTED EXPOSED NAME ├─ I was parsing an exposing list, and I expected ────┐
+└┬──────────────────────┘  an exposed name.                                   │
  │                                                                            │
  │  [ .                                                                       │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_030.md:8:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Exposing lists contain lowercase values, uppercase types or tags, and
+    `Type.*` entries.
+
+    For example:
+        module [main, Result, Result.*]
+
+    I found `.` here.
 
 
 ┌────────────────────────┐
-│ EXPECTED CLOSING BRACE ├─ Platform headers must have a packages section ────┐
-└┬───────────────────────┘  that lists package dependencies.                  │
+│ EXPECTED CLOSING BRACE ├─ I was parsing a `packages` record, and I ─────────┐
+└┬───────────────────────┘  expected a closing `}`.                           │
  │                                                                            │
  │  { # pen                                                                   │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:11:3 ┘
 
-    For example:     packages { base: "../base/main.roc" }
+    Close the packages record after the last package entry.
+
+    For example:
+        packages { base: "../base/main.roc" }
+
+    I found `{` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_provides ─────────────────┐
-└┬────────────┘                                                               │
+┌───────────────────┐
+│ EXPECTED PROVIDES ├─ I was parsing a platform header, and I expected the ───┐
+└┬──────────────────┘  `provides` section.                                    │
  │                                                                            │
  │  pkg: 77"..c", mm} #                                                       │
  │          ‾‾‾                                                               │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:12:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    A platform header must map host symbols to Roc functions in a `provides`
+    record.
+
+    For example:
+        provides { "roc_main": main }
+
+    I found `..c` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: 77"..c", mm} #                                                       │
  │             ‾                                                              │
  └─────────────────────────────────────────────────── fuzz_crash_030.md:12:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: 77"..c", mm} #                                                       │
  │              ‾                                                             │
  └─────────────────────────────────────────────────── fuzz_crash_030.md:12:13 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: 77"..c", mm} #                                                       │
  │                ‾‾                                                          │
  └─────────────────────────────────────────────────── fuzz_crash_030.md:12:15 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `mm` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  pkg: 77"..c", mm} #                                                       │
  │                  ‾                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_030.md:12:17 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  provides # Cd                                                             │
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:13:2 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `provides` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  [ # pen                                                                   │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:14:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ar,                                                                       │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:15:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `ar` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ar,                                                                       │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:15:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  ]                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_030.md:16:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 # TOKENS
 ~~~zig

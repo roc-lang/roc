@@ -8,31 +8,44 @@ type=expr
 { age: 42, name = "Alice" }
 ~~~
 # EXPECTED
-UNEXPECTED TOKEN IN TYPE ANNOTATION - error_malformed_syntax_2.md:1:8:1:10
-UNEXPECTED TOKEN IN EXPRESSION - error_malformed_syntax_2.md:1:10:1:11
+UNEXPECTED TYPE SYNTAX - error_malformed_syntax_2.md:1:8:1:10
+UNEXPECTED EXPRESSION SYNTAX - error_malformed_syntax_2.md:1:10:1:11
 DECLARATION HAS NO VALUE - error_malformed_syntax_2.md:1:3:1:10
 # PROBLEMS
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token 42 is not expected in a ───┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  { age: 42, name = "Alice" }                                               │
  │         ‾‾                                                                 │
  └─────────────────────────────────────────── error_malformed_syntax_2.md:1:8 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `42` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  { age: 42, name = "Alice" }                                               │
  │           ‾                                                                │
  └────────────────────────────────────────── error_malformed_syntax_2.md:1:10 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
 ┌──────────────────────────┐

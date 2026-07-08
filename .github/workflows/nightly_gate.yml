@@ -1,0 +1,65 @@
+name: Nightly Gate
+
+# Runs the full CI suite (ci_zig.yml and everything it calls) once a day on
+# main, and on success fast-forwards the git branch `refs/heads/nightly` to
+# the tested commit. That branch is a gated "full-suite-clean" source pointer;
+# it is NOT the `nightly` GitHub release tag and does not publish artifacts.
+#
+# SHA pinning: for schedule/workflow_dispatch events, github.sha is resolved
+# once when the run is created and inherited by every reusable-workflow job.
+# All jobs use bare actions/checkout, which checks out that SHA, so the whole
+# run tests a single commit even if main advances mid-run. Do not add
+# `ref: main` to any checkout in the called workflows — that would
+# reintroduce drift.
+
+on:
+  schedule:
+    - cron: '17 0 * * *' # non-zero minute; top-of-hour crons get delayed/dropped
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-gate
+  cancel-in-progress: false
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  # A single `needs: full-suite` edge below aggregates every nested job,
+  # including the nested cross-compile and nix workflow calls.
+  full-suite:
+    uses: ./.github/workflows/ci_zig.yml
+    with:
+      full-run: true
+
+  promote:
+    needs: full-suite
+    # Hard guard: a manual dispatch on a feature branch must never move the
+    # nightly branch.
+    if: success() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - name: Fast-forward nightly branch to tested commit
+        run: git push origin "$GITHUB_SHA:refs/heads/nightly"
+
+  notify:
+    needs: full-suite
+    # Same ref guard as promote so branch-test failures don't ping Zulip.
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify maintainers on Zulip
+        uses: zulip/github-actions-zulip/send-message@v1
+        with:
+          api-key: ${{ secrets.ZULIP_API_KEY_ISSUE_BOT }}
+          email: "high-priority-issues-bot@roc.zulipchat.com"
+          organization-url: "https://roc.zulipchat.com"
+          to: "contributing"
+          type: "stream"
+          topic: "Main branch CI failures"
+          content: 'Nightly Gate failed on main @ ${{ github.sha }} — the nightly branch was not advanced: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'

@@ -12,15 +12,23 @@ TYPE ALIAS WITH ASSOCIATED ITEMS - type_alias_with_associated.md:1:16:1:17
 # PROBLEMS
 
 ┌──────────────────────────────────┐
-│ TYPE ALIAS WITH ASSOCIATED ITEMS ├─ Type aliases cannot have associated ────┐
-└┬─────────────────────────────────┘  items (such as types or methods).       │
+│ TYPE ALIAS WITH ASSOCIATED ITEMS ├─ I was parsing a type alias, but only ───┐
+└┬─────────────────────────────────┘  nominal types can have associated       │
+ │                                    items.                                  │
  │                                                                            │
  │  Foo : [A, B, C].{ x = 5 }                                                 │
  │                 ‾                                                          │
  └──────────────────────────────────────── type_alias_with_associated.md:1:16 ┘
 
-    Only nominal types (defined with :=) can have associated items. Type
-    aliases (defined with :) only define names for other types.
+    Use `:=` to define a nominal type with associated items, or remove the
+    associated item block from this alias.
+
+    For example:
+        Id := U64 implements [
+            zero = @Id 0
+        ]
+
+    I found `.` here.
 
 # TOKENS
 ~~~zig

@@ -1614,7 +1614,7 @@ const CheckFxStep = struct {
 const BuiltinCompilerRun = struct {
     run: *Step.Run,
     builtin_bin: std.Build.LazyPath,
-    builtin_indices_bin: std.Build.LazyPath,
+    builtin_indices_zig: std.Build.LazyPath,
     builtin_artifact_bin: std.Build.LazyPath,
 };
 
@@ -1655,21 +1655,6 @@ fn createAndRunBuiltinCompiler(
     builtin_compiler_exe.root_module.addImport("reporting", roc_modules.reporting);
     builtin_compiler_exe.root_module.addImport("builtins", roc_modules.builtins);
 
-    // The builtin compiler reloads the just-written Builtin.bin via the same
-    // loader the runtime uses, so the baked artifact pairs identically with the
-    // env that BuiltinModules.init will load. `builtin_loading` lives in the eval
-    // module, which imports `compiled_builtins` (this compiler's own output), so
-    // it is added here as a standalone module to avoid that import cycle.
-    builtin_compiler_exe.root_module.addImport("builtin_loading", b.createModule(.{
-        .root_source_file = b.path("src/eval/builtin_loading.zig"),
-        .target = b.graph.host,
-        .optimize = .Debug,
-        .imports = &.{
-            .{ .name = "can", .module = roc_modules.can },
-            .{ .name = "collections", .module = roc_modules.collections },
-        },
-    }));
-
     // The builtin compiler publishes the Builtin module to a CheckedModuleArtifact
     // and must run the same compile-time finalizer the runtime uses (Builtin has
     // compile-time roots that must be evaluated into its ConstStore). The finalizer
@@ -1685,9 +1670,11 @@ fn createAndRunBuiltinCompiler(
         .imports = &.{
             .{ .name = "base", .module = roc_modules.base },
             .{ .name = "build_options", .module = roc_modules.build_options },
+            .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "can", .module = roc_modules.can },
             .{ .name = "check", .module = roc_modules.check },
+            .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "lir", .module = roc_modules.lir },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
@@ -1710,13 +1697,13 @@ fn createAndRunBuiltinCompiler(
     }
 
     const builtin_bin = run_builtin_compiler.addOutputFileArg("Builtin.bin");
-    const builtin_indices_bin = run_builtin_compiler.addOutputFileArg("builtin_indices.bin");
+    const builtin_indices_zig = run_builtin_compiler.addOutputFileArg("builtin_indices.zig");
     const builtin_artifact_bin = run_builtin_compiler.addOutputFileArg("Builtin.artifact.bin");
 
     return .{
         .run = run_builtin_compiler,
         .builtin_bin = builtin_bin,
-        .builtin_indices_bin = builtin_indices_bin,
+        .builtin_indices_zig = builtin_indices_zig,
         .builtin_artifact_bin = builtin_artifact_bin,
     };
 }
@@ -2301,6 +2288,7 @@ pub fn build(b: *std.Build) void {
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it to zig-out/lib/echo.wasm.zst");
+    const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue package and specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
     const build_release_step = b.step("build-release", "Build optimized release binary for distribution");
@@ -2340,6 +2328,13 @@ pub fn build(b: *std.Build) void {
     const test_progress_interval_ms = b.option(u64, "test-progress-interval-ms", "Print non-TTY parallel test progress every N milliseconds; 0 disables it") orelse 0;
     const eval_no_fork = b.option(bool, "eval-no-fork", "Run eval tests in-process instead of through fork isolation") orelse false;
     const eval_time_worker = b.option(bool, "eval-time-worker", "Print eval worker startup timing instrumentation") orelse false;
+    const glue_release_tag = b.option([]const u8, "glue-release-tag", "Nightly release tag used in generated glue package URLs");
+    const enable_valgrind = b.option(bool, "valgrind", "Emit Valgrind client request support") orelse false;
+    if (enable_valgrind and (builtin.target.os.tag != .linux or target.result.os.tag != .linux)) {
+        std.log.err("-Dvalgrind=true requires a Linux build host and Linux target", .{});
+        std.process.exit(1);
+    }
+    const valgrind_support = if (enable_valgrind) true else null;
     if (shared_memory_size) |size| {
         if (size == 0) {
             std.log.err("-Dshared-memory-size must be greater than 0", .{});
@@ -2462,7 +2457,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const roc_modules = modules.RocModules.create(b, build_options, zstd);
+    const roc_modules = modules.RocModules.create(b, build_options, zstd, valgrind_support);
 
     // Build-time compiler for builtin .roc modules
     //
@@ -2489,24 +2484,29 @@ pub fn build(b: *std.Build) void {
         "Builtin.roc",
     );
 
-    // Copy builtin_indices.bin
-    _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_indices_bin,
-        "builtin_indices.bin",
-    );
-
     // Copy the baked CheckedModuleArtifact
     _ = write_compiled_builtins.addCopyFile(
         builtin_compiler.builtin_artifact_bin,
         "Builtin.artifact.bin",
     );
 
-    // Generate compiled_builtins.zig with hardcoded Builtin module
+    // Generate compiled_builtins.zig with hardcoded Builtin module.
+    // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
+    // static storage, so runtime code can build views over them directly.
     const builtins_source_str =
-        \\pub const builtin_bin = @embedFile("Builtin.bin");
+        \\const generated_indices = @import("builtin_indices");
+        \\
+        \\const builtin_bin_raw = @embedFile("Builtin.bin");
+        \\pub var builtin_bin: [builtin_bin_raw.len]u8 align(16) = builtin_bin_raw.*;
         \\pub const builtin_source = @embedFile("Builtin.roc");
-        \\pub const builtin_indices_bin = @embedFile("builtin_indices.bin");
-        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin");
+        \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
+        \\pub var builtin_artifact_bin: [builtin_artifact_bin_raw.len]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\pub const builtin_indices_raw = generated_indices.builtin_indices_raw;
+        \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
+        \\    return generated_indices.builtinIndices(CIR);
+        \\}
+        \\pub const builtin_type_registry_hash = generated_indices.builtin_type_registry_hash;
+        \\pub const builtin_indices_layout_hash = generated_indices.builtin_indices_layout_hash;
         \\
     ;
 
@@ -2518,6 +2518,9 @@ pub fn build(b: *std.Build) void {
     const compiled_builtins_module = b.createModule(.{
         .root_source_file = compiled_builtins_source,
     });
+    compiled_builtins_module.addImport("builtin_indices", b.createModule(.{
+        .root_source_file = builtin_compiler.builtin_indices_zig,
+    }));
 
     const bytebox = b.dependency("bytebox", .{
         .target = target,
@@ -2585,6 +2588,10 @@ pub fn build(b: *std.Build) void {
 
     const run_minici = b.addRunArtifact(minici_exe);
     run_minici.addArg(b.graph.zig_exe);
+    for (b.search_prefixes.items) |search_prefix| {
+        run_minici.addArg("--search-prefix");
+        run_minici.addArg(search_prefix);
+    }
     run_minici.step.dependOn(&install_minici.step);
     run_minici_step.dependOn(&run_minici.step);
 
@@ -2690,7 +2697,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true, valgrind_support) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
@@ -2730,6 +2737,7 @@ pub fn build(b: *std.Build) void {
             llvm_codegen_module,
             null, // No tracy
             false,
+            valgrind_support,
         );
         if (release_exe) |exe| {
             roc_modules.addAll(exe);
@@ -2774,6 +2782,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
+                    .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 },
             }),
         });
@@ -3135,6 +3144,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .valgrind = valgrind_support,
         }),
     });
     configureBackend(snapshot_exe, target);
@@ -3167,7 +3177,11 @@ pub fn build(b: *std.Build) void {
         run_snapshot_tool_step,
         run_args,
     );
-    const check_snapshot_diff = b.addSystemCommand(&.{ "git", "diff", "--exit-code", "test/snapshots" });
+    const check_snapshot_diff = b.addSystemCommand(&.{
+        "sh",
+        "-c",
+        "if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git diff --exit-code test/snapshots; elif test -d .jj; then test -z \"$(jj diff --summary test/snapshots)\"; else echo 'run-check-snapshots requires a Git or JJ workspace' >&2; exit 1; fi",
+    });
     check_snapshot_diff.step.dependOn(run_snapshot_tool_step);
     run_check_snapshots_step.dependOn(&check_snapshot_diff.step);
 
@@ -3437,6 +3451,38 @@ pub fn build(b: *std.Build) void {
         // Ensure the wasm is built before the test runs.
         run_echo_wasm_test.step.dependOn(&echo_wasm_install.step);
         run_test_echo_wasm_step.dependOn(&run_echo_wasm_test.step);
+    }
+
+    {
+        const glue_release_exe = b.addExecutable(.{
+            .name = "glue_release",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/glue_release.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(glue_release_exe, target);
+
+        const glue_package_cmd = b.addRunArtifact(roc_exe);
+        glue_package_cmd.setCwd(b.path("src/glue/platform"));
+        glue_package_cmd.addArgs(&.{ "bundle", "--output-dir" });
+        const glue_package_dir = glue_package_cmd.addOutputDirectoryArg("glue-package");
+        glue_package_cmd.addArg("main.roc");
+
+        const glue_release_cmd = b.addRunArtifact(glue_release_exe);
+        glue_release_cmd.addArg(glue_release_tag orelse "nightly-local");
+        glue_release_cmd.addDirectoryArg(glue_package_dir);
+        const glue_release_dir = glue_release_cmd.addOutputDirectoryArg("glue-release");
+
+        const glue_release_install = b.addInstallDirectory(.{
+            .source_dir = glue_release_dir,
+            .install_dir = .prefix,
+            .install_subdir = "glue-release",
+        });
+        const clean_glue_release_install = RemoveDirTreeStep.create(b, b.getInstallPath(.prefix, "glue-release"));
+        glue_release_install.step.dependOn(&clean_glue_release_install.step);
+        build_glue_release_step.dependOn(&glue_release_install.step);
     }
 
     // Build playground integration tests - now enabled for all optimization modes.
@@ -3896,6 +3942,56 @@ pub fn build(b: *std.Build) void {
         tests_summary.setRunSerialization();
     }
 
+    const guarded_list_violation_exe = b.addExecutable(.{
+        .name = "guarded_list_violation_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/collections/guarded_list_violation_test.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .link_libc = true,
+        }),
+    });
+    guarded_list_violation_exe.root_module.addImport("collections", roc_modules.collections);
+    guarded_list_violation_exe.root_module.addImport("check", roc_modules.check);
+    guarded_list_violation_exe.root_module.addImport("layout", roc_modules.layout);
+    guarded_list_violation_exe.root_module.addImport("lir", roc_modules.lir);
+    guarded_list_violation_exe.root_module.addImport("postcheck", roc_modules.postcheck);
+
+    const run_guarded_list_violations_step = b.step(
+        "run-test-guarded-list-violations",
+        "Run guarded-list expected-failure checks",
+    );
+    const guarded_list_violation_cases = [_]struct {
+        name: []const u8,
+        list_name: []const u8,
+    }{
+        .{ .name = "span_append_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "ptr_append_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_ensure_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_append_slice_move", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_restore_below_range", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "ptr_restore_below_index", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_clear", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "span_ownership_transfer", .list_name = "guarded_list_violation_test.values" },
+        .{ .name = "lir_proc_specs", .list_name = "LirStore.proc_specs" },
+        .{ .name = "lir_local_span", .list_name = "LirStore.local_ids" },
+        .{ .name = "lifted_fns", .list_name = "monotype_lifted.Program.fns" },
+        .{ .name = "lifted_expr_ids", .list_name = "monotype_lifted.Program.expr_ids" },
+        .{ .name = "mono_exprs", .list_name = "monotype.Program.exprs" },
+        .{ .name = "mono_type_spans", .list_name = "monotype.Type.Store.spans" },
+        .{ .name = "mono_type_fields", .list_name = "monotype.Type.Store.fields" },
+        .{ .name = "lambda_mono_expr_ids", .list_name = "lambda_mono.Program.expr_ids" },
+        .{ .name = "lambda_mono_type_spans", .list_name = "lambda_mono.Type.Store.spans" },
+    };
+    for (guarded_list_violation_cases) |case| {
+        const run_violation = b.addRunArtifact(guarded_list_violation_exe);
+        run_violation.addArg(case.name);
+        run_violation.expectStdErrMatch(b.fmt("guarded list invalidated: {s}", .{case.list_name}));
+        run_guarded_list_violations_step.dependOn(&run_violation.step);
+    }
+    build_test_zig_step.dependOn(&guarded_list_violation_exe.step);
+    run_test_zig_step.dependOn(run_guarded_list_violations_step);
+
     for (module_tests_result.tests) |module_test| {
         // Add compiled builtins to tests that canonicalize ordinary modules.
         if (std.mem.eql(u8, module_test.test_step.name, "can") or std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
@@ -4345,6 +4441,33 @@ pub fn build(b: *std.Build) void {
         run_watch_cli_test_step.dependOn(&run_watch_test.step);
     }
 
+    // MiniCI output-filter tests. MiniCI is a standalone host build tool that
+    // only imports `std`, so it needs no module wiring.
+    {
+        const minici_test = b.addTest(.{
+            .name = "minici_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/build/minici.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+            }),
+            .filters = test_filters,
+        });
+        build_test_zig_step.dependOn(&minici_test.step);
+
+        const run_minici_test = b.addRunArtifact(minici_test);
+        if (run_args.len != 0) {
+            run_minici_test.addArgs(run_args);
+        }
+        tests_summary.addRun(&run_minici_test.step);
+
+        const run_minici_test_step = b.step(
+            "run-test-zig-minici",
+            "Run MiniCI output-filter Zig tests",
+        );
+        run_minici_test_step.dependOn(&run_minici_test.step);
+    }
+
     // Add check for forbidden patterns in type checker code
     const check_patterns = CheckTypeCheckerPatternsStep.create(b);
     run_check_type_checker_patterns_step.dependOn(&check_patterns.step);
@@ -4390,12 +4513,11 @@ pub fn build(b: *std.Build) void {
     run_check_zig_format_step.dependOn(&check_fmt.step);
 
     // Parser code coverage with kcov
-    // Only supported on Linux ARM64 and macOS (kcov doesn't work on Windows)
-    // TODO ZIG 16: re-check if DWARF bug is fixed — may be able to enable x86_64 coverage
-    // Linux x86_64 is NOT supported due to Zig 0.15.2 generating invalid DWARF .debug_line
-    // sections that cause kcov to fail (see CoverageSummaryStep comments for details)
-    const is_linux_x86_64 = target.result.os.tag == .linux and target.result.cpu.arch == .x86_64;
-    const is_coverage_supported = (target.result.os.tag == .linux or target.result.os.tag == .macos) and !is_linux_x86_64;
+    // Only supported on Linux ARM64, matching CI's coverage runner. Other local
+    // targets still keep the run-coverage-parser step, but it reports unsupported
+    // instead of invoking a kcov binary that cannot trace reliably on that host.
+    const is_linux_arm64 = target.result.os.tag == .linux and target.result.cpu.arch == .aarch64;
+    const is_coverage_supported = is_linux_arm64;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
@@ -4588,7 +4710,7 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("=" ** 60 ++ "\n", .{});
                     std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
                     std.debug.print("=" ** 60 ++ "\n\n", .{});
-                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64 and macOS targets with supported Zig DWARF.\n", .{});
+                    std.debug.print("kcov parser coverage is currently enabled only on Linux ARM64.\n", .{});
                     std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
                     std.debug.print("=" ** 60 ++ "\n", .{});
                 }
@@ -4802,7 +4924,6 @@ pub fn build(b: *std.Build) void {
             const http_app_output = build_http_app.addPrefixedOutputFileArg("--output=", http_app_exe_name);
             build_http_app.addFileArg(b.path("test/http-headers/app.roc"));
             build_http_app.addFileInput(b.path("test/http-headers/platform/main.roc"));
-            build_http_app.addFileInput(b.path("test/http-headers/platform/Headers.roc"));
             build_http_app.step.dependOn(final_http_host_step);
             build_http_app.step.dependOn(build_roc_step);
             const install_http_app = b.addInstallBinFile(http_app_output, http_app_exe_name);
@@ -4886,7 +5007,6 @@ pub fn build(b: *std.Build) void {
             const json_app_output = build_json_app.addPrefixedOutputFileArg("--output=", json_app_exe_name);
             build_json_app.addFileArg(b.path("test/json-decoder/app.roc"));
             build_json_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
-            build_json_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_app.step.dependOn(final_json_host_step);
             build_json_app.step.dependOn(build_roc_step);
             const install_json_app = b.addInstallBinFile(json_app_output, json_app_exe_name);
@@ -4904,7 +5024,6 @@ pub fn build(b: *std.Build) void {
             const json_camel_app_output = build_json_camel_app.addPrefixedOutputFileArg("--output=", json_camel_app_exe_name);
             build_json_camel_app.addFileArg(b.path("test/json-decoder/camel_app.roc"));
             build_json_camel_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
-            build_json_camel_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_camel_app.step.dependOn(final_json_host_step);
             build_json_camel_app.step.dependOn(build_roc_step);
             const install_json_camel_app = b.addInstallBinFile(json_camel_app_output, json_camel_app_exe_name);
@@ -4922,7 +5041,6 @@ pub fn build(b: *std.Build) void {
             const json_camel_direct_app_output = build_json_camel_direct_app.addPrefixedOutputFileArg("--output=", json_camel_direct_app_exe_name);
             build_json_camel_direct_app.addFileArg(b.path("test/json-decoder/camel_direct_app.roc"));
             build_json_camel_direct_app.addFileInput(b.path("test/json-decoder/platform/main.roc"));
-            build_json_camel_direct_app.addFileInput(b.path("test/json-decoder/platform/Json.roc"));
             build_json_camel_direct_app.step.dependOn(final_json_host_step);
             build_json_camel_direct_app.step.dependOn(build_roc_step);
             const install_json_camel_direct_app = b.addInstallBinFile(json_camel_direct_app_output, json_camel_direct_app_exe_name);
@@ -5262,6 +5380,7 @@ fn addMainExe(
     llvm_codegen_module: *std.Build.Module,
     flag_enable_tracy: ?[]const u8,
     add_machine_code_shim_test: bool,
+    valgrind_support: ?bool,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -5272,6 +5391,7 @@ fn addMainExe(
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
             .link_libc = true,
+            .valgrind = valgrind_support,
         }),
     });
     // The in-process interpreter (used by `--opt=interpreter`) recurses Zig stack

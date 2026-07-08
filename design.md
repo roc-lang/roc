@@ -99,6 +99,19 @@ layout used to represent that value. The stage that commits a runtime encoding
 outputs the explicit mapping from checked ids to runtime encodings, and all
 later stages consume that mapping.
 
+Identity provenance follows meaning provenance. An identity may be derived
+from module content — the module name, the source bytes, and the identities
+of imports — only for definitions whose entire meaning is determined by that
+content. A binding whose meaning is partly supplied from outside the compiled
+program is identified by its role at that outside boundary instead. Hosted
+functions receive their implementations from the host, and `provides`
+entrypoints are called by the host, both keyed by the symbol strings in the
+platform header; their identities are those symbol strings and declaration
+slots, never a content hash of a declaring module. Two hosted declarations
+are two distinct identities even when their declaring modules are
+byte-identical, and no deduplication, specialization, or merging step may
+collapse two externally-bound identities into one.
+
 Backends do not reason about reference counting. They lower and execute the
 explicit LIR `incref`, `decref`, and `free` statements emitted before backend
 code generation. Each explicit RC statement carries the concrete RC helper
@@ -552,6 +565,105 @@ The recommended migration order is:
 8. Verify with focused canonicalization tests, `zig build minici`, and
    parser/canonicalization benchmarks.
 
+## Canonicalization Policy Ownership
+
+Canonicalization owns source-name scope policy before checking. Any rule that
+decides whether a source type name is inserted, shadows another type, replaces
+an auto-imported type, redeclares an existing type, or repeats the same external
+type must live in one place. Callers may choose which source operation they are
+performing, but they must not duplicate the type-binding collision matrix.
+
+The `Scope.type_bindings` table has one ordinary mutation API for type names.
+It accepts the full scope slice, the target scope index, the introduced name,
+and the incoming binding:
+
+```zig
+const TypeBindingInput = union(enum) {
+    local_nominal: CIR.Statement.Idx,
+    local_alias: CIR.Statement.Idx,
+    associated_nominal: CIR.Statement.Idx,
+    external_nominal: Scope.ExternalTypeBinding,
+};
+
+const TypeBindingDecision = union(enum) {
+    inserted,
+    inserted_shadowing_parent: Scope.TypeBinding,
+    replaced_current_external: Scope.ExternalTypeBinding,
+    idempotent_current,
+    rejected_current_conflict: Scope.TypeBinding,
+    redeclared_current: Scope.TypeBinding,
+};
+```
+
+The exact names may change with implementation, but the shape must remain:
+one `Scope` function mutates `type_bindings`, and its return value carries the
+old binding that caused any warning or error. `Scope` does not push diagnostics,
+does not inspect source regions from `ModuleEnv`, and does not update import
+display mappings. `Can` maps the returned decision to diagnostics and performs
+the import-mapping side effects that are specific to external imports.
+
+Parent-scope shadowing must be computed by the same type-binding API. The
+function receives the scope slice and target index directly; it does not use an
+untyped callback or a callback without context. The parent walk chooses the
+nearest parent binding and returns that binding to the caller. This preserves
+regions for both local statements and external imports without reconstructing
+them at each call site.
+
+The current-scope collision matrix is:
+
+- A same statement already bound to the same name is idempotent.
+- A same external module/original-name pair already bound to the same name is
+  idempotent.
+- A local declaration replacing an external binding succeeds and returns the
+  replaced external binding so `Can` can report the shadowing region.
+- An external binding colliding with any different current binding is rejected
+  and returns the existing binding.
+- A local alias colliding with a current local alias reports alias
+  redeclaration.
+- A local nominal colliding with a current local nominal or associated nominal
+  reports type redeclaration.
+- A local declaration colliding with the other local kind reports the diagnostic
+  chosen by the existing binding, not by the incoming binding.
+
+Direct writes to `Scope.type_bindings` are allowed only for explicit
+initialization paths that prove the binding cannot collide, such as seeding the
+compiler-owned builtin scope before source declarations are introduced. If that
+proof stops being local and obvious, the initialization path must use the same
+type-binding API.
+
+Result suffix desugaring has a separate owner inside `Can`. The suffix forms
+`expr?`, `expr ? handler`, and `expr ?? default` all lower to a match over the
+same `Try` shape. They must share one concrete builder for the common structure:
+
+- resolve the compiler-owned `Try` nominal target once,
+- wrap `Ok` and `Err` tag patterns with that nominal target,
+- append the `Ok(#ok) => #ok` branch,
+- construct the `Err(...)` tag expression used by early return,
+- create the final match with the caller-selected `is_try_suffix` value.
+
+The builder must support both local and external nominal targets because the
+Builtin module may refer to its own `Try`, while ordinary modules use the
+compiler-owned external builtin. It must not silently fall back to bare `Ok` and
+`Err` patterns when `Try` is missing. A missing compiler-owned `Try` target is a
+compiler invariant violation after builtin setup, not an alternate
+canonicalization mode.
+
+The three suffix callers provide only the distinct error-branch body:
+
+- `expr?` returns the original error payload from the enclosing function, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ? handler` transforms the error payload and then returns `Err(...)`, or
+  emits `e_expect_err` inside a top-level `expect`.
+- `expr ?? default` uses the default expression and does not mark the match as a
+  try suffix.
+
+Do not introduce a generic desugaring interpreter for these cases. The helper
+should be a small set of concrete `Can` functions that emit the same CIR nodes
+and scratch spans as the current hand-written paths. This keeps
+canonicalization output explicit, keeps diagnostics in `Can`, and keeps release
+builds fast: the work runs once per source suffix or type declaration, with no
+runtime cost in the compiled program.
+
 ## Type Alias Invariant
 
 Source type aliases are transparent views of their backing type. An alias root
@@ -593,13 +705,62 @@ alias roots union-find representatives for concrete structures.
 
 The checked module cache is the only checked cache boundary in this design.
 Checked module cache entries are trusted compiler-produced cache entries, not
-adversarial inputs. Cache reads validate only the cache header, format version,
-payload hash, key, serialized layout, and ordinary binary decoding. They must
+adversarial inputs. Cache reads validate only the cache header,
+entry-version hash, key, serialized layout, and ordinary binary decoding. They must
 not rerun checked validation, reselect hoisted roots, reconstruct checked data,
 or walk checked expressions to prove that cached checked data is still complete.
 Correctness belongs to the producer path that writes the cache entry, and
 invalidation belongs to the cache key and explicit cache/selection format
 versions.
+
+`ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
+store is part of the checked module cache data. A cache hit materializes it as a
+view of its byte buffer and stops. Cache reads must not scan the string entries,
+rebuild a string interning table, check every string length header, or check
+every entry boundary. This design adds no
+store-specific release-build validation; cache reads perform only the existing
+cache-entry admission and decode checks before trusting the blob. Once those
+pass, the internal string buffer structure is a producer invariant. Debug builds
+may assert this invariant while constructing fresh stores and in focused store
+tests; optimized cache reads consume the store directly.
+
+String literal deduplication is a build-time concern. The durable
+`StringLiteral.Store` owns only portable checked string bytes plus `get` and
+iteration by `StringLiteral.Idx`. Each entry is encoded as:
+
+```text
+len: u32 little-endian | bytes
+```
+
+It has no insert API and no dedup index.
+Fresh construction uses `StringLiteral.Builder` state paired with a `Store`.
+That state may live in a wrapper or in the build owner that owns the store, but
+it is always transient. The builder index is never serialized, never stored in
+LirImage, and never rebuilt on a cache hit. If a later phase needs a mutable
+string-literal builder, it must request an explicit fresh builder from source
+data or another builder-owned input; it must not reopen a cached store on the
+normal cache path.
+
+The byte interning algorithm has one owner shared by identifier names, checked
+name stores, and string-literal builders. Storage policies own only id encoding,
+text lookup, and append layout. For string literals, appending a new entry writes
+the portable checked entry layout above and returns the content byte offset as
+`StringLiteral.Idx`. Duplicate input
+bytes must return the existing content offset. The hash table is an accelerator
+only: hash matches must still compare exact byte length and contents before an
+existing id is reused. The shared interning algorithm is comptime-policy
+specialized, so string literals, identifier names, and checked name stores do
+not pay a runtime storage-kind branch.
+
+Runtime static string layout is generated later by the target-specific static
+data emitter. The checked cache must not store native pointer-width padding,
+static refcount words, allocation headers, or any other runtime `RocStr` layout
+bytes.
+
+The string-literal builder must reject impossible `u32` length or content-offset
+overflow as a compiler invariant: debug builds assert or panic with the
+invariant, and optimized builds mark the path unreachable. It must never silently
+truncate a string length or offset.
 
 The checked module cache id is target-independent:
 
@@ -612,6 +773,21 @@ CheckedModuleId =
   + direct_import_checked_module_ids
 ```
 
+The cache id is not merely the module's source bytes plus recursive import
+ids. Source bytes are only one input. The id also includes the compiler build
+hash, the module identity, the checking context identity, and the ordered direct
+import checked module ids. The checking context identity includes import-name
+hashes, resolved import ids, platform requirement context, platform/app
+relation identity, and explicit root requests. Any additional checked tables
+stored in the checked module cache must be deterministic output of those
+checked inputs and the checked modules they name. Such tables are serialized
+data, not new cache-id inputs.
+
+`module_identity` includes the module's name. Canonicalization output is not
+a function of source bytes alone — a type module's main type takes its name
+from the module's file name — so no key or identity derived from module
+content may be computed from source bytes without the module name.
+
 The cache id does not include target ABI, pointer width, layout ids, field offsets,
 alignment decisions, backend choice, object format, code-generation options,
 post-check lowering strategy, or post-check specialization state.
@@ -623,11 +799,38 @@ imports must produce the same reachable `.lss` specializations or `.boxy`
 descriptors, callable representations, layout decisions, ARC statements, and
 backend behavior for the same lowering strategy.
 
+Checked modules store the target-independent lowering visibility selected by
+checking. This includes the complete checked module id set needed by later
+post-check stages for the module's explicit roots, checked type roots, checked
+type schemes, public API dependencies, type-owner dependencies, and
+platform/app relation closures. The set is duplicate-free and stable. It is
+serialized as relocatable sorted POD slices, with binary-search lookup where a
+map is needed; mutable hash maps may be used only while constructing the checked
+module and must not be the persisted representation.
+
+On a cache hit, the coordinator consumes this lowering visibility directly to
+materialize imported checked module views. It must not rebuild the same set by
+walking checked bodies, checked type roots, checked type schemes, public API
+dependency lists, or platform/app relation closure data. Recomputing that
+visibility during post-check lowering is a producer-boundary bug: the checked
+module cache already owns this target-independent checked information.
+
 The compiler does not cache Monotype IR, Monotype Lifted IR, Lambda Solved IR,
 Lambda Mono decisions, boxy representation plans, boxy type descriptors, boxy
 dictionaries, LIR, or any callable/layout representation derived from them as
 part of checked modules. Those structures are target/session products of the
 current root compilation.
+
+A post-check specialization cache is a separate boundary named
+`SpecializationCacheFile`. It is consumed only after immutable checked modules
+and explicit root requests are available. It is not embedded in checked modules,
+is not visible to importers as checked data, and does not change the checked
+module cache id. Its validity id is computed from exactly the checked modules,
+root requests, and Monotype configuration consumed by specialization. A
+Monotype-only cache file excludes target ABI, pointer width, layout ids, field
+offsets, backend choice, object format, ARC state, and code-generation options.
+If a later-stage cache needs those inputs, it must use a separate file format
+and a separate validity id.
 
 Monotype IR is target-independent, but it is still post-check and root-specific.
 It depends on the roots requested for the current compilation, the reachable
@@ -660,6 +863,81 @@ cache format or the specific checked-data selection version must be bumped. A
 cache hit with a matching key and version is consumed as already-checked output;
 the compiler must not pay an extra pass to rediscover whether the cached output
 is complete for the checked module.
+
+## Def Checking Order
+
+Type checking processes a module's top-level defs as binding groups: the SCC
+condensation of the name-reference graph, in deterministic topological order
+(groups ordered by their first member's source position among independent
+groups; members within a group in source order). The graph covers every name
+reference in a def's expression tree — nested lambda bodies and blocks
+included — plus statically-resolvable type-qualified method-call targets. It
+is transient checking input computed from canonicalization output when
+checking starts and freed with the checker; a checked module never stores it.
+
+Because groups are checked in dependency order, a name reference between
+groups always points at an already-checked def. There is no re-entrant
+`checkDef` from inside an expression walk, and no code path exists for a name
+reference to an unchecked def outside the current group (it is a debug
+invariant violation).
+
+Annotated schemes come before any body. A pre-pass declares a standalone
+generalized scheme from every eligible annotation (a simple `.assign` binding
+whose annotation has no `_` hole): the annotation's type is generated once in
+place, deep-copied into disjoint orphan vars, generalized, and the annotation
+nodes are reset so the def's own body check generates them again exactly as
+always. A reference to an annotated def — by name or by dispatch — before or
+while its body checks instantiates this standalone scheme, exactly like a
+reference to an imported scheme copy; the def itself still checks with its
+annotation generated in its body's frame, sharing vars with the scheme the
+checked module outputs, which checked dispatch-evidence resolution relies on.
+
+The recursion rule is the ML binding-group rule. A recursive group gets one
+shared rank frame: members' patterns are ranked in it first, an in-group
+reference to an unannotated member unifies monomorphically with the member's
+in-flight type (call-site constraints flow into the inferred scheme), unannotated
+members' top-level lambdas stay in the frame instead of generalizing on their
+own, and the whole group generalizes at the frame's boundary. References to
+annotated members instantiate the pre-declared scheme, preserving sound
+polymorphic recursion for annotated defs. The same rule applies to
+block-local `s_decl` functions: each local function decl is a binding group
+of one with its own rank frame, and annotated (type-var-free) locals
+pre-declare their scheme. There is no deferred post-generalization validation
+of recursive references anywhere; the monomorphic rule leaves nothing to
+validate afterwards. A consequence is that an unannotated recursive def
+used at two incompatible types within its own group is a type error — the
+old deferral silently accepted such programs unsoundly.
+
+Static-dispatch dependencies are inherently dynamic (`|a| a.foo()` dispatches
+on an inferred type), so they cannot be in the name graph. When a deferred
+static-dispatch constraint resolves to an unchecked, unannotated local def
+mid-body, the target is only *recorded* (`pending_dispatch_targets`, owned by
+the discovering group) and the constraint re-deferred; the constraint's vars
+are pinned at the group's boundary rank so no inner lambda can generalize
+them first. At the group's generalization boundary — a singleton def's RHS
+frame or a recursive group's shared frame, where no mid-body state is pending
+— the driver checks each target's group in its own nested frame (together
+with any unchecked topological prefix), re-runs dispatch, and interleaves
+boundary literal defaulting to a fixpoint before generalizing. Group checks
+nest only at such boundaries.
+
+Group suspension and merge need no dedicated machinery: a suspended group's
+members are `.processed` with still-live, not-yet-generalized vars, so a
+dispatch back-edge from a nested group links to them monomorphically and rank
+adjustment keeps the shared structure at the suspended group's rank, where it
+generalizes when that group's boundary completes. A group therefore never
+generalizes while one of its deferred dispatch constraints into an unchecked
+group is outstanding, and a suspended group is never re-entered — both are
+asserted in
+debug builds (`group_stack`, group states, and the pending-target
+stack-suffix discipline).
+
+Deferred early-return / `?` constraints record the lambda that created them,
+and each lambda's end drains exactly its own entries; a drain cannot touch
+another lambda's constraints, by construction. Rank bookkeeping is therefore
+strictly stack-shaped: unification only ever runs while the frame owning its
+vars is active, and `addVarToRank`'s debug guard is a regression tripwire
+rather than a reachable condition.
 
 ## Checked Boundary
 
@@ -739,6 +1017,19 @@ as:
 
 Those data must remain target-independent and representation-free.
 
+Named checked types carry explicit owner identity. The source-origin module
+identity remains the source identity used for `TypeDef`, diagnostics, source
+locations, and name-store interning. Alias and nominal checked payloads also
+carry the checked module id that owns the declaration or representation
+authority. For local named types, that id is the current checked module id; for
+imports, checked type copying preserves the imported owner id; for builtins, it
+is the builtin checked module id.
+
+Monotype and runtime lowering consume the owner checked module id directly as a
+checked module address. If a checked type mentions an owner checked module id
+that is not present in lowering visibility, the checked module producer is
+incomplete.
+
 ### Compile-Time Constants and Hoisted Roots
 
 Compile-time constants are checked roots. A compile-time constant root may be an
@@ -795,6 +1086,19 @@ hoisted constants indirectly by calling pure checked functions whose bodies
 restore selected hoisted locals. Therefore same-module compile-time roots are
 emitted as one dependency-sorted request stream, not as permanently separated
 top-level and hoisted groups.
+
+Hoisted-root selection is positional as well as dependency-based. Selection may
+fire only in structurally unguarded positions of runtime bodies, and the checker
+must carry that position as explicit checking context while computing
+hoistability in the normal recursive traversal. Eager child expressions inherit
+their parent's position. Branch bodies, match guards, expect bodies, loop bodies,
+statements after a prior effect/divergence blocker, block finals after such a
+blocker, and conditions reached only after earlier conditional branches are
+suppressed: they may still prove top-level-equivalent for enclosing expressions
+or warnings, but they must not become independent roots. Ordinary top-level
+constant bodies use a stronger compile-time-root context that suppresses nested
+root selection and nested eligibility entirely, because the enclosing body is
+already evaluated at compile time.
 
 Canonicalization's top-level dependency order remains an input for ordinary
 top-level constants, and checking should prefer to emit selected hoisted roots
@@ -1059,6 +1363,18 @@ The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
 concrete monomorphic dispatcher type has already determined the owner.
 
+Some method registry targets are generated structural targets rather than
+procedure bodies. A nominal or opaque type can opt in to a compiler-derived
+structural codec with an annotation-only associated method such as
+`parser_for : _` or `encoder_for : _`. Canonicalization may represent this marker
+as `e_anno_only` or, for hosted/type-module processing, as a zero-argument
+`e_hosted_lambda`; `CheckedModule.method_registry` records it explicitly as a
+generated parser or generated encoder target. Post-check lowering must consume
+that explicit target kind and lower the structural parser/encoder from the
+dispatch plan's concrete callable type. It must not treat the marker as a
+procedure body, synthesize a fake source function, or infer generated behavior
+from a missing procedure template.
+
 ### Structural Serialization Methods
 
 Parsing and encoding are ordinary static-dispatch methods. Roc does not expose a
@@ -1079,74 +1395,83 @@ functions:
 
 ```roc
 thing = Json.parse(json_str)?
+thing = Json.parse_trailing_commas(json_str)?
 thing = Json.Utf8.parse(json_bytes)?
 
-json_str = Json.encode(thing)?
+json_str = Json.to_str(thing)
+json_str = Json.to_str_try(floaty_thing)?
 json_bytes = Json.Utf8.encode(thing)?
 
-headers = Headers.parse(raw_headers)?
+headers = Encoding.HttpHeader.parse(raw_headers)?
 ```
 
-The convenience functions construct the format state directly, call the value or
-type's ordinary method, validate the remaining state if the format requires it,
-and return the final `Try`. They do not need a required `init`, `finish`, or
-`default` hook. A header helper can build the initial state as ordinary Roc data:
-
-```roc
-state = Headers.{ raw }
-```
+The convenience functions construct the internal format state directly, call the
+value or type's ordinary method, validate the remaining state if the format
+requires it, and return the final public value. A fallible helper such as
+`Json.to_str_try` returns a `Try` and preserves the encoder's error type. This
+is for values that cannot always be represented as JSON, such as `F32` or `F64`
+values that are `NaN`, positive infinity, or negative infinity. An infallible
+helper such as `Json.to_str` requires an empty encoder error type and returns
+the string directly. They do not need a required `init`, `finish`, or `default`
+hook. The runtime cursor types are implementation details of the builtin format
+module, not public `Json.State` or
+`Encoding.HttpHeader.State` APIs.
 
 The underlying parse method is public and callable. It is deliberately curried:
 
 ```roc
 a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, err))
-a.encode_to : a, encoding -> (state -> Try(state, err))
+a.encoder_for : encoding -> (a, state -> Try(state, err))
 ```
 
-`parser_for` is a method on the value type being produced. `encode_to` is a method
-on the value being serialized. Structural types get these methods from the
-compiler. Nominal types may define them explicitly, and structural derivation
-uses those explicit nominal methods when a field, payload, list element, nested
-value, or other sub-shape has that nominal type.
+`parser_for` is a method on the value type being produced. `encoder_for` is a
+method on the value type being serialized. Structural types get these methods
+from the compiler. Nominal types may define them explicitly, and structural
+derivation uses those explicit nominal methods when a field, payload, list
+element, nested value, or other sub-shape has that nominal type.
 
 The `encoding` argument is the pure format/configuration value used to construct
 the specialized parser. It may represent choices such as JSON object field
-renaming, JSON tag representation, or a header matching mode. The `state`
+renaming, whether JSON accepts trailing commas, JSON tag representation, or a
+header matching mode. The `state`
 argument is the runtime cursor or output state. Keeping these separate matters:
 parser construction can transform the requested structural shape before the
 runtime scan starts, while the returned runtime function threads only the cursor
-state and parsed values.
+state and parsed values. Encoder construction can similarly precompute
+shape-specific metadata before the returned runtime function receives the value
+and output state.
 
-For example, a public HTTP header helper has this shape:
+For example, the builtin HTTP header helper inside `Builtin.Encoding` has this
+shape:
 
 ```roc
-Headers := { raw : Str }.{
-	DecodeErr := [MissingRequired, BadHeader].{}
-
-	parse : Str -> Try(output, DecodeErr)
+HttpHeader := [MissingRequired, BadHeader].{
+	parse : Str -> Try(output, HttpHeader)
 		where [
-			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
 		]
 	parse = |raw| {
 		Output : output
 
-		parse_output = Output.parser_for(HeaderEncoding.Caseless)
-		parsed = parse_output(Headers.{ raw })?
+		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
+		parsed = parse_output(HttpHeaderState.{ raw })?
 
 		Ok(parsed.value)
 	}
 }
 ```
 
-The exact shape of `HeaderEncoding` is format-owned; it is not a compiler
-interface. The important split is that `Output.parser_for(HeaderEncoding.Caseless)`
-constructs the concrete parser and `Headers.{ raw }` is the runtime input state.
-Formats with no configurable behavior can still use a zero-sized encoding value.
+The important split is that `Output.parser_for(HttpHeaderEncoding.Caseless)`
+constructs the concrete parser and the hidden `HttpHeaderState.{ raw }` is the
+runtime input state. Formats with no configurable behavior can still use a
+zero-sized internal encoding value.
 
 The error type is inferred from the format methods. All `Try` errors in one
 parse or encode operation unify with the public function's returned error type.
-When a concrete operation cannot fail, its error type is empty, so an exhaustive
-`Ok(value) = Json.encode(thing)` binding is accepted.
+When a concrete encode operation cannot fail, its error type is empty, so
+`Json.to_str` can bind the underlying encoder result with an exhaustive
+`Ok(encoded_state) = ...` pattern and return `Str` directly. When a concrete
+encode operation can fail, `Json.to_str_try` returns `Try(Str, err)` instead.
 
 Checking derives structural methods by emitting ordinary static-dispatch
 constraints. For example, deriving `a.parser_for` for a concrete shape asks the
@@ -1193,33 +1518,33 @@ not expose raw field-slot indices, unsafe byte indexing, or unchecked memory
 primitives as part of the serialization method surface.
 
 Record parsing is driven by the compiler-generated structural `parser_for` method.
-The compiler creates a `Str.FieldName.FieldNames(_shape)` value for each
+The compiler creates a `Encoding.FieldName.FieldNames(_shape)` value for each
 concrete record shape:
 
 ```roc
-Str.FieldName(_shape) : opaque
-Str.FieldName.FieldNames(_shape) : opaque
+Encoding.FieldName(_shape) : opaque
+Encoding.FieldName.FieldNames(_shape) : opaque
 
-Str.FieldName.FieldNames.rename_fields : Str.FieldName.FieldNames(_shape), (Str -> Str) -> Str.FieldName.FieldNames(_shape)
-Str.FieldName.FieldNames.shortest_name : Str.FieldName.FieldNames(_shape) -> U64
-Str.FieldName.FieldNames.longest_name : Str.FieldName.FieldNames(_shape) -> U64
-Str.FieldName.FieldNames.iter : Str.FieldName.FieldNames(_shape) -> Iter(Str.FieldName(_shape))
-Str.FieldName.FieldNames.for_size : Str.FieldName.FieldNames(_shape), U64 -> Iter(Str.FieldName(_shape))
+Encoding.FieldName.FieldNames.rename_fields : Encoding.FieldName.FieldNames(_shape), (Str -> Str) -> Encoding.FieldName.FieldNames(_shape)
+Encoding.FieldName.FieldNames.shortest_name : Encoding.FieldName.FieldNames(_shape) -> U64
+Encoding.FieldName.FieldNames.longest_name : Encoding.FieldName.FieldNames(_shape) -> U64
+Encoding.FieldName.FieldNames.iter : Encoding.FieldName.FieldNames(_shape) -> Iter(Encoding.FieldName(_shape))
+Encoding.FieldName.FieldNames.for_size : Encoding.FieldName.FieldNames(_shape), U64 -> Iter(Encoding.FieldName(_shape))
 
-Str.FieldName.name : Str.FieldName(_shape) -> Str
+Encoding.FieldName.name : Encoding.FieldName(_shape) -> Str
 ```
 
-`Str.FieldName.FieldNames(_shape)` contains the requested field names and
+`Encoding.FieldName.FieldNames(_shape)` contains the requested field names and
 compiler-owned result positions for one concrete record shape.
-`Str.FieldName(_shape)` is an opaque handle to one field in that same shape. The
+`Encoding.FieldName(_shape)` is an opaque handle to one field in that same shape. The
 `_shape` parameter is a phantom type: it is not runtime data, but it ties a
 field handle to the exact field set that created it. A parser for
 `{ cache_control : Str, content_length : U64 }` cannot accept a
-`Str.FieldName` produced from `{ foo : Str }`, because the phantom types do not
+`Encoding.FieldName` produced from `{ foo : Str }`, because the phantom types do not
 unify. That type-level tie is what lets generated record parsers avoid runtime
 bounds checks on field handles. If the only way to obtain a
-`Str.FieldName(_shape)` is from the matching
-`Str.FieldName.FieldNames(_shape)`, then the compiler already knows every handle
+`Encoding.FieldName(_shape)` is from the matching
+`Encoding.FieldName.FieldNames(_shape)`, then the compiler already knows every handle
 is in range for that record. There is no user-exposed `U64` slot to validate at
 runtime.
 
@@ -1227,7 +1552,7 @@ The derived `parser_for` constructs field metadata before returning the runtime
 lambda:
 
 ```roc
-renamed_fields = Str.FieldName.FieldNames.rename_fields(original_fields, |name| encoding.rename_field(name))
+renamed_fields = Encoding.FieldName.FieldNames.rename_fields(original_fields, |name| encoding.rename_field(name))
 parse_nested = Nested.parser_for(encoding)
 ```
 
@@ -1235,11 +1560,11 @@ parse_nested = Nested.parser_for(encoding)
 method whose first argument is the encoding value. Every encoding provides it;
 identity is the normal implementation. Taking the encoding value as an argument
 lets one encoding type store parser-construction configuration such as JSON
-field naming style. `Str.FieldName.FieldNames.rename_fields` applies that
+field naming style. `Encoding.FieldName.FieldNames.rename_fields` applies that
 function to every requested record field, discards the original names from the
-returned `Str.FieldName.FieldNames`, and rebuilds the length buckets used by
-`Str.FieldName.FieldNames.for_size`, `Str.FieldName.FieldNames.shortest_name`,
-and `Str.FieldName.FieldNames.longest_name`. If parser construction is
+returned `Encoding.FieldName.FieldNames`, and rebuilds the length buckets used by
+`Encoding.FieldName.FieldNames.for_size`, `Encoding.FieldName.FieldNames.shortest_name`,
+and `Encoding.FieldName.FieldNames.longest_name`. If parser construction is
 compile-time evaluated, the renaming work is also compile-time work. For JSON
 camel-case decoding, the final runtime parser can contain only `camelCase`
 field names. For HTTP header decoding, the final runtime parser can contain only
@@ -1251,11 +1576,11 @@ parse strings, `U64`, tag unions, and records uses these method shapes:
 ```roc
 encoding.parse_str : encoding, state -> Try({ value : Str, rest : state }, err)
 encoding.parse_u64 : encoding, state -> Try({ value : U64, rest : state }, err)
-encoding.parse_tag_union : encoding, ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
+encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
 
-encoding.parse_record_field : encoding, Str.FieldName.FieldNames(_shape), state -> Try(
+encoding.parse_record_field : encoding, Encoding.FieldName.FieldNames(_shape), state -> Try(
 	[
-		Field({ field : Str.FieldName(_shape), rest : state }),
+		Field({ field : Encoding.FieldName(_shape), rest : state }),
 		TryField({ name : Str, rest : state }),
 		TryFieldCaseless({ name : Str, rest : state }),
 		Continue({ rest : state }),
@@ -1290,8 +1615,8 @@ continues from that parser's returned state. When it sees `cache_control`, it
 calls the `Str` parser. The value parser owns value consumption.
 
 `Field` means the format already matched the input field name against the
-provided `Str.FieldName.FieldNames(_shape)`, usually by iterating
-`Str.FieldName.FieldNames.for_size(fields, len)`
+provided `Encoding.FieldName.FieldNames(_shape)`, usually by iterating
+`Encoding.FieldName.FieldNames.for_size(fields, len)`
 or another field iterator. `TryField` means the format parsed a field name and
 asks the generated record parser to exact-match it against the transformed
 fields. `TryFieldCaseless` is the same, but uses ASCII caseless matching. If a
@@ -1329,19 +1654,19 @@ construction time and then use `TryFieldCaseless("Cache-Control")` at runtime.
 JSON camel-case parsing can rename `user_id` to `userId` at parser construction
 time and then use `TryField("userId")` at runtime. The compiler does not know
 those policies; it only knows that it has a transformed
-`Str.FieldName.FieldNames(_shape)` value and a requested matching mode.
+`Encoding.FieldName.FieldNames(_shape)` value and a requested matching mode.
 
-`Str.FieldName.FieldNames.shortest_name` and
-`Str.FieldName.FieldNames.longest_name` are computed after renaming. Formats may
+`Encoding.FieldName.FieldNames.shortest_name` and
+`Encoding.FieldName.FieldNames.longest_name` are computed after renaming. Formats may
 use them to skip impossible fields before doing more expensive work. For
 example, if a header name is longer than
-`Str.FieldName.FieldNames.longest_name(fields)` and the format's `rename_field`
+`Encoding.FieldName.FieldNames.longest_name(fields)` and the format's `rename_field`
 never increases field length for headers, the format can consume the line and
 return `Continue` without constructing any temporary field name. This is not a
 parse failure: for formats such as HTTP headers and JSON objects, unknown fields
 remain ordinary input according to that format's rules. If the target record
 actually contains a long renamed field name, the long input field remains
-matchable through the same `Str.FieldName.FieldNames` iteration APIs.
+matchable through the same `Encoding.FieldName.FieldNames` iteration APIs.
 
 For small fields, generated record dispatch compares the packed small string
 representation directly. Roc zeroes unused SSO bytes, so equality can use
@@ -1373,7 +1698,7 @@ sake of generality.
 Nested records follow the same construction/runtime split. The outer derived
 `parser_for` method eagerly calls every nested parser constructor before
 returning its runtime lambda. A nested record gets its own
-`Str.FieldName.FieldNames(_nested_shape)` value, then renames and rebuckets that
+`Encoding.FieldName.FieldNames(_nested_shape)` value, then renames and rebuckets that
 field set through the same `encoding.rename_field` method. A custom nominal
 field calls that nominal type's explicit `parser_for` method during parser
 construction. At runtime the outer record parser dispatches to the
@@ -1422,8 +1747,8 @@ x_auth_token -> x-auth-token
 ```
 
 At runtime the header parser parses the input line name as a seamless slice. It
-may use `Str.FieldName.FieldNames.for_size` plus ASCII-caseless comparison
-against `Str.FieldName.name` to match the transformed field set directly and
+may use `Encoding.FieldName.FieldNames.for_size` plus ASCII-caseless comparison
+against `Encoding.FieldName.name` to match the transformed field set directly and
 return `Field({ field, rest: value_start })`. It may also return
 `TryFieldCaseless({ name, rest: value_start })` and let generated record
 dispatch perform the ASCII-caseless match. If the name cannot match any target
@@ -1446,8 +1771,8 @@ user_id -> userId
 cache_control -> cacheControl
 ```
 
-The runtime JSON scanner can use `Str.FieldName.FieldNames.for_size` and exact
-`Str.FieldName.name` comparison to match each object key against the
+The runtime JSON scanner can use `Encoding.FieldName.FieldNames.for_size` and exact
+`Encoding.FieldName.name` comparison to match each object key against the
 already-renamed field set and return `Field({ field, rest: value_start })` for
 known keys. It may also return `TryField({ name, rest: value_start })` and let
 generated record dispatch perform exact matching. For unknown keys, it skips the
@@ -1455,93 +1780,82 @@ JSON value according to JSON syntax and returns
 `Continue({ rest: after_value })`. The matched field's parser consumes the JSON
 value from `value_start`.
 
-JSON tag unions use the externally tagged object representation:
+JSON tag unions use the externally tagged representation:
 
 ```json
 { "Admin": { "name": "Sam" } }
 ```
 
-This representation avoids collisions between tag names and ordinary record
-field names. Other JSON conventions are represented by different JSON format
-values with different methods; the compiler does not know any JSON-specific
-syntax, null value, missing-field rule, or tag-union convention.
+Zero-payload tags encode as the tag string, one-payload tags encode as
+`{"Tag":payload}`, and multi-payload tags encode as `{"Tag":[...]}`. This
+representation avoids collisions between tag names and ordinary record field
+names. Other JSON conventions are represented by different JSON format values
+with different methods. The compiler receives the null, missing-field, and
+tag-union rules through explicit format methods rather than through hard-coded
+JSON syntax recovery.
 
 Parsing a Roc `Str` from JSON succeeds only for JSON string values. JSON `null`
 and missing object fields are separate format conditions. They are surfaced only
 through field or value types that request them, such as `Try(Str, [Null])` or
 `Try(Str, [Missing])`; the plain `Str` method does not accept either condition.
+`Try(a, [Null])` is the nullable JSON value shape. A format's
+`missing_optional_field` method chooses the record-field absence tag for
+optional fields; JSON uses `Missing`, but another format may choose `Absent` or
+any other tag. `Try(a, [Missing])` and `Try(a, [Missing, Null])` are JSON's
+record-field-only shapes: missing fields parse as `Err(Missing)`, explicit
+`null` parses as `Err(Null)` only when `Null` is in the row, and encoding
+`Err(Missing)` omits the field. Missing fields and `Null` are never conflated.
 
-Concrete HTTP header parser code has this public shape:
+JSON arrays are used for lists, tuples, and sets. Tuples parse with exact arity.
+Sets preserve `Set` insertion order and parse by inserting the array elements.
+JSON dictionaries use object representation only when the key type has a
+lossless object-key codec: strings, bools, numeric types, and zero-payload tags.
+Composite dictionary keys are rejected by static dispatch validation; there is
+no automatic pair-array fallback. Dictionary and set encoders do not sort,
+because Roc does not require keys or elements to be sortable.
+
+Concrete HTTP header parser code has this shape inside `Builtin.Encoding`:
 
 ```roc
-Headers := { raw : Str }.{
-	DecodeErr := [MissingRequired, BadHeader].{}
+HttpHeaderState :: { raw : Str }
 
-	parser_for : () -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr))
+HttpHeaderEncoding :: [Caseless].{
+	rename_field : HttpHeaderEncoding, Str -> Str
+	parse_str : HttpHeaderEncoding, HttpHeaderState -> Try({ value : Str, rest : HttpHeaderState }, HttpHeader)
+	parse_u64 : HttpHeaderEncoding, HttpHeaderState -> Try({ value : U64, rest : HttpHeaderState }, HttpHeader)
+
+	parse_record_field : HttpHeaderEncoding, Encoding.FieldName.FieldNames(_shape), HttpHeaderState -> Try(
+		[
+			Field({ field : Encoding.FieldName(_shape), rest : HttpHeaderState }),
+			TryField({ name : Str, rest : HttpHeaderState }),
+			TryFieldCaseless({ name : Str, rest : HttpHeaderState }),
+			Continue({ rest : HttpHeaderState }),
+			Done({ rest : HttpHeaderState }),
+		],
+		HttpHeader,
+	)
+
+	skip_record_field : HttpHeaderEncoding, HttpHeaderState -> Try(HttpHeaderState, HttpHeader)
+	missing_record_field : HttpHeaderEncoding, Str, HttpHeaderState -> HttpHeader
+	missing_optional_field : HttpHeaderEncoding, Str, HttpHeaderState -> [Missing]
+}
+
+HttpHeader := [MissingRequired, BadHeader].{
+	parser_for : () -> (Str -> Try(output, HttpHeader))
 		where [
-			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
+			output.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try({ value : output, rest : HttpHeaderState }, HttpHeader)),
 		]
 	parser_for = || {
 		Output : output
-		Output.parser_for(HeaderEncoding.Caseless)
-	}
+		parse_output = Output.parser_for(HttpHeaderEncoding.Caseless)
 
-	parse : Str -> Try(output, DecodeErr)
-		where [
-			output.parser_for : HeaderEncoding -> (Headers -> Try({ value : output, rest : Headers }, DecodeErr)),
-		]
-	parse = |raw| {
-		Output : output
-		parse_output = Output.parser_for(HeaderEncoding.Caseless)
-		parsed = parse_output(Headers.{ raw })?
-		Ok(parsed.value)
-	}
-}
-
-HeaderEncoding :: [Caseless].{
-	rename_field : HeaderEncoding, Str -> Str
-	rename_field = |_, name| underscores_to_dashes(name)
-
-	parse_str : HeaderEncoding, Headers -> Try({ value : Str, rest : Headers }, Headers.DecodeErr)
-	parse_str = |_, state| {
-		value_parts = take_header_value(state.raw)?
-		Ok({ value: value_parts.value, rest: { raw: value_parts.after } })
-	}
-
-	parse_u64 : HeaderEncoding, Headers -> Try({ value : U64, rest : Headers }, Headers.DecodeErr)
-	parse_u64 = |_, state| {
-		value_parts = take_header_value(state.raw)?
-
-		match U64.from_str(value_parts.value) {
-			Ok(value) => Ok({ value, rest: { raw: value_parts.after } })
-			Err(_) => Err(Headers.DecodeErr.BadHeader)
+		|raw| {
+			parsed = parse_output(HttpHeaderState.{ raw })?
+			Ok(parsed.value)
 		}
 	}
 
-	parse_record_field : HeaderEncoding, Str.FieldName.FieldNames(_shape), Headers -> Try(
-		[
-			Field({ field : Str.FieldName(_shape), rest : Headers }),
-			TryField({ name : Str, rest : Headers }),
-			TryFieldCaseless({ name : Str, rest : Headers }),
-			Continue({ rest : Headers }),
-			Done({ rest : Headers }),
-		],
-		Headers.DecodeErr,
-	)
-	parse_record_field = |_, fields, state|
-		parse_record_field_from_headers(fields, state.raw)
-
-	skip_record_field : HeaderEncoding, Headers -> Try(Headers, Headers.DecodeErr)
-	skip_record_field = |_, state| {
-		parts = take_header_value(state.raw)?
-		Ok({ raw: parts.after })
-	}
-
-	missing_record_field : HeaderEncoding, Str, Headers -> Headers.DecodeErr
-	missing_record_field = |_, _, _| Headers.DecodeErr.MissingRequired
-
-	missing_optional_field : HeaderEncoding, Str, Headers -> [Missing]
-	missing_optional_field = |_, _, _| Missing
+	parse : Str -> Try(output, HttpHeader)
 }
 ```
 
@@ -1552,74 +1866,75 @@ The exact derived parser type for a header record with mixed field shapes is:
 	cache_control : Str,
 	content_length : U64,
 	x_auth_token : Try(Str, [Missing]),
-}.parser_for : HeaderEncoding -> (Headers -> Try(
+}.parser_for : HttpHeaderEncoding -> (HttpHeaderState -> Try(
 	{
 		value : {
 			cache_control : Str,
 			content_length : U64,
 			x_auth_token : Try(Str, [Missing]),
 		},
-		rest : Headers,
+		rest : HttpHeaderState,
 	},
-	Headers.DecodeErr,
+	Encoding.HttpHeader,
 ))
 ```
 
-Because `HeaderEncoding` does not define `parse_tag_union`, trying to parse a
+Because `Encoding.HttpHeader` does not define `parse_tag_union`, trying to parse a
 header record that contains a tag union is a compile-time static-dispatch error:
 
 ```roc
-bad : Try({ mode : [On, Off] }, Headers.DecodeErr)
-bad = Headers.parse("mode: On\r\n")
+bad : Try({ mode : [On, Off] }, Encoding.HttpHeader)
+bad = Encoding.HttpHeader.parse("mode: On\r\n")
 ```
 
-The missing requirement is `HeaderEncoding.parse_tag_union`; the compiler does
-not wait until runtime to discover that this format does not support tags.
+The missing requirement is `HttpHeaderEncoding.parse_tag_union`; the compiler
+does not wait until runtime to discover that this format does not support tags.
 
 Concrete JSON parser code has this shape:
 
 ```roc
-JsonState := [Input(Str)]
+JsonState :: [Input(Str)]
 
-JsonEncoding :: [Default, CamelCase].{
+JsonEncoding :: [Default, CamelCase, TrailingCommas].{
 	rename_field : JsonEncoding, Str -> Str
 	rename_field = |encoding, name|
 		match encoding {
 			Default => name
+			TrailingCommas => name
 			CamelCase => snake_to_camel(name)
 		}
 
-	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json.DecodeErr)
-	parse_record_field : JsonEncoding, Str.FieldName.FieldNames(_shape), JsonState -> Try(
+	allows_trailing_commas : JsonEncoding -> Bool
+	allows_trailing_commas = |encoding|
+		match encoding {
+			Default => False
+			CamelCase => False
+			TrailingCommas => True
+		}
+
+	parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, Json.ParseErr)
+	parse_record_field : JsonEncoding, Encoding.FieldName.FieldNames(_shape), JsonState -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : JsonState }),
+			Field({ field : Encoding.FieldName(_shape), rest : JsonState }),
 			TryField({ name : Str, rest : JsonState }),
 			TryFieldCaseless({ name : Str, rest : JsonState }),
 			Continue({ rest : JsonState }),
 			Done({ rest : JsonState }),
 		],
-		Json.DecodeErr,
+		Json.ParseErr,
 	)
-	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json.DecodeErr)
-	missing_record_field : JsonEncoding, Str, JsonState -> Json.DecodeErr
+	skip_record_field : JsonEncoding, JsonState -> Try(JsonState, Json.ParseErr)
+	missing_record_field : JsonEncoding, Str, JsonState -> Json.ParseErr
 	missing_optional_field : JsonEncoding, Str, JsonState -> [Missing]
-	parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)
+	parse_tag_union : JsonEncoding, Encoding.ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)
 }
 
-Json :: [].{
-	DecodeErr := [MissingRequired, InvalidJson].{}
+Json :: {}.{
+	ParseErr : [MissingRequiredField(Str), InvalidJson(Str)]
 
-	Token := { raw : Str }.{
-		parser_for : JsonEncoding -> (JsonState -> Try({ value : Token, rest : JsonState }, Json.DecodeErr))
-		parser_for = |encoding| |state| {
-			parsed = JsonEncoding.parse_str(encoding, state)?
-			Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
-		}
-	}
-
-	parse : Str -> Try(a, Json.DecodeErr)
+	parse : Str -> Try(a, Json.ParseErr)
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)),
 		]
 	parse = |json| {
 		Shape : a
@@ -1631,14 +1946,33 @@ Json :: [].{
 				if Str.is_empty(Str.trim_start(rest)) {
 					Ok(parsed.value)
 				} else {
-					Err(Json.DecodeErr.InvalidJson)
+					Err(InvalidJson("Invalid JSON"))
 				}
 		}
 	}
 
-	parser_camel : () -> (Str -> Try(a, Json.DecodeErr))
+	parse_trailing_commas : Str -> Try(a, Json.ParseErr)
 		where [
-			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.DecodeErr)),
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)),
+		]
+	parse_trailing_commas = |json| {
+		Shape : a
+		parse_shape = Shape.parser_for(JsonEncoding.TrailingCommas)
+		parsed = parse_shape(JsonState.Input(json))?
+
+		match parsed.rest {
+			Input(rest) =>
+				if Str.is_empty(Str.trim_start(rest)) {
+					Ok(parsed.value)
+				} else {
+					Err(InvalidJson("Invalid JSON"))
+				}
+		}
+	}
+
+	parser_camel : () -> (Str -> Try(a, Json.ParseErr))
+		where [
+			a.parser_for : JsonEncoding -> (JsonState -> Try({ value : a, rest : JsonState }, Json.ParseErr)),
 		]
 	parser_camel = || {
 		Shape : a
@@ -1652,7 +1986,7 @@ Json :: [].{
 					if Str.is_empty(Str.trim_start(rest)) {
 						Ok(parsed.value)
 					} else {
-						Err(Json.DecodeErr.InvalidJson)
+						Err(InvalidJson("Invalid JSON"))
 					}
 			}
 		}
@@ -1676,7 +2010,7 @@ The exact derived parser type for a JSON record is:
 		},
 		rest : JsonState,
 	},
-	Json.DecodeErr,
+	Json.ParseErr,
 ))
 ```
 
@@ -1688,7 +2022,7 @@ The exact derived parser type for an externally tagged JSON union is:
 		value : [Admin({ name : Str }), Guest],
 		rest : JsonState,
 	},
-	Json.DecodeErr,
+	Json.ParseErr,
 ))
 ```
 
@@ -1745,7 +2079,7 @@ parse_token = |input| {
 }
 ```
 
-Encoding is symmetric. Structural `encode_to` methods call the format's output
+Encoding is symmetric. Structural `encoder_for` methods call the format's output
 methods for strings, records, tag unions, lists, and other shapes. A format's
 output state owns whatever builder it needs. JSON encoding to `Str` allocates
 the final string in the ordinary way, and JSON UTF-8 encoding produces
@@ -1755,8 +2089,18 @@ inferred `Try` error type as parsing.
 The public structural encode method has this exact shape:
 
 ```roc
-value.encode_to : value, encoding -> (state -> Try(state, err))
+value.encoder_for : encoding -> (value, state -> Try(state, err))
 ```
+
+Generated encoders compose child error rows. JSON helpers that cannot fail use a
+named `_never_fails` row variable so they can sequence with encoders that can
+fail. `Json.to_str` requires the final structural encoder's error type to be the
+empty row `[]`; `Json.to_str_try` preserves the final structural encoder's error
+type as `Try(Str, err)`. JSON `F32` and `F64` encoders are the deliberate failing
+scalar case: finite values encode as JSON numbers, while `NaN`, positive
+infinity, and negative infinity return `Err(NaN)`, `Err(Infinity)`, or
+`Err(NegativeInfinity)`. They must not encode non-finite values as JSON `null`,
+and they do not satisfy `Json.to_str`'s infallible encoder requirement.
 
 For a concrete record, the compiler can derive:
 
@@ -1764,7 +2108,7 @@ For a concrete record, the compiler can derive:
 {
 	count : U64,
 	foo_bar : Str,
-}.encode_to : { count : U64, foo_bar : Str }, MyEncoding -> (MyEncoding -> Try(MyEncoding, MyErr))
+}.encoder_for : MyEncoding -> ({ count : U64, foo_bar : Str }, MyState -> Try(MyState, MyErr))
 ```
 
 The encoding type owns the output methods required by that shape:
@@ -1772,12 +2116,47 @@ The encoding type owns the output methods required by that shape:
 ```roc
 MyEncoding :: [Out(Str)].{
 	rename_field : MyEncoding, Str -> Str
-	begin_record : MyEncoding -> Try(MyEncoding, MyErr)
-	encode_record_field : Str, MyEncoding -> Try(MyEncoding, MyErr)
-	end_record : MyEncoding -> Try(MyEncoding, MyErr)
-	encode_str : Str, MyEncoding -> Try(MyEncoding, MyErr)
-	encode_u64 : U64, MyEncoding -> Try(MyEncoding, MyErr)
+	encode_record :
+		MyState,
+		U64,
+		(MyState, (MyState, Str, (MyState -> Try(MyState, MyErr)) -> Try(MyState, MyErr)) -> Try(MyState, MyErr))
+			-> Try(MyState, MyErr)
+	encode_str : Str, MyState -> Try(MyState, MyErr)
+	encode_u64 : U64, MyState -> Try(MyState, MyErr)
 }
+```
+
+The `U64` argument is the statically-known number of record fields that will be
+encoded. The callback receives the current state and a field writer supplied by
+the format. Generated record encoders call the field writer once per present
+field:
+
+```roc
+MyEncoding.encode_record(
+	state,
+	2,
+	|state0, field| {
+		state1 = field(state0, "count", |s| encode_count(value.count, s))?
+		field(state1, "foo-bar", |s| encode_foo_bar(value.foo_bar, s))
+	},
+)
+```
+
+Tuples and lists use the same ownership pattern, except their writer has no
+field name:
+
+```roc
+encode_tuple :
+	MyState,
+	U64,
+	(MyState, (MyState, (MyState -> Try(MyState, MyErr)) -> Try(MyState, MyErr)) -> Try(MyState, MyErr))
+		-> Try(MyState, MyErr)
+
+encode_list :
+	MyState,
+	U64,
+	(MyState, (MyState, (MyState -> Try(MyState, MyErr)) -> Try(MyState, MyErr)) -> Try(MyState, MyErr))
+		-> Try(MyState, MyErr)
 ```
 
 ### Compile-Time Literal Conversions
@@ -2470,6 +2849,16 @@ declaration template. Box payload capabilities remain separate explicit
 representation authorities; their backing roots come from the capability entry
 in checked module data instead of from declaration template lookup.
 
+Named type ownership is already decided before Monotype lowering starts. A
+checked alias or nominal payload names its owner checked module id explicitly,
+and the lowering input includes every checked module id recorded in checked
+lowering visibility. Monotype may build a stage-local lookup table from those
+ids to module views for speed, but that lookup is only an address table over
+explicit checked data. The source-origin identity remains part of the lowered
+type definition identity; the owner checked module id is the module address used
+to find checked declarations, representation authorities, method owners, and
+type-store entries.
+
 This solves two classes of bugs:
 
 - generic nominal backings cannot accidentally swap, lose, or default one
@@ -2539,9 +2928,11 @@ During Monotype construction, an open checked variable is an unresolved graph
 node carrying the variable's numeric and row defaults. Unification resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
 type relations provide concrete evidence; defaults apply only at
-materialization. A Monotype is a materialized view of a solved node: it is
-reserved at a stable id and its content is refilled in place when its node
-gains evidence, so every holder of the id observes the solved type. This is
+materialization. While solving is still active, users hold instantiation graph
+nodes rather than final Monotype type ids. Materialization turns solved graph
+nodes into immutable interned Monotype type nodes. Recursive groups may reserve
+their ids inside the type interner while the group is being sealed, but no type
+id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
@@ -2691,7 +3082,7 @@ Monotype IR has no:
 - source `for` node
 - source row variable requiring closure
 - uninstantiated checked type variable
-- pending owner search
+- missing checked owner address
 
 `FnDef` is the checked identity for a checked, imported, nested, hosted,
 promoted, or checked-stage generated function. It does not contain a capture
@@ -2747,51 +3138,393 @@ This is why generic functions specialize predictably across module boundaries:
 the checked body remains immutable, and every monomorphic specialization records
 its own closed instantiation.
 
+The specialization store must make this lookup direct. It must not scan all
+specializations for a callable family and recompute recursive type digests while
+lowering a body. A specialization request is identified by:
+
+```zig
+const SpecIdentity = struct {
+    callable: CallableIdentity,
+    source_fn_ty_digest: TypeDigest,
+    request_fn_ty_digest: TypeDigest,
+    request_fn_ty: TypeId,
+};
+
+const CallableIdentity = union(enum) {
+    proc_template: struct {
+        module: CheckedModuleId,
+        proc: ProcTemplateId,
+    },
+    nested_site: struct {
+        module: CheckedModuleId,
+        owner_proc: ProcTemplateId,
+        owner_fn_digest: FnDigest,
+        site: NestedSiteId,
+    },
+    hosted: HostedId,
+    generated: GeneratedId,
+};
+
+const SpecStatus = enum {
+    reserved,
+    lowering,
+    ready,
+};
+
+const SpecRecord = struct {
+    identity: SpecIdentity,
+    request_fn_ty: TypeId,
+    request_fn_ty_digest: TypeDigest,
+    solved_fn_ty: TypeId,
+    solved_fn_ty_digest: TypeDigest,
+    fn: FnId,
+    status: SpecStatus,
+};
+```
+
+`source_fn_ty_digest` records the checked source function type after
+instantiation into the requesting graph. `request_fn_ty_digest` records the
+closed function type REQUESTED by the call site that reserved the record. The
+digests make lookup fast, but they are not the only correctness check. When a
+digest match is found, the store must also verify the checked callable identity
+and exact structural equality of the closed Monotype function type. Digest
+collisions are therefore harmless.
+
+The identity is immutable: it is written once when the record is reserved and
+never rewritten, so no structure that indexes by identity ever needs a rekey or
+a second synchronized entry. Later refinements are data on the record. The
+request view may be refined while the record is still `reserved` — once per
+deferring graph that seals its view of the request; the solved view records the
+body's solved type when the record becomes `ready`. Each refinement registers
+an *alias* lookup entry (the new digest also reaches the same record), so a
+request shaped like the current request reuses the record even after the body
+solved a more specific type — the record is never widened (the one-way snapshot
+rule above). Status transitions (`reserved → lowering → ready`) and both
+refinements happen only through the specialization store's API. A record
+loaded from another shard's cache is a finished snapshot and matches only at
+its solved shape: a requester that matches it already has the solved type, so
+no evidence needs to flow back.
+
+The in-memory builder owns a transient hash table from lookup keys to
+`SpecId`, plus the append-only `SpecRecord` array. The output program owns the
+records and the function bodies, not the hash table. A loaded cache file may
+build a transient hash table over the mapped records, but the file itself stores
+sorted records and fixed spans so it can be consumed without pointer fixups.
+
+Monotype type construction must feed the specialization store with immutable
+interned type nodes:
+
+```zig
+const MonoTypeStore = struct {
+    nodes: []const MonoTypeNode,
+    args: []const TypeId,
+    fields: []const Field,
+    tags: []const Tag,
+    payloads: []const TypeId,
+    declared_fields: []const DeclaredField,
+    digests: []const TypeDigest,
+};
+
+const MonoTypeNode = extern struct {
+    tag: MonoTypeTag,
+    first: u32,
+    len: u32,
+    extra: u32,
+};
+```
+
+The mutable instantiation graph may use union-find, row-extension links, and
+work queues while solving one specialization. Its final output is an immutable
+`TypeId` in `MonoTypeStore`. After that point, the type node is never refilled.
+Rows are normalized once, with field and tag names in explicit sorted order,
+and the type digest is stored beside the node when the node is interned. Parent
+digests are computed from child digests, so structurally growing records and
+function types do not repeatedly walk their whole prefix.
+
+The type interner enforces exact equality:
+
+```text
+same digest
+same tag
+same child count and metadata
+same ordered child ids, field names, tag names, and payload positions
+```
+
+The digest table is an acceleration structure only. Exact equality remains the
+authority for type identity. This gives generic higher-order code the desired
+shape: repeated calls at the same closed function type reuse one specialization
+after the first request, and growing structural accumulator types add only the
+new record/function nodes instead of redigesting every previous layer.
+
+Open instantiation graphs do not write directly into final Monotype body
+sections. While a specialization is being solved, lowering writes to a
+`BodyDraft` owned by that specialization graph. A draft mirrors the final
+Monotype sections enough for lowering to refer to expressions, patterns, locals,
+definitions, nested definitions, side-pool spans, and function signatures, but
+all type-bearing fields use a draft type cell:
+
+```zig
+const DraftTypeCell = union(enum) {
+    graph_node: InstNodeId,
+    sealed: TypeId,
+};
+```
+
+`graph_node` is used for any type cell owned by the active instantiation graph:
+expression types, pattern types, binder/local types, typed-local entries,
+function arguments, function returns, lambda and nested function signatures,
+specialization request function types, layout requests, and runtime schema
+requests. `sealed` is used only for closed Monotype types that were already
+materialized before this graph was opened, such as imported cache entries or
+builder-global primitive and hosted ABI types. If a sealed type must participate
+in the current specialization's constraints, the graph imports it and the draft
+stores the imported node instead of the original `TypeId`.
+
+A `BodyDraft` may contain ordinary lowering ids, spans, and side pools while it
+is active, but those ids are draft-local. They are not cache ids and no later
+post-check stage consumes them. The draft is sealed only after:
+
+1. all checked type evidence for the specialization has been applied;
+2. deferred procedure-template requests created by this graph have been drained
+   or reserved with stable closed request types;
+3. nested function bodies that share this graph have finished lowering;
+4. every unresolved graph node can be closed from checked data, or can be
+   proven to be a truly unconstrained empty tag union.
+
+Sealing performs the only transition from graph nodes to final Monotype
+`TypeId`s. It walks every draft type cell, materializes each graph node
+through the Monotype type interner, preserves recursive groups privately inside
+the interner, computes and stores type digests once, and then copies the fully
+sealed records into `MonoProgramBuilder`. This copy also turns draft-local ids
+and spans into final shard-local ids and spans. If sealing finds a graph node in
+any completed record after this step, that is a compiler bug.
+
+This split is required for future specialization caching. Cache files contain
+only sealed `MonoProgramView` sections: fixed-width records, ids, spans, and
+offsets into side pools. They never contain union-find nodes, mutable type
+views, allocator-owned arrays, hash maps, or draft-local ids. Because every
+interior relation in a sealed program is an id or span into the same shard, a
+mapped cache file can be read back as a read-only `MonoProgramView` with only
+top-level slice creation, shard assignment, and import-table resolution.
+
+The program store is split into a builder and a read-only view:
+
+```zig
+const MonoProgramBuilder = struct {
+    types: MonoTypeInterner,
+    specs: SpecBuilder,
+    fns: ArrayList(FnDef),
+    exprs: ArrayList(Expr),
+    pats: ArrayList(Pat),
+    names: NameStoreBuilder,
+};
+
+const MonoProgramView = struct {
+    types: MonoTypeStore,
+    specs: []const SpecRecord,
+    fns: []const FnDef,
+    exprs: []const Expr,
+    pats: []const Pat,
+    names: NameStoreView,
+};
+```
+
+Function slots are shard-aware so future cache files can be mapped directly:
+
+```zig
+const ShardId = enum(u32) { _ };
+const FnSlot = union(enum) {
+    local: FnId,
+    imported: ImportedFnId,
+};
+
+const ImportedFn = extern struct {
+    shard: ShardId,
+    fn: FnId,
+};
+```
+
+A newly built root program has one mutable local shard. A loaded specialization
+file is a read-only shard. Calls inside a shard use local `FnId` values when
+the target is stored in the same shard. Cross-shard calls use an `ImportedFnId`
+into an imports table. Loading resolves each import table entry to
+`ImportedFn { shard, fn }` once. Function bodies are not rewritten after the
+file is mapped.
+
+The durable format uses only plain old data records, offsets, lengths, and side
+pools. Hash maps, union-find nodes, temporary worklists, and allocator-owned
+arrays are transient builder data and are never written.
+
+```zig
+const SpecializationCacheHeader = extern struct {
+    magic: [8]u8,
+    format_version: u32,
+    compiler_layout_hash: [32]u8,
+    validity_id: [32]u8,
+
+    names: FileSlice,
+    type_nodes: FileSlice,
+    type_args: FileSlice,
+    fields: FileSlice,
+    tags: FileSlice,
+    payloads: FileSlice,
+    declared_fields: FileSlice,
+    type_digests: FileSlice,
+
+    specs: FileSlice,
+    fns: FileSlice,
+    defs: FileSlice,
+    nested_defs: FileSlice,
+    exprs: FileSlice,
+    pats: FileSlice,
+    stmts: FileSlice,
+    locals: FileSlice,
+    expr_ids: FileSlice,
+    pat_ids: FileSlice,
+    typed_locals: FileSlice,
+    stmt_ids: FileSlice,
+    field_exprs: FileSlice,
+    record_destructs: FileSlice,
+    str_pattern_steps: FileSlice,
+    branches: FileSlice,
+    if_branches: FileSlice,
+    string_literals: FileSlice,
+    imports: FileSlice,
+    roots: FileSlice,
+    layout_requests: FileSlice,
+    runtime_schema_requests: FileSlice,
+    comptime_sites: FileSlice,
+    source_files: FileSlice,
+    expr_locs: FileSlice,
+    expr_regions: FileSlice,
+    stmt_locs: FileSlice,
+    stmt_regions: FileSlice,
+    local_names: FileSlice,
+    debug_names: FileSlice,
+};
+
+const FileSlice = extern struct {
+    offset: u64,
+    len: u64,
+};
+```
+
+Any current in-memory field that contains a process pointer or slice must be
+converted to an offset record plus a byte or region side pool before it can be
+written to these sections. This applies to string literals, source-file names,
+local names, debug-name text, and compile-time site branch-region lists. A cache
+file must never store process pointers from `[]const u8`, `[]const Region`, hash
+maps, or allocator-owned arrays.
+
+The loader validates the header, `format_version`, `compiler_layout_hash`,
+`validity_id`, bounds, alignment, and section ordering. It then creates a
+`MonoProgramView` by adding the mapped base address to each `FileSlice`. The
+only required fixups are:
+
+- converting top-level file slices to process slices;
+- assigning a `ShardId` to the mapped file;
+- resolving each import-table entry to a loaded shard and function id.
+
+There are no per-expression, per-type, or per-function pointer rewrites. All
+interior relations are ids or spans into the same shard.
+
+`validity_id` for a Monotype specialization file includes:
+
+- the format version and compiler layout hash;
+- the root checked module id and all checked module ids read by the stored
+  specializations;
+- the explicit root request set;
+- the Monotype configuration that can affect reachable specializations;
+- builtin module data consumed by Monotype;
+- the source callable identities and source function type digests for the
+  stored specializations.
+
+It does not include data that Monotype does not consume. In particular, it does
+not include LIR layout decisions, ARC output, backend symbols, object-format
+choices, or code-generation options.
+
+Cache loading is an optimization of the same specialization store, not another
+lowering path. A loaded `SpecRecord` must pass the same identity and exact type
+checks as a freshly produced record before it can satisfy a request. If no
+loaded record matches, the builder creates the specialization normally and may
+append it to a new cache file after the program is complete.
+
 ### Static Dispatch In Monotype
 
-Static dispatch is resolved while producing Monotype IR in `.lss`. `.boxy`
-does not enter this stage; it resolves the same checked dispatch plans to
-dictionary/vtable calls or concrete structural operations while lowering
-checked CIR directly to LIR.
+Static dispatch is DECIDED during checking and CONSUMED during Monotype
+lowering. Every dispatch site leaves checking with an explicit resolution on
+its plan:
 
-For each checked dispatch plan in a body specialization:
+- `direct(evidence_node)` — checking proved the concrete target. The evidence
+  node names the target and carries evidence for the target's own
+  requirements
+  (its nested `where`-clause constraints), recursively.
+- `constraint(depth, k)` — the dispatcher is the k-th evidence param of the
+  d-th enclosing generalized callable. Each specialization edge supplies the
+  answer: dictionary passing resolved entirely at compile time.
+- `structural(kind)` — the checker chose the compiler-derived structural
+  implementation (equality, hashing, parsing, encoding) for an ownerless
+  shape.
+- `checked_error` — checking rejected the site; executing it anyway (running a
+  program with reported errors) lowers to an explicit crash.
+- `unreachable_dispatch` — the dispatcher is a constrained variable no
+  specialization edge can ever supply and no default applies: the dispatch is
+  statically unreachable and lowers to an explicit crash.
 
-1. Instantiate the checked dispatcher type into the current Monotype type
-   store.
-2. Instantiate the checked callable type into the current Monotype type store.
-3. Lower every checked operand into the current body specialization.
-4. Derive the concrete `MethodOwner` from the instantiated dispatcher type.
-5. Look up `(MethodOwner, MethodNameId)` in the checked method registry.
-6. Instantiate the target method callable type and verify it matches the plan's
-   callable type.
-7. Emit a direct `call_proc`, or emit structural equality when the checked plan
-   explicitly permits it.
+Nothing else exists. Monotype lowering never derives a method owner from type
+content, never searches a registry by method name, and never intersects
+constraints to guess a target.
 
-Any failure after checking is a compiler bug. Monotype lowering must not search
-for possible owners by intersecting method registries or constraints.
+The `.lss` strategy consumes these plans while producing Monotype IR. The
+`.boxy` strategy does not enter Monotype; it consumes the same checked dispatch
+plans while lowering checked CIR directly to LIR, choosing dictionary/vtable
+calls or concrete structural operations from the explicit checked data.
 
-Owner derivation is a type-content operation, not a registry operation.
-Monotype type lowering preserves owner-bearing type identity in builtin and
-named type nodes for every dispatcher type.
+**Evidence params.** Every type scheme with dispatch requirements has one
+deterministic ordered list of (dispatcher var, constraint) pairs —
+its evidence params — enumerated purely from the scheme's type structure
+(depth-first: function args then return, type arguments then backing, row
+fields and tags then extension, constraints emitted at each var's first
+occurrence, then constraint fn types walked the same way). Index `k` in this
+list is the shared identity between a plan's `constraint(k)` resolution and
+the k-th evidence entry a call edge supplies. The definition's module and any
+importing module enumerate identical lists from their structural copies of the
+scheme.
 
-`type_def` covers named nominal, opaque, and alias definitions that can own
-methods. Transparent backing representation is separate from this owner head.
-Monotype lowering may later erase or reinterpret transparent wrappers for value
-representation, but static dispatch reads the owner head before the dispatch
-node is removed.
+**Edges supply evidence.** Checking persists, for every instantiation of a
+constrained scheme, the (pristine var, fresh var) pairs of its constrained
+vars. Checking resolves each instantiation edge's requirements — against the
+enclosing callable's own evidence params (producing `constraint(k)` again),
+against concrete types (producing `direct` targets through exact registry
+lookups), through the monomorphic default rule, or structurally — and stores
+the result as site evidence keyed by the use expression. Monotype lowering
+materializes a specialization's evidence vector at each call edge and passes
+it to the callee specialization; a plan resolved `constraint(k)` reads entry
+`k` of the innermost vector (walking lexical parents for nested local
+functions by `depth`).
 
-The owner algorithm is fixed:
+**The default rule.** A constrained var no edge can pin follows exactly the
+rule Monotype uses to materialize unresolved variables: numeral literals and
+defaultable arithmetic operators default to `Dec`, quote and interpolation
+literals default to `Str`, and every requirement on such a var resolves against
+the default owner during checking. Structural-capable requirements on other
+unpinnable vars resolve structurally; the rest are statically unreachable.
 
-1. Fully resolve the instantiated dispatcher type.
-2. Compute its `DispatchOwnerHead` from Monotype type content.
-3. If the head is `builtin`, use that builtin owner.
-4. If the head is `type_def`, use that exact `TypeDef`.
-5. If the head is `none` and the checked dispatch plan permits derived `is_eq`,
-   emit structural equality.
-6. Otherwise stop with a compiler invariant failure.
+**Compiler-generated edges.** Structural derivations and builtin helpers call
+methods on component types with no checked instantiation record. For these,
+each checked evidence param also carries the label-addressed PATH from its scheme's
+callable to the dispatcher's first occurrence (argument positions, type
+arguments, row labels — labels rather than positions, because Monotype sorts
+rows). Monotype resolves such a target's requirements by walking those paths
+over the concrete monomorphic callable at the consumption site, recursively:
+component owners resolve through exact registry lookups, ownerless shapes take
+the structural implementations.
 
-The algorithm never asks the method registry "which owners could match this
-constraint?" The registry only answers exact lookups after the owner is known.
+Exact registry lookups — `(MethodOwner, MethodNameId)` — happen during
+checking, and during path synthesis for compiler-generated
+edges. The registry only ever answers exact lookups after the owner is known
+from checked type content; no stage asks "which owners could match this
+constraint?".
 
 ### Iterator `for`
 
@@ -3823,37 +4556,18 @@ root proc ids, platform entrypoints, and target usize.
 
 Structural record layout is order-insensitive: fields are sorted
 lexicographically by name and then stably by descending alignment, so source
-field order never affects memory. Nominal records instead lay out fields in
-*declared* order, so a nominal record can be given the exact memory layout of a
-chosen C struct and exchanged with a host with no per-field translation.
+field order never affects memory. Nominal records use the same structural
+layout by default. A nominal record opts into declared-order layout only by
+including an unnamed field in its declaration.
 
-The padding invariant is unchanged: a committed struct never contains internal
-alignment padding between fields. Because every layout's size is a multiple of
-its alignment, descending-alignment order always satisfies this, and it is the
-order structural records use. Declared order does not always satisfy it, so
-nominal layout commit verifies the declared order and only repairs it when it
-would introduce internal padding:
-
-- Verify: walk fields in declared order; if every field is naturally aligned at
-  its running offset, commit the declared order unchanged. This accepts
-  hand-tuned layouts — including ones, as in many C structs, where a
-  lower-alignment field validly precedes a higher-alignment one because earlier
-  fields already advanced the offset to the needed boundary — without reordering
-  them.
-- Repair: when declared order would require padding, commit the no-padding order
-  that is lexicographically closest to declared order. The longest valid
-  declared prefix is kept, and at each forced break the earliest-declared field
-  that still admits a no-padding completion is chosen. A completion always
-  exists (descending-alignment witnesses one from offset zero), so repair is
-  total and is never reported as an error: eliminating padding is the compiler's
-  responsibility, not the programmer's.
-
-Repair is a greedy walk with a memoized feasibility check. Feasibility depends
-only on the running offset modulo the maximum field alignment and on the
-multiset of remaining field shapes, of which there are few, so it is cheap and
-needs no backtracking. Reordering never changes a struct's size or alignment —
-every no-padding order shares both — so it only changes which field name lands
-at which offset.
+Declared-order nominal layout is for host-facing records that intentionally
+mirror a C struct. When a nominal declaration contains an unnamed field, layout
+commit sends the fields to the store in declaration order and commits that
+order verbatim. The store inserts normal C-style implicit padding between
+fields as alignment requires, and rounds the total size up to the maximum field
+alignment. It does not repair or reorder the declaration. Padding is represented
+in committed layout fields, so later stages consume committed offsets and sizes
+instead of reconstructing them.
 
 Nominal record declarations may contain unnamed fields, written `_` or
 `_`-prefixed (`_reserved`). An unnamed field reserves the size of its type but
@@ -3861,9 +4575,9 @@ stores nothing, is not accessible, and imposes no alignment requirement on
 itself (its bytes are uninitialized), which lets a declaration reproduce a C
 struct's explicit padding without a dummy value to initialize. Layout treats
 unnamed fields as alignment-one spacers, so they advance the offset by their
-size yet repair may place them at any offset. They contribute their size but not
-their alignment to the struct, so pure padding never inflates a struct's
-alignment. Using an unnamed field in a structural record type is rejected during
+size in the committed field order. They contribute their size but not their
+alignment to the struct, so pure padding never inflates a struct's alignment.
+Using an unnamed field in a structural record type is rejected during
 canonicalization.
 
 Declared field order is explicit data. Record rows are sorted lexicographically
@@ -3871,16 +4585,15 @@ by name at several stages (checking, Monotype row lowering, and Monotype
 instantiation) because field-name resolution and digests depend on a single
 fixed order, so the declared order is not recoverable from the lowered record
 itself. Canonicalization preserves it — a nominal declaration's record
-annotation keeps its fields in source order — and checking records it in the
-checked artifact's declared-field pool. Nominal declaration rows and any
-materialized nominal type payload that represents that declaration carry a span
-into that pool, distinct from the (lexicographic) backing row, so later stages
-consume it without rescanning declarations. Monotype lowering, boxy planning,
-and layout lowering all use this checked datum. The struct commit applies it as
-the declared order described above; field-name resolution
-continues to use the lexicographic row order, independent of the layout offset
-map. The same datum is consumed by the interpreter's layout store, so all
-backends agree.
+annotation keeps its fields in source order — and checking records it as
+explicit checked artifact data distinct from the (lexicographic) backing row,
+so later stages consume it without rescanning declarations. Monotype lowering,
+boxy planning, and layout lowering all use this checked datum. The struct
+commit uses
+it only for the unnamed-field opt-in described above; otherwise nominal records
+use the structural order of their backing row. Field-name resolution continues
+to use the lexicographic row order, independent of the layout offset map. The
+same data is consumed by the interpreter's layout store, so all backends agree.
 
 ### Pattern Lowering
 
@@ -4350,16 +5063,29 @@ against the borrow typing rules:
   borrow's lifetime is contained in the lender's
 - every join body holds under the entry state of each jump that reaches it:
   jump states are summarized over the names the body relies on (liveness,
-  unit counts, alias partition, and borrow anchors), and the body is
-  certified once per distinct summary, exactly as shared switch suffixes are
-  re-walked per distinct inflowing state
+  unit counts, alias partition, and borrow anchors) and joined into a
+  forward dataflow fixpoint — summaries agreeing on every name's ownership
+  mode share one abstraction whose must-alias partition is the meet of
+  theirs (with per-fine-class balances re-attributed by constraint
+  propagation), and the body is re-certified only when a jump strictly
+  refines that abstraction. Mode disagreements split the abstraction along
+  exactly the entry-state modes real in-edges disagree about, so refinement never
+  manufactures entry states no jump produced; in the worst case it
+  degenerates to one walk per distinct summary, with no capacity cap and no
+  skip path. The join is monotone over a finite-height lattice (partition
+  refinement is bounded by the name count; balance divergence across
+  mode-identical entries is itself a finding — per-iteration accumulation),
+  so certification of every procedure runs to completion
 - every call site satisfies the callee variant's signature, and every pinned
   signature holds
 
 The certifier consumes only the emitted LIR and the stage-local signature
-table. A certifier failure is a compiler bug and stops compilation. Release
-builds compile the certifier away entirely, like every other debug-only
-boundary check.
+table, and leaves no unverified residue: every procedure is certified to a
+fixpoint. The guaranteed property is that every emitted schedule balances
+ownership on all paths — each unit released or transferred exactly once, no
+use after death, no release of a borrow. A certifier failure is a compiler
+bug and stops compilation. Release builds compile the certifier away
+entirely, like every other debug-only boundary check.
 
 ### Thread-Confined Reference Counts
 
@@ -4574,13 +5300,28 @@ checked CIR
   -> Lambda Mono decisions
   -> LIR
   -> ARC insertion
-  -> LIR interpreter
+  -> native dev backend on native compiler hosts
   -> store eval result in ConstStore
 ```
 
-The compile-time evaluator is an LIR interpreter. It does not interpret
-Monotype IR, Lambda Solved IR, logical Lambda Mono expressions, or any
-source-level IR.
+On native compiler hosts, every `compile_time_*` root uses the dev backend for
+compile-time evaluation: ordinary constants, selected hoisted constants,
+expects, callable eval roots, numeral conversions, and quote conversions. The
+compile-time evaluator does not interpret Monotype IR, Lambda Solved IR,
+logical Lambda Mono expressions, or any source-level IR.
+
+The only interpreter path is for compiler hosts that cannot run generated native
+code, currently wasm32 and freestanding compiler builds. This decision is made
+from the compiler's own build target. The Roc program target selected by
+`roc --target` does not affect the compile-time evaluation strategy. A native
+compiler host without host dev-backend code generation support is unsupported for
+compile-time evaluation; it must not silently use the interpreter.
+
+Diagnostic behavior must be identical between the dev-backend evaluator and the
+host-restricted LIR interpreter. A mismatch in crashes, expect failures,
+empirical exhaustiveness diagnostics, branch coverage, literal conversion
+diagnostics, or stored constants is a compiler bug in one of the evaluators or
+in the data they consume.
 
 Runtime `.boxy` builds do not make compile-time roots use boxy lowering.
 Compile-time finalization continues to lower the requested compile-time roots
@@ -4593,12 +5334,53 @@ ARC insertion in its single-variant form: one proc per solved `RcSig`, no
 mode specialization. Compile-time evaluation pays for solving once per
 evaluated root and never for variant cloning.
 
-The LIR interpreter produces a runtime value. Checking then stores that eval
+The evaluator produces a runtime value. Checking then stores that eval
 result as checked-stage data in the checked module's `ConstStore`. `ConstStore`
 stores checked Roc values only. It does not contain Monotype nodes, Lambda
 Solved data, Lambda Mono decision data, runtime addresses, allocation identity,
 layout ids, runtime discriminants, field offsets, LIR locals, LIR procedure
 ids, backend symbols, backend bytes, or host handles.
+
+Compile-time finalization evaluates dependency-ready roots in batches. Each
+batch is lowered to LIR once, ARC is inserted once, the dev backend emits native
+code for the reachable proc specs, and a generated wrapper is emitted for each
+root. Roots in the same batch are independent pure computations and may run on a
+work queue. The finalizer still commits stored values, diagnostics, coverage
+updates, and root completion in sorted request order.
+
+Each root job owns its compile-time host state: `RocOps`, a root-local arena for
+Roc allocations, allocation tracking needed by RocOps, branch-hit records,
+expect/dbg/crash event lists, failure region state, a call-region stack, a crash
+boundary, and its result buffer. Roc runtime allocations are arena allocations
+and are bulk-freed after the result has been copied into `ConstStore`. Host
+events and failure state stay root-local until deterministic replay.
+
+A crash or empirical exhaustiveness failure in one root records that root's
+result and must not change the result of any other root in the same batch. Root
+jobs do not write diagnostics, stderr output, checked problems, or `ConstStore`
+entries directly. They write root-local event lists and branch-hit data; after
+all jobs in the batch finish, checking finalization replays those lists in the
+sorted root order.
+
+Slow-root progress reporting observes the same root job state without changing
+evaluation. By default, a root that has been running for more than three seconds
+may be reported periodically on both TTY and non-TTY stderr. The message names
+the one-line source snippet for the root, truncated with `…` if needed, plus the
+module, line, column, and elapsed seconds. If the root belongs to a binding, the
+snippet should include enough of that binding line to identify the binding.
+
+Progress reporting must not add a fixed latency penalty to fast compile-time
+evaluation. A reporting worker may be started when stderr/std_io reporting is
+configured, but every wait in that worker must be interruptible by the
+finalizer. The worker waits for the earliest running root's slow-report
+deadline, normally `root_start + 3s`, or for a stop signal, whichever comes
+first. When a root starts, the worker is signaled so it can recompute the next
+deadline without polling. When finalization finishes, it signals the worker and
+joins it immediately; it must never wait for a plain sleep interval to expire.
+Roots that finish before the slow threshold therefore pay only monitor setup and
+signaling overhead, not the reporting period. Roots that exceed the threshold
+are reported, then the worker waits interruptibly until the next per-root report
+deadline or finalization stop.
 
 `ConstStore` uses node ids so stored constants can preserve sharing without
 duplicating large values. Multiple fields may reference the same `ConstNodeId`.
@@ -4942,6 +5724,16 @@ provides { "roc_main": main_for_host! }
 hosted { "roc_stdout_line": Stdout.line!, "roc_stderr_line": Stderr.line! }
 ```
 
+The symbol string is the identity of an externally-bound function. A hosted
+call resolves to the entry at its declaration slot in the `hosted` section;
+resolution never matches hosted declarations by signature, by
+declaring-module content, or by any content-derived module identity. Two
+byte-identical modules whose effectful declarations are wired to different
+symbols stay distinct because the platform header that assigns those symbols
+is the data that separates them. `provides` follows the same rule: the
+exported symbol set is part of the platform relation, and two exports remain
+two exports even when they name the same Roc function.
+
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
 as a weak extern and calls it directly with the natural C ABI for its types.
@@ -5272,6 +6064,7 @@ The post-check pipeline must not contain:
 - checked-module runtime payloads, value conversion plans, callable-set
   descriptors, boxy descriptors, boxy dictionaries, or erased ABI decisions
 - owner discovery by method-registry intersection
+- method-registry intersection used as an ownership source
 - backend reference-counting decisions
 - descriptor or dictionary pointers stored inside ordinary Roc value
   representations
@@ -5343,6 +6136,9 @@ Minimum boundary checks:
   carries an explicit descriptor reference.
 - ARC output passes the debug borrow certifier.
 - Backends receive only ARC-complete LIR.
+- No deduplication, specialization, or callable-merging step maps two
+  `hosted` declarations or two `provides` exports to one identity, even when
+  their declaring modules are byte-identical.
 
 The test suite also verifies cross-strategy host ABI equivalence. For the same
 checked artifact, `.lss` and `.boxy` must agree on exported and hosted symbol

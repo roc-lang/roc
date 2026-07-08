@@ -8,9 +8,9 @@ type=repl
 » lst.map(|_| "zzz ").join_with(" ").trim()
 ~~~
 # OUTPUT
-**Undefined Variable**
+**Name Not In Scope**
 Nothing is named `lst` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Is it misspelled, or is there an import missing?
 
 **repl:1:1:1:4:**
 ```roc

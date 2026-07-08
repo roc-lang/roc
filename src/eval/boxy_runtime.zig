@@ -1718,7 +1718,8 @@ pub const BoxyRuntime = struct {
                         field_desc,
                         expected_field_layout,
                     );
-                } else try self.materializeLocalValue(hooks, 
+                } else try self.materializeLocalValue(
+                    hooks,
                     self.normalizeValueToLayout(field_value, actual_field_layout, expected_field_layout),
                     expected_field_layout,
                 );
@@ -2384,6 +2385,14 @@ pub const BoxyRuntime = struct {
                 expected_layout,
             );
         }
+        if (actual_layout_val.tag == .zst and expected_is_tag and target_desc.tag_variants.len != 0) {
+            return try self.materializeZstBoxyTagPayloadToLayoutWithTargetDesc(
+                hooks,
+                source_desc,
+                target_desc,
+                expected_layout,
+            );
+        }
 
         if (self.singleFieldPayloadInfo(expected_layout)) |target_field| {
             const target = try hooks.allocValue(expected_layout);
@@ -2413,6 +2422,103 @@ pub const BoxyRuntime = struct {
         }
 
         return try self.materializeBoxyPayloadToLayout(hooks, value, actual_layout, source_desc, expected_layout);
+    }
+
+    fn materializeZstBoxyTagPayloadToLayoutWithTargetDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        target_desc: *const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!Value {
+        const source_variants = self.requireBoxyTagVariants(source_desc.tag_variants);
+        if (source_variants.len != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: zero-sized source boxy tag payload descriptor for layout {d} had {d} variants",
+                .{ @intFromEnum(expected_layout), source_variants.len },
+            );
+        }
+        const source_variant = source_variants[0];
+        if (source_variant.payload_layout != .zst or source_variant.payload_descs.len != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: zero-sized source boxy tag payload descriptor variant {s} had nonzero payload metadata",
+                .{self.store.getString(source_variant.name)},
+            );
+        }
+
+        const target_variant = self.findLocalBoxyTagVariant(target_desc, source_variant.name) orelse {
+            const target_ext_discriminant = self.boxyTagExtDiscriminant(target_desc) orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: target boxy tag descriptor for layout {d} had no variant named {s}",
+                    .{ @intFromEnum(expected_layout), self.store.getString(source_variant.name) },
+                );
+            };
+            const target_ext_desc = try self.resolveBoxyTagExtDesc(hooks, target_desc);
+            const target = try self.allocTagValue(hooks, expected_layout);
+            if (self.helper.sizeOf(target.base_layout) > 0) {
+                self.helper.writeTagDiscriminant(target.base, target.base_layout, target_ext_discriminant);
+            } else if (target_ext_discriminant != 0) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: zero-sized boxy tag materialization wrote nonzero extension discriminant {d} into zero-sized layout {d}",
+                    .{ target_ext_discriminant, @intFromEnum(expected_layout) },
+                );
+            }
+            const ext_slot_layout = self.requireBoxyTagPayloadLayout(target.base_layout, target_ext_discriminant);
+            const ext_value = try self.materializeZstBoxyTagPayloadToLayoutWithTargetDesc(
+                hooks,
+                source_desc,
+                target_ext_desc,
+                ext_slot_layout,
+            );
+            try self.writeVariantPayloadValue(hooks, target.base, ext_slot_layout, ext_value, ext_slot_layout);
+            return target.outer;
+        };
+
+        const target = try self.allocTagValue(hooks, expected_layout);
+        if (self.helper.sizeOf(target.base_layout) > 0) {
+            self.helper.writeTagDiscriminant(target.base, target.base_layout, target_variant.discriminant);
+        } else if (target_variant.discriminant != 0) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: zero-sized boxy tag materialization wrote nonzero discriminant {d} into zero-sized layout {d}",
+                .{ target_variant.discriminant, @intFromEnum(target.base_layout) },
+            );
+        }
+
+        const expected_payload_layout = self.requireBoxyTagPayloadLayout(target.base_layout, target_variant.discriminant);
+        if (self.helper.sizeOf(expected_payload_layout) == 0) return target.outer;
+        const source_payload_desc = if (self.findBoxyPayloadDesc(&source_variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const target_payload_desc = if (self.findBoxyPayloadDesc(target_variant, 0)) |desc_ref|
+            try hooks.resolveDescRef(desc_ref)
+        else
+            null;
+        const payload = if (target_payload_desc) |resolved_target_desc|
+            try self.materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
+                hooks,
+                Value.zst,
+                .zst,
+                source_payload_desc,
+                resolved_target_desc,
+                expected_payload_layout,
+            )
+        else
+            try self.materializeBoxyPayloadToLayout(
+                hooks,
+                Value.zst,
+                .zst,
+                source_payload_desc,
+                expected_payload_layout,
+            );
+        try self.writeVariantPayloadValue(
+            hooks,
+            target.base,
+            expected_payload_layout,
+            payload,
+            expected_payload_layout,
+        );
+        return target.outer;
     }
 
     fn materializeBoxyTagPayloadToNonTagLayoutWithTargetDesc(

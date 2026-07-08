@@ -16,25 +16,25 @@ type=expr
 ~~~
 # EXPECTED
 STRAY DOLLAR SIGN - record_different_fields_error.md:6:10:6:11
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:2:20:2:21
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:21:2:39
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:39:2:40
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:2:40:2:41
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:3:13:3:14
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:14:3:33
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:33:3:34
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:3:34:3:35
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:15:4:16
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:4:25:4:26
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:15:5:16
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:5:24:5:25
-UNEXPECTED TOKEN IN TYPE ANNOTATION - record_different_fields_error.md:6:20:6:21
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:21:6:27
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:27:6:28
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:6:28:6:29
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:10:7:17
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:17:7:18
-UNEXPECTED TOKEN IN EXPRESSION - record_different_fields_error.md:7:30:7:31
+UNEXPECTED TYPE SYNTAX - record_different_fields_error.md:2:20:2:21
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:2:21:2:39
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:2:39:2:40
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:2:40:2:41
+UNEXPECTED TYPE SYNTAX - record_different_fields_error.md:3:13:3:14
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:3:14:3:33
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:3:33:3:34
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:3:34:3:35
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:4:15:4:16
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:4:25:4:26
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:5:15:5:16
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:5:24:5:25
+UNEXPECTED TYPE SYNTAX - record_different_fields_error.md:6:20:6:21
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:6:21:6:27
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:6:27:6:28
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:6:28:6:29
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:7:10:7:17
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:7:17:7:18
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_error.md:7:30:7:31
 DECLARATION HAS NO VALUE - record_different_fields_error.md:2:5:2:21
 DECLARATION HAS NO VALUE - record_different_fields_error.md:3:5:3:14
 TYPE MISMATCH - record_different_fields_error.md:4:5:4:15
@@ -54,213 +54,333 @@ MISSING METHOD - record_different_fields_error.md:7:19:7:30
 
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  _privateField: "leading underscore",                                      │
  │                 ‾                                                          │
  └───────────────────────────────────── record_different_fields_error.md:2:20 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `"` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token leading underscore is not ──────┐
-└┬───────────────────────────────┘  expected in an expression.                │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  _privateField: "leading underscore",                                      │
  │                  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
  └───────────────────────────────────── record_different_fields_error.md:2:21 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `leading underscore` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token " is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  _privateField: "leading underscore",                                      │
  │                                    ‾                                       │
  └───────────────────────────────────── record_different_fields_error.md:2:39 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `"` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  _privateField: "leading underscore",                                      │
  │                                     ‾                                      │
  └───────────────────────────────────── record_different_fields_error.md:2:40 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  field_: "trailing underscore",                                            │
  │          ‾                                                                 │
  └───────────────────────────────────── record_different_fields_error.md:3:13 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `"` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token trailing underscore is not ─────┐
-└┬───────────────────────────────┘  expected in an expression.                │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field_: "trailing underscore",                                            │
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └───────────────────────────────────── record_different_fields_error.md:3:14 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `trailing underscore` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token " is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field_: "trailing underscore",                                            │
  │                              ‾                                             │
  └───────────────────────────────────── record_different_fields_error.md:3:33 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `"` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field_: "trailing underscore",                                            │
  │                               ‾                                            │
  └───────────────────────────────────── record_different_fields_error.md:3:34 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  PascalCase: "pascal",                                                     │
  │            ‾                                                               │
  └───────────────────────────────────── record_different_fields_error.md:4:15 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  PascalCase: "pascal",                                                     │
  │                      ‾                                                     │
  └───────────────────────────────────── record_different_fields_error.md:4:25 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  kebab-case: "kebab",                                                      │
  │            ‾                                                               │
  └───────────────────────────────────── record_different_fields_error.md:5:15 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  kebab-case: "kebab",                                                      │
  │                     ‾                                                      │
  └───────────────────────────────────── record_different_fields_error.md:5:24 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌─────────────────────────────────────┐
-│ UNEXPECTED TOKEN IN TYPE ANNOTATION ├─ The token " is not expected in a ────┐
-└┬────────────────────────────────────┘  type annotation.                     │
+┌────────────────────────┐
+│ UNEXPECTED TYPE SYNTAX ├─ I was parsing a type annotation, and this token ──┐
+└┬───────────────────────┘  cannot start a type here.                         │
  │                                                                            │
  │  field$special: "dollar",                                                  │
  │                 ‾                                                          │
  └───────────────────────────────────── record_different_fields_error.md:6:20 ┘
 
-    Type annotations should contain types like Str, Num a, or List U64.
+    Types can be type variables, uppercase type names, function types, tuples,
+    records, or tag unions.
+
+    For example:
+        List(U64)
+
+    I found `"` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token dollar is not expected in an ───┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field$special: "dollar",                                                  │
  │                  ‾‾‾‾‾‾                                                    │
  └───────────────────────────────────── record_different_fields_error.md:6:21 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `dollar` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token " is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field$special: "dollar",                                                  │
  │                        ‾                                                   │
  └───────────────────────────────────── record_different_fields_error.md:6:27 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `"` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field$special: "dollar",                                                  │
  │                         ‾                                                  │
  └───────────────────────────────────── record_different_fields_error.md:6:28 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token @symbol is not expected in an ──┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field@symbol: "at symbol",                                                │
  │       ‾‾‾‾‾‾‾                                                              │
  └───────────────────────────────────── record_different_fields_error.md:7:10 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `@symbol` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token : is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field@symbol: "at symbol",                                                │
  │              ‾                                                             │
  └───────────────────────────────────── record_different_fields_error.md:7:17 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `:` here.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token , is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  field@symbol: "at symbol",                                                │
  │                           ‾                                                │
  └───────────────────────────────────── record_different_fields_error.md:7:30 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `,` here.
+    A comma separates items, but there must be a valid item on both sides of it.
 
 
 ┌──────────────────────────┐
@@ -457,7 +577,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 131)
+		(e-dispatch-call (method "negate") (constraint-fn-var 136)
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(args)))

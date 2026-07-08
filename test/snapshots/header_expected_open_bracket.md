@@ -8,18 +8,24 @@ type=file
 module
 ~~~
 # EXPECTED
-PARSE ERROR - header_expected_open_bracket.md:2:1:2:1
+EXPECTED EXPOSING LIST - header_expected_open_bracket.md:2:1:2:1
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: header_expected_open_square ───────┐
-└┬────────────┘                                                               │
+┌────────────────────────┐
+│ EXPECTED EXPOSING LIST ├─ I was parsing a module or hosted header, and I ───┐
+└┬───────────────────────┘  expected an opening `[`.                          │
  │                                                                            │
  │                                                                            │
  │  ‾                                                                         │
  └─────────────────────────────────────── header_expected_open_bracket.md:2:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    The names exposed by this module are written in square brackets after the
+    header keyword.
+
+    For example:
+        module [main, helper]
+
+    I reached the end of the file before this construct was complete.
 
 # TOKENS
 ~~~zig

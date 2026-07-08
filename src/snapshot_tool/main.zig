@@ -20,6 +20,7 @@ const reporting = @import("reporting");
 const check = @import("check");
 const compile = @import("compile");
 const lir = @import("lir");
+const GuardedList = lir.LirStore.GuardedList;
 const layout = @import("layout");
 const backend = @import("backend");
 const fmt = @import("fmt");
@@ -112,6 +113,7 @@ const SnapshotError =
         BufferTooSmall,
         CacheRoundTripValidationFailed,
         CacheVersionHashMismatch,
+        CorruptSerializedModuleEnv,
         ErrFinalizingHTMLWriter,
         InvalidMagicNumber,
         MissingBuiltinModule,
@@ -295,6 +297,7 @@ fn generateAllReports(
             empty_modules,
             &solver.import_mapping,
             &solver.regions,
+            null,
         );
         defer report_builder.deinit();
 
@@ -911,7 +914,6 @@ fn processSnapshotContent(
     defer parse_ast.deinit();
 
     const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try can_ir.insertIdent(base.Ident.for_text(module_name)),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,
@@ -2833,13 +2835,7 @@ fn validateMonoOutput(allocator: Allocator, mono_source: []const u8, source_path
 
     // Type-check the canonicalized MONO output
     // Create a BuiltinContext using the config's builtin information
-    const module_name = validation_env.insertIdent(base.Ident.for_text("mono_validation")) catch |err| {
-        std.log.err("MONO VALIDATION ERROR in {s}: Failed to insert module name: {}", .{ source_path, err });
-        return false;
-    };
-
     const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = module_name,
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,
@@ -3464,25 +3460,27 @@ fn processDocsSnapshot(
     };
     defer build_env.deinit();
     build_env.setFinalizeExecutableArtifacts(false);
+    build_env.setSyntheticRootPackageIdentity();
+    build_env.setSyntheticRootPlatformPackageIdentity();
 
     build_env.build(app_path) catch |err| {
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
         return false;
     };
 
-    // 4. Get compiled modules and extract docs
-    const modules = build_env.getCompiledModules(allocator) catch |err| {
-        std.log.err("Failed to get compiled modules: {}", .{err});
+    // 4. Get documentable modules and extract docs
+    const modules = build_env.getDocumentationModules(allocator) catch |err| {
+        std.log.err("Failed to get documentable modules: {}", .{err});
         return false;
     };
     defer allocator.free(modules);
 
     if (modules.len == 0) {
-        std.log.err("No modules were compiled", .{});
+        std.log.err("No documentable modules were compiled", .{});
         return false;
     }
 
-    // Extract docs from each compiled module
+    // Extract docs from each documentable module
     var module_docs_list = std.ArrayList(docs_mod.DocModel.ModuleDocs).empty;
     defer {
         for (module_docs_list.items) |*md| md.deinit(allocator);
@@ -3505,8 +3503,8 @@ fn processDocsSnapshot(
         try module_docs_list.append(allocator, mod_docs);
     }
 
-    // Modules are collected in package hash-map order, which is not
-    // deterministic; docs output must be.
+    // Module collection can still depend on package hash-map order for
+    // non-platform roots, and docs output must be deterministic.
     std.mem.sort(docs_mod.DocModel.ModuleDocs, module_docs_list.items, {}, docs_mod.DocModel.moduleDocsLessThan);
 
     // Build PackageDocs
@@ -3803,7 +3801,8 @@ fn snapshotNativeEntrypoints(
         var arg_layouts_owned = true;
         errdefer if (arg_layouts_owned) allocator.free(arg_layouts);
 
-        for (arg_locals, 0..) |local_id, i| {
+        for (0..arg_locals.len) |i| {
+            const local_id = GuardedList.at(arg_locals, i);
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
@@ -3907,6 +3906,8 @@ fn processDevObjectSnapshot(
         return false;
     };
     defer build_env.deinit();
+    build_env.setSyntheticRootPackageIdentity();
+    build_env.setSyntheticRootPlatformPackageIdentity();
 
     build_env.build(app_path) catch |err| {
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
@@ -4416,6 +4417,7 @@ fn compileSnapshotReplInspectedModule(
                 .indices = bm.builtin_indices,
                 .artifact = &bm.checked_artifact,
             },
+            null,
         );
     }
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .module, source, &.{});
@@ -4454,7 +4456,6 @@ fn renderSnapshotReplTypeProblems(
     defer parse_ast.deinit();
 
     const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try can_ir.insertIdent(base.Ident.for_text("repl")),
         .bool_stmt = config.builtin_indices.bool_type,
         .try_stmt = config.builtin_indices.try_type,
         .str_stmt = config.builtin_indices.str_type,

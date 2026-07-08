@@ -316,6 +316,11 @@ pub const Diagnostic = union(enum) {
         duplicate_region: Region,
         original_region: Region,
     },
+    duplicate_tag: struct {
+        tag_name: Ident.Idx,
+        duplicate_region: Region,
+        original_region: Region,
+    },
     f64_pattern_literal: struct {
         region: Region,
     },
@@ -446,6 +451,7 @@ pub const Diagnostic = union(enum) {
             .unused_variable => |d| d.region,
             .used_underscore_variable => |d| d.region,
             .duplicate_record_field => |d| d.duplicate_region,
+            .duplicate_tag => |d| d.duplicate_region,
             .invalid_single_quote => |d| d.region,
             .empty_tuple => |d| d.region,
             .f64_pattern_literal => |d| d.region,
@@ -637,16 +643,12 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Undefined Variable", "", .runtime_error);
+        var report = try Report.init(allocator, "Name Not In Scope", "", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.headline.addReflowingText("Nothing is named ");
         try report.headline.addUnqualifiedSymbol(owned_ident);
         try report.headline.addReflowingText(" in this scope.");
-        try report.document.addReflowingText("Is there an ");
-        try report.document.addKeyword("import");
-        try report.document.addReflowingText(" or ");
-        try report.document.addKeyword("exposing");
-        try report.document.addReflowingText(" missing up-top?");
+        try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
 
         // Check for common misspellings and add a tip if found
         if (reporting.CommonMisspellings.getIdentifierTip(ident_name)) |tip| {
@@ -1378,6 +1380,52 @@ pub const Diagnostic = union(enum) {
 
         try report.document.addLineBreak();
         try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
+
+        return report;
+    }
+
+    pub fn buildDuplicateTagReport(
+        allocator: Allocator,
+        tag_name: []const u8,
+        duplicate_region_info: base.RegionInfo,
+        original_region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) Allocator.Error!Report {
+        var report = try Report.init(allocator, "Duplicate Tag", "", .runtime_error);
+        const owned_tag_name = try report.addOwnedString(tag_name);
+
+        try report.headline.addReflowingText("The tag ");
+        try report.headline.addUnqualifiedSymbol(owned_tag_name);
+        try report.headline.addReflowingText(" appears more than once in this tag union.");
+
+        try report.document.addReflowingText("This tag is duplicated here:");
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            duplicate_region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The tag ");
+        try report.document.addUnqualifiedSymbol(owned_tag_name);
+        try report.document.addReflowingText(" was first defined here:");
+        try report.document.addLineBreak();
+        try report.document.addSourceRegion(
+            original_region_info,
+            .dimmed,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Tag union tags must have unique names. Rename one of these tags or remove the duplicate.");
 
         return report;
     }

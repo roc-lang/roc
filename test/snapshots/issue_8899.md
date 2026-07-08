@@ -27,58 +27,58 @@ DEPRECATED NUMBER SUFFIX - issue_8899.md:11:34:11:39
 # PROBLEMS
 
 ┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
-└┬─────────────────────────┘  syntax.                                         │
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
+└┬─────────────────────────┘                                                  │
  │                                                                            │
  │  var $total = 0i64                                                         │
  │               ‾‾‾‾                                                         │
  └──────────────────────────────────────────────────────── issue_8899.md:3:22 ┘
 
-    The `i64` suffix is deprecated. Use `0.I64` instead.
+    The suffix `i64` is deprecated. Write `0.I64` instead.
 
 
 ┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
-└┬─────────────────────────┘  syntax.                                         │
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
+└┬─────────────────────────┘                                                  │
  │                                                                            │
  │  var $acc = [0i64]                                                         │
  │              ‾‾‾‾                                                          │
  └──────────────────────────────────────────────────────── issue_8899.md:4:21 ┘
 
-    The `i64` suffix is deprecated. Use `0.I64` instead.
+    The suffix `i64` is deprecated. Write `0.I64` instead.
 
 
 ┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
-└┬─────────────────────────┘  syntax.                                         │
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
+└┬─────────────────────────┘                                                  │
  │                                                                            │
  │  sum_with_last([10i64, 20i64, 30i64])                                      │
  │                 ‾‾‾‾‾                                                      │
  └─────────────────────────────────────────────────────── issue_8899.md:11:20 ┘
 
-    The `i64` suffix is deprecated. Use `10.I64` instead.
+    The suffix `i64` is deprecated. Write `10.I64` instead.
 
 
 ┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
-└┬─────────────────────────┘  syntax.                                         │
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
+└┬─────────────────────────┘                                                  │
  │                                                                            │
  │  sum_with_last([10i64, 20i64, 30i64])                                      │
  │                        ‾‾‾‾‾                                               │
  └─────────────────────────────────────────────────────── issue_8899.md:11:27 ┘
 
-    The `i64` suffix is deprecated. Use `20.I64` instead.
+    The suffix `i64` is deprecated. Write `20.I64` instead.
 
 
 ┌──────────────────────────┐
-│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses a deprecated suffix ───┐
-└┬─────────────────────────┘  syntax.                                         │
+│ DEPRECATED NUMBER SUFFIX ├─ This number literal uses an old suffix syntax. ─┐
+└┬─────────────────────────┘                                                  │
  │                                                                            │
  │  sum_with_last([10i64, 20i64, 30i64])                                      │
  │                               ‾‾‾‾‾                                        │
  └─────────────────────────────────────────────────────── issue_8899.md:11:34 ┘
 
-    The `i64` suffix is deprecated. Use `30.I64` instead.
+    The suffix `i64` is deprecated. Write `30.I64` instead.
 
 # TOKENS
 ~~~zig
@@ -190,7 +190,7 @@ EndOfFile,
 					(e-block
 						(s-reassign
 							(p-assign (ident "$acc"))
-							(e-call (constraint-fn-var 225)
+							(e-call (constraint-fn-var 228)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local
@@ -202,7 +202,7 @@ EndOfFile,
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 246)
+										(e-call (constraint-fn-var 249)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -213,7 +213,7 @@ EndOfFile,
 												(pattern (degenerate false)
 													(p-applied-tag)))
 											(value
-												(e-dispatch-call (method "plus") (constraint-fn-var 249)
+												(e-dispatch-call (method "plus") (constraint-fn-var 252)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "$total"))))
@@ -230,7 +230,7 @@ EndOfFile,
 						(e-empty_record)))
 				(e-lookup-local
 					(p-assign (ident "$total"))))))
-	(e-call (constraint-fn-var 372)
+	(e-call (constraint-fn-var 375)
 		(e-lookup-local
 			(p-assign (ident "sum_with_last")))
 		(e-list

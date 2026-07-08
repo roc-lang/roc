@@ -5,6 +5,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const types = @import("types");
 const layout = @import("./layout.zig");
+const base = @import("base");
 const Ident = @import("base").Ident;
 
 /// Key to identify a type variable in a specific module.
@@ -19,7 +20,7 @@ pub const ModuleVarKey = packed struct {
 /// can reference the same nominal type definition.
 pub const NominalKey = struct {
     ident_idx: Ident.Idx,
-    origin_module: Ident.Idx,
+    origin_module: base.ModuleIdentity.Idx,
 };
 
 /// Work queue for layout computation, tracking pending and resolved containers.

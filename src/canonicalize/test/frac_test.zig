@@ -74,7 +74,7 @@ test "fractional literal - scientific notation large (near f64 max)" {
             const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
             try testing.expect(literal.isFractional());
             try testing.expect(!literal.isNegative());
-            try testing.expectEqual(@as(u32, 0), literal.after_decimal_digit_count);
+            try testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
         },
         else => {
             try testing.expect(false); // Should be exact from_numeral
@@ -95,7 +95,7 @@ test "fractional literal - scientific notation at f32 boundary" {
             const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
             try testing.expect(literal.isFractional());
             try testing.expect(!literal.isNegative());
-            try testing.expectEqual(@as(u32, 0), literal.after_decimal_digit_count);
+            try testing.expectEqual(@as(u64, 0), literal.after_decimal_digit_count);
         },
         else => {
             try testing.expect(false); // Should be exact from_numeral

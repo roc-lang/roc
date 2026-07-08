@@ -32,115 +32,139 @@ j : I128
 j = -17011687303715884105728
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_025.md:9:1:9:2
-PARSE ERROR - fuzz_crash_025.md:9:3:9:4
-PARSE ERROR - fuzz_crash_025.md:9:5:9:25
-PARSE ERROR - fuzz_crash_025.md:12:48:12:49
-PARSE ERROR - fuzz_crash_025.md:13:1:13:2
-PARSE ERROR - fuzz_crash_025.md:13:3:13:4
-PARSE ERROR - fuzz_crash_025.md:13:4:13:5
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_025.md:9:1:9:2
+UNEXPECTED STATEMENT - fuzz_crash_025.md:9:3:9:4
+UNEXPECTED STATEMENT - fuzz_crash_025.md:9:5:9:25
+UNEXPECTED STATEMENT - fuzz_crash_025.md:12:48:12:49
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_025.md:13:1:13:2
+UNEXPECTED STATEMENT - fuzz_crash_025.md:13:3:13:4
+UNEXPECTED STATEMENT - fuzz_crash_025.md:13:4:13:5
 INVALID NUMBER - fuzz_crash_025.md:12:5:12:48
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  d = 18446744073709551615                                                  │
  │  ‾                                                                         │
  └───────────────────────────────────────────────────── fuzz_crash_025.md:9:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `d` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  d = 18446744073709551615                                                  │
  │    ‾                                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_025.md:9:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `=` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  d = 18446744073709551615                                                  │
  │      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
  └───────────────────────────────────────────────────── fuzz_crash_025.md:9:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `18446744073709551615` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  e = 3402823669209384634633746074317682114553.14: I8                       │
  │                                                 ‾                          │
  └─────────────────────────────────────────────────── fuzz_crash_025.md:12:48 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `:` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  f =8                                                                      │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_025.md:13:1 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `f` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  f =8                                                                      │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_025.md:13:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `=` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  f =8                                                                      │
  │     ‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_025.md:13:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `8` here.
 
 
 ┌────────────────┐

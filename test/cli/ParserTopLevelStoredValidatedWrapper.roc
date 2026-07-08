@@ -13,9 +13,9 @@ Format := [Default].{
 			Done => Err(ParserTopLevelStoredValidatedWrapper.DecodeErr.MissingRequired)
 		}
 
-	parse_record_field : Format, Str.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
 		[
-			Field({ field : Str.FieldName(_shape), rest : State }),
+			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
 			TryFieldCaseless({ name : Str, rest : State }),
 			Continue({ rest : State }),

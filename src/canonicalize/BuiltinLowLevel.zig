@@ -26,13 +26,13 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
     }
 
     const parse_intrinsics = [_][]const u8{
-        "Builtin.Str.ParseTagUnionSpec.parse",
-        "Builtin.Str.FieldName.FieldNames.rename_fields",
-        "Builtin.Str.FieldName.FieldNames.shortest_name",
-        "Builtin.Str.FieldName.FieldNames.longest_name",
-        "Builtin.Str.FieldName.FieldNames.iter",
-        "Builtin.Str.FieldName.FieldNames.for_size",
-        "Builtin.Str.FieldName.name",
+        "Builtin.Encoding.ParseTagUnionSpec.parse",
+        "Builtin.Encoding.FieldName.FieldNames.rename_fields",
+        "Builtin.Encoding.FieldName.FieldNames.shortest_name",
+        "Builtin.Encoding.FieldName.FieldNames.longest_name",
+        "Builtin.Encoding.FieldName.FieldNames.iter",
+        "Builtin.Encoding.FieldName.FieldNames.for_size",
+        "Builtin.Encoding.FieldName.name",
     };
     for (parse_intrinsics) |name| {
         if (env.common.findIdent(name)) |intrinsic| {
@@ -321,6 +321,24 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ .name = "Builtin.Hasher.write_str", .op = .hasher_write_str },
     };
     for (hasher_primitives) |primitive| {
+        if (env.common.findIdent(primitive.name)) |ident| {
+            try low_level_map.put(ident, primitive.op);
+        }
+    }
+    const crypto_primitives = [_]struct {
+        name: []const u8,
+        op: CIR.Expr.LowLevel,
+    }{
+        .{ .name = "crypto_sha256_hash_bytes", .op = .crypto_sha256_hash_bytes },
+        .{ .name = "crypto_sha256_hasher_empty", .op = .crypto_sha256_hasher_empty },
+        .{ .name = "crypto_sha256_hasher_write", .op = .crypto_sha256_hasher_write },
+        .{ .name = "crypto_sha256_hasher_finish", .op = .crypto_sha256_hasher_finish },
+        .{ .name = "crypto_blake3_hash_bytes", .op = .crypto_blake3_hash_bytes },
+        .{ .name = "crypto_blake3_hasher_empty", .op = .crypto_blake3_hasher_empty },
+        .{ .name = "crypto_blake3_hasher_write", .op = .crypto_blake3_hasher_write },
+        .{ .name = "crypto_blake3_hasher_finish", .op = .crypto_blake3_hasher_finish },
+    };
+    for (crypto_primitives) |primitive| {
         if (env.common.findIdent(primitive.name)) |ident| {
             try low_level_map.put(ident, primitive.op);
         }

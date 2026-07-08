@@ -3,7 +3,7 @@ app [main!] { pf: platform "./platform/main.roc" }
 import pf.Stdout
 
 # Test that primitive types have encode methods for static dispatch encoding.
-# This matches the pattern established for Str.encode and List.encode.
+# This matches the pattern established for Str.encode.
 
 # Define a simple format type that converts to UTF-8 bytes.
 # This format type provides encode methods for various types.

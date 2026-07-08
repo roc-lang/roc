@@ -1,8 +1,5 @@
 on:
-  workflow_call:
   workflow_dispatch:
-  # temporary for testing
-  # pull_request:
 
 name: Zig Interpreter Benchmarks
 
@@ -18,7 +15,6 @@ jobs:
       ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
     steps:
       # === MAIN BRANCH BUILD ===
-      # TEMPORARY: Using PR branch for both to test CI workflow - revert to ref: "main" after testing
       - name: Checkout main branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
         with:

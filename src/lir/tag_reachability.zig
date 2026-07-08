@@ -6,11 +6,13 @@
 //! not need ownership repair.
 
 const std = @import("std");
+const collections = @import("collections");
 const core = @import("lir_core");
 
 const LIR = core.LIR;
 const LirProgram = core.Program;
 const LirStore = core.LirStore;
+const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
 
 /// Analyze possible tag values and bypass switches that cannot take some of
@@ -191,15 +193,15 @@ const Pass = struct {
 
     fn init(result: *LirProgram.Result) Allocator.Error!Pass {
         const allocator = result.store.allocator;
-        const local_info = try allocator.alloc(ValueInfo, result.store.locals.items.len);
+        const local_info = try allocator.alloc(ValueInfo, result.store.localCount());
         errdefer allocator.free(local_info);
         @memset(local_info, .{});
 
-        const proc_returns = try allocator.alloc(ValueInfo, result.store.proc_specs.items.len);
+        const proc_returns = try allocator.alloc(ValueInfo, result.store.procSpecCount());
         errdefer allocator.free(proc_returns);
         @memset(proc_returns, .{});
 
-        const use_counts = try allocator.alloc(u32, result.store.locals.items.len);
+        const use_counts = try allocator.alloc(u32, result.store.localCount());
         errdefer allocator.free(use_counts);
         @memset(use_counts, 0);
 
@@ -237,11 +239,14 @@ const Pass = struct {
     }
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
-        for (self.store.proc_specs.items, 0..) |proc, proc_index| {
+        for (0..self.store.procSpecCount()) |proc_index| {
+            const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
-            for (self.store.getLocalSpan(proc.args)) |arg| {
+            const args = self.store.getLocalSpan(proc.args);
+            for (0..args.len) |index| {
+                const arg = GuardedList.at(args, index);
                 _ = self.local_info[@intFromEnum(arg)].markAll(self.allocator);
             }
         }
@@ -251,7 +256,8 @@ const Pass = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (self.store.proc_specs.items, 0..) |proc, proc_index| {
+            for (0..self.store.procSpecCount()) |proc_index| {
+                const proc = self.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
                 const body = proc.body orelse continue;
                 if (try self.analyzeProc(@enumFromInt(@as(u32, @intCast(proc_index))), body)) {
                     changed = true;
@@ -318,7 +324,9 @@ const Pass = struct {
             },
             .assign_struct => |s| {
                 const target = self.localInfoMut(s.target);
-                for (self.store.getLocalSpan(s.fields), 0..) |field, index| {
+                const fields = self.store.getLocalSpan(s.fields);
+                for (0..fields.len) |index| {
+                    const field = GuardedList.at(fields, index);
                     const source = self.localInfo(field);
                     if (try target.mergeFieldTags(self.allocator, @intCast(index), &source.tags)) changed = true;
                 }
@@ -354,7 +362,8 @@ const Pass = struct {
             .decref_if_initialized => |s| try self.pushStmt(s.next),
             .free => |s| try self.pushStmt(s.next),
             .switch_stmt => |s| {
-                for (self.store.getCFSwitchBranches(s.branches)) |branch| try self.pushStmt(branch.body);
+                const branches = self.store.getCFSwitchBranches(s.branches);
+                for (0..branches.len) |index| try self.pushStmt(GuardedList.at(branches, index).body);
                 try self.pushStmt(s.default_branch);
                 if (s.continuation) |continuation| try self.pushStmt(continuation);
             },
@@ -367,7 +376,8 @@ const Pass = struct {
                 try self.pushStmt(s.on_miss);
             },
             .str_match_set => |s| {
-                for (self.store.getStrMatchArms(s.arms)) |arm| try self.pushStmt(arm.on_match);
+                const arms = self.store.getStrMatchArms(s.arms);
+                for (0..arms.len) |index| try self.pushStmt(GuardedList.at(arms, index).on_match);
                 try self.pushStmt(s.on_miss);
             },
             .join => |s| {
@@ -424,7 +434,8 @@ const Pass = struct {
 
     fn collectUseCounts(self: *Pass) Allocator.Error!void {
         @memset(self.use_counts, 0);
-        for (self.store.cf_stmts.items) |stmt| {
+        for (0..self.store.cfStmtCount()) |stmt_index| {
+            const stmt = self.store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
             try self.countStmtUses(stmt);
         }
     }
@@ -444,16 +455,19 @@ const Pass = struct {
             },
             .assign_call => |s| {
                 if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
-                for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
             .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
             .assign_boxy_desc_ref => |s| {
                 if (s.desc.localOrNull()) |local| self.noteUse(local);
-                for (self.store.getLocalSpan(s.captures)) |local| self.noteUse(local);
+                const captures = self.store.getLocalSpan(s.captures);
+                for (0..captures.len) |index| self.noteUse(GuardedList.at(captures, index));
             },
             .assign_boxy_dict_ref => |s| {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
@@ -496,12 +510,23 @@ const Pass = struct {
             },
             .assign_call_dict => |s| {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
-                for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg);
-                for (self.store.getLocalSpan(s.hidden_args)) |arg| self.noteUse(arg);
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
+                const hidden_args = self.store.getLocalSpan(s.hidden_args);
+                for (0..hidden_args.len) |index| self.noteUse(GuardedList.at(hidden_args, index));
             },
-            .assign_low_level => |s| for (self.store.getLocalSpan(s.args)) |arg| self.noteUse(arg),
-            .assign_list => |s| for (self.store.getLocalSpan(s.elems)) |elem| self.noteUse(elem),
-            .assign_struct => |s| for (self.store.getLocalSpan(s.fields)) |field| self.noteUse(field),
+            .assign_low_level => |s| {
+                const args = self.store.getLocalSpan(s.args);
+                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
+            },
+            .assign_list => |s| {
+                const elems = self.store.getLocalSpan(s.elems);
+                for (0..elems.len) |index| self.noteUse(GuardedList.at(elems, index));
+            },
+            .assign_struct => |s| {
+                const fields = self.store.getLocalSpan(s.fields);
+                for (0..fields.len) |index| self.noteUse(GuardedList.at(fields, index));
+            },
             .assign_tag => |s| {
                 if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
                 if (s.payload) |payload| self.noteUse(payload);
@@ -541,7 +566,7 @@ const Pass = struct {
 
     fn rewriteSwitches(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
-        while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
+        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
             const switch_stmt = switch (stmt) {
@@ -559,7 +584,8 @@ const Pass = struct {
             const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
             var kept = std.ArrayList(LIR.CFSwitchBranch).empty;
             defer kept.deinit(self.allocator);
-            for (branches) |branch| {
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
                 if (branch.value > std.math.maxInt(u16)) continue;
                 if (tags.contains(@intCast(branch.value))) {
                     try kept.append(self.allocator, branch);
@@ -580,7 +606,9 @@ const Pass = struct {
     }
 
     fn targetForDiscriminant(self: *Pass, switch_stmt: anytype, value: u16) LIR.CFStmtId {
-        for (self.store.getCFSwitchBranches(switch_stmt.branches)) |branch| {
+        const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
+        for (0..branches.len) |index| {
+            const branch = GuardedList.at(branches, index);
             if (branch.value == value) return branch.body;
         }
         return switch_stmt.default_branch;
@@ -588,7 +616,7 @@ const Pass = struct {
 
     fn removeDeadDiscriminantReads(self: *Pass) Allocator.Error!void {
         var stmt_index: usize = 0;
-        while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
+        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmt(stmt_id);
             const assign = switch (stmt) {
@@ -613,15 +641,18 @@ const Pass = struct {
     fn patchRedirects(self: *Pass) Allocator.Error!void {
         if (self.redirects.count() == 0) return;
 
-        for (self.store.proc_specs.items) |*proc| {
+        for (0..self.store.procSpecCount()) |proc_index| {
+            const proc = self.store.getProcSpecPtr(@enumFromInt(@as(u32, @intCast(proc_index))));
             if (proc.body) |body| proc.body = self.resolveRedirect(body);
-            for (self.store.getJoinPointSpanMut(proc.join_points)) |*join_point| {
+            const join_points = self.store.getJoinPointSpanMut(proc.join_points);
+            for (0..join_points.len) |index| {
+                const join_point = GuardedList.atPtr(join_points, index);
                 join_point.body = self.resolveRedirect(join_point.body);
             }
         }
 
         var stmt_index: usize = 0;
-        while (stmt_index < self.store.cf_stmts.items.len) : (stmt_index += 1) {
+        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
             const stmt = self.store.getCFStmtPtr(stmt_id);
             switch (stmt.*) {
@@ -659,7 +690,9 @@ const Pass = struct {
                 .decref_if_initialized => |*s| s.next = self.resolveRedirect(s.next),
                 .free => |*s| s.next = self.resolveRedirect(s.next),
                 .switch_stmt => |*s| {
-                    for (self.store.getCFSwitchBranchesMut(s.branches)) |*branch| {
+                    const branches = self.store.getCFSwitchBranchesMut(s.branches);
+                    for (0..branches.len) |index| {
+                        const branch = GuardedList.atPtr(branches, index);
                         branch.body = self.resolveRedirect(branch.body);
                     }
                     s.default_branch = self.resolveRedirect(s.default_branch);
@@ -677,7 +710,9 @@ const Pass = struct {
                     const arms = self.store.getStrMatchArms(s.arms);
                     const rewritten = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
                     defer self.allocator.free(rewritten);
-                    for (arms, rewritten) |arm, *out| {
+                    for (0..arms.len) |index| {
+                        const arm = GuardedList.at(arms, index);
+                        const out = &rewritten[index];
                         out.* = arm;
                         out.on_match = self.resolveRedirect(arm.on_match);
                     }
@@ -1008,7 +1043,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
     const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 1), branches.len);
-    try testing.expectEqual(@as(u64, 0), branches[0].value);
+    try testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 }
 
 test "tag reachability keeps unrelated live discriminant reads" {

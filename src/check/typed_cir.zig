@@ -220,9 +220,13 @@ pub const Modules = struct {
 /// whole `Modules` graph) by the builtin and cache-hit load paths, which only need
 /// the env prepared.
 pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!void {
+    if (env.runtime_prepared) return;
+
     try env.getIdentStore().enableRuntimeInserts(allocator);
+    try env.module_identities.enableRuntimeInserts(allocator);
     try ensureModuleNameIdents(env);
     env.finalizeMethodTables();
+    env.runtime_prepared = true;
 }
 
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {

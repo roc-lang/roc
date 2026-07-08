@@ -14,6 +14,7 @@ pub const BUILTIN_TYPES = [_][]const u8{
     "Dict",
     "Set",
     "Box",
+    "Crypto",
     // Boolean and control flow
     "Bool",
     "Try",
@@ -63,6 +64,7 @@ test "isBuiltinType recognizes collection types" {
     try std.testing.expect(isBuiltinType("Dict"));
     try std.testing.expect(isBuiltinType("Set"));
     try std.testing.expect(isBuiltinType("Box"));
+    try std.testing.expect(isBuiltinType("Crypto"));
 }
 
 test "isBuiltinType recognizes boolean and control flow types" {
@@ -107,6 +109,6 @@ test "isBuiltinType rejects non-builtin types" {
 }
 
 test "BUILTIN_TYPES has expected count" {
-    // 5 collection types + 2 bool/control + 5 unsigned + 5 signed + 2 float + 2 decimal/num = 21
-    try std.testing.expectEqual(@as(usize, 21), BUILTIN_TYPES.len);
+    // 6 collection/namespace types + 2 bool/control + 5 unsigned + 5 signed + 2 float + 2 decimal/num = 22
+    try std.testing.expectEqual(@as(usize, 22), BUILTIN_TYPES.len);
 }

@@ -73,10 +73,12 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
 const EffectfulTopLevel = problem_mod.EffectfulTopLevel;
 const EffectfulExpect = problem_mod.EffectfulExpect;
+const EffectfulFunctionName = problem_mod.EffectfulFunctionName;
 
 // Comptime errors
 const ComptimeCrash = problem_mod.ComptimeCrash;
@@ -104,6 +106,14 @@ fn pluralize(count: anytype, singular: []const u8, plural: []const u8) []const u
 
 // reporting //
 
+/// Platform source used to render the platform-side region of
+/// platform-requirement diagnostics: the platform's checked env and its
+/// user-facing filename, always supplied together.
+pub const PlatformRequirementSource = struct {
+    env: *const ModuleEnv,
+    filename: []const u8,
+};
+
 /// Build reports for problems
 pub const ReportBuilder = struct {
     const Self = @This();
@@ -117,6 +127,7 @@ pub const ReportBuilder = struct {
     source: []const u8,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
+    platform_requirement_source: ?PlatformRequirementSource,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
     /// The checker's full region list, which includes regions for type variables
     /// created during type checking that don't have corresponding CIR nodes.
@@ -141,6 +152,7 @@ pub const ReportBuilder = struct {
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
         checker_regions: *const Region.List,
+        platform_requirement_source: ?PlatformRequirementSource,
     ) Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -154,6 +166,7 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .platform_requirement_source = platform_requirement_source,
             .diff_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 8),
             .diff_tags = try SnapshotTagSafeList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
@@ -204,6 +217,30 @@ pub const ReportBuilder = struct {
             self.filename,
             self.source,
             self.module_env.getLineStarts(),
+        );
+    }
+
+    /// Add source code warning highlighting for a region.
+    fn addSourceWarningRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
+        const region_info = self.module_env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .warning_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+    }
+
+    fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
+        const source = self.platform_requirement_source orelse return;
+        const region_info = source.env.calcRegionInfo(region);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            source.filename,
+            source.env.common.source,
+            source.env.getLineStarts(),
         );
     }
 
@@ -790,15 +827,22 @@ pub const ReportBuilder = struct {
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
-                    .platform_requirement => return try self.makeMismatchReport(
-                        ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                        &.{D.bytes("This expression is used in an unexpected way.")},
-                        &.{D.bytes("It has the type:")},
-                        mismatch.types.actual_snapshot,
-                        &.{D.bytes("But the platform says it should be:")},
-                        mismatch.types.expected_snapshot,
-                        &.{},
-                    ),
+                    .platform_requirement => |ctx| {
+                        var report = try self.makeMismatchReport(
+                            ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(" to have a specific type.") },
+                            &.{D.bytes("Here it has the type:")},
+                            mismatch.types.actual_snapshot,
+                            &.{D.bytes("But the platform requires:")},
+                            mismatch.types.expected_snapshot,
+                            &.{},
+                        );
+                        try report.document.addLineBreak();
+                        try report.document.addText("The requirement is declared here:");
+                        try report.document.addLineBreak();
+                        try self.addPlatformRequirementSourceHighlight(&report, ctx.platform_region);
+                        return report;
+                    },
                     .type_annotation => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way.")},
@@ -854,11 +898,17 @@ pub const ReportBuilder = struct {
             .effectful_expect => |data| {
                 return self.buildEffectfulExpectReport(data);
             },
+            .effectful_function_name => |data| {
+                return self.buildEffectfulFunctionNameReport(data);
+            },
             .annotation_only_value => |data| {
                 return self.buildAnnotationOnlyValueReport(data);
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
+            },
+            .host_boundary_open_row => |data| {
+                return self.buildHostBoundaryOpenRowReport(data);
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
@@ -3413,31 +3463,33 @@ pub const ReportBuilder = struct {
         try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
-            D.bytes("module to define a type alias named"),
+            D.bytes("module to define a type named"),
             D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
         }, self, &report, &report.headline);
 
+        try self.addSourceHighlightRegion(&report, data.app_region);
+        try report.document.addLineBreak();
+        try self.addPlatformRequirementSourceHighlight(&report, data.platform_region);
+        try report.document.addLineBreak();
+
         switch (data.ctx) {
             .not_found => {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("Add a type alias definition for"),
+                    D.bytes("Add a type alias or nominal type named"),
                     D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
-                    D.bytes("to your app module. Check your platform's documentation for the expected type."),
+                    D.bytes("to your app module."),
                 }, self, &report);
             },
-            .found_but_not_alias => {
+            .found_but_not_type => {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("You have a definition named"),
+                    D.bytes("You have a value named"),
                     D.ident(data.expected_alias_ident).withAnnotation(.type_variable),
                     D.bytes(",").withNoPrecedingSpace(),
-                    D.bytes("but it's not a type alias. The platform requires a type alias (defined with"),
-                    D.bytes(":").withAnnotation(.inline_code).withNoPrecedingSpace(),
-                    D.bytes("),").withNoPrecedingSpace(),
-                    D.bytes("not a value definition."),
+                    D.bytes("but this platform requirement needs a type declaration with that name."),
                 }, self, &report);
             },
         }
@@ -3510,19 +3562,24 @@ pub const ReportBuilder = struct {
         try D.renderSliceInto(&.{
             D.bytes("The platform expects your"),
             D.bytes("app").withAnnotation(.inline_code),
-            D.bytes("module to export a definition named"),
+            D.bytes("module to expose a definition named"),
             D.ident(data.expected_def_ident).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("but I couldn't find one."),
         }, self, &report, &report.headline);
 
+        try self.addSourceHighlightRegion(&report, data.app_region);
+        try report.document.addLineBreak();
+        try self.addPlatformRequirementSourceHighlight(&report, data.platform_region);
+        try report.document.addLineBreak();
+
         switch (data.ctx) {
             .not_found => {
                 try D.renderSlice(&.{
                     D.bytes("Hint:").withAnnotation(.emphasized),
-                    D.bytes("Define and export"),
+                    D.bytes("Define and expose"),
                     D.ident(data.expected_def_ident).withAnnotation(.inline_code),
-                    D.bytes("in your app module. Check your platform's documentation for the expected type signature."),
+                    D.bytes("in your app header."),
                 }, self, &report);
             },
             .found_but_not_exported => {
@@ -3531,9 +3588,9 @@ pub const ReportBuilder = struct {
                     D.bytes("You have a definition named"),
                     D.ident(data.expected_def_ident).withAnnotation(.inline_code),
                     D.bytes(",").withNoPrecedingSpace(),
-                    D.bytes("but it's not exported. Add it to your module's"),
-                    D.bytes("exposes").withAnnotation(.inline_code),
-                    D.bytes("list in the module header."),
+                    D.bytes("but it is not listed in your"),
+                    D.bytes("app").withAnnotation(.inline_code),
+                    D.bytes("header. Add it there so the platform can use it."),
                 }, self, &report);
             },
         }
@@ -3553,6 +3610,20 @@ pub const ReportBuilder = struct {
             D.bytes("Wrap function types in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("when crossing the host boundary."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildHostBoundaryOpenRowReport(self: *Self, data: HostBoundaryOpenRow) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Host Boundary Requires Closed Rows", "Host-bound types cannot contain open record or tag-union rows.", .runtime_error);
+        errdefer report.deinit();
+
+        try self.addSourceHighlightRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Close every record and tag-union row in this type before it crosses the host boundary."),
         }, self, &report);
         return report;
     }
@@ -3581,6 +3652,22 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try D.renderSlice(&.{
             D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
+        }, self, &report);
+        return report;
+    }
+
+    fn buildEffectfulFunctionNameReport(self: *Self, data: EffectfulFunctionName) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Effectful Function Name", "This function performs an effect, so its name must end in `!`.", .warning);
+        errdefer report.deinit();
+
+        try self.addSourceWarningRegion(&report, data.region);
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("Add a trailing"),
+            D.bytes("!").withAnnotation(.inline_code),
+            D.bytes("to this function name."),
         }, self, &report);
         return report;
     }

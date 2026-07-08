@@ -61,6 +61,7 @@ const TestEnv = struct {
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, try gpa.dupe(u8, ""));
         try module_env.initCIRFields("Test");
+        try module_env.ensureContentIdentity(&.{});
         return .{
             .module_env = module_env,
             .snapshots = try snapshot_mod.Store.initCapacity(gpa, 16),
@@ -87,7 +88,7 @@ const TestEnv = struct {
         const env = unify_mod.Env{
             .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
-            .qualified_module_ident = self.module_env.qualified_module_ident,
+            .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
             .problems = &self.problems,
             .snapshots = &self.snapshots,
@@ -103,7 +104,7 @@ const TestEnv = struct {
         const env = unify_mod.Env{
             .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
-            .qualified_module_ident = self.module_env.qualified_module_ident,
+            .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
             .problems = &self.problems,
             .snapshots = &self.snapshots,
@@ -153,8 +154,8 @@ const TestEnv = struct {
     // helpers - alias //
 
     fn mkAlias(self: *Self, name: []const u8, backing_var: Var, args: []const Var) std.mem.Allocator.Error!Content {
-        const module_ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text("MyModule"));
-        return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_ident_idx);
+        const module_identity = try self.module_env.internModuleIdentity(&([_]u8{0x22} ** 32), Ident.Idx.NONE);
+        return try self.module_env.types.mkAlias(try self.mkTypeIdent(name), backing_var, args, module_identity);
     }
 
     // helpers - structure - tuple //
@@ -171,7 +172,7 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            self.module_env.qualified_module_ident, // Use qualified module ident for proper canLiftInner check
+            self.module_env.selfModuleIdentity(), // Use this module's identity for proper canLiftInner check
             false, // Use nominal for tests
         );
     }
@@ -181,7 +182,7 @@ const TestEnv = struct {
             try self.mkTypeIdent(name),
             backing_var,
             args,
-            self.module_env.qualified_module_ident, // Use qualified module ident for proper canLiftInner check
+            self.module_env.selfModuleIdentity(), // Use this module's identity for proper canLiftInner check
             true, // Opaque type
         );
     }
@@ -424,7 +425,7 @@ test "unify - alias with concrete" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - alias with concrete other way" {
@@ -456,7 +457,7 @@ test "unify - alias with concrete other way" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, b);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - alias with own backing structure" {
@@ -483,7 +484,7 @@ test "unify - alias with own backing structure" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - own backing structure with alias" {
@@ -510,7 +511,7 @@ test "unify - own backing structure with alias" {
     try std.testing.expect(resolved_alias.var_ != resolved_backing.var_);
 
     const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, alias_var);
-    try std.testing.expectEqual(.not_recursive, occurs_result);
+    try std.testing.expectEqual(.valid, occurs_result);
 }
 
 test "unify - alias (flex backing) with rigid" {
@@ -910,9 +911,9 @@ test "unify - distinct concrete builtin numeric nominals never unify" {
     // empty tag union backing and a present source decl (see
     // `mkNumberTypeContent` in src/check/Check.zig). Mirror that shape for
     // U8 and I64 with distinct source decls.
-    const origin_module = try env.module_env.getIdentStore().insert(
-        env.module_env.gpa,
-        Ident.for_text("Builtin"),
+    const origin_module = try env.module_env.internModuleIdentity(
+        &([_]u8{0x33} ** 32),
+        Ident.Idx.NONE,
     );
 
     const u8_backing = try env.module_env.types.freshFromContent(Content{ .structure = .empty_tag_union });
@@ -1048,7 +1049,7 @@ test "partitionFields - same record" {
 
     const result = try unify_mod.partitionFields(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1084,7 +1085,7 @@ test "partitionFields - disjoint fields" {
 
     const result = try unify_mod.partitionFields(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1121,7 +1122,7 @@ test "partitionFields - overlapping fields" {
 
     const result = try unify_mod.partitionFields(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1161,7 +1162,7 @@ test "partitionFields - reordering is normalized" {
 
     const result = try unify_mod.partitionFields(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1328,7 +1329,7 @@ test "partitionTags - same tags" {
 
     const result = try unify_mod.partitionTags(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1364,7 +1365,7 @@ test "partitionTags - disjoint fields" {
 
     const result = try unify_mod.partitionTags(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1401,7 +1402,7 @@ test "partitionTags - overlapping tags" {
 
     const result = try unify_mod.partitionTags(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1441,7 +1442,7 @@ test "partitionTags - reordering is normalized" {
 
     const result = try unify_mod.partitionTags(
         env.module_env.getIdentStoreConst(),
-        env.module_env.qualified_module_ident,
+        env.module_env.selfModuleIdentity(),
         &env.module_env.types,
         &env.scratch,
         &env.occurs_scratch,
@@ -1697,6 +1698,24 @@ test "unify - succeeds on nominal, tag union recursion" {
 
     const result_tag_union = try env.unify(a_backing, b_backing);
     try std.testing.expectEqual(.ok, result_tag_union);
+}
+
+test "unify - deeply nested tuples do not depend on native call stack" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const depth = 128;
+    var a = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+    var b = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
+
+    for (0..depth) |_| {
+        a = try env.module_env.types.freshFromContent(try env.mkTuple(&.{a}));
+        b = try env.module_env.types.freshFromContent(try env.mkTuple(&.{b}));
+    }
+
+    const result = try env.unify(a, b);
+    try std.testing.expectEqual(.ok, result);
 }
 
 // static dispatch constraints //
@@ -2087,4 +2106,173 @@ test "unify order - deferred constraint origin var depends on operand order" {
     };
     // The constraint lands on a different surviving root depending on order.
     try std.testing.expect((try Helper.run(true)) != (try Helper.run(false)));
+}
+
+// content-based nominal identity //
+
+const copy_import = @import("../copy_import.zig");
+
+/// Build a standalone "declaring module" env whose content identity is
+/// finalized from (module_name, source, no imports), holding one nominal
+/// type declaration-shaped var: `Value := {}` with a present source decl.
+const DeclaringModule = struct {
+    env: *ModuleEnv,
+    owned_source: []u8,
+
+    fn init(gpa: std.mem.Allocator, module_name: []const u8, source: []const u8) std.mem.Allocator.Error!DeclaringModule {
+        const owned_source = try gpa.dupe(u8, source);
+        errdefer gpa.free(owned_source);
+        const env = try gpa.create(ModuleEnv);
+        env.* = try ModuleEnv.init(gpa, owned_source);
+        try env.initCIRFields(module_name);
+        try env.ensureContentIdentity(&.{});
+        return .{ .env = env, .owned_source = owned_source };
+    }
+
+    fn deinit(self: *DeclaringModule) void {
+        const gpa = self.env.gpa;
+        self.env.deinit();
+        gpa.destroy(self.env);
+        gpa.free(self.owned_source);
+    }
+
+    /// A nominal type var as its declaring module would produce it.
+    fn mkNominalVar(self: *DeclaringModule, type_name: []const u8, source_decl: u32) std.mem.Allocator.Error!Var {
+        const ident = try self.env.insertIdent(Ident.for_text(type_name));
+        const backing = try self.env.types.freshFromContent(Content{ .structure = .empty_record });
+        const content = try self.env.types.mkNominalWithSourceDecl(
+            .{ .ident_idx = ident },
+            backing,
+            &.{},
+            self.env.selfModuleIdentity(),
+            source_decl,
+            false,
+        );
+        return try self.env.types.freshFromContent(content);
+    }
+};
+
+fn copyIntoConsumer(consumer: *TestEnv, source: *DeclaringModule, var_: Var) std.mem.Allocator.Error!Var {
+    var var_mapping = std.AutoHashMap(Var, Var).init(consumer.module_env.gpa);
+    defer var_mapping.deinit();
+    return try copy_import.copyVar(
+        &source.env.types,
+        &consumer.module_env.types,
+        var_,
+        &var_mapping,
+        source.env,
+        consumer.module_env,
+        consumer.module_env.gpa,
+    );
+}
+
+test "content identity: same module content reached as two envs unifies (two URLs / mirrors / vendored copies)" {
+    const gpa = std.testing.allocator;
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    // The same package content fetched twice (e.g. via two different URLs)
+    // loads as two distinct envs with byte-identical name + source.
+    var json_a = try DeclaringModule.init(gpa, "Json", "Value := {}");
+    defer json_a.deinit();
+    var json_b = try DeclaringModule.init(gpa, "Json", "Value := {}");
+    defer json_b.deinit();
+
+    const from_a = try copyIntoConsumer(&consumer, &json_a, try json_a.mkNominalVar("Value", 7));
+    const from_b = try copyIntoConsumer(&consumer, &json_b, try json_b.mkNominalVar("Value", 7));
+
+    const result = try consumer.unify(from_a, from_b);
+    try std.testing.expectEqual(.ok, result);
+}
+
+test "content identity: changed module content does not unify (version coexistence)" {
+    const gpa = std.testing.allocator;
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    // Two majors of a package coexist in one build: the changed module's
+    // types must stay distinct even though every name matches.
+    var json_v1 = try DeclaringModule.init(gpa, "Json", "Value := {}");
+    defer json_v1.deinit();
+    var json_v2 = try DeclaringModule.init(gpa, "Json", "Value := {}\nextra = 1");
+    defer json_v2.deinit();
+
+    const from_v1 = try copyIntoConsumer(&consumer, &json_v1, try json_v1.mkNominalVar("Value", 7));
+    const from_v2 = try copyIntoConsumer(&consumer, &json_v2, try json_v2.mkNominalVar("Value", 7));
+
+    const result = try consumer.unify(from_v1, from_v2);
+    try std.testing.expect(result.isProblem());
+}
+
+test "content identity: module name participates in identity" {
+    const gpa = std.testing.allocator;
+    var consumer = try TestEnv.init(gpa);
+    defer consumer.deinit();
+
+    // A type module's main type takes its name from the module's file name,
+    // so source bytes alone underdetermine meaning (design.md Cache Boundary).
+    var json = try DeclaringModule.init(gpa, "Json", "Value := {}");
+    defer json.deinit();
+    var toml = try DeclaringModule.init(gpa, "Toml", "Value := {}");
+    defer toml.deinit();
+
+    const from_json = try copyIntoConsumer(&consumer, &json, try json.mkNominalVar("Value", 7));
+    const from_toml = try copyIntoConsumer(&consumer, &toml, try toml.mkNominalVar("Value", 7));
+
+    const result = try consumer.unify(from_json, from_toml);
+    try std.testing.expect(result.isProblem());
+}
+
+test "content identity: declaration reordering changes no identity except via the module's own source hash" {
+    const gpa = std.testing.allocator;
+
+    // Reordering declarations changes the module's source bytes, hence its
+    // deep hash — and nothing else: an unrelated module's identity is
+    // untouched, and the reordered module's identity changes wholesale.
+    var ordered = try DeclaringModule.init(gpa, "M", "A := {}\nB := {}");
+    defer ordered.deinit();
+    var reordered = try DeclaringModule.init(gpa, "M", "B := {}\nA := {}");
+    defer reordered.deinit();
+    var unrelated_1 = try DeclaringModule.init(gpa, "Other", "C := {}");
+    defer unrelated_1.deinit();
+    var unrelated_2 = try DeclaringModule.init(gpa, "Other", "C := {}");
+    defer unrelated_2.deinit();
+
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        ordered.env.contentIdentityHash().?,
+        reordered.env.contentIdentityHash().?,
+    ));
+    try std.testing.expectEqualSlices(
+        u8,
+        unrelated_1.env.contentIdentityHash().?,
+        unrelated_2.env.contentIdentityHash().?,
+    );
+}
+
+test "content identity: deep hash covers transitive imports (byte-identical modules over different deps stay distinct)" {
+    const gpa = std.testing.allocator;
+
+    var dep_v1 = try DeclaringModule.init(gpa, "Dep", "X := {}");
+    defer dep_v1.deinit();
+    var dep_v2 = try DeclaringModule.init(gpa, "Dep", "X := {}\nchanged = 1");
+    defer dep_v2.deinit();
+
+    // Two byte-identical modules whose transitive dependencies differ must
+    // not share identity: their field layouts could differ.
+    var over_v1 = try DeclaringModule.init(gpa, "Api", "T := { x : Dep.X }");
+    defer over_v1.deinit();
+    over_v1.env.self_module_identity = base.ModuleIdentity.Idx.NONE;
+    try over_v1.env.ensureContentIdentity(&.{@as(*const ModuleEnv, dep_v1.env)});
+
+    var over_v2 = try DeclaringModule.init(gpa, "Api", "T := { x : Dep.X }");
+    defer over_v2.deinit();
+    over_v2.env.self_module_identity = base.ModuleIdentity.Idx.NONE;
+    try over_v2.env.ensureContentIdentity(&.{@as(*const ModuleEnv, dep_v2.env)});
+
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        over_v1.env.contentIdentityHash().?,
+        over_v2.env.contentIdentityHash().?,
+    ));
 }

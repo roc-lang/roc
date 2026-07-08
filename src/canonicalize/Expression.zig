@@ -437,10 +437,10 @@ pub const Expr = union(enum) {
     /// Runtime error expression that crashes when executed.
     /// These are inserted during canonicalization when the compiler encounters
     /// semantic errors but continues compilation following the "inform don't block" philosophy.
-    /// Common causes include undefined variables, type mismatches, and invalid operations.
+    /// Common causes include names not in scope, type mismatches, and invalid operations.
     ///
     /// ```roc
-    /// # This generates e_runtime_error for undefined variable 'x'
+    /// # This generates e_runtime_error for name 'x' not being in scope
     /// y = x + 1
     ///
     /// # This generates e_runtime_error for type mismatch

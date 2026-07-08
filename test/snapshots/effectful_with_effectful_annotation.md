@@ -16,19 +16,19 @@ print_msg! = |msg| Stdout.line!(msg)
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - effectful_with_effectful_annotation.md:7:20:7:32
+NAME NOT IN SCOPE - effectful_with_effectful_annotation.md:7:20:7:32
 EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  print_msg! = |msg| Stdout.line!(msg)                                      │
  │                     ‾‾‾‾‾‾‾‾‾‾‾‾                                           │
  └─────────────────────────────── effectful_with_effectful_annotation.md:7:20 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌───────────────────────────┐
@@ -107,7 +107,7 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 55)
+		(e-call (constraint-fn-var 68)
 			(e-lookup-local
 				(p-assign (ident "print_msg!")))
 			(e-string

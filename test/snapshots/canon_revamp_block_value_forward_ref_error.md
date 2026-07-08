@@ -11,19 +11,19 @@ x = {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
+NAME NOT IN SCOPE - canon_revamp_block_value_forward_ref_error.md:2:5:2:6
 UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `y` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `y` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  y + 1                                                                     │
  │  ‾                                                                         │
  └───────────────────────── canon_revamp_block_value_forward_ref_error.md:2:5 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -75,7 +75,7 @@ x = {
 		(p-assign (ident "x"))
 		(e-block
 			(s-expr
-				(e-dispatch-call (method "plus") (constraint-fn-var 52)
+				(e-dispatch-call (method "plus") (constraint-fn-var 55)
 					(receiver
 						(e-runtime-error (tag "ident_not_in_scope")))
 					(args

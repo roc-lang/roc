@@ -34,16 +34,16 @@ validateAuth = |creds| HttpAuth.validate(creds)
 MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
 MODULE NOT FOUND - can_import_nested_modules.md:10:36:10:42
-UNDEFINED VARIABLE - can_import_nested_modules.md:11:29:11:43
+NAME NOT IN SCOPE - can_import_nested_modules.md:11:29:11:43
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
 MODULE NOT IMPORTED - can_import_nested_modules.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
-UNDEFINED VARIABLE - can_import_nested_modules.md:20:23:20:30
+NAME NOT IN SCOPE - can_import_nested_modules.md:20:23:20:30
 DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
 MODULE NOT FOUND - can_import_nested_modules.md:23:24:23:36
 MODULE NOT FOUND - can_import_nested_modules.md:23:52:23:58
 MODULE NOT FOUND - can_import_nested_modules.md:23:68:23:74
-UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
+NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
 # PROBLEMS
 
 ┌─────────────────────┐
@@ -76,15 +76,15 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `login` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `login` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  authenticate = |user, pass| HttpAuth.login(user, pass)                    │
  │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
  └──────────────────────────────────────── can_import_nested_modules.md:11:29 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────────┐
@@ -117,15 +117,15 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `padLeft` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `padLeft` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
  │                        ‾‾‾‾‾‾‾                                             │
  └──────────────────────────────────────── can_import_nested_modules.md:20:23 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌────────────────┐
@@ -168,15 +168,15 @@ UNDEFINED VARIABLE - can_import_nested_modules.md:24:24:24:41
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `validate` in this scope. ───────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `validate` in this scope. ────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  validateAuth = |creds| HttpAuth.validate(creds)                           │
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └──────────────────────────────────────── can_import_nested_modules.md:24:24 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

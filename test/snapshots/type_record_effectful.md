@@ -17,18 +17,18 @@ printName = |person| {
 main! = |_| {}
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - type_record_effectful.md:7:5:7:17
+NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Stdout.line!(person.name)                                                 │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

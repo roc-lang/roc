@@ -432,42 +432,10 @@ pub fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
 }
 
-/// Destination stream for human-facing report output (summaries, timing
-/// tables, per-test lines).
-pub const ReportDest = enum { stdout, stderr };
-
-/// Print formatted report output to stdout.
-///
-/// Routine runner output belongs on stdout, not stderr. zig's build runner
-/// treats a child's stderr as diagnostic output and echoes it — together with
-/// a misleading "failed command" line — even when the process exits 0 (it
-/// optimistically records the command at spawn and only clears it on certain
-/// paths). A Run step created with `expectExitCode` captures stderr for this
-/// purpose. Keeping a passing run's output on stdout leaves stderr empty, so
-/// the build stays quiet on success; genuine failures still go to stderr and
-/// fail the step. Silently drops the line on a formatting/write error.
-pub fn printStdout(comptime fmt: []const u8, args: anytype) void {
-    var buf: [4096]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    writeAll(stdoutFd(), text);
-}
-
-fn reportPrint(dest: ReportDest, comptime fmt: []const u8, args: anytype) void {
-    switch (dest) {
-        .stdout => printStdout(fmt, args),
-        .stderr => std.debug.print(fmt, args),
-    }
-}
-
-/// Print a single timing statistics row to stderr.
+/// Print a single row of timing statistics, or dashes if no data is available.
 pub fn printStatsRow(label: []const u8, stats: ?TimingStats) void {
-    printStatsRowTo(.stderr, label, stats);
-}
-
-/// Like `printStatsRow`, but routes to the given destination stream.
-pub fn printStatsRowTo(dest: ReportDest, label: []const u8, stats: ?TimingStats) void {
     if (stats) |s| {
-        reportPrint(dest, "  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
+        std.debug.print("  {s:<8} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1} {d:>8.1}   {d:>3}\n", .{
             label,
             nsToMs(s.min),
             nsToMs(s.max),
@@ -483,15 +451,10 @@ pub fn printStatsRowTo(dest: ReportDest, label: []const u8, stats: ?TimingStats)
 
 /// Print the header row for timing statistics output.
 pub fn printStatsHeader() void {
-    printStatsHeaderTo(.stderr);
-}
-
-/// Like `printStatsHeader`, but routes to the given destination stream.
-pub fn printStatsHeaderTo(dest: ReportDest) void {
-    reportPrint(dest, "  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
+    std.debug.print("  {s:<8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8} {s:>8}   {s:>3}\n", .{
         "Phase", "Min", "Max", "Mean", "Median", "StdDev", "P95", "Total", "N",
     });
-    reportPrint(dest, "  {s:-<8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8}   {s:->3}\n", .{
+    std.debug.print("  {s:-<8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8} {s:->8}   {s:->3}\n", .{
         "", "", "", "", "", "", "", "", "",
     });
 }
@@ -499,19 +462,6 @@ pub fn printStatsHeaderTo(dest: ReportDest) void {
 /// Print the N slowest tests by duration. Caller provides a getName callback
 /// to extract the display name from the test spec.
 pub fn printSlowestN(
-    comptime Spec: type,
-    specs: []const Spec,
-    durations: []const u64,
-    n: usize,
-    gpa: Allocator,
-    comptime getName: fn (Spec) []const u8,
-) void {
-    printSlowestNTo(.stderr, Spec, specs, durations, n, gpa, getName);
-}
-
-/// Like `printSlowestN`, but routes to the given destination stream.
-pub fn printSlowestNTo(
-    dest: ReportDest,
     comptime Spec: type,
     specs: []const Spec,
     durations: []const u64,
@@ -538,10 +488,10 @@ pub fn printSlowestNTo(
 
     const show_count = @min(n, top_buf.items.len);
     if (show_count > 0) {
-        reportPrint(dest, "\n  Slowest {d} tests:\n", .{show_count});
+        std.debug.print("\n  Slowest {d} tests:\n", .{show_count});
         for (top_buf.items[0..show_count], 1..) |entry, rank| {
             const ms = nsToMs(entry.duration_ns);
-            reportPrint(dest, "    {d}. {s}  ({d:.1}ms)\n", .{ rank, getName(specs[entry.idx]), ms });
+            std.debug.print("    {d}. {s}  ({d:.1}ms)\n", .{ rank, getName(specs[entry.idx]), ms });
         }
     }
 }
@@ -952,6 +902,8 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         stabilizeResult: *const fn (Allocator, Result) Result,
         /// Extract test name from spec (for timeout messages).
         getName: *const fn (Spec) []const u8,
+        /// Override the parent watchdog and child-visible timeout for one spec.
+        getTimeoutMs: ?*const fn (Spec, u64) u64 = null,
         /// Use setsid() + kill(-pid) for process group cleanup.
         /// Enable when children spawn subprocesses (e.g., roc build).
         use_process_groups: bool = false,
@@ -979,11 +931,19 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             worker_index: usize,
             start_ns: u64,
             start_time_ms: i64,
+            timeout_ms: u64,
             buf: std.ArrayListUnmanaged(u8),
             timed_out: bool,
         };
 
         var global_slots: ?[]?ChildSlot = null;
+
+        fn timeoutForSpec(spec: Spec, default_timeout_ms: u64) u64 {
+            return if (cfg.getTimeoutMs) |getTimeoutMs|
+                getTimeoutMs(spec, default_timeout_ms)
+            else
+                default_timeout_ms;
+        }
 
         fn recordSpan(
             spans: ?[]?PoolSpan,
@@ -1036,6 +996,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
             const start_ns = monotonicNs() -| pool_start_ns;
             if (cfg.onTestStarted) |cb| cb(specs[test_idx]);
+            const test_timeout_ms = timeoutForSpec(specs[test_idx], timeout_ms);
 
             const pipe_fds = pipe() catch {
                 recordSpan(spans, test_idx, worker_index, start_ns, monotonicNs() -| pool_start_ns);
@@ -1061,7 +1022,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
                 const allocator = arena.allocator();
 
-                const result = cfg.runTest(io, allocator, specs[test_idx], timeout_ms);
+                const result = cfg.runTest(io, allocator, specs[test_idx], test_timeout_ms);
                 cfg.serialize(pipe_fds[1], result);
                 closeFd(pipe_fds[1]);
                 std.c._exit(0);
@@ -1076,6 +1037,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 .worker_index = worker_index,
                 .start_ns = start_ns,
                 .start_time_ms = milliTimestamp(),
+                .timeout_ms = test_timeout_ms,
                 .buf = .empty,
                 .timed_out = false,
             };
@@ -1238,21 +1200,20 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 }
 
                 // Check timeouts
-                if (timeout_ms > 0) {
-                    const now = milliTimestamp();
-                    for (slots) |*slot_opt| {
-                        if (slot_opt.*) |*slot| {
-                            const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
-                            const kill_after_ms = timeout_ms +| cfg.timeout_report_grace_ms;
-                            if (elapsed > kill_after_ms and !slot.timed_out) {
-                                slot.timed_out = true;
-                                const test_name = cfg.getName(specs[slot.test_index]);
-                                std.debug.print("\n  HANG  {s}  ({d}ms) — killing\n", .{ test_name, elapsed });
-                                if (cfg.use_process_groups) {
-                                    posixKill(-slot.pid, posix.SIG.KILL) catch {};
-                                } else {
-                                    posixKill(slot.pid, posix.SIG.KILL) catch {};
-                                }
+                const now = milliTimestamp();
+                for (slots) |*slot_opt| {
+                    if (slot_opt.*) |*slot| {
+                        if (slot.timeout_ms == 0) continue;
+                        const elapsed: u64 = @intCast(@max(0, now - slot.start_time_ms));
+                        const kill_after_ms = slot.timeout_ms +| cfg.timeout_report_grace_ms;
+                        if (elapsed > kill_after_ms and !slot.timed_out) {
+                            slot.timed_out = true;
+                            const test_name = cfg.getName(specs[slot.test_index]);
+                            std.debug.print("\n  HANG  {s}  ({d}ms) — killing\n", .{ test_name, elapsed });
+                            if (cfg.use_process_groups) {
+                                posixKill(-slot.pid, posix.SIG.KILL) catch {};
+                            } else {
+                                posixKill(slot.pid, posix.SIG.KILL) catch {};
                             }
                         }
                     }
@@ -1290,7 +1251,8 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 _ = arena.reset(.retain_capacity);
                 const start_ns = monotonicNs() -| pool_start_ns;
                 if (cfg.onTestStarted) |cb| cb(spec);
-                const unstable_result = cfg.runTest(io, arena.allocator(), spec, timeout_ms);
+                const test_timeout_ms = timeoutForSpec(spec, timeout_ms);
+                const unstable_result = cfg.runTest(io, arena.allocator(), spec, test_timeout_ms);
                 results[i] = cfg.stabilizeResult(gpa, unstable_result);
                 recordSpan(spans, i, 0, start_ns, monotonicNs() -| pool_start_ns);
             }
@@ -1314,6 +1276,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             worker_index: usize,
             start_ns: u64,
             start_ms: i64,
+            timeout_ms: u64,
             timed_out: bool,
         };
 
@@ -1450,8 +1413,9 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 const start_ns = monotonicNs() -| state.pool_start_ns;
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
+                const test_timeout_ms = timeoutForSpec(state.specs[idx], state.timeout_ms);
 
-                state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, idx, &.{}, state.timeout_ms)) {
+                state.results[idx] = switch (spawnSingleWorker(state.io, state.gpa, state.template, idx, &.{}, test_timeout_ms)) {
                     .ok => |result| result,
                     .timed_out => cfg.timeout_result,
                     .crashed => cfg.default_result,
@@ -1506,6 +1470,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
                 const start_ns = monotonicNs() -| state.pool_start_ns;
                 if (cfg.onTestStarted) |cb| cb(state.specs[idx]);
+                const test_timeout_ms = timeoutForSpec(state.specs[idx], state.timeout_ms);
 
                 state.slots_mutex.lockUncancelable(io);
                 state.slots[slot_idx] = ActiveChild{
@@ -1514,6 +1479,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                     .worker_index = slot_idx,
                     .start_ns = start_ns,
                     .start_ms = milliTimestamp(),
+                    .timeout_ms = test_timeout_ms,
                     .timed_out = false,
                 };
                 state.slots_mutex.unlock(io);
@@ -1601,15 +1567,15 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             while (!state.watchdog_done.load(.acquire)) {
                 // Swallow cancel: watchdog cleanup happens on the next tick.
                 std.Io.sleep(io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
-                if (state.timeout_ms == 0) continue;
 
                 const now = milliTimestamp();
                 state.slots_mutex.lockUncancelable(io);
                 defer state.slots_mutex.unlock(io);
                 for (state.slots) |*slot_opt| {
                     if (slot_opt.*) |*slot| {
+                        if (slot.timeout_ms == 0) continue;
                         const elapsed: u64 = @intCast(@max(0, now - slot.start_ms));
-                        const kill_after_ms = state.timeout_ms +| cfg.timeout_report_grace_ms;
+                        const kill_after_ms = slot.timeout_ms +| cfg.timeout_report_grace_ms;
                         if (elapsed > kill_after_ms and !slot.timed_out) {
                             slot.timed_out = true;
                             if (slot.child.id) |id| terminateProcess(id);

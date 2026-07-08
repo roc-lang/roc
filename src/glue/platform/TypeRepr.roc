@@ -4,7 +4,7 @@ import TagUnionRepr exposing [TagUnionRepr]
 
 ## Structured, language-agnostic representation of a Roc type for glue code generation.
 ## All naming uses Roc conventions with "Roc" prefix to avoid conflicts with builtin type names.
-## Uses U64 indices into Types.type_table for type references.
+## Uses U64 indices into Types.types for type references.
 TypeRepr := [
     RocBool,
     RocBox(U64),

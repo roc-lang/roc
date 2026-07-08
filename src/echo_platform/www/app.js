@@ -8,6 +8,140 @@ const modulesListEl = document.getElementById("modules-list");
 const addModuleBtn = document.getElementById("add-module");
 const moduleTemplate = document.getElementById("module-template");
 
+const ANSI_FG_CLASSES = {
+  30: "ansi-fg-black",
+  31: "ansi-fg-red",
+  32: "ansi-fg-green",
+  33: "ansi-fg-yellow",
+  34: "ansi-fg-blue",
+  35: "ansi-fg-magenta",
+  36: "ansi-fg-cyan",
+  37: "ansi-fg-white",
+  90: "ansi-fg-bright-black",
+  91: "ansi-fg-bright-red",
+  92: "ansi-fg-bright-green",
+  93: "ansi-fg-bright-yellow",
+  94: "ansi-fg-bright-blue",
+  95: "ansi-fg-bright-magenta",
+  96: "ansi-fg-bright-cyan",
+  97: "ansi-fg-bright-white",
+};
+
+function resetAnsiState(state) {
+  state.bold = false;
+  state.dim = false;
+  state.italic = false;
+  state.underline = false;
+  state.fg = "";
+}
+
+function freshAnsiState() {
+  const state = {};
+  resetAnsiState(state);
+  return state;
+}
+
+const ansiState = freshAnsiState();
+
+function applyAnsiSgr(params, state) {
+  if (params.length === 0) params = [0];
+
+  for (const code of params) {
+    if (code === 0) {
+      resetAnsiState(state);
+    } else if (code === 1) {
+      state.bold = true;
+    } else if (code === 2) {
+      state.dim = true;
+    } else if (code === 3) {
+      state.italic = true;
+    } else if (code === 4) {
+      state.underline = true;
+    } else if (code === 22) {
+      state.bold = false;
+      state.dim = false;
+    } else if (code === 23) {
+      state.italic = false;
+    } else if (code === 24) {
+      state.underline = false;
+    } else if (code === 39) {
+      state.fg = "";
+    } else if (ANSI_FG_CLASSES[code]) {
+      state.fg = ANSI_FG_CLASSES[code];
+    }
+  }
+}
+
+function ansiClassName(state) {
+  return [
+    state.bold && "ansi-bold",
+    state.dim && "ansi-dim",
+    state.italic && "ansi-italic",
+    state.underline && "ansi-underline",
+    state.fg,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function appendAnsiText(parent, text, state) {
+  if (!text) return;
+
+  const className = ansiClassName(state);
+  if (!className) {
+    parent.appendChild(document.createTextNode(text));
+    return;
+  }
+
+  const span = document.createElement("span");
+  span.className = className;
+  span.textContent = text;
+  parent.appendChild(span);
+}
+
+function appendAnsi(parent, text, state) {
+  let index = 0;
+
+  while (index < text.length) {
+    const esc = text.indexOf("\u001b", index);
+    if (esc === -1) {
+      appendAnsiText(parent, text.slice(index), state);
+      break;
+    }
+
+    appendAnsiText(parent, text.slice(index, esc), state);
+    index = esc + 1;
+
+    if (text[index] !== "[") continue;
+
+    const finalIndex = text.slice(index + 1).search(/[@-~]/);
+    if (finalIndex === -1) break;
+
+    const end = index + 1 + finalIndex;
+    if (text[end] === "m") {
+      const body = text.slice(index + 1, end);
+      const params = body
+        ? body
+            .split(";")
+            .map((part) => (part === "" ? 0 : Number(part)))
+            .filter((value) => Number.isInteger(value))
+        : [0];
+      applyAnsiSgr(params, state);
+    }
+    index = end + 1;
+  }
+}
+
+function appendErrorsTerminal(text) {
+  let terminal = errorsEl.querySelector(".terminal");
+  if (!terminal) {
+    terminal = document.createElement("pre");
+    terminal.className = "terminal";
+    errorsEl.appendChild(terminal);
+  }
+  appendAnsi(terminal, text, ansiState);
+}
+
 const importObject = {
   env: {
     js_echo(ptr, len) {
@@ -16,24 +150,19 @@ const importObject = {
     },
     js_stderr(ptr, len) {
       const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, ptr, len);
-      errorsEl.innerHTML += decoder.decode(bytes);
+      appendErrorsTerminal(decoder.decode(bytes));
     },
   },
 };
 
 function appendTrapNotice(err) {
-  const div = document.createElement("div");
-  div.className = "report error";
-  const h = document.createElement("h1");
-  h.textContent = "Compiler crashed";
-  const p = document.createElement("pre");
-  p.textContent =
-    "The Roc compiler hit an unrecoverable error while compiling your code. " +
-    "This is a bug in Roc — please report it.\n\n" +
-    String(err);
-  div.appendChild(h);
-  div.appendChild(p);
-  errorsEl.appendChild(div);
+  appendErrorsTerminal(
+    "\u001b[1;31mCompiler crashed\u001b[0m\n" +
+      "The Roc compiler hit an unrecoverable error while compiling your code. " +
+      "This is a bug in Roc - please report it.\n\n" +
+      String(err) +
+      "\n",
+  );
 }
 
 async function reinstantiate() {
@@ -77,7 +206,8 @@ function appendSkipNotice(msg) {
 
 async function run() {
   outputEl.textContent = "";
-  errorsEl.innerHTML = "";
+  errorsEl.textContent = "";
+  resetAnsiState(ansiState);
 
   let trapped = false;
   let code = 255;
@@ -112,7 +242,7 @@ async function run() {
     return;
   }
 
-  if (code === 255 && !errorsEl.innerHTML) {
+  if (code === 255 && !errorsEl.textContent) {
     errorsEl.textContent = "Compilation or execution failed";
   } else if (code !== 0 && code !== 255) {
     outputEl.textContent += `Exit code: ${code}\n`;

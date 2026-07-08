@@ -417,7 +417,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 83;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 84;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 55;
 /// Count of the statement nodes in the ModuleEnv
@@ -514,8 +514,18 @@ fn addMethodCallData(store: *NodeStore, args: CIR.Expr.Span, method_name_region:
 // Binop ops are offset past the three unit tags so every `Binop.Op` value has
 // a distinct slot.
 const surface_origin_binop_offset: u32 = 3;
+comptime {
+    // The binop range starts after the unit (payload-less) tags; keep the offset
+    // in sync so a new unit variant can't collide with a `Binop.Op` slot.
+    var unit_count: u32 = 0;
+    for (@typeInfo(CIR.Expr.SurfaceOrigin).@"union".fields) |field| {
+        if (field.type == void) unit_count += 1;
+    }
+    std.debug.assert(surface_origin_binop_offset == unit_count);
+}
 
-fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
+/// Encode surface origin
+pub fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     return switch (origin) {
         .method_call => 0,
         .unary_minus => 1,
@@ -524,7 +534,8 @@ fn encodeSurfaceOrigin(origin: CIR.Expr.SurfaceOrigin) u32 {
     };
 }
 
-fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
+/// Decode surface origin
+pub fn decodeSurfaceOrigin(encoded: u32) CIR.Expr.SurfaceOrigin {
     return switch (encoded) {
         0 => .method_call,
         1 => .unary_minus,
@@ -4308,6 +4319,11 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.duplicate_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.field_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
+        .duplicate_tag => |r| {
+            node.tag = .diag_duplicate_tag;
+            region = r.duplicate_region;
+            node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.tag_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
+        },
         .crash_expects_string => |r| {
             node.tag = .diag_crash_expects_string;
             region = r.region;
@@ -4769,6 +4785,17 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             const p = payload.diag_ident_with_region;
             return CIR.Diagnostic{ .duplicate_record_field = .{
                 .field_name = @bitCast(p.ident),
+                .duplicate_region = store.getRegionAt(node_idx),
+                .original_region = .{
+                    .start = .{ .offset = p.region_start },
+                    .end = .{ .offset = p.region_end },
+                },
+            } };
+        },
+        .diag_duplicate_tag => {
+            const p = payload.diag_ident_with_region;
+            return CIR.Diagnostic{ .duplicate_tag = .{
+                .tag_name = @bitCast(p.ident),
                 .duplicate_region = store.getRegionAt(node_idx),
                 .original_region = .{
                     .start = .{ .offset = p.region_start },

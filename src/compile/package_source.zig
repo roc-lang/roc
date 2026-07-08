@@ -35,18 +35,23 @@ pub const UrlSource = struct {
         };
     }
 
-    pub fn urlId(self: *const UrlSource) []const u8 {
-        return self.url_id.slice(self.url);
+    pub fn urlIdPrefix(self: *const UrlSource) []const u8 {
+        return self.url_id.prefix(self.url);
+    }
+
+    pub fn urlIdSuffix(self: *const UrlSource) []const u8 {
+        return self.url_id.suffix(self.url);
     }
 };
 
-test "UrlSource returns package URL id" {
+test "UrlSource returns package URL id spans" {
     const url = "https://example.com/foo/bar/1.2.3/hash";
     var source = try UrlSource.init(std.testing.allocator, .{
         .url = url,
-        .url_id = .{ .start = 8, .len = 19 },
+        .url_id = .{ .prefix_start = 8, .prefix_len = 19, .suffix_start = 33, .suffix_len = 1 },
     });
     defer source.deinit(std.testing.allocator);
 
-    try std.testing.expectEqualStrings("example.com/foo/bar", source.urlId());
+    try std.testing.expectEqualStrings("example.com/foo/bar", source.urlIdPrefix());
+    try std.testing.expectEqualStrings("/", source.urlIdSuffix());
 }

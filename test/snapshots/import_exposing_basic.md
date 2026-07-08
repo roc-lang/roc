@@ -5,40 +5,56 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import json.Json exposing [decode, encode]
+import json.Json exposing [decode, to_str]
 
 main = {
     data = { name: "Alice", age: 30 }
-    encoded = encode(data)
+    encoded = to_str(data)
     decoded = decode(encoded)
     decoded
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - import_exposing_basic.md:5:15:5:21
-UNDEFINED VARIABLE - import_exposing_basic.md:6:15:6:21
+DUPLICATE DEFINITION - import_exposing_basic.md:1:1:1:43
+NAME NOT IN SCOPE - import_exposing_basic.md:5:15:5:21
+NAME NOT IN SCOPE - import_exposing_basic.md:6:15:6:21
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `encode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
  │                                                                            │
- │  encoded = encode(data)                                                    │
+ │  import json.Json exposing [decode, to_str]                                │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
+ └────────────────────────────────────────────── import_exposing_basic.md:1:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  import json.Json exposing [decode, to_str]                           │
+      │  ‾                                                                    │
+      └───────────────────────────────────────── import_exposing_basic.md:1:1 ┘
+
+
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `to_str` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
+ │                                                                            │
+ │  encoded = to_str(data)                                                    │
  │            ‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────── import_exposing_basic.md:5:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `decode` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  decoded = decode(encoded)                                                 │
  │            ‾‾‾‾‾‾                                                          │
  └───────────────────────────────────────────── import_exposing_basic.md:6:15 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -61,7 +77,7 @@ EndOfFile,
 				(exposed-lower-ident
 					(text "decode"))
 				(exposed-lower-ident
-					(text "encode"))))
+					(text "to_str"))))
 		(s-decl
 			(p-ident (raw "main"))
 			(e-block
@@ -77,7 +93,7 @@ EndOfFile,
 					(s-decl
 						(p-ident (raw "encoded"))
 						(e-apply
-							(e-ident (raw "encode"))
+							(e-ident (raw "to_str"))
 							(e-ident (raw "data"))))
 					(s-decl
 						(p-ident (raw "decoded"))
@@ -88,11 +104,11 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Json exposing [decode, encode]
+import json.Json exposing [decode, to_str]
 
 main = {
 	data = { name: "Alice", age: 30 }
-	encoded = encode(data)
+	encoded = to_str(data)
 	decoded = decode(encoded)
 	decoded
 }
@@ -129,7 +145,7 @@ main = {
 	(s-import (module "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
-			(exposed (name "encode") (wildcard false)))))
+			(exposed (name "to_str") (wildcard false)))))
 ~~~
 # TYPES
 ~~~clojure

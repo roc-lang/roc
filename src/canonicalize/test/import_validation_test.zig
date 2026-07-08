@@ -8,7 +8,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
-const collections = @import("collections");
 const parse = @import("parse");
 
 const Can = @import("../Can.zig");
@@ -85,8 +84,6 @@ test "file imports reject absolute paths before recording dependencies" {
     const allocator = gpa_state.allocator();
 
     const source =
-        \\module [main]
-        \\
         \\import "/tmp/data.txt" as data : Str
         \\
         \\main = data
@@ -163,10 +160,8 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     try utils_env.setExposedTypeNodeIndexById(result_idx, 3);
     // Parse source code with various import statements
     const source =
-        \\module [main]
-        \\
         \\# Import from existing module with valid items
-        \\import Json exposing [decode, JsonError]
+        \\import DataJson exposing [decode, JsonError]
         \\
         \\# Import from existing module with some invalid items
         \\import Utils exposing [map, doesNotExist, Try, InvalidType]
@@ -175,7 +170,7 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
         \\import NonExistent exposing [something, SomeType]
         \\
         \\# Valid import with all exposed items
-        \\import Json exposing [encode, DecodeProblem]
+        \\import DataJson exposing [encode, DecodeProblem]
         \\
         \\main = "test"
     ;
@@ -196,8 +191,8 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     // Now create module_envs using parse_env's ident store
     var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
     defer module_envs.deinit();
-    const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Json"));
-    const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("Json"));
+    const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("DataJson"));
+    const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("DataJson"));
     try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident });
     const utils_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Utils"));
     const utils_qualified_ident = try utils_env.common.insertIdent(utils_env.gpa, Ident.for_text("Utils"));
@@ -302,8 +297,6 @@ test "import validation - type module associated values are importable via expos
 
     // Now canonicalize an importer that uses an exposed associated value.
     const importer_source =
-        \\module [main]
-        \\
         \\import FooBar exposing [square]
         \\
         \\main = square(12)
@@ -403,8 +396,6 @@ test "import validation - exposed nested type associated function resolves via s
     try chess_can.canonicalizeFile();
 
     const importer_source =
-        \\module [main]
-        \\
         \\import Chess exposing [Square]
         \\
         \\main = Square.create({ rank: 3, file: 5 })
@@ -510,8 +501,6 @@ test "import validation - exposing a type module's main type by name is not a re
     try shape_can.canonicalizeFile();
 
     const importer_source =
-        \\module [main]
-        \\
         \\import Shape exposing [Shape]
         \\
         \\main = Shape.area(5)
@@ -573,8 +562,6 @@ test "unresolved exposed value is not imported as external lookup target zero" {
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const a_source =
-        \\module [f]
-        \\
         \\T := [].{
         \\    f = |x| x
         \\}
@@ -591,29 +578,15 @@ test "unresolved exposed value is not imported as external lookup target zero" {
     defer a_can.deinit();
     try a_can.canonicalizeFile();
 
-    const exposed_f = a_env.common.findIdent("f") orelse return error.MissingExposedIdent;
-    const f_target = a_env.getExposedTargetById(exposed_f) orelse return error.MissingExposedTarget;
-    try expectEqual(collections.ExposedItemTarget.Kind.unresolved, f_target.tag());
-    try expectEqual(@as(?u32, null), a_env.getExposedValueNodeIndexById(exposed_f));
-
-    var found_unimplemented_f = false;
     const a_diagnostics = try a_env.getDiagnostics();
     defer allocator.free(a_diagnostics);
     for (a_diagnostics) |diagnostic| {
         switch (diagnostic) {
-            .exposed_but_not_implemented => |d| {
-                if (std.mem.eql(u8, a_env.getIdent(d.ident), "f")) {
-                    found_unimplemented_f = true;
-                }
-            },
-            else => {},
+            else => return error.UnexpectedImportDiagnostic,
         }
     }
-    try testing.expect(found_unimplemented_f);
 
     const importer_source =
-        \\module [main]
-        \\
         \\import A
         \\
         \\main = A.f({})
@@ -672,9 +645,7 @@ test "import validation - no module_envs provided" {
 
     // Parse source code with import statements
     const source =
-        \\module [main]
-        \\
-        \\import Json exposing [decode, JsonError]
+        \\import DataJson exposing [decode, JsonError]
         \\
         \\main = "test"
     ;
@@ -705,9 +676,6 @@ test "import validation - no module_envs provided" {
             .module_not_found => {
                 // expected this error message, ignore
             },
-            .module_header_deprecated => {
-                // expected deprecation warning, ignore
-            },
             else => {
                 // these errors are not expected
                 try testing.expect(false);
@@ -722,8 +690,6 @@ test "import interner - Import.Idx functionality" {
     const allocator = gpa_state.allocator();
     // Parse source code with multiple imports, including duplicates
     const source =
-        \\module [main]
-        \\
         \\import List
         \\import Dict
         \\import List  # Duplicate - should get same Import.Idx
@@ -785,7 +751,6 @@ test "import interner - many imports keep stable module identity keys" {
     var source = std.ArrayList(u8).empty;
     defer source.deinit(allocator);
 
-    try source.appendSlice(allocator, "module [main]\n\n");
     for (0..import_count) |i| {
         const line = try std.fmt.allocPrint(allocator, "import T{d}\n", .{i});
         defer allocator.free(line);
@@ -823,8 +788,6 @@ test "import interner - comprehensive usage example" {
     const allocator = gpa_state.allocator();
     // Parse source with imports used in different contexts
     const source =
-        \\module [process]
-        \\
         \\import List exposing [map, filter]
         \\import Dict
         \\import Try exposing [Try, withDefault]
@@ -884,8 +847,6 @@ test "module scopes - imports work in module scope" {
     const allocator = gpa_state.allocator();
     // Parse source with imports used in module scope
     const source =
-        \\module [process]
-        \\
         \\import List
         \\import Dict
         \\
@@ -926,8 +887,6 @@ test "module-qualified lookups with e_lookup_external" {
     const allocator = gpa_state.allocator();
     // Parse source with module-qualified lookups
     const source =
-        \\module [main]
-        \\
         \\import List
         \\import Dict
         \\
@@ -995,8 +954,6 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try module_envs.put(math_utils_ident, .{ .env = math_env, .qualified_type_ident = math_utils_qualified_ident });
     // Parse source that uses these exposed items
     const source =
-        \\module [calculate]
-        \\
         \\import MathUtils exposing [add, multiply, PI]
         \\
         \\calculate = \x, y ->
@@ -1029,7 +986,7 @@ test "exposed_items - tracking CIR node indices for exposed items" {
     try testing.expect(has_mathutils);
 }
 
-test "imported multi-qualified tag rejects exposed alias target" {
+test "imported type-module tag rejects alias target" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
     const allocator = gpa_state.allocator();
@@ -1039,9 +996,7 @@ test "imported multi-qualified tag rejects exposed alias target" {
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const imported_source =
-        \\module [Alias]
-        \\
-        \\Alias : [Tag]
+        \\Other : [Tag]
     ;
 
     var imported_env = try ModuleEnv.init(allocator, imported_source);
@@ -1056,11 +1011,9 @@ test "imported multi-qualified tag rejects exposed alias target" {
     try imported_can.canonicalizeFile();
 
     const source =
-        \\module [bad]
+        \\import Other exposing [Other]
         \\
-        \\import Other
-        \\
-        \\bad = Other.Alias.Tag
+        \\bad = Other.Tag
     ;
 
     var env = try ModuleEnv.init(allocator, source);
@@ -1098,7 +1051,7 @@ test "imported multi-qualified tag rejects exposed alias target" {
         switch (diagnostic) {
             .type_alias_but_needed_nominal => |d| {
                 const name = env.getIdent(d.name);
-                if (std.mem.eql(u8, name, "Alias")) {
+                if (std.mem.eql(u8, name, "Other")) {
                     found_alias_error = true;
                 }
             },
@@ -1119,8 +1072,6 @@ test "imported nested associated types resolve by qualified export key" {
     const roc_ctx = CoreCtx.testing(allocator, allocator);
 
     const imported_source =
-        \\module [A, B]
-        \\
         \\A := [A].{
         \\    Inner := [AInner]
         \\}
@@ -1142,8 +1093,6 @@ test "imported nested associated types resolve by qualified export key" {
     try imported_can.canonicalizeFile();
 
     const source =
-        \\module [a, b]
-        \\
         \\import Types
         \\
         \\a : Types.A.Inner

@@ -22,6 +22,7 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
     Coordinator.AppDiscoveryError ||
+    check.CheckedArtifact.CompileTimeFinalizer.Error ||
     eval.BuiltinModules.InitError ||
     std.Thread.SpawnError ||
     error{
@@ -246,7 +247,7 @@ fn lowerAppPathToLir(
     if (dump) |writer| {
         const store = &lowered.lir_result.store;
         const layouts = &lowered.lir_result.layouts;
-        for (0..store.proc_specs.items.len) |index| {
+        for (0..store.getProcSpecs().len) |index| {
             try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), writer);
         }
     }

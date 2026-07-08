@@ -1,8 +1,10 @@
-module []
+app [main!] { pf: platform "./platform/main.roc" }
 
 # Regression test: String literals of length >= 24 (big strings) must work
 # correctly with equality comparisons. This tests the single-segment string
 # fast path in str_collect.
+
+main! = || {}
 
 # Exactly 24 characters - this is a "big string" (>= SMALL_STRING_SIZE)
 expect ("123456789012345678901234" != "")

@@ -233,6 +233,8 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc__num_mul_with_overflow_i64", {} },
     .{ "roc__num_mul_with_overflow_i8", {} },
     .{ "roc__num_sub_with_overflow_i128", {} },
+    .{ "roc_builtins_num_mul_with_overflow_i128", {} },
+    .{ "roc_builtins_num_mul_with_overflow_u128", {} },
     .{ "roc_builtins_allocate_with_refcount", {} },
     .{ "roc_builtins_box_decref_with", {} },
     .{ "roc_builtins_box_decref_with_single_thread", {} },

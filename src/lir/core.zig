@@ -12,6 +12,8 @@ pub const RootMetadata = @import("root_metadata.zig");
 pub const Hosted = @import("hosted.zig");
 /// LIR program result shared by post-check lowering and consumers.
 pub const Program = @import("program.zig");
+/// Checked integer arithmetic metadata shared by LIR producers and consumers.
+pub const CheckedArithmetic = @import("checked_arithmetic.zig");
 
 test "lir core declarations are referenced" {
     std.testing.refAllDecls(@This());
@@ -20,4 +22,5 @@ test "lir core declarations are referenced" {
     std.testing.refAllDecls(RootMetadata);
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
+    std.testing.refAllDecls(CheckedArithmetic);
 }

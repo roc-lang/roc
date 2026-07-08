@@ -17,57 +17,88 @@ InnerModule : {
 }
 ~~~
 # EXPECTED
-PARSE ERROR - type_shadowing_across_scopes.md:9:5:9:8
-PARSE ERROR - type_shadowing_across_scopes.md:9:21:9:28
-PARSE ERROR - type_shadowing_across_scopes.md:9:28:9:29
-PARSE ERROR - type_shadowing_across_scopes.md:10:1:10:2
+EXPECTED TYPE FIELD - type_shadowing_across_scopes.md:9:5:9:8
+EXPECTED RECORD TYPE SEPARATOR - type_shadowing_across_scopes.md:9:21:9:28
+UNEXPECTED STATEMENT - type_shadowing_across_scopes.md:9:28:9:29
+UNEXPECTED STATEMENT - type_shadowing_across_scopes.md:10:1:10:2
 DUPLICATE DEFINITION - type_shadowing_across_scopes.md:1:1:1:28
 UNUSED VARIABLE - type_shadowing_across_scopes.md:4:16:4:20
 MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_type_field_name ──────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ EXPECTED TYPE FIELD ├─ I was parsing a record type, and I expected a ───────┐
+└┬────────────────────┘  field name.                                          │
  │                                                                            │
  │  Try : [Success, Failure]                                                  │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────── type_shadowing_across_scopes.md:9:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Record type fields start with lowercase names, `_`, or named underscores,
+    followed by `:` and the field type.
+
+    For example:
+        { name : Str, age : U64 }
+
+    I found `Try` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: expected_ty_close_curly_or_comma ──┐
-└┬────────────┘                                                               │
+┌────────────────────────────────┐
+│ EXPECTED RECORD TYPE SEPARATOR ├─ I was parsing a record type, and I ───────┐
+└┬───────────────────────────────┘  expected `,` or `}`.                      │
  │                                                                            │
  │  Try : [Success, Failure]                                                  │
  │                  ‾‾‾‾‾‾‾                                                   │
  └────────────────────────────────────── type_shadowing_across_scopes.md:9:21 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Separate record type fields with commas and close the record type with `}`.
+
+    For example:
+        { name : Str, age : U64 }
+
+    I found `Failure` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Try : [Success, Failure]                                                  │
  │                         ‾                                                  │
  └────────────────────────────────────── type_shadowing_across_scopes.md:9:28 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  }                                                                         │
  │  ‾                                                                         │
  └────────────────────────────────────── type_shadowing_across_scopes.md:10:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `}` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
 ┌──────────────────────┐

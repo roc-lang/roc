@@ -348,14 +348,10 @@ test "check type - numeral defaulting survivor matrix - every candidate as first
 // candidates before `u8` in `numeral_default_candidates` (src/check/Check.zig:
 // dec, i64, u64, i128, u128, i32, u32, i16, u16, i8 — then u8). Editing that
 // list must update this count to u8's new index.
-// `bench_probe_attempts`/`bench_probe_refuted` are permanent test-support
-// counters in Check.zig; zig's default test runner runs this binary's tests
-// sequentially in-process, so resetting them here cannot race.
+// `bench_probe_attempts`/`bench_probe_refuted` are per-instance debug-only fields
+// on the Check struct, compiled out entirely in release builds. A fresh Check
+// instance starts at 0, so no reset is needed.
 test "check type - numeral defaulting pre-filter refutes provably-failing candidates" {
-    const Check = @import("../Check.zig");
-    Check.bench_probe_attempts = 0;
-    Check.bench_probe_refuted = 0;
-
     const source =
         \\my_u8 : U8
         \\my_u8 = 7
@@ -369,8 +365,10 @@ test "check type - numeral defaulting pre-filter refutes provably-failing candid
     // canonical default).
     try test_env.assertDefType("h", "U8");
 
-    try testing.expectEqual(@as(usize, 1), Check.bench_probe_attempts);
-    try testing.expectEqual(@as(usize, 10), Check.bench_probe_refuted);
+    if (comptime std.debug.runtime_safety) {
+        try testing.expectEqual(@as(usize, 1), test_env.checker.bench_probe_attempts);
+        try testing.expectEqual(@as(usize, 10), test_env.checker.bench_probe_refuted);
+    }
 }
 
 // CANDIDATE-ORDER PIN for `numeral_default_candidates` (src/check/Check.zig):
@@ -1467,6 +1465,25 @@ test "check type - alias open tag union" {
     try checkTypesModule(source, .{ .pass = .last_def }, "{} -> MyAlias([C])");
 }
 
+test "check type - alias forward reference in open tag union completes" {
+    // repro for https://github.com/roc-lang/roc/issues/9959
+    const source =
+        \\Repro :: U8
+        \\
+        \\hang : Str -> Foo([])
+        \\hang = |_| { foo: Thing }
+        \\
+        \\Foo(tags) : { foo: Union(tags) }
+        \\
+        \\Union(others) : [Thing, ..others]
+    ;
+
+    var test_env = try TestEnv.init("Repro", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check type - alias open record" {
     const source =
         \\main! = |_| {}
@@ -1527,6 +1544,7 @@ test "checked artifact method registry skips nominal associated values" {
         module,
         &names,
         &template_lookup,
+        &.{},
         &checked_types,
         &checked_bodies,
     );
@@ -1538,7 +1556,7 @@ test "checked artifact method registry skips nominal associated values" {
 test "typed method definition entries expose finalized owner-method keys" {
     const gpa = testing.allocator;
 
-    var env = try ModuleEnv.init(gpa, "module []\n");
+    var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     try env.initCIRFields("Test");
     try env.common.calcLineStarts(gpa);
@@ -2900,6 +2918,91 @@ test "check type - expect" {
     );
 }
 
+test "check type - top-level expect suppresses constant match warning" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\expect match get_favorite_color("Bob") {
+        \\    Blue => True
+        \\    _ => False
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "get_favorite_color" } },
+        "Str -> Color",
+    );
+}
+
+test "check type - inline expect suppresses constant match warning" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    expect match get_favorite_color("Bob") {
+        \\        Blue => True
+        \\        _ => False
+        \\    }
+        \\    {}
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "main" } },
+        "{}",
+    );
+}
+
+test "check type - expect suppression survives annotated local binding" {
+    const source =
+        \\Color : [Blue, Red]
+        \\
+        \\get_favorite_color : Str -> Color
+        \\get_favorite_color = |name| {
+        \\    if name == "Bob" {
+        \\        Blue
+        \\    } else {
+        \\        Red
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    is_blue : Bool
+        \\    is_blue = match get_favorite_color("Bob") {
+        \\        Blue => True
+        \\        _ => False
+        \\    }
+        \\    is_blue
+        \\}
+    ;
+
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "get_favorite_color" } },
+        "Str -> Color",
+    );
+}
+
 test "check type - expect not bool" {
     const source =
         \\main = {
@@ -4153,6 +4256,67 @@ test "check type - equirecursive static dispatch with type annotation" {
     );
 }
 
+test "check type - static dispatch nested decoder error rows type-check" {
+    // repro for https://github.com/roc-lang/roc/issues/9893
+    const source =
+        \\generate_u8 : RandomDecoder, List(U8) -> (Try(U8, [TooShort]), List(U8))
+        \\generate_u8 = |_, bytes| (Err(TooShort), bytes)
+        \\
+        \\generate_list : RandomDecoder, List(U8), (List(U8), RandomDecoder -> (Try(elem, err), List(U8))) -> (Try(List(elem), [TooShort, ..err]), List(U8))
+        \\generate_list = |_, bytes, elem_decoder| {
+        \\    (result, rest) = elem_decoder(bytes, random_decoder)
+        \\    match result {
+        \\        Ok(value) => (Ok([value]), rest),
+        \\        Err(err) => (Err(err), rest)
+        \\    }
+        \\}
+        \\
+        \\RandomDecoder := {}.{
+        \\    decode_u8 = generate_u8
+        \\    decode_list = generate_list
+        \\}
+        \\
+        \\random_decoder = RandomDecoder.({})
+        \\
+        \\RandomState := List(U8)
+        \\
+        \\random_value : RandomState -> (a, RandomState) where [a.decode : (List(U8)), RandomDecoder -> (Try(a, err), List(U8))]
+        \\random_value = |RandomState.(bytes)| {
+        \\    Val : a
+        \\    (_, rest) = Val.decode(bytes, random_decoder)
+        \\    (Val, RandomState.(rest))
+        \\}
+        \\
+        \\Pair(a, b) := (a, b).{
+        \\    decode: (List(U8)), RandomDecoder -> (Try(Pair(a, b), err), List(U8)) where [
+        \\        a.decode : (List(U8)), RandomDecoder -> (Try(a, err), List(U8)),
+        \\        b.decode : (List(U8)), RandomDecoder -> (Try(b, err), List(U8)),
+        \\    ]
+        \\    decode = |bytes, format| {
+        \\        ValA : a
+        \\        ValB : b
+        \\        (_, bytes_a) = ValA.decode(bytes, format)
+        \\        (_, bytes_b) = ValB.decode(bytes_a, format)
+        \\        (Err(TooShort), bytes_b)
+        \\    }
+        \\}
+        \\
+        \\expect {
+        \\    state = RandomState.([])
+        \\    x : (Pair(List(Pair(U8, U8)), List(Pair(U8, U8))), RandomState)
+        \\    x = random_value(state)
+        \\    match x {
+        \\        _ => True
+        \\    }
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("Type Mismatch");
+}
+
 test "check type - static dispatch method type mismatch - REGRESSION TEST" {
     // This test verifies that when a method is called with mismatched types,
     // we get a TYPE MISMATCH error. This is a regression test for the diagnostic
@@ -5363,24 +5527,23 @@ test "check type - self recursive function - fibonacci - fail" {
         \\  }
         \\}
     ;
+    // The binding-group recursion rule unifies the recursive reference with
+    // the def's in-flight type immediately, so the mismatch surfaces at the
+    // bad argument itself rather than as a post-hoc recursive-def validation.
     try checkTypesModule(
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\The recursive definition `fib` is used in an unexpected way.
-        \\**test:5:5:5:8:**
+        \\This string literal is being used where a non-string type is needed.
+        \\**test:5:9:5:18:**
         \\```roc
         \\    fib("bad arg") + fib(n - 2.U8)
         \\```
-        \\    ^^^
+        \\        ^^^^^^^^^
         \\
-        \\It has the type:
+        \\The type was determined to be:
         \\
-        \\    Str -> U8
-        \\
-        \\But other places expect it to be:
-        \\
-        \\    U8 -> U8
+        \\    U8
         \\
         \\
         ,
@@ -6192,9 +6355,63 @@ test "check type - mutually recursive functions - partially annotated polymorphi
     );
 }
 
+test "check type - mutually recursive functions - three member unannotated group" {
+    // Three unannotated members inferred as one binding group; the whole
+    // group generalizes together at its boundary.
+    const source =
+        \\red = |n| if n == 0.U64 { 0.U64 } else { green(n - 1.U64) }
+        \\green = |n| if n == 0.U64 { 0.U64 } else { blue(n - 1.U64) }
+        \\blue = |n| if n == 0.U64 { 0.U64 } else { red(n - 1.U64) }
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "red", .expected = "U64 -> U64" },
+            .{ .def = "green", .expected = "U64 -> U64" },
+            .{ .def = "blue", .expected = "U64 -> U64" },
+        },
+    );
+}
+
+test "check type - mutually recursive functions - all annotated polymorphic" {
+    // Both members' schemes are pre-declared from their annotations, so each
+    // in-group reference instantiates the other's scheme (sound polymorphic
+    // recursion) and both keep their own rigid type parameters.
+    const source =
+        \\walk : U64, a -> a
+        \\walk = |n, x| if n <= 0.U64 { x } else { jump(n - 1.U64, x) }
+        \\jump : U64, b -> b
+        \\jump = |n, x| if n <= 0.U64 { x } else { walk(n - 1.U64, x) }
+        \\test = (walk(1.U64, "hi"), jump(1.U64, 42.U8))
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "walk", .expected = "U64, a -> a" },
+            .{ .def = "jump", .expected = "U64, b -> b" },
+            .{ .def = "test", .expected = "(Str, U8)" },
+        },
+    );
+}
+
+test "check type - annotated self recursive function - polymorphic recursion allowed" {
+    // An annotated def's self-reference instantiates its pre-declared scheme,
+    // so a recursive use at a specialized type is legal (polymorphic
+    // recursion for annotated defs).
+    const source =
+        \\depth : List(a) -> U64
+        \\depth = |list| match list {
+        \\    [] => 0
+        \\    [first, ..] => 1 + depth([[first]])
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+}
+
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
-    // Inner let-def lambda should generalize normally even while
-    // defer_generalize is active for the outer cycle.
+    // Inner let-def lambda should generalize normally even while the
+    // enclosing binding group's own generalization waits for the group
+    // boundary.
     const source =
         \\f = |n| {
         \\    id = |x| x

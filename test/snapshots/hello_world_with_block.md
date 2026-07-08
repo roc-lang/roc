@@ -19,19 +19,19 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - hello_world_with_block.md:11:2:11:14
+NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Stdout.line!("Hello, world!")                                             │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └──────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐

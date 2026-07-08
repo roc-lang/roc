@@ -156,8 +156,9 @@ literal *is* the backing shape, so it lifts by unification.
 
 **Number and string** literals do not implicitly become a nominal. They coerce
 only into a builtin number/string type, or into a nominal that declares its own
-`from_numeral` / `from_quote`. For any other nominal — including a transparent
-newtype like `UserId := U64` — use explicit construction (`UserId.(0)`).
+[`from_numeral` / `from_quote`](static-dispatch.md#literal-conversion). For
+any other nominal — including a transparent newtype like `UserId := U64` — use
+explicit construction (`UserId.(0)`).
 
 A value that already has a concrete type — like the `U64` parameter `n` above —
 must also be constructed explicitly; it does not silently become a different

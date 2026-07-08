@@ -11,13 +11,13 @@ Pair(a, b+ : (
 ~~~
 # EXPECTED
 UNCLOSED STRING - fuzz_crash_021.md:1:13:1:16
-PARSE ERROR - fuzz_crash_021.md:1:4:1:5
-PARSE ERROR - fuzz_crash_021.md:1:5:1:9
-PARSE ERROR - fuzz_crash_021.md:1:9:1:13
-PARSE ERROR - fuzz_crash_021.md:1:13:1:14
-PARSE ERROR - fuzz_crash_021.md:1:14:1:16
-PARSE ERROR - fuzz_crash_021.md:1:16:1:16
-PARSE ERROR - fuzz_crash_021.md:3:1:3:5
+TYPE APPLICATION NEEDS PARENTHESES - fuzz_crash_021.md:1:4:1:5
+UNEXPECTED STATEMENT - fuzz_crash_021.md:1:5:1:9
+UNEXPECTED STATEMENT - fuzz_crash_021.md:1:9:1:13
+UNEXPECTED STATEMENT - fuzz_crash_021.md:1:13:1:14
+UNEXPECTED STATEMENT - fuzz_crash_021.md:1:14:1:16
+UNEXPECTED STATEMENT - fuzz_crash_021.md:1:16:1:16
+EXPECTED TYPE SEPARATOR - fuzz_crash_021.md:3:1:3:5
 # PROBLEMS
 
 ┌─────────────────┐
@@ -30,93 +30,129 @@ PARSE ERROR - fuzz_crash_021.md:3:1:3:5
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Type applications require parentheses around their type ─────┐
-└┬────────────┘  arguments.                                                   │
+┌────────────────────────────────────┐
+│ TYPE APPLICATION NEEDS PARENTHESES ├─ I was parsing a type annotation, ─────┐
+└┬───────────────────────────────────┘  and I found a type argument without   │
+ │                                      parentheses.                          │
  │                                                                            │
  │  Fli/main.roc" }                                                           │
  │     ‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_021.md:1:4 ┘
 
-    I found a type followed by what looks like a type argument, but they need
-    to be connected with parentheses.
+    Roc type applications use parentheses around their arguments. Write
+    `List(U8)`, not `List U8`.
 
-    Instead of:
-        List U8
-
-    Use:
+    For example:
         List(U8)
 
-    Other valid examples:
-        Dict(Str, Num)
-        Try(a, Str)
-        Maybe(List(U64))
+    I found `/` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Fli/main.roc" }                                                           │
  │      ‾‾‾‾                                                                  │
  └───────────────────────────────────────────────────── fuzz_crash_021.md:1:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `main` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Fli/main.roc" }                                                           │
  │          ‾‾‾‾                                                              │
  └───────────────────────────────────────────────────── fuzz_crash_021.md:1:9 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `.roc` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Fli/main.roc" }                                                           │
  │              ‾                                                             │
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:13 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `"` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Fli/main.roc" }                                                           │
  │               ‾‾                                                           │
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:14 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found ` }` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  Fli/main.roc" }                                                           │
  │                 ‾                                                          │
  └──────────────────────────────────────────────────── fuzz_crash_021.md:1:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: ───────────────────────────────────┐
-└┬────────────┘  expected_ty_anno_close_round_or_comma                        │
+┌─────────────────────────┐
+│ EXPECTED TYPE SEPARATOR ├─ I was parsing type parameters, and I expected ───┐
+└┬────────────────────────┘  `,` or `)`.                                      │
  │                                                                            │
  │  Pair(a, b+ : (                                                            │
  │  ‾‾‾‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_021.md:3:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Separate type parameters with commas and close the parameter list with `)`.
+
+    For example:
+        Result(ok, err)
+
+    I found `Pair` here.
+    Names that start with uppercase letters are used for tags, type names, and
+    module names in Roc.
 
 # TOKENS
 ~~~zig

@@ -55,7 +55,7 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 178)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 181)
 				(receiver
 					(e-match
 						(match
@@ -80,7 +80,7 @@ NO CHANGE
 									(value
 										(e-num (value "12"))))))))
 				(args
-					(e-dispatch-call (method "times") (constraint-fn-var 173)
+					(e-dispatch-call (method "times") (constraint-fn-var 176)
 						(receiver
 							(e-num (value "5")))
 						(args
@@ -95,18 +95,18 @@ NO CHANGE
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 295)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 298)
 									(receiver
-										(e-dispatch-call (method "plus") (constraint-fn-var 257)
+										(e-dispatch-call (method "plus") (constraint-fn-var 260)
 											(receiver
 												(e-num (value "13")))
 											(args
 												(e-num (value "2")))))
 									(args
 										(e-num (value "5"))))
-								(e-dispatch-call (method "is_gte") (constraint-fn-var 404)
+								(e-dispatch-call (method "is_gte") (constraint-fn-var 407)
 									(receiver
-										(e-dispatch-call (method "minus") (constraint-fn-var 366)
+										(e-dispatch-call (method "minus") (constraint-fn-var 369)
 											(receiver
 												(e-num (value "10")))
 											(args
@@ -121,11 +121,11 @@ NO CHANGE
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "is_lte") (constraint-fn-var 523)
+				(e-dispatch-call (method "is_lte") (constraint-fn-var 526)
 					(receiver
 						(e-num (value "12")))
 					(args
-						(e-dispatch-call (method "div_by") (constraint-fn-var 518)
+						(e-dispatch-call (method "div_by") (constraint-fn-var 521)
 							(receiver
 								(e-num (value "3")))
 							(args

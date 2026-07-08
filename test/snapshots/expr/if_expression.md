@@ -46,7 +46,7 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 52)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 55)
 				(receiver
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(args

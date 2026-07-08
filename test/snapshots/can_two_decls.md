@@ -56,7 +56,7 @@ NO CHANGE
 		(e-num (value "5")))
 	(d-let
 		(p-assign (ident "b"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 80)
+		(e-dispatch-call (method "plus") (constraint-fn-var 83)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "a"))))

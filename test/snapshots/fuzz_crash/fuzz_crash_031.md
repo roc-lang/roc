@@ -12,11 +12,11 @@ vavar t= '
 ~~~
 # EXPECTED
 UNCLOSED SINGLE QUOTE - fuzz_crash_031.md:4:10:4:11
-PARSE ERROR - fuzz_crash_031.md:1:1:1:5
-PARSE ERROR - fuzz_crash_031.md:1:6:1:7
-PARSE ERROR - fuzz_crash_031.md:1:7:1:8
-PARSE ERROR - fuzz_crash_031.md:4:1:4:6
-UNEXPECTED TOKEN IN EXPRESSION - fuzz_crash_031.md:4:10:4:11
+UNEXPECTED STATEMENT - fuzz_crash_031.md:1:1:1:5
+UNEXPECTED STATEMENT - fuzz_crash_031.md:1:6:1:7
+UNEXPECTED STATEMENT - fuzz_crash_031.md:1:7:1:8
+UNEXPECTED STATEMENT - fuzz_crash_031.md:4:1:4:6
+UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_031.md:4:10:4:11
 UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
 
@@ -30,59 +30,95 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  mule []                                                                   │
  │  ‾‾‾‾                                                                      │
  └───────────────────────────────────────────────────── fuzz_crash_031.md:1:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `mule` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  mule []                                                                   │
  │       ‾                                                                    │
  └───────────────────────────────────────────────────── fuzz_crash_031.md:1:6 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `[` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  mule []                                                                   │
  │        ‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_031.md:1:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `]` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  vavar t= '                                                                │
  │  ‾‾‾‾‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_031.md:4:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `vavar` here.
+    Names that start with lowercase letters are value names or record field
+    names, depending on the surrounding syntax.
 
 
-┌────────────────────────────────┐
-│ UNEXPECTED TOKEN IN EXPRESSION ├─ The token ' is not expected in an ────────┐
-└┬───────────────────────────────┘  expression.                               │
+┌──────────────────────────────┐
+│ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
+└┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
  │  vavar t= '                                                                │
  │           ‾                                                                │
  └──────────────────────────────────────────────────── fuzz_crash_031.md:4:10 ┘
 
-    Expressions can be identifiers, literals, function calls, or operators.
+    Expressions can be names, literals, tags, records, lists, tuples, lambdas,
+    blocks, conditionals, matches, or function calls.
+
+    For example:
+        add(1, 2)
+
+    I found `'` here.
 
 
 ┌─────────────────────┐

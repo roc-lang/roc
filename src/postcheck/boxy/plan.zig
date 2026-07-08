@@ -17,7 +17,7 @@ const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).na
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 const MethodNameId = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).fn_name);
 const StaticDispatchOrigin = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).origin);
-const NumeralInfo = std.meta.Child(@TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).num_literal));
+const NumeralInfo = std.meta.Child(@TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).numeralInfo()));
 
 const empty_interface_capabilities = checked.ModuleInterfaceCapabilities{};
 const empty_resolved_value_refs = checked.ResolvedValueRefTable{};
@@ -904,6 +904,12 @@ const Builder = struct {
                 .parse_tag_union_spec,
                 .fields,
                 .field,
+                .dict,
+                .set,
+                .crypto_sha256_digest,
+                .crypto_sha256_hasher,
+                .crypto_blake3_digest,
+                .crypto_blake3_hasher,
                 => {},
             }
         }
@@ -1417,8 +1423,8 @@ const Builder = struct {
                 .fn_name = constraint.fn_name,
                 .fn_ty = .{ .module = source_type.module, .ty = constraint.fn_ty },
                 .origin = constraint.origin,
-                .binop_negated = constraint.binop_negated,
-                .num_literal = constraint.num_literal,
+                .binop_negated = constraint.binopNegated(),
+                .num_literal = constraint.numeralInfo(),
             });
         }
         const view = self.moduleForId(source_type.module);
@@ -2178,6 +2184,9 @@ const Builder = struct {
                 .{ .procedure_binding = binding }
             else
                 .{ .nested_expr = .{ .module = lookup.view.key, .expr = self.nestedCallableSiteExprForExpr(lookup.view, local.expr) orelse local.expr } },
+            .generated_structural_parser,
+            .generated_structural_encoder,
+            => boxyPlanInvariant("boxy worker planning reached generated structural method target"),
         };
     }
 
@@ -2726,7 +2735,7 @@ const Builder = struct {
             .imported_hosted,
             => boxyPlanInvariant("hosted stored function reached runtime boxy body type planning before hosted wrapper planning"),
             .parser_runtime,
-            .encode_to_runtime,
+            .encoder_for_runtime,
             => boxyPlanInvariant("generated parser/encoder stored function reached runtime boxy body type planning before generated runtime support"),
         };
     }
@@ -3094,10 +3103,7 @@ const Builder = struct {
             boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
-        const target = switch (dispatch.resolution) {
-            .resolved_target => |target| target,
-            .unresolved_checked_plan => return,
-        };
+        const target = directDispatchTarget(view.static_dispatch_plans, dispatch.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
         const worker = try self.ensureWorker(lookup.source, .{ .module = lookup.view.key, .ty = target.callable_ty }, null);
         const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
@@ -3153,10 +3159,7 @@ const Builder = struct {
             }
         }
 
-        const target = switch (call.resolution) {
-            .resolved_target => |target| target,
-            .unresolved_checked_plan => return,
-        };
+        const target = directDispatchTarget(view.static_dispatch_plans, call.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
         const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = target.callable_ty };
         _ = try self.analyzeType(lookup.view, target.callable_ty);
@@ -3206,6 +3209,9 @@ const Builder = struct {
                 .source = .{ .procedure_template = procedure.template },
             },
             .local_proc => boxyPlanInvariant("local procedure dispatch target reached boxy planning before nested procedure worker planning"),
+            .generated_structural_parser,
+            .generated_structural_encoder,
+            => boxyPlanInvariant("generated structural dispatch target reached boxy planning before generated runtime support"),
         };
     }
 
@@ -3417,6 +3423,41 @@ const Builder = struct {
         };
     }
 
+    fn workerSourceForPendingCallableEvalTemplate(
+        self: *Builder,
+        view: ModuleView,
+        template_id: checked.CallableEvalTemplateId,
+    ) ?WorkerSource {
+        const template = self.callableEvalTemplate(view, template_id);
+        const root = view.compile_time_roots.root(template.root);
+        if (root.payload != .pending) return null;
+        return self.workerSourceForCallableRootExpr(view, root.expr);
+    }
+
+    fn workerSourceForCallableRootExpr(
+        self: *Builder,
+        view: ModuleView,
+        expr_id: checked.CheckedExprId,
+    ) ?WorkerSource {
+        const expr = view.checked_bodies.expr(expr_id);
+        return switch (expr.data) {
+            .lookup_local => |lookup| if (lookup.resolved) |ref_id|
+                self.workerSourceForProcedureValueRef(view, ref_id)
+            else
+                null,
+            .lookup_external,
+            .lookup_required,
+            => |maybe_ref| if (maybe_ref) |ref_id|
+                self.workerSourceForProcedureValueRef(view, ref_id)
+            else
+                null,
+            .lambda,
+            .closure,
+            => .{ .nested_expr = .{ .module = view.key, .expr = expr_id } },
+            else => null,
+        };
+    }
+
     fn nestedCallableSiteExprForExpr(
         _: *Builder,
         view: ModuleView,
@@ -3528,6 +3569,13 @@ const Builder = struct {
         return switch (procedure.binding) {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(top_level.artifact);
+                const binding = view.top_level_procedure_bindings.get(top_level.binding);
+                switch (binding.body) {
+                    .callable_eval_template => |template| if (self.workerSourceForPendingCallableEvalTemplate(view, template)) |source| {
+                        break :blk source;
+                    },
+                    .direct_template => {},
+                }
                 if (!self.procedureBindingBodyIsPendingEval(view, top_level.binding)) {
                     _ = self.rootProcedureBindingBody(view, top_level.binding);
                 }
@@ -3535,13 +3583,21 @@ const Builder = struct {
             },
             .platform_required => |required| blk: {
                 const view = self.moduleForId(required.app_value.artifact);
+                const binding_ref: checked.ArtifactTopLevelProcedureBindingRef = .{
+                    .artifact = required.app_value.artifact,
+                    .binding = required.procedure_binding,
+                };
+                const binding = view.top_level_procedure_bindings.get(required.procedure_binding);
+                switch (binding.body) {
+                    .callable_eval_template => |template| if (self.workerSourceForPendingCallableEvalTemplate(view, template)) |source| {
+                        break :blk source;
+                    },
+                    .direct_template => {},
+                }
                 if (!self.procedureBindingBodyIsPendingEval(view, required.procedure_binding)) {
                     _ = self.rootProcedureBindingBody(view, required.procedure_binding);
                 }
-                break :blk .{ .procedure_binding = .{
-                    .artifact = required.app_value.artifact,
-                    .binding = required.procedure_binding,
-                } };
+                break :blk .{ .procedure_binding = binding_ref };
             },
             .imported => .{ .procedure_use = procedure },
             .hosted => .{ .procedure_use = procedure },
@@ -3731,44 +3787,18 @@ fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static_dis
     return switch (payload) {
         .nominal => |nominal| if (nominal.builtin) |builtin|
             .{ .builtin = builtinOwnerForCheckedBuiltin(builtin) }
-        else if (nominal.source_decl) |source_decl|
-            .{ .source_decl = .{
-                .module_name = nominal.origin_module,
-                .statement = source_decl,
-            } }
         else
             .{ .nominal = .{
-                .module_name = nominal.origin_module,
+                .module = nominal.origin_module,
                 .type_name = nominal.name,
-                .source_decl = null,
+                .source_decl = nominal.source_decl,
             } },
         else => null,
     };
 }
 
 fn builtinOwnerForCheckedBuiltin(builtin: checked.CheckedBuiltinNominal) static_dispatch.BuiltinOwner {
-    return switch (builtin) {
-        .bool => .bool,
-        .str => .str,
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        .list => .list,
-        .box => .box,
-        .fields => .fields,
-        .field => .field,
-        .parse_tag_union_spec => .parse_tag_union_spec,
-    };
+    return static_dispatch.builtinOwnerForCheckedBuiltin(builtin);
 }
 
 fn methodOwnerInNames(
@@ -3778,15 +3808,25 @@ fn methodOwnerInNames(
 ) ?static_dispatch.MethodOwner {
     return switch (owner) {
         .builtin => |builtin| .{ .builtin = builtin },
-        .source_decl => |decl| .{ .source_decl = .{
-            .module_name = target_names.lookupModuleName(source_names.moduleNameText(decl.module_name)) orelse return null,
-            .statement = decl.statement,
-        } },
         .nominal => |nominal| .{ .nominal = .{
-            .module_name = target_names.lookupModuleName(source_names.moduleNameText(nominal.module_name)) orelse return null,
+            .module = target_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
             .type_name = target_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
             .source_decl = nominal.source_decl,
         } },
+    };
+}
+
+fn directDispatchTarget(
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    resolution: static_dispatch.StaticDispatchResolution,
+) ?static_dispatch.MethodTarget {
+    return switch (resolution) {
+        .direct => |node_id| plans.evidenceNode(node_id).target,
+        .constraint,
+        .structural,
+        .checked_error,
+        .unreachable_dispatch,
+        => null,
     };
 }
 
@@ -3889,6 +3929,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
         .fn_def = .{ .nested = .{
             .owner = template_ref,
             .site = @enumFromInt(0),
+            .context_fn_key = typeKey(1),
         } },
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = typeKey(1),
@@ -4710,6 +4751,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
         .{ .nominal = .{
             .name = @enumFromInt(3),
             .origin_module = @enumFromInt(4),
+            .owner_module = .{},
             .is_opaque = false,
             .backing = @enumFromInt(3),
             .representation = .{ .local_declaration = @enumFromInt(0) },
@@ -4742,10 +4784,11 @@ test "boxy planner records nominal declared field order from checked payloads" {
 test "boxy planner resolves local nominal declared order from box payload capability" {
     const gpa = std.testing.allocator;
 
+    const root_key = moduleKey(1);
     const field_a: RecordFieldLabelId = @enumFromInt(1);
     const field_b: RecordFieldLabelId = @enumFromInt(2);
     const nominal_key = canonical.NominalTypeKey{
-        .module_name = @enumFromInt(4),
+        .module = @enumFromInt(4),
         .type_name = @enumFromInt(3),
         .source_decl = 9,
     };
@@ -4763,6 +4806,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
         .{
             .id = @enumFromInt(0),
             .nominal = nominal_key,
+            .source_statement = 9,
             .declaration_root = @enumFromInt(4),
             .backing = @enumFromInt(3),
             .pf_start = 0,
@@ -4778,7 +4822,8 @@ test "boxy planner resolves local nominal declared order from box payload capabi
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
         .{ .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = root_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
@@ -4813,7 +4858,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
 
     var plan = try analyzeProgram(gpa, .{
         .root_view = .{
-            .key = moduleKey(1),
+            .key = root_key,
             .checked_types = view,
             .interface_capabilities = &interface_capabilities,
         },
@@ -4854,8 +4899,12 @@ test "boxy planner records imported box payload capability source modules" {
 
     const root_key = moduleKey(1);
     const source_key = moduleKey(2);
+    const nominal_identity = [_]u8{0x44} ** 32;
+    const nominal_module = try root_names.internModuleIdentity(&nominal_identity);
+    const source_nominal_module = try source_names.internModuleIdentity(&nominal_identity);
+    try std.testing.expectEqual(nominal_module, source_nominal_module);
     const nominal_key = canonical.NominalTypeKey{
-        .module_name = @enumFromInt(4),
+        .module = nominal_module,
         .type_name = @enumFromInt(3),
         .source_decl = 9,
     };
@@ -4871,7 +4920,8 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
         .{ .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
@@ -4908,6 +4958,7 @@ test "boxy planner records imported box payload capability source modules" {
         .{
             .id = @enumFromInt(0),
             .nominal = nominal_key,
+            .source_statement = 9,
             .declaration_root = @enumFromInt(4),
             .backing = @enumFromInt(3),
             .pf_start = 0,
@@ -4923,7 +4974,8 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
         .{ .nominal = .{
             .name = nominal_key.type_name,
-            .origin_module = nominal_key.module_name,
+            .origin_module = nominal_key.module,
+            .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
@@ -5009,6 +5061,7 @@ fn builtinNominal(
     return .{
         .name = @enumFromInt(0),
         .origin_module = @enumFromInt(0),
+        .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
         .backing = backing,

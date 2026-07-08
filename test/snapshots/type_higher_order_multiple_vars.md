@@ -13,86 +13,114 @@ compose = |f, g| |x| f(g(x))
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_higher_order_multiple_vars.md:3:36:3:38
-PARSE ERROR - type_higher_order_multiple_vars.md:3:39:3:40
-PARSE ERROR - type_higher_order_multiple_vars.md:3:40:3:42
-PARSE ERROR - type_higher_order_multiple_vars.md:3:43:3:45
-PARSE ERROR - type_higher_order_multiple_vars.md:3:46:3:48
-PARSE ERROR - type_higher_order_multiple_vars.md:3:48:3:49
+AMBIGUOUS FUNCTION TYPE - type_higher_order_multiple_vars.md:3:36:3:38
+UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:39:3:40
+UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:40:3:42
+AMBIGUOUS FUNCTION TYPE - type_higher_order_multiple_vars.md:3:43:3:45
+UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:46:3:48
+UNEXPECTED STATEMENT - type_higher_order_multiple_vars.md:3:48:3:49
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
  │                                     ‾‾                                     │
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:36 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
  │                                        ‾                                   │
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:39 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `(` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
  │                                         ‾‾                                 │
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:40 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `_a` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
  │                                            ‾‾                              │
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:43 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
  │                                               ‾‾                           │
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:46 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `_c` here.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  compose : (_b -> _c) -> (_a -> _b) -> (_a -> _c)                          │
  │                                                 ‾                          │
  └─────────────────────────────────── type_higher_order_multiple_vars.md:3:48 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `)` here.
+    This closes the current construct, so the parser was looking for the
+    missing item before it.
 
 # TOKENS
 ~~~zig
@@ -178,10 +206,10 @@ main! = |_| {}
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-call (constraint-fn-var 40)
+					(e-call (constraint-fn-var 43)
 						(e-lookup-local
 							(p-assign (ident "f")))
-						(e-call (constraint-fn-var 37)
+						(e-call (constraint-fn-var 40)
 							(e-lookup-local
 								(p-assign (ident "g")))
 							(e-lookup-local

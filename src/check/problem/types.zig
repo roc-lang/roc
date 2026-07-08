@@ -43,8 +43,10 @@ pub const Problem = union(enum) {
     polymorphic_var_annotation: PolymorphicVarAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_expect: EffectfulExpect,
+    effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     hosted_unboxed_function: HostedUnboxedFunction,
+    host_boundary_open_row: HostBoundaryOpenRow,
     platform_def_not_found: PlatformDefNotFound,
     platform_hosted_section: PlatformHostedSection,
     platform_alias_not_found: PlatformAliasNotFound,
@@ -73,7 +75,9 @@ pub const Problem = union(enum) {
 /// Error for when a platform expects an alias to be defined, but it's not there
 pub const PlatformAliasNotFound = struct {
     expected_alias_ident: Ident.Idx,
-    ctx: enum { not_found, found_but_not_alias },
+    app_region: base.Region,
+    platform_region: base.Region,
+    ctx: enum { not_found, found_but_not_type },
 };
 
 /// The platform's hosted section disagrees with the hosted functions its
@@ -102,11 +106,18 @@ pub const PlatformHostedSection = struct {
 /// Error for when a platform expects a def to be defined, but it's not there
 pub const PlatformDefNotFound = struct {
     expected_def_ident: Ident.Idx,
+    app_region: base.Region,
+    platform_region: base.Region,
     ctx: enum { not_found, found_but_not_exported },
 };
 
 /// Hosted functions cannot accept or return unboxed functions.
 pub const HostedUnboxedFunction = struct {
+    region: base.Region,
+};
+
+/// Host-bound types must not contain open record or tag-union rows.
+pub const HostBoundaryOpenRow = struct {
     region: base.Region,
 };
 
@@ -129,6 +140,11 @@ pub const EffectfulTopLevel = struct {
 
 /// An expect expression performs effects while evaluating its condition.
 pub const EffectfulExpect = struct {
+    region: base.Region,
+};
+
+/// Warning for an effectful function binding whose name does not end in `!`.
+pub const EffectfulFunctionName = struct {
     region: base.Region,
 };
 
@@ -382,9 +398,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
-    /// Optional numeric literal info for from_numeral constraints
+    /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
-    /// Source region of the string literal for from_quote constraints
+    /// Source region of the string literal for `from_literal` constraints of kind `quote`
     quote_region: ?base.Region = null,
     /// True when the dispatcher was a numeric literal that was defaulted to Dec
     /// because no type annotation was given. Used to add explanatory text in errors.

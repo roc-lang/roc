@@ -11,20 +11,20 @@ match person {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - pattern_destructure_with_rest.md:1:7:1:13
+NAME NOT IN SCOPE - pattern_destructure_with_rest.md:1:7:1:13
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:33:2:40
 DOES NOT EXIST - pattern_destructure_with_rest.md:2:55:2:62
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `person` in this scope. ─────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `person` in this scope. ──────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  match person {                                                            │
  │        ‾‾‾‾‾‾                                                              │
  └────────────────────────────────────── pattern_destructure_with_rest.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌────────────────┐
@@ -99,7 +99,7 @@ match person {
 									(rest-pattern
 										(p-assign (ident "others"))))))))
 				(value
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 32)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 35)
 						(receiver
 							(e-call
 								(e-runtime-error (tag "nested_value_not_found"))

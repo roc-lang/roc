@@ -51,7 +51,7 @@ pub const Capture = struct {
     local: @import("../monotype_lifted/ast.zig").LocalId,
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
-    capture_id: ?u32 = null,
+    capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeVarId,
 };
 
@@ -257,6 +257,70 @@ pub const Store = struct {
     pub fn memberItem(self: *const Store, span_: Span, index: usize) FnMember {
         if (index >= span_.count()) Common.invariant("Lambda Solved member span index out of bounds");
         return self.fn_members.items[@as(usize, span_.start) + index];
+    }
+
+    pub const View = struct {
+        vars: []const Content,
+        spans: []const TypeVarId,
+        fields: []const Field,
+        tags: []const Tag,
+        captures: []const Capture,
+        fn_members: []const FnMember,
+        declared_fields: []const DeclaredField,
+
+        pub fn get(self: View, id: TypeVarId) Content {
+            return self.vars[@intFromEnum(id)];
+        }
+
+        pub fn root(self: View, id: TypeVarId) TypeVarId {
+            var current = id;
+            while (true) {
+                switch (self.get(current)) {
+                    .link => |next| current = next,
+                    else => return current,
+                }
+            }
+        }
+
+        pub fn rootContent(self: View, id: TypeVarId) Content {
+            return self.get(self.root(id));
+        }
+
+        pub fn span(self: View, span_: Span) []const TypeVarId {
+            return self.spans[span_.start..][0..span_.len];
+        }
+
+        pub fn fieldSpan(self: View, span_: Span) []const Field {
+            return self.fields[span_.start..][0..span_.len];
+        }
+
+        pub fn tagSpan(self: View, span_: Span) []const Tag {
+            return self.tags[span_.start..][0..span_.len];
+        }
+
+        pub fn captureSpan(self: View, span_: Span) []const Capture {
+            return self.captures[span_.start..][0..span_.len];
+        }
+
+        pub fn memberSpan(self: View, span_: Span) []const FnMember {
+            return self.fn_members[span_.start..][0..span_.len];
+        }
+
+        pub fn declaredFieldSpan(self: View, span_: Span) []const DeclaredField {
+            return self.declared_fields[span_.start..][0..span_.len];
+        }
+    };
+
+    pub fn view(self: *const Store) View {
+        return .{
+            .vars = self.vars.items,
+            .spans = self.spans.items,
+            .fields = self.fields.items,
+            .tags = self.tags.items,
+            .captures = self.captures.items,
+            .fn_members = self.fn_members.items,
+            .declared_fields = self.declared_fields.items,
+        };
     }
 };
 

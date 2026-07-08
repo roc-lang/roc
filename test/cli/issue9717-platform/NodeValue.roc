@@ -9,46 +9,83 @@ NodeValue := [
 	NvList(List(NodeValue)),
 ].{
 
-	## Format instance - used as the format argument for encode/decode
+	## Format instance - used as the format argument for encoder_for/decode.
 	format : NodeValue
 	format = NvUnit
 
-	## Encode methods for where clause constraints
-	## Pattern: encode_TYPE : NodeValue, TYPE -> Try(NodeValue, [])
-	encode_i64 : NodeValue, I64 -> Try(NodeValue, [])
-	encode_i64 = |_fmt, n| Ok(NvI64(n))
+	## Encoder methods for where clause constraints.
+	## Pattern: encode_TYPE : TYPE, NodeValue -> Try(NodeValue, [])
+	encode_i64 : I64, NodeValue -> Try(NodeValue, [])
+	encode_i64 = |n, _state| Ok(NvI64(n))
 
-	encode_str : NodeValue, Str -> Try(NodeValue, [])
-	encode_str = |_fmt, s| Ok(NvStr(s))
+	encode_str : Str, NodeValue -> Try(NodeValue, [])
+	encode_str = |s, _state| Ok(NvStr(s))
 
-	encode_bool : NodeValue, Bool -> Try(NodeValue, [])
-	encode_bool = |_fmt, b| Ok(NvBool(b))
+	encode_bool : Bool, NodeValue -> Try(NodeValue, [])
+	encode_bool = |b, _state| Ok(NvBool(b))
 
-	encode_unit : NodeValue, {} -> Try(NodeValue, [])
-	encode_unit = |_fmt, {}| Ok(NvUnit)
-
-	encode_list : NodeValue, List(item), (item, NodeValue -> Try(NodeValue, err)) -> Try(NodeValue, err)
-	encode_list = |fmt, items, encode_item| {
-		encoded_result =
-			List.fold(
-				items,
-				Ok([]),
-				|acc_result, item| {
-					match acc_result {
-						Ok(acc) =>
-							match encode_item(item, fmt) {
-								Ok(nv) => Ok(List.append(acc, nv))
-								Err(err) => Err(err)
-							}
-
-						Err(err) => Err(err)
+	encode_record :
+		NodeValue,
+		U64,
+		(NodeValue, (NodeValue, Str, (NodeValue -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)
+	encode_record = |_state, _, write_fields| {
+		write_fields(
+			NvList([]),
+			|field_state, _name, write_value| {
+				items =
+					match field_state {
+						NvList(values) => values
+						_ => {
+							crash "NodeValue.encode_record received a non-list accumulator"
+						}
 					}
-				},
-			)
+				encoded = write_value(NodeValue.format)?
+				Ok(NvList(List.append(items, encoded)))
+			},
+		)
+	}
 
-		match encoded_result {
-			Ok(encoded_items) => Ok(NvList(encoded_items))
-			Err(err) => Err(err)
+	encode_tuple :
+		NodeValue,
+		U64,
+		(NodeValue, (NodeValue, (NodeValue -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)
+	encode_tuple = |_state, _, write_elements| {
+		write_elements(
+			NvList([]),
+			|element_state, write_value| {
+				items =
+					match element_state {
+						NvList(values) => values
+						_ => {
+							crash "NodeValue.encode_tuple received a non-list accumulator"
+						}
+					}
+				encoded = write_value(NodeValue.format)?
+				Ok(NvList(List.append(items, encoded)))
+			},
+		)
+	}
+
+	encode_list :
+		NodeValue,
+		U64,
+		(NodeValue, (NodeValue, (NodeValue -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)
+	encode_list = |state, count, write_elements| {
+		NodeValue.encode_tuple(state, count, write_elements)
+	}
+
+	encoder_for : NodeValue -> (NodeValue, NodeValue -> Try(NodeValue, []))
+	encoder_for = |_| |value, _state| Ok(value)
+
+	encode_value : value -> NodeValue
+		where [
+			value.encoder_for : NodeValue -> (value, NodeValue -> Try(NodeValue, [])),
+		]
+	encode_value = |value| {
+		Value : value
+		encode = Value.encoder_for(NodeValue.format)
+		match encode(value, NodeValue.format) {
+			Ok(encoded) => encoded
 		}
 	}
 

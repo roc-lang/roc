@@ -137,6 +137,9 @@ Here's what will happen if you write this:
 * `Ratio.from_numeral` will return a `Try` representing whether the specified digits are a valid `Ratio`. (Some custom number types may have limits on the size of the numbers they store, may or may not support negative numbers, may or may not support digits after the decimal point, etc.)
   * If `Ratio.from_numeral` returned a [`Try.Ok`](../builtins/Try) tag, then that tag's [payload](tag-unions#payloads) will contain the actual number value that these digits resolved to.
   * If it returned an `Err`, then (since this is all being evaluated at compile time), the compiler will report an error for this number literal before the program even runs.
+
+`from_numeral` is one of Roc's
+[well-known static-dispatch methods](static-dispatch.md#literal-conversion).
   
 ### Inferred Custom Number Types
 

@@ -932,6 +932,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .duplicate_tag = .{
+            .tag_name = rand_ident_idx(),
+            .duplicate_region = rand_region(),
+            .original_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .f64_pattern_literal = .{
             .region = rand_region(),
         },
@@ -1434,5 +1442,26 @@ test "NodeStore round trip - Pattern" {
     const actual_test_count = patterns.items.len;
     if (actual_test_count < NodeStore.MODULEENV_PATTERN_NODE_COUNT) {
         return error.IncompletePatternTestCoverage;
+    }
+}
+
+test "SurfaceOrigin encode/decode round-trips" {
+    const SurfaceOrigin = CIR.Expr.SurfaceOrigin;
+    // Every unit form.
+    const unit_origins = [_]SurfaceOrigin{ .method_call, .unary_minus, .unary_not };
+    for (unit_origins) |origin| {
+        try testing.expectEqual(
+            origin,
+            NodeStore.decodeSurfaceOrigin(NodeStore.encodeSurfaceOrigin(origin)),
+        );
+    }
+    // Every binop form.
+    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".fields) |field| {
+        const op: CIR.Expr.Binop.Op = @enumFromInt(field.value);
+        const origin = SurfaceOrigin{ .binop = op };
+        try testing.expectEqual(
+            origin,
+            NodeStore.decodeSurfaceOrigin(NodeStore.encodeSurfaceOrigin(origin)),
+        );
     }
 }

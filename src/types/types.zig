@@ -24,6 +24,7 @@ const base = @import("base");
 const collections = @import("collections");
 
 const Ident = base.Ident;
+const ModuleIdentity = base.ModuleIdentity;
 const MkSafeList = collections.SafeList;
 const MkSafeMultiList = collections.SafeMultiList;
 
@@ -39,8 +40,9 @@ test {
     // Folding `binop_negated` and `num_literal` into the `origin` union is a
     // semantic regrouping (kind-specific payloads now live inside their variant),
     // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
-    // so the `Origin` union dominates the struct at 52 bytes total.
-    try std.testing.expectEqual(52, @sizeOf(StaticDispatchConstraint));
+    // so the `Origin` union dominates the struct. Provenance adds a raw expr index
+    // (4B) plus a where-clause expect region (8B), both `maxInt`-sentinel packed.
+    try std.testing.expectEqual(64, @sizeOf(StaticDispatchConstraint));
     try std.testing.expectEqual(16, @sizeOf(Func));
 }
 
@@ -315,11 +317,12 @@ pub const Rigid = struct {
 pub const Alias = struct {
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
-    /// The full module path where this alias type was originally defined
-    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
-    origin_module: Ident.Idx,
+    /// Env-local index of the declaring module's deep content identity in the
+    /// owning module env's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
     /// CIR statement index of the source declaration in origin_module, when
-    /// this alias came from a concrete source declaration.
+    /// this alias came from a concrete source declaration. A decl LOCATOR for
+    /// resolving method tables in the owning env — never part of identity.
     source_decl: SourceDecl = .none,
 };
 
@@ -679,10 +682,12 @@ pub const NominalType = struct {
 
     ident: TypeIdent,
     vars: Var.SafeList.NonEmptyRange,
-    /// The full module path where this nominal type was originally defined
-    /// (e.g., "Json.Decode" or "mypackage.Data.Person")
-    origin_module: Ident.Idx,
-    /// Packed source-declaration and opacity bits.
+    /// Env-local index of the declaring module's deep content identity in the
+    /// owning module env's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
+    /// Packed source-declaration and opacity bits. The statement index is a
+    /// decl LOCATOR for resolving method tables in the owning env — never
+    /// part of identity.
     source: NominalSource,
 
     pub fn sourceDecl(self: NominalType) SourceDecl {
@@ -702,11 +707,11 @@ pub const NominalType = struct {
     }
 
     /// Checks if backing types can unify directly with this nominal type
-    pub fn canLiftInner(self: NominalType, cur_module_idx: Ident.Idx) bool {
+    pub fn canLiftInner(self: NominalType, cur_module_identity: ModuleIdentity.Idx) bool {
         if (self.isOpaque()) {
             // If opaque, then can only lift inner type if the current module is
             // the same
-            return self.origin_module.eql(cur_module_idx);
+            return self.origin_module == cur_module_identity;
         }
 
         // If not opaque, then the inner type can always be lifted
@@ -850,6 +855,9 @@ pub const NumeralInfo = struct {
     /// Representation requirements for fractional literals.
     frac_requirements: ?FracRequirements = null,
 
+    /// Whether the literal's exact digits can be materialized as a `Num.Numeral`.
+    can_materialize_numeral: bool,
+
     /// Source region for error reporting
     region: base.Region,
 
@@ -875,6 +883,7 @@ pub const NumeralInfo = struct {
             .is_fractional = is_fractional,
             .fits_dec = null,
             .frac_requirements = null,
+            .can_materialize_numeral = true,
             .region = region,
             .explicit_suffix = false,
         };
@@ -889,6 +898,7 @@ pub const NumeralInfo = struct {
             .is_fractional = is_fractional,
             .fits_dec = null,
             .frac_requirements = null,
+            .can_materialize_numeral = true,
             .region = region,
             .explicit_suffix = false,
         };
@@ -897,7 +907,13 @@ pub const NumeralInfo = struct {
     /// Create metadata for a literal whose exact digits are stored outside the
     /// type store. Type checking only needs sign, fractional-ness, and region;
     /// lowering consumes the recorded digit bytes.
-    pub fn fromExact(is_negative: bool, is_fractional: bool, fits_dec: ?bool, region: base.Region) NumeralInfo {
+    pub fn fromExact(
+        is_negative: bool,
+        is_fractional: bool,
+        fits_dec: ?bool,
+        can_materialize_numeral: bool,
+        region: base.Region,
+    ) NumeralInfo {
         return .{
             .bytes = [_]u8{0} ** 16,
             .is_u128 = false,
@@ -908,6 +924,7 @@ pub const NumeralInfo = struct {
                 .{ .fits_in_f32 = true, .fits_in_dec = fits_dec.? }
             else
                 null,
+            .can_materialize_numeral = can_materialize_numeral,
             .region = region,
             .explicit_suffix = false,
         };
@@ -929,6 +946,67 @@ pub const StaticDispatchConstraint = struct {
     /// literal). Kind-specific payloads (binop negation, literal info) live
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
+    /// Where this constraint was introduced, so ambiguity can be reported at the
+    /// user's own expression without reconstructing var->expr maps after the
+    /// fact. Copied verbatim by instantiation and cross-module import. This is
+    /// METADATA: it is deliberately excluded from type identity — canonical type
+    /// keys (`writeConstraints`) and unification content-equality never read it,
+    /// so two structurally identical constraints with different provenance stay
+    /// equal.
+    provenance: Provenance = .{},
+
+    /// The introducing site of a static dispatch constraint. `intro_expr` is the
+    /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored
+    /// as a plain index because `types` sits below `canonicalize` in the layering
+    /// and cannot name `CIR.Expr.Idx`; the checker converts it back. It is
+    /// module-local — after cross-module import it refers to the ORIGINATING
+    /// module's CIR. `expect_region` is the where-clause "expect" region, set
+    /// only when the constraint was created inside a where-clause annotation
+    /// context (distinct from the intro expr's own region). Both use a `maxInt`
+    /// sentinel for "absent" so the record grows by only an index + a region.
+    pub const Provenance = struct {
+        intro_expr: OptExprIdx = .none,
+        expect_region: OptRegion = OptRegion.none,
+
+        /// An optional raw `CIR.Expr.Idx`. `none` marks a synthetic constraint
+        /// with no introducing expression.
+        pub const OptExprIdx = enum(u32) {
+            none = std.math.maxInt(u32),
+            _,
+
+            pub fn from(raw: u32) OptExprIdx {
+                std.debug.assert(raw != std.math.maxInt(u32));
+                return @enumFromInt(raw);
+            }
+
+            /// The raw index, or null when absent.
+            pub fn get(self: OptExprIdx) ?u32 {
+                return if (self == .none) null else @intFromEnum(self);
+            }
+        };
+
+        /// An optional region packed into a `Region` using a `maxInt` start
+        /// offset as the "absent" sentinel (a real region never starts at
+        /// `maxInt`), avoiding the extra tag byte a Zig optional would add.
+        pub const OptRegion = struct {
+            region: base.Region,
+
+            pub const none = OptRegion{ .region = .{
+                .start = .{ .offset = std.math.maxInt(u32) },
+                .end = .{ .offset = std.math.maxInt(u32) },
+            } };
+
+            pub fn some(region: base.Region) OptRegion {
+                std.debug.assert(region.start.offset != std.math.maxInt(u32));
+                return .{ .region = region };
+            }
+
+            /// The region, or null when absent.
+            pub fn get(self: OptRegion) ?base.Region {
+                return if (self.region.start.offset == std.math.maxInt(u32)) null else self.region;
+            }
+        };
+    };
 
     /// The kinds of literal that desugar to open literal-conversion constraints.
     /// Adding a variant makes every kind-keyed `switch` fail to compile until
@@ -1015,6 +1093,28 @@ pub const StaticDispatchConstraint = struct {
         const a_text = store.getText(a.fn_name);
         const b_text = store.getText(b.fn_name);
         return std.mem.order(u8, a_text, b_text);
+    }
+
+    /// The literal kind a flex var defaults to when it carries `from_literal`
+    /// constraints, by fixed precedence: numeral > quote > interpolation. Single
+    /// source of truth for the tie-break used by the checker (`varLiteralKind`),
+    /// the canonical-key builder (`flexLiteralDefaultKind`), and the mono
+    /// default-phase scan (`numericDefaultPhaseForConstraints`) — they MUST agree,
+    /// or mirror-image programs get different keys/diagnostics.
+    pub fn dominantLiteralKind(constraints: []const StaticDispatchConstraint) ?LiteralKind {
+        var has_quote = false;
+        var has_interpolation = false;
+        for (constraints) |constraint| {
+            switch (constraint.origin) {
+                .from_literal => |lit| switch (lit) {
+                    .numeral => return .numeral,
+                    .quote => has_quote = true,
+                    .interpolation => has_interpolation = true,
+                },
+                else => {},
+            }
+        }
+        return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
     }
 };
 

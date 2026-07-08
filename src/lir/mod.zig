@@ -29,6 +29,8 @@ pub const Arc = @import("arc.zig");
 pub const Trmc = @import("trmc.zig");
 /// Compact textual LIR dumps for golden tests and debug flags.
 pub const DebugPrint = @import("debug_print.zig");
+/// Checked integer arithmetic metadata shared by LIR producers and consumers.
+pub const CheckedArithmetic = core.CheckedArithmetic;
 /// ARC-stage per-proc ownership signatures.
 pub const ArcSig = @import("arc_sig.zig");
 /// ARC borrow-inference solver over ownership-neutral LIR.
@@ -90,6 +92,7 @@ test "lir tests" {
     std.testing.refAllDecls(CheckedPipeline);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(TagReachability);
+    std.testing.refAllDecls(CheckedArithmetic);
     std.testing.refAllDecls(Arc);
     std.testing.refAllDecls(ArcSig);
     std.testing.refAllDecls(ArcSolve);

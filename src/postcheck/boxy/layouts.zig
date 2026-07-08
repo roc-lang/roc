@@ -1107,6 +1107,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
         .{ .nominal = .{
             .name = @enumFromInt(3),
             .origin_module = @enumFromInt(4),
+            .owner_module = .{},
             .is_opaque = false,
             .backing = @enumFromInt(3),
             .representation = .{ .local_declaration = @enumFromInt(0) },
@@ -1145,6 +1146,7 @@ fn builtinNominal(
     return .{
         .name = @enumFromInt(0),
         .origin_module = @enumFromInt(0),
+        .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
         .backing = backing,

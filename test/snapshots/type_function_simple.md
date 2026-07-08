@@ -13,34 +13,41 @@ apply = |fn, x| fn(x)
 main! = |_| {}
 ~~~
 # EXPECTED
-PARSE ERROR - type_function_simple.md:3:26:3:28
-PARSE ERROR - type_function_simple.md:3:29:3:31
+AMBIGUOUS FUNCTION TYPE - type_function_simple.md:3:26:3:28
+UNEXPECTED STATEMENT - type_function_simple.md:3:29:3:31
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ Function types with multiple arrows need parentheses. ───────┐
-└┬────────────┘                                                               │
+┌─────────────────────────┐
+│ AMBIGUOUS FUNCTION TYPE ├─ I was parsing a function type, and multiple ─────┐
+└┬────────────────────────┘  arrows need parentheses.                         │
  │                                                                            │
  │  apply : (_a -> _b) -> _a -> _b                                            │
  │                           ‾‾                                               │
  └────────────────────────────────────────────── type_function_simple.md:3:26 ┘
 
-    Instead of writing a -> b -> c, use parentheses to clarify which you mean:
-            a -> (b -> c) for a curried function (a function that returns
-            another function)
-            (a -> b) -> c for a higher-order function (a function that takes
-            another function)
+    Use parentheses to say whether the function returns another function or
+    takes a function as an argument.
+
+    For example:
+        a -> (b -> c)
+        (a -> b) -> c
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: statement_unexpected_token ────────┐
-└┬────────────┘                                                               │
+┌──────────────────────┐
+│ UNEXPECTED STATEMENT ├─ I was parsing a statement, and this token cannot ───┐
+└┬─────────────────────┘  start a statement here.                             │
  │                                                                            │
  │  apply : (_a -> _b) -> _a -> _b                                            │
  │                              ‾‾                                            │
  └────────────────────────────────────────────── type_function_simple.md:3:29 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Statements can be declarations, type annotations, imports, expectations,
+    returns, crashes, loops, or expression statements inside a block.
+
+    For example:
+        answer = 42
+
+    I found `_b` here.
 
 # TOKENS
 ~~~zig
@@ -108,7 +115,7 @@ main! = |_| {}
 			(args
 				(p-assign (ident "fn"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 27)
+			(e-call (constraint-fn-var 30)
 				(e-lookup-local
 					(p-assign (ident "fn")))
 				(e-lookup-local

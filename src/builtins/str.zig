@@ -107,7 +107,7 @@ pub const RocStr = extern struct {
                 .capacity_or_alloc_ptr = encodeSliceAllocationPtr(list_alloc_ptr),
                 .length = count,
             };
-        } else if (start == 0 and (update_mode == .InPlace or list.isUnique(roc_ops))) {
+        } else if (start == 0 and list.canReuseAllocation(update_mode, roc_ops)) {
             // Rare case, we can take over the original list.
             return RocStr{
                 .bytes = start_byte,
@@ -402,7 +402,7 @@ pub const RocStr = extern struct {
         const element_width = 1;
         const old_capacity = self.getCapacity();
 
-        if (self.isSmallStr() or self.isSeamlessSlice() or !(update_mode == .InPlace or self.isUnique())) {
+        if (!self.canReuseAllocation(update_mode)) {
             return self.reallocateFresh(new_length, roc_ops);
         }
 
@@ -537,6 +537,23 @@ pub const RocStr = extern struct {
 
         // otherwise, check if the refcount is one
         return @call(.always_inline, RocStr.isRefcountOne, .{self});
+    }
+
+    /// Returns true when this value is the only live reference to its backing
+    /// bytes, either because the caller proved that statically (`.InPlace`) or
+    /// because the runtime refcount is 1. This permits consuming the value,
+    /// changing its visible length, and editing bytes inside its visible window.
+    /// It does not mean the heap allocation can be resized or reused wholesale:
+    /// seamless slices point into a larger allocation, and small strings have no
+    /// heap allocation at all.
+    pub inline fn isExclusive(self: RocStr, update_mode: UpdateMode) bool {
+        return update_mode == .InPlace or self.isUnique();
+    }
+
+    /// Returns true when this string owns a big-string allocation whose extent
+    /// matches the visible value, so allocation-resize/reuse paths are safe.
+    pub inline fn canReuseAllocation(self: RocStr, update_mode: UpdateMode) bool {
+        return !self.isSmallStr() and !self.isSeamlessSlice() and self.isExclusive(update_mode);
     }
 
     fn isRefcountOne(self: RocStr) bool {
@@ -1041,7 +1058,7 @@ pub fn substringUnsafe(
         return smallStringFromPtr(string.asU8ptr() + start, length);
     }
     if (string.bytes) |source_ptr| {
-        if (start == 0 and string.isUnique()) {
+        if (start == 0 and string.canReuseAllocation(.Immutable)) {
             var output = string;
             output.setLen(length);
             return output;
@@ -1325,7 +1342,11 @@ pub fn strJoinWithC(
     // `.text`, so the element loop never runs and every heap element string
     // leaks (verified on x64win). Direct calls relocate correctly, and this
     // mirrors `RocList.decref`'s own element-teardown logic for `List Str`.
-    if (list.isUnique(roc_ops)) {
+    // Full teardown is slice-correct because getAllocationElementCount(true)
+    // returns the whole backing allocation length for seamless slices. This is
+    // intentionally kept as direct RocStr.decref calls rather than a callback
+    // into RocList.decref because COFF misresolved that callback on x64win.
+    if (list.isExclusive(.Immutable, roc_ops)) {
         if (list.getAllocationDataPtr(roc_ops)) |source| {
             const count = list.getAllocationElementCount(true, roc_ops);
             const elems: [*]RocStr = utils.alignedPtrCast([*]RocStr, source, @src());
@@ -1822,7 +1843,7 @@ pub fn strTrim(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
-    } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
+    } else if (leading_bytes == 0 and string.canReuseAllocation(update_mode)) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1888,7 +1909,7 @@ pub fn strTrimStart(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
-    } else if (leading_bytes == 0 and (update_mode == .InPlace or string.isUnique())) {
+    } else if (leading_bytes == 0 and string.canReuseAllocation(update_mode)) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -1954,7 +1975,7 @@ pub fn strTrimEnd(
         // Just create another small string of the correct bytes.
         // No need to decref because it is a small string.
         return smallStringFromPtr(string.asU8ptr(), new_len);
-    } else if (update_mode == .InPlace or string.isUnique()) {
+    } else if (string.canReuseAllocation(update_mode)) {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
@@ -2029,7 +2050,10 @@ pub fn strWithAsciiLowercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var new_str = if (update_mode == .InPlace or string.isUnique())
+    // Exclusive seamless slices may edit bytes inside their visible window: Str
+    // elements are plain bytes, and refcount 1 means no other value can observe
+    // the backing allocation. This is not an allocation-reuse decision.
+    var new_str = if (string.isExclusive(update_mode))
         string
     else blk: {
         string.decref(roc_ops);
@@ -2062,7 +2086,10 @@ pub fn strWithAsciiUppercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var new_str = if (update_mode == .InPlace or string.isUnique())
+    // Exclusive seamless slices may edit bytes inside their visible window: Str
+    // elements are plain bytes, and refcount 1 means no other value can observe
+    // the backing allocation. This is not an allocation-reuse decision.
+    var new_str = if (string.isExclusive(update_mode))
         string
     else blk: {
         string.decref(roc_ops);
@@ -2400,7 +2427,7 @@ pub fn strReleaseExcessCapacity(
     if (string.isSmallStr()) {
         // SmallStr has no excess capacity.
         return string;
-    } else if ((update_mode == .InPlace or string.isUnique()) and !string.isSeamlessSlice() and string.getCapacity() == old_length) {
+    } else if (string.canReuseAllocation(update_mode) and string.getCapacity() == old_length) {
         return string;
     } else if (old_length == 0) {
         string.decref(roc_ops);
@@ -3419,6 +3446,59 @@ test "substringUnsafe: end" {
     const actual = substringUnsafe(str, 23, 37 - 23, test_env.getOps());
 
     try std.testing.expect(RocStr.eql(actual, expected));
+}
+
+test "RocStr shrink operations keep unique seamless slices as slices" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const backing1 = RocStr.fromSlice("0123456789abcdefghijklmnopqrstuvwxyz", test_env.getOps());
+    const slice1 = substringUnsafe(backing1, 5, 20, test_env.getOps());
+    try std.testing.expect(slice1.isSeamlessSlice());
+    try std.testing.expect(slice1.isExclusive(.Immutable));
+    try std.testing.expect(!slice1.canReuseAllocation(.Immutable));
+
+    const slice1_bytes = slice1.bytes;
+    const slice1_alloc = slice1.capacity_or_alloc_ptr;
+    const shortened = substringUnsafe(slice1, 0, 12, test_env.getOps());
+    defer shortened.decref(test_env.getOps());
+
+    try std.testing.expect(shortened.isSeamlessSlice());
+    try std.testing.expect(shortened.bytes == slice1_bytes);
+    try std.testing.expectEqual(slice1_alloc, shortened.capacity_or_alloc_ptr);
+    try std.testing.expect(shortened.eqlSlice("56789abcdefg"));
+
+    const backing2 = RocStr.fromSlice("prefix   middle value suffix", test_env.getOps());
+    const slice2 = substringUnsafe(backing2, 6, "   middle value suffix".len, test_env.getOps());
+    const trimmed_start = strTrimStart(slice2, .Immutable, test_env.getOps());
+    defer trimmed_start.decref(test_env.getOps());
+
+    try std.testing.expect(trimmed_start.isSeamlessSlice());
+    try std.testing.expect(trimmed_start.eqlSlice("middle value suffix"));
+
+    const prefix3 = "012345678901234567890123456789";
+    const backing3 = RocStr.fromSlice(prefix3 ++ "middle value   yy", test_env.getOps());
+    const slice3 = substringUnsafe(backing3, prefix3.len, "middle value   ".len, test_env.getOps());
+    const slice3_bytes = slice3.bytes;
+    const slice3_alloc = slice3.capacity_or_alloc_ptr;
+    const trimmed_end = strTrimEnd(slice3, .Immutable, test_env.getOps());
+    defer trimmed_end.decref(test_env.getOps());
+
+    try std.testing.expect(trimmed_end.isSeamlessSlice());
+    try std.testing.expect(trimmed_end.bytes == slice3_bytes);
+    try std.testing.expectEqual(slice3_alloc, trimmed_end.capacity_or_alloc_ptr);
+    try std.testing.expect(trimmed_end.eqlSlice("middle value"));
+
+    const prefix4 = "abcdefghijklmnopqrstuvwx";
+    const backing4 = RocStr.fromSlice(prefix4 ++ "  middle value  yy", test_env.getOps());
+    const slice4 = substringUnsafe(backing4, prefix4.len, "  middle value  ".len, test_env.getOps());
+    const slice4_alloc = slice4.capacity_or_alloc_ptr;
+    const trimmed = strTrim(slice4, .Immutable, test_env.getOps());
+    defer trimmed.decref(test_env.getOps());
+
+    try std.testing.expect(trimmed.isSeamlessSlice());
+    try std.testing.expectEqual(slice4_alloc, trimmed.capacity_or_alloc_ptr);
+    try std.testing.expect(trimmed.eqlSlice("middle value"));
 }
 
 test "startsWith: food starts with foo" {

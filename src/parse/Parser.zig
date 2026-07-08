@@ -197,7 +197,7 @@ fn looksLikeTypeDecl(self: *Parser) bool {
     };
 }
 
-fn looksLikeAppliedTagDestructure(self: *Parser) bool {
+fn looksLikeTagOrNominalDestructure(self: *Parser) bool {
     std.debug.assert(self.peek() == .UpperIdent);
 
     var lookahead: u32 = 1;
@@ -205,11 +205,18 @@ fn looksLikeAppliedTagDestructure(self: *Parser) bool {
         lookahead += 1;
     }
 
-    if (self.peekN(lookahead) != .NoSpaceOpenRound) {
+    // After the (optional) qualifier chain, accept either the applied-tag form
+    // `Tag(args) =` (qualifiers then `(`) or the nominal-value destructure
+    // `Type.(pattern) =` (qualifiers then `.(`). Both then share the same scan
+    // to the matching `)` followed by `=`.
+    if (self.peekN(lookahead) == .NoSpaceOpenRound) {
+        lookahead += 1;
+    } else if (self.peekN(lookahead) == .Dot and self.peekN(lookahead + 1) == .NoSpaceOpenRound) {
+        lookahead += 2;
+    } else {
         return false;
     }
 
-    lookahead += 1;
     var depth: u32 = 1;
     var closing_tok = Token.Tag.EndOfFile;
     while (depth > 0) {
@@ -800,6 +807,9 @@ fn parseRecordFieldTokens(self: *Parser) std.mem.Allocator.Error!AST.RecordField
     self.expect(.LowerIdent) catch {
         return try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, start);
     };
+    if (self.isVarIdent(start)) {
+        try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = start, .end = start + 1 });
+    }
     const name = start;
     var value: ?AST.Expr.Idx = null;
     if (self.peek() == .OpColon) {
@@ -1208,6 +1218,9 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
             return try self.pushMalformed(AST.Header.Idx, .expected_package_or_platform_name, start);
         }
         const name_tok = self.pos;
+        if (self.isVarIdent(name_tok)) {
+            try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = name_tok, .end = name_tok + 1 });
+        }
         self.advance();
         if (self.peek() != .OpColon) {
             self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
@@ -1766,9 +1779,10 @@ fn parseSymbolMapCollectionTokens(
     open_tag: AST.Diagnostic.Tag,
     close_tag: AST.Diagnostic.Tag,
 ) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
+    const start = self.pos;
     self.expect(.OpenCurly) catch {
         _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, open_tag, self.pos);
-        return .{ .span = .{ .start = 0, .len = 0 } };
+        return .{ .span = .{ .start = 0, .len = 0 }, .region = .{ .start = start, .end = self.pos } };
     };
     const top = self.store.scratchSymbolMapEntryTop();
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
@@ -1780,9 +1794,9 @@ fn parseSymbolMapCollectionTokens(
     self.expect(.CloseCurly) catch {
         self.store.clearScratchSymbolMapEntriesFrom(top);
         _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, close_tag, self.pos);
-        return .{ .span = .{ .start = 0, .len = 0 } };
+        return .{ .span = .{ .start = 0, .len = 0 }, .region = .{ .start = start, .end = self.pos } };
     };
-    return try self.store.symbolMapEntrySpanFrom(top);
+    return try self.store.symbolMapEntrySpanFrom(top, .{ .start = start, .end = self.pos });
 }
 
 fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
@@ -3209,10 +3223,10 @@ fn runExprStatementKernel(
                 }
                 if (tok == .TripleDot) {
                     const start = self.pos;
+                    self.advance();
                     const expr = try self.store.addExpr(.{ .ellipsis = .{
                         .region = .{ .start = start, .end = self.pos },
                     } });
-                    self.advance();
                     expr_finish_state = .{ .start = start, .min_bp = expr_state.min_bp, .expr = expr };
                     continue :expr_kernel .suffix;
                 }
@@ -3431,6 +3445,16 @@ fn runExprStatementKernel(
                     } });
                     continue :expr_kernel .suffix;
                 }
+                if (tok == .Dot or
+                    tok == .DotUpperIdent or
+                    tok == .NoSpaceDotUpperIdent or
+                    tok == .MalformedDotUnicodeIdent or
+                    tok == .MalformedNoSpaceDotUnicodeIdent)
+                {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
+                    expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
             } else if (tok_int < @intFromEnum(Token.Tag.OpPlus)) {
                 if (tok == .NoSpaceOpenRound) {
                     self.advance();
@@ -3489,6 +3513,11 @@ fn runExprStatementKernel(
                 expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr_idx };
                 continue :expr_kernel .suffix;
             } else if (tok_int < @intFromEnum(Token.Tag.OpArrow)) {
+                if (tok == .Dot or tok == .DotStar or tok == .TripleDot) {
+                    const expr = try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
+                    expr_finish_state = .{ .start = expr_finish_state.start, .min_bp = expr_finish_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
                 // Not an expression suffix.
             } else if (tok_int <= @intFromEnum(Token.Tag.OpFatArrow)) {
                 if (expr_match_guard_depth != 0) {
@@ -4172,6 +4201,9 @@ fn runExprStatementKernel(
             .CloseCurly => continue :expr_kernel .record_finish,
             .LowerIdent => {
                 const field_start = self.pos;
+                if (self.isVarIdent(field_start)) {
+                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
+                }
                 self.advance();
                 const name = field_start;
                 if (self.peek() == .OpColon) {
@@ -4208,9 +4240,14 @@ fn runExprStatementKernel(
             },
             else => {
                 const field_start = self.pos;
-                const malformed_field = try self.pushMalformed(AST.RecordField.Idx, .expected_expr_record_field_name, field_start);
-                try self.store.addScratchRecordField(malformed_field);
-                const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
+                try self.pushDiagnostic(.expected_expr_record_field_name, .{ .start = field_start, .end = field_start + 1 });
+                while (self.peek() != .EndOfFile and self.peek() != .CloseCurly and self.peek() != .Comma) {
+                    self.advance();
+                }
+                if (self.peek() == .CloseCurly) {
+                    self.advance();
+                }
+                const expr = try self.store.addMalformed(AST.Expr.Idx, .expected_expr_record_field_name, .{ .start = expr_record_state.start, .end = self.pos });
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
             },
@@ -4818,6 +4855,9 @@ fn runExprStatementKernel(
             // record types. They parse like any other field name.
             .LowerIdent, .Underscore, .NamedUnderscore => {
                 const field_start = self.pos;
+                if (self.peek() == .LowerIdent and self.isVarIdent(field_start)) {
+                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
+                }
                 const name = self.pos;
                 self.advance();
                 if (self.peek() != .OpColon) {
@@ -5216,7 +5256,7 @@ fn runExprStatementKernel(
                 }
                 if (tok == .UpperIdent) {
                     const start = self.pos;
-                    if (self.looksLikeAppliedTagDestructure()) {
+                    if (self.looksLikeTagOrNominalDestructure()) {
                         try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);
                         pattern_root_state = .{
                             .outer_start = self.pos,
@@ -6095,6 +6135,9 @@ fn runExprStatementKernel(
             },
             .LowerIdent => {
                 const field_start = self.pos;
+                if (self.isVarIdent(field_start)) {
+                    try self.pushDiagnostic(.record_field_name_cannot_be_var, .{ .start = field_start, .end = field_start + 1 });
+                }
                 const name = self.pos;
                 self.advance();
                 if (self.peek() == .Comma or self.peek() == .CloseCurly) {
@@ -6140,10 +6183,14 @@ fn runExprStatementKernel(
                     continue :expr_kernel .pattern_complete;
                 }
                 const field_start = self.pos;
+                try self.pushDiagnostic(.expected_lower_ident_pat_field_name, .{ .start = field_start, .end = field_start + 1 });
                 while (self.peek() != .EndOfFile and self.peek() != .CloseCurly) {
                     self.advance();
                 }
-                last_pattern = try self.pushMalformed(AST.Pattern.Idx, .expected_lower_ident_pat_field_name, field_start);
+                if (self.peek() == .CloseCurly) {
+                    self.advance();
+                }
+                last_pattern = try self.store.addMalformed(AST.Pattern.Idx, .expected_lower_ident_pat_field_name, .{ .start = field_start, .end = self.pos });
                 continue :expr_kernel .pattern_complete;
             },
         },
@@ -6390,7 +6437,7 @@ fn finishRecordExpr(
 }
 
 /// Binding power of the lhs and rhs of a particular operator.
-const BinOpBp = struct { left: u8, right: u8 };
+pub const BinOpBp = struct { left: u8, right: u8 };
 
 inline fn isInBinOpTokenRange(tok: Token.Tag) bool {
     const tok_int = @intFromEnum(tok);
@@ -6440,7 +6487,7 @@ inline fn getTokenBPInRange(tok: Token.Tag) BinOpBp {
 }
 
 /// Get the binding power for a Token if it's a operator token, else return null.
-fn getTokenBP(tok: Token.Tag) ?BinOpBp {
+pub fn getTokenBP(tok: Token.Tag) ?BinOpBp {
     if (!isInBinOpTokenRange(tok)) return null;
     const bp = getTokenBPInRange(tok);
     return if (bp.left == 0) null else bp;

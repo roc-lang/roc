@@ -67,15 +67,17 @@ const LayoutTest = struct {
         self.module_env.deinit();
     }
 
-    /// Helper to create a nominal Box type with the given element type
-    /// Note: Caller must have already inserted "Box" and "Builtin" idents and set builtin_module_ident
-    fn mkBoxType(self: *LayoutTest, elem_var: types.Var, box_ident_idx: base.Ident.Idx, builtin_module_idx: base.Ident.Idx) Allocator.Error!types.Var {
-        const box_content = try self.type_store.mkNominal(
+    /// Helper to create a nominal Box type with the given element type.
+    /// Note: Caller must have already inserted the "Box" ident.
+    fn mkBoxType(self: *LayoutTest, elem_var: types.Var, box_ident_idx: base.Ident.Idx, builtin_identity: base.ModuleIdentity.Idx) Allocator.Error!types.Var {
+        const box_content = try self.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
             .{ .ident_idx = box_ident_idx },
             elem_var,
             &[_]types.Var{elem_var},
-            builtin_module_idx,
+            builtin_identity,
+            null,
             false,
+            true, // builtin origin: layout recognizes Box via the builtin-origin bit
         );
         return try self.type_store.freshFromContent(box_content);
     }
@@ -103,8 +105,7 @@ test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
 
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
-    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), base.Ident.Idx.NONE);
 
     try lt.initLayoutStore();
 
@@ -133,9 +134,7 @@ test "fromTypeVar - zero-sized types (ZST)" {
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -157,12 +156,14 @@ test "fromTypeVar - zero-sized types (ZST)" {
     const box_zst_idx = try lt.layout_store.fromTypeVar(0, box_zst_var, &lt.type_scope, null);
     try testing.expect(lt.layout_store.getLayout(box_zst_idx).tag == .box_of_zst);
 
-    const list_zst_content = try lt.type_store.mkNominal(
+    const list_zst_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = list_ident_idx },
         empty_tag_union_var,
         &[_]types.Var{empty_tag_union_var},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin: layout recognizes List via the builtin-origin bit
     );
     const list_zst_var = try lt.type_store.freshFromContent(list_zst_content);
     const list_zst_idx = try lt.layout_store.fromTypeVar(0, list_zst_var, &lt.type_scope, null);
@@ -177,8 +178,7 @@ test "fromTypeVar - record with only zero-sized fields" {
 
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
-    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), base.Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -238,9 +238,7 @@ test "deeply nested containers with inner ZST" {
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -251,21 +249,25 @@ test "deeply nested containers with inner ZST" {
     // Create List(Box(List(Box(empty_record))))
     const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
     const inner_box = try lt.mkBoxType(empty_record, box_ident_idx, builtin_module_idx);
-    const inner_list_content = try lt.type_store.mkNominal(
+    const inner_list_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = list_ident_idx },
         inner_box,
         &[_]types.Var{inner_box},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const inner_list = try lt.type_store.freshFromContent(inner_list_content);
     const outer_box = try lt.mkBoxType(inner_list, box_ident_idx, builtin_module_idx);
-    const outer_list_content = try lt.type_store.mkNominal(
+    const outer_list_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = list_ident_idx },
         outer_box,
         &[_]types.Var{outer_box},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
@@ -295,9 +297,7 @@ test "nested ZST detection - List of record with ZST field" {
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -312,7 +312,7 @@ test "nested ZST detection - List of record with ZST field" {
     const record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_record_var } } });
 
     // List of this record should be list_of_zst since the record only has ZST fields
-    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, record_var, &[_]types.Var{record_var}, builtin_module_idx, false);
+    const list_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(.{ .ident_idx = list_ident_idx }, record_var, &[_]types.Var{record_var}, builtin_module_idx, null, false, true);
     const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.fromTypeVar(0, list_var, &lt.type_scope, null);
     try testing.expect(lt.layout_store.getLayout(list_idx).tag == .list_of_zst);
@@ -327,8 +327,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
 
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
-    const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), base.Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -363,9 +362,7 @@ test "nested ZST detection - deeply nested" {
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    // Set the builtin_module_ident so the layout store can recognize Builtin types
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -393,7 +390,7 @@ test "nested ZST detection - deeply nested" {
     const outer_record_var = try lt.type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_record_fields, .ext = empty_record_var } } });
 
     // List({ field: ({ field2: {} }, ()) })
-    const list_content = try lt.type_store.mkNominal(.{ .ident_idx = list_ident_idx }, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx, false);
+    const list_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(.{ .ident_idx = list_ident_idx }, outer_record_var, &[_]types.Var{outer_record_var}, builtin_module_idx, null, false, true);
     const list_var = try lt.type_store.freshFromContent(list_content);
     const list_idx = try lt.layout_store.fromTypeVar(0, list_var, &lt.type_scope, null);
 
@@ -421,8 +418,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
     const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
 
     lt.module_env_ptr[0] = &lt.module_env;
@@ -435,12 +431,14 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     const elem_var = try lt.type_store.fresh();
 
     // Create List(a)
-    const list_content = try lt.type_store.mkNominal(
+    const list_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = list_ident_idx },
         elem_var,
         &[_]types.Var{elem_var},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin: layout recognizes List via the builtin-origin bit
     );
     const list_var = try lt.type_store.freshFromContent(list_content);
 
@@ -469,12 +467,14 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
         .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
     };
     const try_backing_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = try_backing_tag_union } });
-    const try_content = try lt.type_store.mkNominal(
+    const try_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = try_ident_idx },
         try_backing_var,
         &[_]types.Var{ elem_var, error_tag_union_var },
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const try_var = try lt.type_store.freshFromContent(try_content);
 
@@ -496,12 +496,14 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     });
 
     // Now create a List with this constrained flex element
-    const outer_list_content = try lt.type_store.mkNominal(
+    const outer_list_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = list_ident_idx },
         constrained_flex,
         &[_]types.Var{constrained_flex},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const outer_list_var = try lt.type_store.freshFromContent(outer_list_content);
 
@@ -541,8 +543,7 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
     // Setup identifiers
     const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
     const token_contents_ident_idx = try lt.module_env.insertIdent(Ident.for_text("TokenContents"));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -591,12 +592,14 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
     const try_backing_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = try_backing_tag_union } });
 
     // Create the Try nominal type: Try(TokenContents, Str)
-    const try_content = try lt.type_store.mkNominal(
+    const try_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = try_ident_idx },
         try_backing_var,
         &[_]types.Var{ token_contents_alias_var, str_var },
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const try_var = try lt.type_store.freshFromContent(try_content);
 
@@ -631,8 +634,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
     // Setup identifiers
     const rich_doc_ident_idx = try lt.module_env.insertIdent(Ident.for_text("RichDoc"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -648,12 +650,14 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
     const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
 
     // Create Box(recursive_var) - this references the recursive var before we define the nominal
-    const box_content = try lt.type_store.mkNominal(
+    const box_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = box_ident_idx },
         recursive_var,
         &[_]types.Var{recursive_var},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const box_recursive_var = try lt.type_store.freshFromContent(box_content);
 
@@ -677,12 +681,14 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
     const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
 
     // Create the nominal type content: RichDoc := [PlainText(Str), Wrapped(Box(RichDoc))]
-    const rich_doc_content = try lt.type_store.mkNominal(
+    const rich_doc_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = rich_doc_ident_idx },
         tag_union_var,
         &[_]types.Var{},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
 
     // Close the recursive loop by updating the recursive_var to point to the nominal content
@@ -728,8 +734,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -746,12 +751,14 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
 
     // Create List(recursive_var) - this is the key difference from issue #8816
     // The recursion goes through List in a record field, not through Box
-    const list_recursive_content = try lt.type_store.mkNominal(
+    const list_recursive_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = list_ident_idx },
         recursive_var,
         &[_]types.Var{recursive_var},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const list_recursive_var = try lt.type_store.freshFromContent(list_recursive_content);
 
@@ -792,12 +799,14 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
 
     // Create the nominal type content: Statement := [FuncCall({...}), ForLoop({block: List(Statement)})]
-    const statement_content = try lt.type_store.mkNominal(
+    const statement_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = statement_ident_idx },
         tag_union_var,
         &[_]types.Var{},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
 
     // Close the recursive loop by updating the recursive_var to point to the nominal content
@@ -840,8 +849,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     // Setup identifiers
     const nat_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Nat"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
-    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
-    lt.module_env.idents.builtin_module = builtin_module_idx;
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -855,12 +863,14 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
 
     // Create Box(recursive_var)
-    const box_content = try lt.type_store.mkNominal(
+    const box_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = box_ident_idx },
         recursive_var,
         &[_]types.Var{recursive_var},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
     const box_recursive_var = try lt.type_store.freshFromContent(box_content);
 
@@ -881,12 +891,14 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
 
     // Create the nominal type content: Nat := [Zero, Suc(Box(Nat))]
-    const nat_content = try lt.type_store.mkNominal(
+    const nat_content = try lt.type_store.mkNominalWithSourceDeclAndBuiltinOrigin(
         .{ .ident_idx = nat_ident_idx },
         tag_union_var,
         &[_]types.Var{},
         builtin_module_idx,
+        null,
         false,
+        true, // builtin origin
     );
 
     // Close the recursive loop

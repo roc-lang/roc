@@ -23,6 +23,18 @@ const RuntimeValueAddress = struct {
     layout: u32,
 };
 
+/// Runtime erased-callable identity decoded into the LIR proc and capture data.
+pub const ErasedCallableResolution = struct {
+    proc: lir.LIR.LirProcSpecId,
+    capture_ptr: [*]u8,
+};
+
+/// Resolves erased-callable runtime data for the active evaluator.
+pub const ErasedCallableResolver = struct {
+    context: ?*anyopaque = null,
+    resolve: *const fn (?*anyopaque, [*]u8) ErasedCallableResolution = interpreterErasedCallable,
+};
+
 const TagBase = struct {
     value: Value,
     layout_idx: layout.Idx,
@@ -40,6 +52,7 @@ pub const Writer = struct {
     program: *const LirProgram.Result,
     stored_values: std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId),
     str_backings: std.AutoHashMap(usize, StrBacking),
+    erased_callable_resolver: ErasedCallableResolver,
 
     pub fn init(
         allocator: Allocator,
@@ -52,7 +65,12 @@ pub const Writer = struct {
             .program = program,
             .stored_values = std.AutoHashMap(RuntimeValueAddress, checked.ConstNodeId).init(allocator),
             .str_backings = std.AutoHashMap(usize, StrBacking).init(allocator),
+            .erased_callable_resolver = .{},
         };
+    }
+
+    pub fn setErasedCallableResolver(self: *Writer, resolver: ErasedCallableResolver) void {
+        self.erased_callable_resolver = resolver;
     }
 
     pub fn deinit(self: *Writer) void {
@@ -107,6 +125,7 @@ pub const Writer = struct {
     ) Allocator.Error!checked.ConstNodeId {
         return switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
+            .layout_only => writerInvariant("layout-only const plan reached ConstStore writer"),
             .zst => try self.module.const_store.append(.zst),
             .scalar => try self.module.const_store.append(.{ .scalar = self.storeScalar(layout_idx, value) }),
             .str => try self.storeStr(value),
@@ -283,12 +302,23 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Allocator.Error![]const checked.ConstNodeId {
-        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
-        errdefer self.module.const_store.allocator.free(nodes);
-        if (plans.len == 0) return nodes;
+        if (plans.len == 0) return try self.module.const_store.allocator.alloc(checked.ConstNodeId, 0);
 
         const layout_value = self.program.layouts.getLayout(layout_idx);
+        if (layout_value.tag == .box) {
+            const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed struct value had null payload pointer");
+            return try self.storeStructChildren(plans, layout_value.getIdx(), .{ .ptr = ptr });
+        }
+
+        const nodes = try self.module.const_store.allocator.alloc(checked.ConstNodeId, plans.len);
+        errdefer self.module.const_store.allocator.free(nodes);
         if (layout_value.tag == .zst) {
+            for (nodes, 0..) |*node, index| {
+                node.* = try self.storeValue(plans[index], .zst, Value.zst);
+            }
+            return nodes;
+        }
+        if (layout_value.tag == .box_of_zst) {
             for (nodes, 0..) |*node, index| {
                 node.* = try self.storeValue(plans[index], .zst, Value.zst);
             }
@@ -379,11 +409,10 @@ pub const Writer = struct {
     ) Allocator.Error!checked.ConstFnId {
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
-        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        const resolved = self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
-            if (entry.entry != proc) continue;
-            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
+            if (entry.entry != resolved.proc) continue;
+            const captures = try self.storeCaptures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             defer self.module.const_store.allocator.free(captures);
             return try self.module.const_store.appendFn(.{
                 .fn_def = entry.template.fn_def,
@@ -410,6 +439,7 @@ pub const Writer = struct {
             for (slots, 0..) |slot, index| {
                 captures[index] = .{
                     .id = slot.id,
+                    .ty = try self.cloneCaptureType(slot.ty),
                     .value = try self.storeValue(slot.plan, .zst, Value.zst),
                 };
             }
@@ -419,18 +449,29 @@ pub const Writer = struct {
                 const offset = self.program.layouts.getStructFieldOffsetByOriginalIndex(layout_value.getStruct().idx, slot.slot);
                 captures[index] = .{
                     .id = slot.id,
+                    .ty = try self.cloneCaptureType(slot.ty),
                     .value = try self.storeValue(slot.plan, field_layout, payload_value.offset(offset)),
                 };
             }
         } else if (slots.len == 1) {
             captures[0] = .{
                 .id = slots[0].id,
+                .ty = try self.cloneCaptureType(slots[0].ty),
                 .value = try self.storeValue(slots[0].plan, payload_layout, payload_value),
             };
         } else {
             writerInvariant("multi-capture function did not use a struct capture layout");
         }
         return captures;
+    }
+
+    fn cloneCaptureType(self: *Writer, ty: const_store.ConstTypeId) Allocator.Error!const_store.ConstTypeId {
+        return self.module.const_store.type_store.cloneTypeFromTranslated(
+            &self.program.const_types,
+            &self.program.const_type_names,
+            &self.module.canonical_names,
+            ty,
+        );
     }
 
     fn collectStrBackings(
@@ -441,6 +482,7 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         switch (self.constPlan(plan_id)) {
             .pending => writerInvariant("pending const plan reached string backing collection"),
+            .layout_only => writerInvariant("layout-only const plan reached string backing collection"),
             .zst,
             .scalar,
             => {},
@@ -534,6 +576,15 @@ pub const Writer = struct {
             for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
             return;
         }
+        if (layout_value.tag == .box_of_zst) {
+            for (plans) |plan| try self.collectStrBackings(plan, .zst, Value.zst);
+            return;
+        }
+        if (layout_value.tag == .box) {
+            const ptr = self.readBoxDataPointer(value) orelse writerInvariant("boxed struct value had null payload pointer");
+            try self.collectStructStrBackings(plans, layout_value.getIdx(), .{ .ptr = ptr });
+            return;
+        }
         if (layout_value.tag != .struct_) writerInvariant("struct const plan had non-struct layout");
 
         for (plans, 0..) |plan, index| {
@@ -599,11 +650,10 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         const set = self.program.erased_fns.items[@intFromEnum(set_id)];
         const data_ptr = self.readErasedCallablePointer(value);
-        const proc = Interpreter.erasedCallableInterpreterProcId(data_ptr);
+        const resolved = self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         for (set.entries) |entry| {
-            if (entry.entry != proc) continue;
-            const capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr);
-            try self.collectCaptureStrBackings(entry.captures, entry.capture_layout, .{ .ptr = capture_ptr });
+            if (entry.entry != resolved.proc) continue;
+            try self.collectCaptureStrBackings(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr });
             return;
         }
         writerInvariant("erased callable result did not match an explicit erased function entry");
@@ -753,6 +803,13 @@ pub const Writer = struct {
         return self.program.const_plans.items[raw];
     }
 };
+
+fn interpreterErasedCallable(_: ?*anyopaque, data_ptr: [*]u8) ErasedCallableResolution {
+    return .{
+        .proc = Interpreter.erasedCallableInterpreterProcId(data_ptr),
+        .capture_ptr = Interpreter.erasedCallableInterpreterCaptureValuePtr(data_ptr),
+    };
+}
 
 fn checkedU32(value: usize, comptime message: []const u8) u32 {
     if (value > std.math.maxInt(u32)) writerInvariant(message);

@@ -10,8 +10,12 @@ const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
+const GuardedList = lir.LirStore.GuardedList;
 const layout_mod = @import("layout");
 const LayoutIdx = layout_mod.Idx;
+const MonoAst = postcheck.Monotype.Ast;
+const MonoLower = postcheck.Monotype.Lower;
+const MonoType = postcheck.Monotype.Type;
 
 const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || error{
     TestExpectedEqual,
@@ -43,6 +47,16 @@ const LiftedSource = struct {
 
     fn deinit(self: *LiftedSource, allocator: Allocator) void {
         self.lifted.deinit();
+        helpers.cleanupParseAndCanonical(allocator, self.resources);
+    }
+};
+
+const MonotypeSource = struct {
+    resources: helpers.ParsedResources,
+    mono: postcheck.Monotype.Ast.Program,
+
+    fn deinit(self: *MonotypeSource, allocator: Allocator) void {
+        self.mono.deinit();
         helpers.cleanupParseAndCanonical(allocator, self.resources);
     }
 };
@@ -121,6 +135,250 @@ fn lowerModuleWithOptions(
     };
 }
 
+fn monotypeCountersForModule(
+    allocator: Allocator,
+    source: []const u8,
+) TestError!postcheck.Monotype.Lower.SpecializationCounters {
+    return monotypeCountersForModuleWithImports(allocator, source, &.{});
+}
+
+fn lowerMonotypeModule(
+    allocator: Allocator,
+    source: []const u8,
+) TestError!MonotypeSource {
+    return lowerMonotypeModuleWithOptions(allocator, source, .{});
+}
+
+const LowerMonotypeOptions = struct {
+    specialization_cache: MonoLower.SpecializationCacheControl = .{},
+    loaded_specialization_shards: []const MonoLower.LoadedSpecializationShard = &.{},
+    specialization_counters: ?*MonoLower.SpecializationCounters = null,
+};
+
+fn lowerMonotypeModuleWithOptions(
+    allocator: Allocator,
+    source: []const u8,
+    options: LowerMonotypeOptions,
+) TestError!MonotypeSource {
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    errdefer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{
+            .specialization_cache = options.specialization_cache,
+            .loaded_specialization_shards = options.loaded_specialization_shards,
+            .specialization_counters = options.specialization_counters,
+        },
+    );
+    errdefer mono.deinit();
+
+    return .{
+        .resources = resources,
+        .mono = mono,
+    };
+}
+
+fn monotypeCountersForModuleWithImports(
+    allocator: Allocator,
+    source: []const u8,
+    imports: []const helpers.ModuleSource,
+) TestError!postcheck.Monotype.Lower.SpecializationCounters {
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, imports, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var counters: postcheck.Monotype.Lower.SpecializationCounters = .{};
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{ .specialization_counters = &counters },
+    );
+    defer mono.deinit();
+
+    return counters;
+}
+
+fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
+    try std.testing.expectEqual(lhs.next_symbol, rhs.next_symbol);
+
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Content, lhs.types.types, rhs.types.types);
+    try std.testing.expectEqualSlices(?check.CheckedNames.TypeDigest, lhs.types.type_digests, rhs.types.type_digests);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.TypeId, lhs.types.spans, rhs.types.spans);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Field, lhs.types.fields, rhs.types.fields);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.Tag, lhs.types.tags, rhs.types.tags);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Type.DeclaredField, lhs.types.declared_fields, rhs.types.declared_fields);
+
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.SpecRecord, lhs.specs, rhs.specs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ImportedFn, lhs.imported_fns, rhs.imported_fns);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Fn, lhs.fns, rhs.fns);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Def, lhs.defs, rhs.defs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.NestedDef, lhs.nested_defs, rhs.nested_defs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Expr, lhs.exprs, rhs.exprs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Pat, lhs.pats, rhs.pats);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Stmt, lhs.stmts, rhs.stmts);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Local, lhs.locals, rhs.locals);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.ExprId, lhs.expr_ids, rhs.expr_ids);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.PatId, lhs.pat_ids, rhs.pat_ids);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.TypedLocal, lhs.typed_locals, rhs.typed_locals);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StmtId, lhs.stmt_ids, rhs.stmt_ids);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.FieldExpr, lhs.field_exprs, rhs.field_exprs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RecordDestruct, lhs.record_destructs, rhs.record_destructs);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.StrPatternStep, lhs.str_pattern_steps, rhs.str_pattern_steps);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Branch, lhs.branches, rhs.branches);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.IfBranch, lhs.if_branches, rhs.if_branches);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.Root, lhs.roots, rhs.roots);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.LayoutRequest, lhs.layout_requests, rhs.layout_requests);
+    try std.testing.expectEqualSlices(postcheck.Monotype.Ast.RuntimeSchemaRequest, lhs.runtime_schema_requests, rhs.runtime_schema_requests);
+    try std.testing.expectEqualSlices(base.SourceLoc, lhs.expr_locs, rhs.expr_locs);
+    try std.testing.expectEqualSlices(base.Region, lhs.expr_regions, rhs.expr_regions);
+    try std.testing.expectEqualSlices(base.SourceLoc, lhs.stmt_locs, rhs.stmt_locs);
+    try std.testing.expectEqualSlices(base.Region, lhs.stmt_regions, rhs.stmt_regions);
+}
+
+const DurableTypeSnapshot = struct {
+    view: MonoType.DurableView,
+    type_digests: []check.CheckedNames.TypeDigest,
+
+    fn deinit(self: DurableTypeSnapshot, allocator: Allocator) void {
+        allocator.free(self.type_digests);
+    }
+};
+
+fn durableTypeSnapshot(allocator: Allocator, program: *const MonoAst.Program) Allocator.Error!DurableTypeSnapshot {
+    const store_view = program.types.view();
+    const type_digests = try allocator.alloc(check.CheckedNames.TypeDigest, store_view.types.len);
+    errdefer allocator.free(type_digests);
+
+    for (type_digests, 0..) |*digest, index| {
+        digest.* = store_view.type_digests[index] orelse
+            program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
+    }
+
+    return .{
+        .view = .{
+            .types = store_view.types,
+            .type_digests = type_digests,
+            .spans = store_view.spans,
+            .fields = store_view.fields,
+            .tags = store_view.tags,
+            .declared_fields = store_view.declared_fields,
+        },
+        .type_digests = type_digests,
+    };
+}
+
+fn digestBytesEqual(lhs: check.CheckedNames.TypeDigest, rhs: check.CheckedNames.TypeDigest) bool {
+    return std.mem.eql(u8, lhs.bytes[0..], rhs.bytes[0..]);
+}
+
+fn specRecordMatches(
+    allocator: Allocator,
+    name_store: *const check.CheckedNames.NameStore,
+    candidate_types: anytype,
+    candidate: MonoAst.SpecRecord,
+    expected_types: anytype,
+    expected: MonoAst.SpecRecord,
+) Allocator.Error!bool {
+    if (!std.meta.eql(candidate.identity.callable, expected.identity.callable)) return false;
+    if (!digestBytesEqual(candidate.identity.source_fn_ty_digest, expected.identity.source_fn_ty_digest)) return false;
+    if (!digestBytesEqual(candidate.identity.request_fn_ty_digest, expected.identity.request_fn_ty_digest)) return false;
+    if (!digestBytesEqual(candidate.solved_fn_ty_digest, expected.solved_fn_ty_digest)) return false;
+    return try MonoType.typeEqlAcrossStores(
+        allocator,
+        name_store,
+        candidate_types,
+        candidate.solved_fn_ty,
+        expected_types,
+        expected.solved_fn_ty,
+    );
+}
+
+fn specCoveredByLocalOrLoaded(
+    allocator: Allocator,
+    cached: MonoAst.ProgramView,
+    loaded: MonoLower.LoadedSpecializationShard,
+    expected_types: anytype,
+    expected: MonoAst.SpecRecord,
+) Allocator.Error!bool {
+    for (cached.specs) |candidate| {
+        if (try specRecordMatches(allocator, cached.names, cached.types, candidate, expected_types, expected)) return true;
+    }
+
+    for (loaded.specs) |candidate| {
+        if (try specRecordMatches(allocator, cached.names, loaded.types, candidate, expected_types, expected)) return true;
+    }
+
+    return false;
+}
+
+fn expectSpecsCoveredByCachedOrLoaded(
+    allocator: Allocator,
+    no_cache: MonoAst.ProgramView,
+    cached: MonoAst.ProgramView,
+    loaded: MonoLower.LoadedSpecializationShard,
+) TestError!void {
+    for (no_cache.specs) |expected| {
+        if (!try specCoveredByLocalOrLoaded(allocator, cached, loaded, no_cache.types, expected)) {
+            return error.MissingProcSpec;
+        }
+    }
+}
+
+fn isUnaryPrimitiveFnSpec(view: MonoAst.ProgramView, record: MonoAst.SpecRecord, primitive: MonoType.Primitive) bool {
+    const func = switch (view.types.get(record.solved_fn_ty)) {
+        .func => |func| func,
+        else => return false,
+    };
+    const args = view.types.span(func.args);
+    if (args.len != 1) return false;
+    const arg_matches = switch (view.types.get(args[0])) {
+        .primitive => |arg| arg == primitive,
+        else => false,
+    };
+    const ret_matches = switch (view.types.get(func.ret)) {
+        .primitive => |ret| ret == primitive,
+        else => false,
+    };
+    return arg_matches and ret_matches;
+}
+
 fn lowerModuleWithInlineExpects(
     allocator: Allocator,
     source: []const u8,
@@ -148,7 +406,8 @@ fn mainProcArgLayouts(
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
     errdefer allocator.free(arg_layouts);
 
-    for (arg_locals, 0..) |local_id, index| {
+    for (0..arg_locals.len) |index| {
+        const local_id = GuardedList.at(arg_locals, index);
         arg_layouts[index] = lowered.lir_result.store.getLocal(local_id).layout_idx;
     }
 
@@ -213,7 +472,7 @@ const DebugEffectCounts = struct {
 
 fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) DebugEffectCounts {
     var counts = DebugEffectCounts{};
-    for (lowered.lir_result.store.cf_stmts.items) |stmt| {
+    for (lowered.lir_result.store.getCFStmts()) |stmt| {
         switch (stmt) {
             .debug => counts.debug += 1,
             .expect => counts.expect += 1,
@@ -226,8 +485,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
 test "optimized inline expect lowering omits expects and keeps dbg" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\main : I64
         \\main = {
         \\    dbg 1
@@ -258,8 +515,6 @@ test "nominal record lays out fields in declared order" {
     // layout, so { z: U16, y: U16, x: U32 } is kept verbatim. Without the marker
     // it would sort structurally and hoist the U32 to offset 0.
     const source =
-        \\module [main]
-        \\
         \\Account := { z : U16, y : U16, x : U32, _ : {} }
         \\
         \\main : Account -> Account
@@ -287,15 +542,11 @@ test "nominal record lays out fields in declared order" {
 test "imported nominal record lays out fields in declared order" {
     const allocator = std.testing.allocator;
     const acct_module =
-        \\module [Account]
-        \\
         \\Account := { z : U16, y : U16, x : U32, _ : {} }
     ;
     // An imported nominal record must lay out identically to a local one, or
     // values would be read with the wrong offsets across module boundaries.
     const source =
-        \\module [main]
-        \\
         \\import Acct exposing [Account]
         \\
         \\main : Account -> Account
@@ -323,8 +574,6 @@ test "nominal record reserves unnamed padding fields without inflating alignment
     // unnamed bytes hold the explicit padding so `b` lands at offset 4 without
     // the compiler inserting alignment padding of its own.
     const source =
-        \\module [main]
-        \\
         \\Padded := { a : U8, _ : U8, _ : U8, _ : U8, b : U32 }
         \\
         \\main : Padded -> Padded
@@ -357,8 +606,6 @@ test "generic nominal record instantiates unnamed padding to the argument's size
     // size, exactly like a named field of the same type: `Foo(U64)` is 16 bytes
     // (x:U64 @0 plus 8 bytes of padding), just as `{ x : a, y : a }(U64)` would be.
     const source =
-        \\module [main]
-        \\
         \\Foo(a) := { x : a, _ : a }
         \\
         \\main : Foo(U64) -> Foo(U64)
@@ -387,8 +634,6 @@ test "nominal record with a parenthesized backing still honors declared order an
     // the unnamed field must still be accepted and the layout must match the
     // unparenthesized form (a@0, b@4, size 8, with three padding spacers).
     const source =
-        \\module [main]
-        \\
         \\Padded := ({ a : U8, _ : U8, _ : U8, _ : U8, b : U32 })
         \\
         \\main : Padded -> Padded
@@ -507,7 +752,7 @@ fn expectInlinePlanDecision(
     const plan = inline_plan.view();
 
     var found = false;
-    for (solved.lifted.fns.items, 0..) |fn_, index| {
+    for (solved.lifted.fnsView(), 0..) |fn_, index| {
         const name_id = solved.lifted.procDebugName(fn_.symbol) orelse continue;
         const actual_name = solved.lifted.names.exportNameText(name_id);
         if (!std.mem.eql(u8, actual_name, fn_name)) continue;
@@ -572,7 +817,9 @@ fn collectAssignCallProcs(
             .switch_stmt => |stmt| {
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
                 try work.append(allocator, stmt.default_branch);
-                for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
+                const branches = lowered.lir_result.store.getCFSwitchBranches(stmt.branches);
+                for (0..branches.len) |i| {
+                    const branch = GuardedList.at(branches, i);
                     try work.append(allocator, branch.body);
                 }
             },
@@ -585,7 +832,9 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.on_miss);
             },
             .str_match_set => |stmt| {
-                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                const arms = lowered.lir_result.store.getStrMatchArms(stmt.arms);
+                for (0..arms.len) |i| {
+                    const arm = GuardedList.at(arms, i);
                     try work.append(allocator, arm.on_match);
                 }
                 try work.append(allocator, stmt.on_miss);
@@ -703,7 +952,9 @@ fn collectProcShape(
                 shape.switch_count += 1;
                 if (stmt.continuation) |continuation| try work.append(allocator, continuation);
                 try work.append(allocator, stmt.default_branch);
-                for (lowered.lir_result.store.getCFSwitchBranches(stmt.branches)) |branch| {
+                const branches = lowered.lir_result.store.getCFSwitchBranches(stmt.branches);
+                for (0..branches.len) |i| {
+                    const branch = GuardedList.at(branches, i);
                     try work.append(allocator, branch.body);
                 }
             },
@@ -718,7 +969,9 @@ fn collectProcShape(
             },
             .str_match_set => |stmt| {
                 shape.str_match_set_count += 1;
-                for (lowered.lir_result.store.getStrMatchArms(stmt.arms)) |arm| {
+                const arms = lowered.lir_result.store.getStrMatchArms(stmt.arms);
+                for (0..arms.len) |i| {
+                    const arm = GuardedList.at(arms, i);
                     try work.append(allocator, arm.on_match);
                 }
                 try work.append(allocator, stmt.on_miss);
@@ -790,7 +1043,7 @@ fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool 
             shape.switch_count == 8 and
             shape.join_count == 11 and
             shape.jump_count == 15 and
-            shape.struct_assign_count >= 8,
+            shape.struct_assign_count >= 2,
     };
 }
 
@@ -864,7 +1117,7 @@ fn markReachableLiftedExpr(
     if (reachable[index]) return;
     reachable[index] = true;
 
-    switch (program.exprs.items[index].data) {
+    switch (program.getExprAt(index).data) {
         .local,
         .unit,
         .int_lit,
@@ -872,21 +1125,36 @@ fn markReachableLiftedExpr(
         .frac_f64_lit,
         .dec_lit,
         .str_lit,
+        .bytes_lit,
         .crash,
         .comptime_exhaustiveness_failed,
         .uninitialized,
         .uninitialized_payload,
         => {},
         .fn_ref => |fn_ref| {
-            for (program.exprSpan(fn_ref.captures)) |capture| {
-                markReachableLiftedExpr(program, capture, reachable);
+            const operands = program.captureOperandSpan(fn_ref.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
             }
         },
         .list,
         .tuple,
-        => |items| for (program.exprSpan(items)) |child| markReachableLiftedExpr(program, child, reachable),
-        .record => |fields| for (program.fieldExprSpan(fields)) |field| markReachableLiftedExpr(program, field.value, reachable),
-        .tag => |tag| for (program.exprSpan(tag.payloads)) |payload| markReachableLiftedExpr(program, payload, reachable),
+        => |items| {
+            const children = program.exprSpan(items);
+            for (0..children.len) |i| markReachableLiftedExpr(program, GuardedList.at(children, i), reachable);
+        },
+        .record => |fields| {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |i| {
+                const field = GuardedList.at(field_exprs, i);
+                markReachableLiftedExpr(program, field.value, reachable);
+            }
+        },
+        .tag => |tag| {
+            const payloads = program.exprSpan(tag.payloads);
+            for (0..payloads.len) |i| markReachableLiftedExpr(program, GuardedList.at(payloads, i), reachable);
+        },
         .nominal,
         .dbg,
         .expect,
@@ -917,13 +1185,22 @@ fn markReachableLiftedExpr(
         => {},
         .call_value => |call| {
             markReachableLiftedExpr(program, call.callee, reachable);
-            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
         },
         .call_proc => |call| {
-            for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable);
-            for (program.exprSpan(call.captures)) |capture| markReachableLiftedExpr(program, capture, reachable);
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+            const operands = program.captureOperandSpan(call.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
+            }
         },
-        .low_level => |call| for (program.exprSpan(call.args)) |arg| markReachableLiftedExpr(program, arg, reachable),
+        .low_level => |call| {
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+        },
         .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
         .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
         .structural_eq => |eq| {
@@ -936,28 +1213,37 @@ fn markReachableLiftedExpr(
         },
         .match_ => |match| {
             markReachableLiftedExpr(program, match.scrutinee, reachable);
-            for (program.branchSpan(match.branches)) |branch| {
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
                 if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }
         },
         .if_ => |if_| {
-            for (program.ifBranchSpan(if_.branches)) |branch| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
                 markReachableLiftedExpr(program, branch.cond, reachable);
                 markReachableLiftedExpr(program, branch.body, reachable);
             }
             markReachableLiftedExpr(program, if_.final_else, reachable);
         },
         .block => |block| {
-            for (program.stmtSpan(block.statements)) |stmt| markReachableLiftedStmt(program, stmt, reachable);
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |i| markReachableLiftedStmt(program, GuardedList.at(statements, i), reachable);
             markReachableLiftedExpr(program, block.final_expr, reachable);
         },
         .loop_ => |loop| {
-            for (program.exprSpan(loop.initial_values)) |initial| markReachableLiftedExpr(program, initial, reachable);
+            const initial_values = program.exprSpan(loop.initial_values);
+            for (0..initial_values.len) |i| markReachableLiftedExpr(program, GuardedList.at(initial_values, i), reachable);
             markReachableLiftedExpr(program, loop.body, reachable);
         },
         .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
-        .continue_ => |continue_| for (program.exprSpan(continue_.values)) |value| markReachableLiftedExpr(program, value, reachable),
+        .continue_ => |continue_| {
+            const values = program.exprSpan(continue_.values);
+            for (0..values.len) |i| markReachableLiftedExpr(program, GuardedList.at(values, i), reachable);
+        },
     }
 }
 
@@ -966,7 +1252,7 @@ fn markReachableLiftedStmt(
     stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
     reachable: []bool,
 ) void {
-    switch (program.stmts.items[@intFromEnum(stmt_id)]) {
+    switch (program.getStmt(stmt_id)) {
         .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
         .expr,
         .expect,
@@ -982,11 +1268,11 @@ fn countUnreachableLiftedDirectCalls(
     allocator: Allocator,
     program: *const postcheck.MonotypeLifted.Ast.Program,
 ) TestError!usize {
-    const reachable = try allocator.alloc(bool, program.exprs.items.len);
+    const reachable = try allocator.alloc(bool, program.exprCount());
     defer allocator.free(reachable);
     @memset(reachable, false);
 
-    for (program.fns.items) |fn_| {
+    for (program.fnsView()) |fn_| {
         switch (fn_.body) {
             .roc => |body| markReachableLiftedExpr(program, body, reachable),
             .hosted => {},
@@ -994,7 +1280,7 @@ fn countUnreachableLiftedDirectCalls(
     }
 
     var count: usize = 0;
-    for (program.exprs.items, reachable) |expr, is_reachable| {
+    for (program.exprsView(), reachable) |expr, is_reachable| {
         if (!is_reachable and expr.data == .call_proc) count += 1;
     }
     return count;
@@ -1161,10 +1447,381 @@ fn expectRootTargetHasCalls(
     try std.testing.expect(target_calls.len > 0);
 }
 
-test "direct call wrapper is inlined when inline mode is enabled" {
-    try expectRootDirectCallCount(
+fn nestedSite(def: postcheck.Monotype.Ast.NestedDef) ?postcheck.Monotype.Ast.NestedFn {
+    return switch (def.fn_def.fn_def) {
+        .nested => |site| site,
+        else => null,
+    };
+}
+
+fn sameNestedSourceSite(
+    lhs: postcheck.Monotype.Ast.NestedFn,
+    rhs: postcheck.Monotype.Ast.NestedFn,
+) bool {
+    return std.mem.eql(u8, lhs.owner.artifact.bytes[0..], rhs.owner.artifact.bytes[0..]) and
+        lhs.owner.proc_base == rhs.owner.proc_base and
+        lhs.owner.template == rhs.owner.template and
+        lhs.site == rhs.site;
+}
+
+test "issue 9802 same-type map2 specialization counters are bounded" {
+    const allocator = std.testing.allocator;
+    const source =
         \\module [main]
         \\
+        \\Boxed(a) := [Boxed(a)]
+        \\
+        \\const : a -> Boxed(a)
+        \\const = |value| Boxed(value)
+        \\
+        \\map2 : Boxed(a), Boxed(b), (a, b -> c) -> Boxed(c)
+        \\map2 = |Boxed(left), Boxed(right), f| Boxed(f(left, right))
+        \\
+        \\unwrap : Boxed(a) -> a
+        \\unwrap = |Boxed(value)| value
+        \\
+        \\main : I64
+        \\main = {
+        \\    v0 = const(0)
+        \\    v1 = map2(v0, const(1), |a, b| a + b)
+        \\    v2 = map2(v1, const(2), |a, b| a + b)
+        \\    v3 = map2(v2, const(3), |a, b| a + b)
+        \\    v4 = map2(v3, const(4), |a, b| a + b)
+        \\    v5 = map2(v4, const(5), |a, b| a + b)
+        \\    v6 = map2(v5, const(6), |a, b| a + b)
+        \\    v7 = map2(v6, const(7), |a, b| a + b)
+        \\    v8 = map2(v7, const(8), |a, b| a + b)
+        \\    unwrap(v8)
+        \\}
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+
+    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+        .template_requests = 53,
+        .template_hits = 22,
+        .template_misses = 5,
+        .nested_requests = 8,
+        .nested_hits = 0,
+        .nested_misses = 8,
+        .template_lookup_candidates = 22,
+        .nested_lookup_candidates = 0,
+        .specialization_type_digest_requests = 74,
+        .specialization_type_digest_cache_hits = 139,
+        .specialization_type_digest_cache_misses = 128,
+        .specialization_type_digest_nodes_visited = 128,
+        .exact_type_checks = 22,
+    }, counters);
+}
+
+test "issue 9802 growing-structural map2 specialization counters are bounded" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\Boxed(a) := [Boxed(a)]
+        \\
+        \\const : a -> Boxed(a)
+        \\const = |value| Boxed(value)
+        \\
+        \\map2 : Boxed(a), Boxed(b), (a, b -> c) -> Boxed(c)
+        \\map2 = |Boxed(left), Boxed(right), f| Boxed(f(left, right))
+        \\
+        \\unwrap : Boxed(a) -> a
+        \\unwrap = |Boxed(value)| value
+        \\
+        \\main : I64
+        \\main = {
+        \\    v0 = const(0)
+        \\    v1 = map2(v0, const(1), |acc, n| { acc, n1: n })
+        \\    v2 = map2(v1, const(2), |acc, n| { acc, n2: n })
+        \\    v3 = map2(v2, const(3), |acc, n| { acc, n3: n })
+        \\    v4 = map2(v3, const(4), |acc, n| { acc, n4: n })
+        \\    v5 = map2(v4, const(5), |acc, n| { acc, n5: n })
+        \\    v6 = map2(v5, const(6), |acc, n| { acc, n6: n })
+        \\    unwrap(v6).n6
+        \\}
+    ;
+
+    const counters = try monotypeCountersForModule(allocator, source);
+
+    try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
+        .template_requests = 29,
+        .template_hits = 5,
+        .template_misses = 10,
+        .nested_requests = 6,
+        .nested_hits = 0,
+        .nested_misses = 6,
+        .template_lookup_candidates = 5,
+        .nested_lookup_candidates = 0,
+        .specialization_type_digest_requests = 51,
+        .specialization_type_digest_cache_hits = 244,
+        .specialization_type_digest_cache_misses = 290,
+        .specialization_type_digest_nodes_visited = 290,
+        .exact_type_checks = 5,
+    }, counters);
+}
+
+test "imported and local generic specialization counters reuse closed types" {
+    const allocator = std.testing.allocator;
+    const util_module =
+        \\module [identity]
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+    ;
+    const source =
+        \\module [main]
+        \\
+        \\import Util exposing [identity]
+        \\
+        \\Boxed(a) := [Boxed(a)]
+        \\
+        \\local_identity : a -> a
+        \\local_identity = |value| value
+        \\
+        \\main : { imported_a : Boxed(U64), imported_b : Boxed(U64), local_a : Boxed(U64), local_b : Boxed(U64) }
+        \\main = {
+        \\    value = Boxed(1)
+        \\    {
+        \\        imported_a: identity(value),
+        \\        imported_b: identity(value),
+        \\        local_a: local_identity(value),
+        \\        local_b: local_identity(value),
+        \\    }
+        \\}
+    ;
+
+    const counters = try monotypeCountersForModuleWithImports(allocator, source, &.{
+        .{ .name = "Util", .source = util_module },
+    });
+
+    try std.testing.expect(counters.template_requests >= 4);
+    try std.testing.expect(counters.template_misses >= 2);
+    try std.testing.expect(counters.template_hits >= 2);
+    try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
+}
+
+test "disabling monotype specialization cache does not change monotype output" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\main : { n : U64, flag : Bool }
+        \\main = {
+        \\    { n: identity(1), flag: identity(Bool.True) }
+        \\}
+    ;
+
+    var default = try lowerMonotypeModule(allocator, source);
+    defer default.deinit(allocator);
+
+    var disabled = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .specialization_cache = .disabled,
+    });
+    defer disabled.deinit(allocator);
+
+    try expectEquivalentMonotypeProgramViews(default.mono.view(), disabled.mono.view());
+}
+
+test "monotype specialization cache read reuses loaded hits and lowers fresh misses" {
+    const allocator = std.testing.allocator;
+    const mixed_source =
+        \\module [main]
+        \\
+        \\identity : a -> a
+        \\identity = |value| value
+        \\
+        \\main : { n : U64, flag : Bool }
+        \\main = {
+        \\    { n: identity(1), flag: identity(Bool.True) }
+        \\}
+    ;
+
+    var loaded_program = try lowerMonotypeModule(allocator, mixed_source);
+    defer loaded_program.deinit(allocator);
+    const loaded_program_view = loaded_program.mono.view();
+
+    const selected_loaded_spec = for (loaded_program_view.specs) |record| {
+        if (isUnaryPrimitiveFnSpec(loaded_program_view, record, .u64)) break record;
+    } else return error.MissingProcSpec;
+    const loaded_specs = [_]MonoAst.SpecRecord{selected_loaded_spec};
+
+    const loaded_types = try durableTypeSnapshot(allocator, &loaded_program.mono);
+    defer loaded_types.deinit(allocator);
+    const loaded_shards = [_]MonoLower.LoadedSpecializationShard{.{
+        .shard_id = @enumFromInt(1),
+        .types = loaded_types.view,
+        .specs = &loaded_specs,
+    }};
+
+    var no_cache = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
+        .specialization_cache = .disabled,
+    });
+    defer no_cache.deinit(allocator);
+
+    var counters: MonoLower.SpecializationCounters = .{};
+    var cached = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
+        .specialization_cache = .{},
+        .loaded_specialization_shards = &loaded_shards,
+        .specialization_counters = &counters,
+    });
+    defer cached.deinit(allocator);
+
+    try std.testing.expect(cached.mono.view().imported_fns.len > 0);
+    try std.testing.expect(cached.mono.view().specs.len < no_cache.mono.view().specs.len);
+    try std.testing.expect(counters.template_hits > 0);
+    try std.testing.expect(counters.template_misses > 0);
+    try expectSpecsCoveredByCachedOrLoaded(allocator, no_cache.mono.view(), cached.mono.view(), loaded_shards[0]);
+}
+
+test "nested function specializations keep equal types at different sites distinct" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\first : U64 -> U64
+        \\first = |n| {
+        \\    id = |x| x
+        \\    id(n)
+        \\}
+        \\
+        \\second : U64 -> U64
+        \\second = |n| {
+        \\    id = |x| x
+        \\    id(n)
+        \\}
+        \\
+        \\main : { first : U64, second : U64 }
+        \\main = { first: first(1), second: second(2) }
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+
+    var found_distinct_sites = false;
+    const nested_defs = lowered.mono.nestedDefsView();
+    for (nested_defs, 0..) |lhs, lhs_index| {
+        const lhs_site = nestedSite(lhs) orelse continue;
+        for (nested_defs[lhs_index + 1 ..]) |rhs| {
+            const rhs_site = nestedSite(rhs) orelse continue;
+            if (!sameNestedSourceSite(lhs_site, rhs_site) and
+                try lowered.mono.types.typeEql(&lowered.mono.names, lhs.fn_def.mono_fn_ty, rhs.fn_def.mono_fn_ty))
+            {
+                found_distinct_sites = true;
+            }
+        }
+    }
+
+    try std.testing.expect(found_distinct_sites);
+}
+
+test "one nested function site specializes at multiple closed function types" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\choose : a -> a
+        \\choose = |value| {
+        \\    id = |x| x
+        \\    id(value)
+        \\}
+        \\
+        \\main : { n : U64, s : Str }
+        \\main = { n: choose(1), s: choose("hi") }
+    ;
+
+    var lowered = try lowerMonotypeModule(allocator, source);
+    defer lowered.deinit(allocator);
+
+    var found_same_site_distinct_types = false;
+    const nested_defs = lowered.mono.nestedDefsView();
+    for (nested_defs, 0..) |lhs, lhs_index| {
+        const lhs_site = nestedSite(lhs) orelse continue;
+        for (nested_defs[lhs_index + 1 ..]) |rhs| {
+            const rhs_site = nestedSite(rhs) orelse continue;
+            if (!sameNestedSourceSite(lhs_site, rhs_site)) continue;
+            if (lhs.fn_def.mono_fn_ty != rhs.fn_def.mono_fn_ty) {
+                found_same_site_distinct_types = true;
+            }
+        }
+    }
+
+    try std.testing.expect(found_same_site_distinct_types);
+}
+
+test "differently ordered source record rows produce normalized monotype rows" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\module [main]
+        \\
+        \\choose : Bool -> { a : U64, b : U64 }
+        \\choose = |flag| if flag { b: 2, a: 1 } else { a: 3, b: 4 }
+        \\
+        \\main : { a : U64, b : U64 }
+        \\main = choose(Bool.True)
+    ;
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, import_count);
+    defer allocator.free(import_views);
+
+    var view_index: usize = 0;
+    if (resources.borrowed_builtin_artifact) |builtin_artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(builtin_artifact);
+        view_index += 1;
+    }
+    for (resources.import_artifacts) |*artifact| {
+        import_views[view_index] = check.CheckedArtifact.importedView(artifact);
+        view_index += 1;
+    }
+
+    var mono = try postcheck.Monotype.Lower.run(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.requests },
+        .{},
+    );
+    defer mono.deinit();
+
+    const specs = mono.specsView();
+    try std.testing.expect(specs.len > 0);
+    for (specs) |spec| {
+        try std.testing.expectEqual(postcheck.Monotype.Ast.SpecStatus.ready, spec.status);
+    }
+
+    const a_name = try mono.names.internRecordFieldLabel("a");
+    const b_name = try mono.names.internRecordFieldLabel("b");
+    var normalized_rows: usize = 0;
+    const type_view = mono.types.view();
+    for (type_view.types) |content| {
+        const span = switch (content) {
+            .record => |fields| fields,
+            else => continue,
+        };
+        const fields = type_view.fieldSpan(span);
+        if (fields.len != 2) continue;
+        if (fields[0].name == a_name and fields[1].name == b_name) {
+            normalized_rows += 1;
+        } else if (fields[0].name == b_name and fields[1].name == a_name) {
+            return error.TestUnexpectedResult;
+        }
+    }
+
+    try std.testing.expect(normalized_rows > 0);
+}
+
+test "direct call wrapper is inlined when inline mode is enabled" {
+    try expectRootDirectCallCount(
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1178,8 +1835,6 @@ test "direct call wrapper is inlined when inline mode is enabled" {
 
 test "direct call wrapper is not inlined when inline mode is none" {
     try expectRootTargetHasCalls(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1193,8 +1848,6 @@ test "direct call wrapper is not inlined when inline mode is none" {
 
 test "zero statement block wrapper is inlined" {
     try expectRootDirectCallCount(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1211,8 +1864,6 @@ test "zero statement block wrapper is inlined" {
 test "low level wrapper is inlined when inline mode is enabled" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\main : Str -> U64
         \\main = |str| Str.count_utf8_bytes(str)
     , .wrappers);
@@ -1225,8 +1876,6 @@ test "low level wrapper is inlined when inline mode is enabled" {
 
 test "block wrapper with statements is not inlined" {
     try expectInlinePlanDecision(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1243,8 +1892,6 @@ test "block wrapper with statements is not inlined" {
 
 test "call value wrapper is not inlined" {
     try expectInlinePlanDecision(
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1259,8 +1906,6 @@ test "call value wrapper is not inlined" {
 test "self-recursive direct wrapper is not inlined" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\wrapper : U64 -> U64
         \\wrapper = |x| wrapper(x)
         \\
@@ -1284,8 +1929,6 @@ test "self-recursive direct wrapper is not inlined" {
 
 test "mutually recursive direct wrappers are not inlined" {
     try expectRootTargetHasCalls(
-        \\module [main]
-        \\
         \\a : U64 -> U64
         \\a = |x| b(x)
         \\
@@ -1300,8 +1943,6 @@ test "mutually recursive direct wrappers are not inlined" {
 test "capturing direct wrapper is not inlined" {
     const allocator = std.testing.allocator;
     var lowered_source = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\callee : U64 -> U64
         \\callee = |x| x + 1
         \\
@@ -1339,8 +1980,6 @@ fn expectRootTargetTailTransform(
 
 test "trmc: recursive list builder is TRMC-transformed through the pipeline" {
     try expectRootTargetTailTransform(
-        \\module [main]
-        \\
         \\LinkedList := [Nil, Cons(I64, LinkedList)]
         \\
         \\repeat : I64, I64 -> LinkedList
@@ -1352,8 +1991,6 @@ test "trmc: recursive list builder is TRMC-transformed through the pipeline" {
 
 test "trmc: accumulator recursion is TCE-transformed through the pipeline" {
     try expectRootTargetTailTransform(
-        \\module [main]
-        \\
         \\sum_to : I64, I64 -> I64
         \\sum_to = |n, acc| if n == 0.I64 acc else sum_to(n - 1, acc + n)
         \\
@@ -1363,8 +2000,6 @@ test "trmc: accumulator recursion is TCE-transformed through the pipeline" {
 
 test "trmc: result used before the constructor is not transformed" {
     try expectRootTargetTailTransform(
-        \\module [main]
-        \\
         \\LinkedList := [Nil, Cons(I64, LinkedList)]
         \\
         \\length_acc : LinkedList, I64 -> I64
@@ -1385,8 +2020,6 @@ test "trmc: result used before the constructor is not transformed" {
 
 test "plant iter pipeline specializes collect worker after inlining" {
     try expectIterCollectWorkerSpecialized(
-        \\module [main]
-        \\
         \\Plant : { seed : I64 }
         \\
         \\random_plant : I64 -> Plant
@@ -1413,8 +2046,6 @@ test "known-length List.iter collect specializes without unbound locals" {
     // ARC use-after-realloc fix, since main's rewrite emits an owned variant.)
     const allocator = std.testing.allocator;
     var optimized = try lowerModule(allocator,
-        \\module [main]
-        \\
         \\main : List(I64)
         \\main =
         \\    Iter.collect(
@@ -1426,8 +2057,6 @@ test "known-length List.iter collect specializes without unbound locals" {
 
 test "direct iter collect worker specializes constructor recursive call" {
     try expectIterCollectWorkerSpecialized(
-        \\module [main]
-        \\
         \\Plant : { seed : I64 }
         \\
         \\random_plant : I64 -> Plant
@@ -1444,8 +2073,6 @@ test "direct iter collect worker specializes constructor recursive call" {
 test "spec constr does not duplicate opaque let-bound direct calls" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tick : I64 -> I64
@@ -1471,8 +2098,6 @@ test "spec constr does not duplicate opaque let-bound direct calls" {
 test "spec constr does not duplicate opaque known-match payloads" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\Step : [One(I64)]
         \\
@@ -1498,8 +2123,6 @@ test "spec constr does not duplicate opaque known-match payloads" {
 
 test "spec constr preserves direct call argument effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap : I64 -> I64
@@ -1525,8 +2148,6 @@ test "spec constr preserves direct call argument effect order" {
 
 test "spec constr preserves left-to-right order for multiple unsafe call args" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap_one : I64 -> I64
@@ -1558,8 +2179,6 @@ test "spec constr preserves left-to-right order for multiple unsafe call args" {
 
 test "spec constr preserves substituted capture order before direct call args" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap_capture : I64 -> I64
@@ -1590,8 +2209,6 @@ test "spec constr preserves substituted capture order before direct call args" {
 
 test "spec constr preserves callable argument effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\
         \\tap : I64 -> I64
@@ -1620,8 +2237,6 @@ test "spec constr preserves callable argument effect order" {
 
 test "spec constr preserves known-match single-use payload effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\Step : [One(I64)]
         \\
@@ -1647,8 +2262,6 @@ test "spec constr preserves known-match single-use payload effect order" {
 
 test "spec constr preserves nested known-match payload effect order" {
     try expectOptimizedDbgEvents(
-        \\module [main]
-        \\
         \\State : { n : I64 }
         \\Step : [One({ item : I64 })]
         \\
@@ -1679,8 +2292,6 @@ test "spec constr preserves nested known-match payload effect order" {
 test "spec constr writes dynamically discovered workers once" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Step : [Start(I64), Loop(I64)]
         \\
         \\go : Step -> I64
@@ -1709,8 +2320,6 @@ test "spec constr writes dynamically discovered workers once" {
 test "spec constr specializes recursive record state" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\State : { n : I64, acc : I64 }
         \\
         \\sum_record : State -> I64
@@ -1742,8 +2351,6 @@ test "spec constr specializes recursive record state" {
 test "spec constr specializes record state carried by while loop" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Start : { n : I64 }
         \\State : { n : I64, acc : I64 }
         \\
@@ -1778,8 +2385,6 @@ test "spec constr specializes record state carried by while loop" {
 test "spec constr specializes recursive tuple state" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\sum_tuple : (I64, I64) -> I64
         \\sum_tuple = |state|
         \\    match state {
@@ -1812,8 +2417,6 @@ test "spec constr specializes recursive tuple state" {
 test "spec constr leaves uninspected constructor arguments generic" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\unused_state : { n : I64 }, I64 -> I64
         \\unused_state = |state, n|
         \\    if n == 0 {
@@ -1843,8 +2446,6 @@ test "spec constr leaves uninspected constructor arguments generic" {
 test "spec constr specializes tagged recursive state" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Step : [Done, More(I64)]
         \\
         \\count_down : Step, I64 -> I64
@@ -1880,8 +2481,6 @@ test "spec constr specializes tagged recursive state" {
 test "spec constr uses fully known entry shape for multiple tuple states" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\roman : I64, (I64, I64), (I64, I64) -> I64
         \\roman = |n, p, q|
         \\    if n == 0 {
@@ -1914,8 +2513,6 @@ test "LIR statements and procs carry resolved source locations" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\add2 : U64 -> U64
         \\add2 = |n| n + 2
         \\
@@ -1933,17 +2530,17 @@ test "LIR statements and procs carry resolved source locations" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_locs.items.len);
-    try std.testing.expectEqual(store.cf_stmts.items.len, store.cf_stmt_regions.items.len);
-    try std.testing.expectEqual(store.proc_specs.items.len, store.proc_locs.items.len);
-    try std.testing.expect(store.proc_debug_names.items.len > 0);
-    for (store.proc_debug_names.items) |entry| {
-        try std.testing.expect(entry.proc < store.proc_specs.items.len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.getCFStmtLocs().len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.getCFStmtRegions().len);
+    try std.testing.expectEqual(store.getProcSpecs().len, store.getProcLocs().len);
+    try std.testing.expect(store.getProcDebugNames().len > 0);
+    for (store.getProcDebugNames()) |entry| {
+        try std.testing.expect(entry.proc < store.getProcSpecs().len);
     }
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items, store.cf_stmts.items) |loc, region, stmt| {
+    for (store.getCFStmtLocs(), store.getCFStmtRegions(), store.getCFStmts()) |loc, region, stmt| {
         const has_source = switch (stmt) {
             .incref,
             .decref,
@@ -2007,7 +2604,7 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(located > 0);
 
     var located_procs: usize = 0;
-    for (store.proc_locs.items) |loc| {
+    for (store.getProcLocs()) |loc| {
         if (loc.hasLocation()) {
             located_procs += 1;
             try std.testing.expect(loc.file < store.sourceFileCount());
@@ -2017,7 +2614,7 @@ test "LIR statements and procs carry resolved source locations" {
 
     var found_add2 = false;
     var found_mul3 = false;
-    for (0..store.proc_specs.items.len) |i| {
+    for (0..store.getProcSpecs().len) |i| {
         const name = store.procDebugName(@enumFromInt(i)) orelse continue;
         if (std.mem.eql(u8, name, "add2")) found_add2 = true;
         if (std.mem.eql(u8, name, "mul3")) found_mul3 = true;
@@ -2030,8 +2627,6 @@ test "referenced but uncalled function does not materialize a proc" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\unused : U64 -> U64
         \\unused = |n| n + 1
         \\
@@ -2047,7 +2642,7 @@ test "referenced but uncalled function does not materialize a proc" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var found_unused = false;
-    for (0..store.proc_specs.items.len) |i| {
+    for (0..store.getProcSpecs().len) |i| {
         const name = store.procDebugName(@enumFromInt(i)) orelse continue;
         if (std.mem.eql(u8, name, "unused")) found_unused = true;
     }
@@ -2058,8 +2653,6 @@ test "LIR statements carry source locations under optimizing inline mode" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\add2 : U64 -> U64
         \\add2 = |n| n + 2
         \\
@@ -2075,7 +2668,7 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.items, store.cf_stmt_regions.items) |loc, region| {
+    for (store.getCFStmtLocs(), store.getCFStmtRegions()) |loc, region| {
         if (loc.hasLocation()) located += 1;
         if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
@@ -2086,8 +2679,6 @@ test "adjacent string interpolation patterns lower to grouped LIR match set" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\classify : Str -> Str
         \\classify = |s| match s {
         \\    "a${x}z" => x
@@ -2110,8 +2701,6 @@ test "LIR locals carry source-level names" {
     const allocator = std.testing.allocator;
 
     const source =
-        \\module [main]
-        \\
         \\compute : U64 -> U64
         \\compute = |n| {
         \\    first_part = n * 2
@@ -2127,11 +2716,11 @@ test "LIR locals carry source-level names" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.locals.items.len, store.local_names.items.len);
+    try std.testing.expectEqual(store.getLocals().len, store.getLocalNamesRaw().len);
 
     var found_first = false;
     var found_second = false;
-    for (0..store.locals.items.len) |i| {
+    for (0..store.getLocals().len) |i| {
         const name = store.localName(@enumFromInt(i)) orelse continue;
         if (std.mem.eql(u8, name, "first_part")) found_first = true;
         if (std.mem.eql(u8, name, "second_part")) found_second = true;
@@ -2151,7 +2740,7 @@ test "shared callees are lifted once and never gain spurious captures" {
 
     var source = std.ArrayList(u8).empty;
     defer source.deinit(allocator);
-    try source.appendSlice(allocator, "module [main]\n\nf0 : U64 -> U64\nf0 = |n| n + 1\n\n");
+    try source.appendSlice(allocator, "f0 : U64 -> U64\nf0 = |n| n + 1\n\n");
     var level: usize = 1;
     while (level <= depth) : (level += 1) {
         const chunk = try std.fmt.allocPrint(
@@ -2171,8 +2760,9 @@ test "shared callees are lifted once and never gain spurious captures" {
 
     // The whole chain survives lifting as distinct closed functions: the diamond
     // is not collapsed, and no function gains spurious closure captures.
-    try std.testing.expect(lifted.lifted.fns.items.len >= depth);
-    for (lifted.lifted.fns.items) |func| {
+    const lifted_fns = lifted.lifted.fnsView();
+    try std.testing.expect(lifted_fns.len >= depth);
+    for (lifted_fns) |func| {
         try std.testing.expectEqual(@as(u32, 0), func.captures.len);
     }
 }

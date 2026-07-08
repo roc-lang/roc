@@ -21,6 +21,8 @@ pub const BuiltinKind = enum {
     i128_mod_s,
     u128_div,
     u128_mod,
+    num_mul_with_overflow_i128,
+    num_mul_with_overflow_u128,
     i128_to_dec,
     u128_to_dec,
     dec_to_int_try_unsafe,
@@ -83,6 +85,14 @@ pub const BuiltinKind = enum {
     hasher_write_f64_bits,
     hasher_write_bytes,
     hasher_write_str,
+    crypto_sha256_hash_bytes,
+    crypto_sha256_hasher_empty,
+    crypto_sha256_hasher_write,
+    crypto_sha256_hasher_finish,
+    crypto_blake3_hash_bytes,
+    crypto_blake3_hasher_empty,
+    crypto_blake3_hasher_write,
+    crypto_blake3_hasher_finish,
 };
 
 /// Wasm call signature and symbol name for a builtin wrapper.
@@ -103,6 +113,8 @@ pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
     .{ .name = "roc_builtins_num_rem_trunc_i128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_num_div_trunc_u128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_num_rem_trunc_u128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_num_mul_with_overflow_i128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_num_mul_with_overflow_u128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_i128_to_dec_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_u128_to_dec_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_dec_to_int_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
@@ -165,6 +177,14 @@ pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
     .{ .name = "roc_builtins_hasher_write_f64_bits", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_hasher_write_bytes", .wasm_params = &.{ .i64, .i32, .i32, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
     .{ .name = "roc_builtins_hasher_write_str", .wasm_params = &.{ .i64, .i32, .i32, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
+    .{ .name = "roc_builtins_crypto_sha256_hash_bytes", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_sha256_hasher_empty", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_sha256_hasher_write", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_sha256_hasher_finish", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_blake3_hash_bytes", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_blake3_hasher_empty", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_blake3_hasher_write", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+    .{ .name = "roc_builtins_crypto_blake3_hasher_finish", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
 };
 
 /// Return the builtin wrapper signature for `kind`.

@@ -128,13 +128,14 @@ h == foo
 }
 ~~~
 # EXPECTED
-PARSE ERROR - fuzz_crash_020.md:52:16:52:16
-PARSE ERROR - fuzz_crash_020.md:58:4:58:4
-PARSE ERROR - fuzz_crash_020.md:59:3:59:3
-PARSE ERROR - fuzz_crash_020.md:60:16:60:16
-PARSE ERROR - fuzz_crash_020.md:62:5:62:5
-PARSE ERROR - fuzz_crash_020.md:63:7:63:7
-PARSE ERROR - fuzz_crash_020.md:66:12:66:12
+MISSING MATCH ARROW - fuzz_crash_020.md:52:16:52:16
+MISSING MATCH ARROW - fuzz_crash_020.md:58:4:58:4
+MISSING MATCH ARROW - fuzz_crash_020.md:59:3:59:3
+MISSING MATCH ARROW - fuzz_crash_020.md:60:16:60:16
+MISSING MATCH ARROW - fuzz_crash_020.md:62:5:62:5
+MISSING MATCH ARROW - fuzz_crash_020.md:63:7:63:7
+MISSING MATCH ARROW - fuzz_crash_020.md:66:12:66:12
+EXPECTED RECORD ACCESSOR - fuzz_crash_020.md:83:2:83:5
 MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
 MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
 MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
@@ -145,49 +146,49 @@ UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:20:12:20:13
 UNDECLARED TYPE - fuzz_crash_020.md:24:15:24:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:24:24:24:25
 UNDECLARED TYPE - fuzz_crash_020.md:37:7:37:9
-UNDEFINED VARIABLE - fuzz_crash_020.md:40:5:40:8
-UNDEFINED VARIABLE - fuzz_crash_020.md:42:4:42:5
-UNDEFINED VARIABLE - fuzz_crash_020.md:42:6:42:10
-UNDEFINED VARIABLE - fuzz_crash_020.md:45:3:45:4
-UNDEFINED VARIABLE - fuzz_crash_020.md:53:2:53:3
+NAME NOT IN SCOPE - fuzz_crash_020.md:40:5:40:8
+NAME NOT IN SCOPE - fuzz_crash_020.md:42:4:42:5
+NAME NOT IN SCOPE - fuzz_crash_020.md:42:6:42:10
+NAME NOT IN SCOPE - fuzz_crash_020.md:45:3:45:4
+NAME NOT IN SCOPE - fuzz_crash_020.md:53:2:53:3
 UNUSED VARIABLE - fuzz_crash_020.md:52:11:52:14
-UNDEFINED VARIABLE - fuzz_crash_020.md:55:11:55:12
+NAME NOT IN SCOPE - fuzz_crash_020.md:55:11:55:12
 UNUSED VARIABLE - fuzz_crash_020.md:57:2:57:4
-UNDEFINED VARIABLE - fuzz_crash_020.md:59:3:59:7
+NAME NOT IN SCOPE - fuzz_crash_020.md:59:3:59:7
 UNUSED VARIABLE - fuzz_crash_020.md:60:12:60:15
-UNDEFINED VARIABLE - fuzz_crash_020.md:72:2:72:4
+NAME NOT IN SCOPE - fuzz_crash_020.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_020.md:74:9:74:15
-UNDEFINED VARIABLE - fuzz_crash_020.md:78:9:78:14
-UNDEFINED VARIABLE - fuzz_crash_020.md:80:3:80:6
+NAME NOT IN SCOPE - fuzz_crash_020.md:78:9:78:14
+UNRECOGNIZED SYNTAX - fuzz_crash_020.md:83:2:83:5
 CRASH EXPECTS STRING - fuzz_crash_020.md:86:3:86:11
-UNDEFINED VARIABLE - fuzz_crash_020.md:87:11:87:12
-UNDEFINED VARIABLE - fuzz_crash_020.md:92:11:92:15
-UNDEFINED VARIABLE - fuzz_crash_020.md:93:2:93:7
-UNDEFINED VARIABLE - fuzz_crash_020.md:94:3:94:6
-UNDEFINED VARIABLE - fuzz_crash_020.md:96:34:96:37
-UNDEFINED VARIABLE - fuzz_crash_020.md:96:47:96:52
-UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:57
+NAME NOT IN SCOPE - fuzz_crash_020.md:87:11:87:12
+NAME NOT IN SCOPE - fuzz_crash_020.md:92:11:92:15
+NAME NOT IN SCOPE - fuzz_crash_020.md:93:2:93:7
+NAME NOT IN SCOPE - fuzz_crash_020.md:94:3:94:6
+NAME NOT IN SCOPE - fuzz_crash_020.md:96:34:96:37
+NAME NOT IN SCOPE - fuzz_crash_020.md:96:47:96:52
+NAME NOT IN SCOPE - fuzz_crash_020.md:96:54:96:57
 DUPLICATE DEFINITION - fuzz_crash_020.md:97:2:97:3
-UNDEFINED VARIABLE - fuzz_crash_020.md:97:21:97:24
-UNDEFINED VARIABLE - fuzz_crash_020.md:97:30:97:32
+NAME NOT IN SCOPE - fuzz_crash_020.md:97:21:97:24
+NAME NOT IN SCOPE - fuzz_crash_020.md:97:30:97:32
 INVALID ASSIGNMENT TO ITSELF - fuzz_crash_020.md:97:34:97:35
-UNDEFINED VARIABLE - fuzz_crash_020.md:98:2:98:3
-UNDEFINED VARIABLE - fuzz_crash_020.md:100:11:100:14
-UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
-UNDEFINED VARIABLE - fuzz_crash_020.md:102:8:102:13
-UNDEFINED VARIABLE - fuzz_crash_020.md:105:2:105:3
-UNDEFINED VARIABLE - fuzz_crash_020.md:105:55:105:59
-UNDEFINED VARIABLE - fuzz_crash_020.md:105:60:105:64
-UNDEFINED VARIABLE - fuzz_crash_020.md:108:4:108:5
-UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
+NAME NOT IN SCOPE - fuzz_crash_020.md:98:2:98:3
+NAME NOT IN SCOPE - fuzz_crash_020.md:100:11:100:14
+NAME NOT IN SCOPE - fuzz_crash_020.md:102:4:102:6
+NAME NOT IN SCOPE - fuzz_crash_020.md:102:8:102:13
+NAME NOT IN SCOPE - fuzz_crash_020.md:105:2:105:3
+NAME NOT IN SCOPE - fuzz_crash_020.md:105:55:105:59
+NAME NOT IN SCOPE - fuzz_crash_020.md:105:60:105:64
+NAME NOT IN SCOPE - fuzz_crash_020.md:108:4:108:5
+NAME NOT IN SCOPE - fuzz_crash_020.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
 UNUSED VARIABLE - fuzz_crash_020.md:97:2:97:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
-UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
-UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
-UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
+NAME NOT IN SCOPE - fuzz_crash_020.md:119:2:119:5
+NAME NOT IN SCOPE - fuzz_crash_020.md:120:1:120:2
+NAME NOT IN SCOPE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:22:1:23:2
@@ -196,92 +197,146 @@ MISSING METHOD - fuzz_crash_020.md:39:2:39:3
 MISSING METHOD - fuzz_crash_020.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_020.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:74:1:74:22
+DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 MISSING METHOD - fuzz_crash_020.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
 TYPE MISMATCH - fuzz_crash_020.md:93:22:93:24
-DECLARATION HAS NO VALUE - fuzz_crash_020.md:113:1:113:7
 DECLARATION HAS NO VALUE - fuzz_crash_020.md:116:1:116:13
 TYPE MISMATCH - fuzz_crash_020.md:119:2:119:10
 MISSING METHOD - fuzz_crash_020.md:105:55:105:66
 MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  match a {lue  {                                                           │
  │                ‾                                                           │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:52:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  1 "for" => 20[1, ] # t                                                    │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:58:4 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  ment                                                                      │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:59:3 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  [1, 2, 3,est]123                                                          │
  │               ‾                                                            │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:60:16 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  ] 23                                                                      │
  │    ‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:62:5 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  3.1 314                                                                   │
  │      ‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:63:7 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
 
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: match_branch_missing_arrow ────────┐
-└┬────────────┘                                                               │
+┌─────────────────────┐
+│ MISSING MATCH ARROW ├─ I was parsing a match branch, and I expected `=>` ───┐
+└┬────────────────────┘  before the branch body.                              │
  │                                                                            │
  │  (1, 2, 3)123                                                              │
  │           ‾                                                                │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:66:12 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Add `=>` after the pattern or guard.
+
+    For example:
+        Err(msg) => crash msg
+
+    I reached the end of the file before this construct was complete.
+
+
+┌──────────────────────────┐
+│ EXPECTED RECORD ACCESSOR ├─ I was parsing access after `.`, and I ──────────┐
+└┬─────────────────────────┘  expected a field name or tuple index.           │
+ │                                                                            │
+ │  ...                                                                       │
+ │  ‾‾‾                                                                       │
+ └──────────────────────────────────────────────────── fuzz_crash_020.md:83:2 ┘
+
+    Record access uses a lowercase field name like `.name`. Tuple access uses a
+    number like `.0`. Uppercase names, malformed names, and a bare `.` are not
+    valid accessors.
+
+    For example:
+        person.name
+        pair.0
+
+    I found `...` here.
 
 
 ┌──────────────────┐
@@ -395,59 +450,59 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `num` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `num` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  if num {                                                                  │
  │     ‾‾‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:40:5 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `s` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `s` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  s exp0                                                                    │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:42:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `exp0` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `exp0` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  s exp0                                                                    │
  │    ‾‾‾‾                                                                    │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:42:6 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `r` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `r` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  r                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:45:3 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  x                                                                         │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:53:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -462,15 +517,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     to suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `x` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `x` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Blue=> {x                                                                 │
  │          ‾                                                                 │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:55:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -485,15 +540,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ment` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ment` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  ment                                                                      │
  │  ‾‾‾‾                                                                      │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:59:3 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -508,15 +563,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     to suppress this warning.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `nt` in this scope. ─────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `nt` in this scope. ──────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  nt                                                                        │
  │  ‾‾                                                                        │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:72:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -529,26 +584,26 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `blaue` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `blaue` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  expect blaue                                                              │
  │         ‾‾‾‾‾                                                              │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:78:9 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `tag` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌─────────────────────┐
+│ UNRECOGNIZED SYNTAX ├─ I don't recognize this syntax. ──────────────────────┐
+└┬────────────────────┘                                                       │
  │                                                                            │
- │  tag                                                                       │
+ │  ...                                                                       │
  │  ‾‾‾                                                                       │
- └──────────────────────────────────────────────────── fuzz_crash_020.md:80:3 ┘
+ └──────────────────────────────────────────────────── fuzz_crash_020.md:83:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    This might be a syntax error, an unsupported language feature, or a typo.
 
 
 ┌──────────────────────┐
@@ -562,81 +617,81 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     For example: `crash "Something went wrong"`
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `d` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `d` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  i= "H, ${d}"                                                              │
  │           ‾                                                                │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:87:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `list` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `list` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  for n in list {                                                           │
  │           ‾‾‾‾                                                             │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:92:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  line!("Ag ${n} to ${er}")                                                 │
  │  ‾‾‾‾‾                                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:93:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ber` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ber` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  ber + n                                                                   │
  │  ‾‾‾                                                                       │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:94:3 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `tag` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `tag` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
  │                                  ‾‾‾                                       │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:96:34 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `world` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `world` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
  │                                               ‾‾‾‾‾                        │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:96:47 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ned` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ned` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }                 │
  │                                                      ‾‾‾                   │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:96:54 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────┐
@@ -654,26 +709,26 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
        └────────────────────────────────────────────── fuzz_crash_020.md:88:1 ┘
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `tag` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `tag` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
  │                     ‾‾‾                                                    │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:97:21 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `nd` in this scope. ─────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `nd` in this scope. ──────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  t = (123, "World", tag, O, (nd, t), [1, 2, 3])                            │
  │                              ‾‾                                            │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:97:30 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌──────────────────────────────┐
@@ -690,103 +745,103 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     the value being assigned.
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `m` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `m` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  m (                                                                       │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:98:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ag1` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ag1` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  "World",ag1,                                                              │
  │          ‾‾‾                                                               │
  └────────────────────────────────────────────────── fuzz_crash_020.md:100:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `ne` in this scope. ─────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `ne` in this scope. ──────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  (ne, tuple),                                                              │
  │   ‾‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:102:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `tuple` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `tuple` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  (ne, tuple),                                                              │
  │       ‾‾‾‾‾                                                                │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:102:8 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `b` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `b` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.n… │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:105:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `e_fn` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `e_fn` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  …12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?                                   │
  │           ‾‾‾‾                                                             │
  └────────────────────────────────────────────────── fuzz_crash_020.md:105:55 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `arg1` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `arg1` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  … 3 e_fn(arg1)?.od()?.ned()?.recd?                                        │
  │           ‾‾‾‾                                                             │
  └────────────────────────────────────────────────── fuzz_crash_020.md:105:60 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `r` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `r` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  r(nu) # xpr                                                               │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:108:4 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `nu` in this scope. ─────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `nu` in this scope. ──────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  r(nu) # xpr                                                               │
  │    ‾‾                                                                      │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:108:6 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐
@@ -847,37 +902,37 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  foo == 1                                                                  │
  │  ‾‾‾                                                                       │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:119:2 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `h` in this scope. ──────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `h` in this scope. ───────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  h == foo                                                                  │
  │  ‾                                                                         │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:120:1 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `foo` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `foo` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  h == foo                                                                  │
  │       ‾‾‾                                                                  │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:120:6 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────────────┐
@@ -1007,6 +1062,18 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     they are published through the host boundary.
 
 
+┌──────────────────────────┐
+│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
+└┬─────────────────────────┘  implementation.                                 │
+ │                                                                            │
+ │  y : {}                                                                    │
+ │  ‾‾‾‾‾‾                                                                    │
+ └─────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
+
+    Add a value body here, or put hosted functions in a platform type module so
+    they are published through the host boundary.
+
+
 ┌────────────────┐
 │ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
 └┬───────────────┘  whose type doesn't have that method.                      │
@@ -1078,18 +1145,6 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
     But you are trying to use it as:
 
         Str
-
-
-┌──────────────────────────┐
-│ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
-└┬─────────────────────────┘  implementation.                                 │
- │                                                                            │
- │  y : {}                                                                    │
- │  ‾‾‾‾‾‾                                                                    │
- └─────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
-
-    Add a value body here, or put hosted functions in a platform type module so
-    they are published through the host boundary.
 
 
 ┌──────────────────────────┐
@@ -1454,8 +1509,7 @@ EndOfFile,
 						(s-expect
 							(e-ident (raw "blaue")))
 						(s-return
-							(e-ident (raw "tag")))
-						(e-ellipsis)
+							(e-malformed (reason "expr_dot_suffix_not_allowed")))
 						(e-apply
 							(e-ident (raw "me"))
 							(e-ellipsis))
@@ -1621,17 +1675,21 @@ Map(a, b) : Lis, (ab) -> List(b)
 
 MapML # Ag
 	: # Aon
-		List(),
+		List( # rg
+		),
 		(ab) -> # row
 			List(b) # z)
 
-line : () # Co
+line : ( # Cm
+) # Co
 
 Som : { foo : O, bar : g }
 
-Ml(a) : {}
+Ml(a) : { # ld
+}
 
-Soine(a) : {} #
+Soine(a) : { #
+} #
 
 Maybe(a) : [Somne]
 
@@ -1694,11 +1752,10 @@ ma = |_| {
 	w = "d"
 	var er = 123
 	expect blaue
-	return # d
-		tag
+	return
 
 	#
-	...
+		
 	me(
 		..., # r
 	)
@@ -1926,11 +1983,9 @@ expect {
 				(s-expect
 					(e-runtime-error (tag "ident_not_in_scope")))
 				(s-return
-					(e-runtime-error (tag "ident_not_in_scope")))
+					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-not-implemented))
-				(s-expr
-					(e-call (constraint-fn-var 2309)
+					(e-call (constraint-fn-var 2320)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -1978,7 +2033,7 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 2593)
+									(e-interpolation (constraint-fn-var 2604)
 										(first
 											(e-literal (string "Ag ")))
 										(parts
@@ -1988,7 +2043,7 @@ expect {
 											(e-lookup-local
 												(p-assign (ident "#interp_2")))
 											(e-literal (string "")))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 2596)
+						(e-dispatch-call (method "plus") (constraint-fn-var 2607)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2052,7 +2107,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3042)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 3053)
 									(receiver
 										(e-match
 											(match
@@ -2086,18 +2141,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3159)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 3170)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3121)
+															(e-dispatch-call (method "plus") (constraint-fn-var 3132)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3268)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 3279)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3230)
+															(e-dispatch-call (method "minus") (constraint-fn-var 3241)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2112,7 +2167,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3352)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 3363)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2126,12 +2181,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3419)
+													(e-dispatch-call (method "ned") (constraint-fn-var 3430)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 3386)
+																		(e-dispatch-call (method "od") (constraint-fn-var 3397)
 																			(receiver
 																				(e-match
 																					(match

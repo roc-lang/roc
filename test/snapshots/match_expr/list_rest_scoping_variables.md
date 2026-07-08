@@ -13,54 +13,70 @@ match data {
 }
 ~~~
 # EXPECTED
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:2:6:2:13
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:3:13:3:20
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:4:6:4:13
-BAD LIST REST PATTERN SYNTAX - list_rest_scoping_variables.md:5:13:5:20
+OLD LIST REST PATTERN - list_rest_scoping_variables.md:2:6:2:13
+OLD LIST REST PATTERN - list_rest_scoping_variables.md:3:13:3:20
+OLD LIST REST PATTERN - list_rest_scoping_variables.md:4:6:4:13
+OLD LIST REST PATTERN - list_rest_scoping_variables.md:5:13:5:20
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [..items] => 1                                                            │
  │   ‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────────────── list_rest_scoping_variables.md:2:6 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [first, ..items] => first                                                 │
  │          ‾‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────── list_rest_scoping_variables.md:3:13 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [..items, last] => last                                                   │
  │   ‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────────────── list_rest_scoping_variables.md:4:6 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [first, ..items, last] => first + last                                    │
  │          ‾‾‾‾‾‾‾                                                           │
  └─────────────────────────────────────── list_rest_scoping_variables.md:5:13 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 # TOKENS
 ~~~zig
@@ -157,7 +173,7 @@ match data {
 							(rest-at (index 1)
 								(p-assign (ident "items"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 81)
+					(e-dispatch-call (method "plus") (constraint-fn-var 84)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "first"))))

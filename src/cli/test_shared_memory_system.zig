@@ -186,7 +186,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     const used = compiled.lowered.shm.getUsedSize();
     try testing.expect(used > @sizeOf(lir.LirImage.Header));
     try testing.expect(compiled.lowered.view.root_procs.len > 0);
-    try testing.expect(compiled.lowered.view.store.proc_specs.items.len > 0);
+    try testing.expect(compiled.lowered.view.store.getProcSpecs().len > 0);
     try testing.expect(compiled.lowered.view.layouts.layouts.items.items.len > 0);
 
     const header = compiled.lowered.image_header;
@@ -194,7 +194,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expectEqual(lir.LirImage.MAGIC, header.magic);
     try testing.expectEqual(lir.LirImage.FORMAT_VERSION, header.format_version);
     try testing.expectEqual(compiled.lowered.view.root_procs.len, child_view.root_procs.len);
-    try testing.expectEqual(compiled.lowered.view.store.proc_specs.items.len, child_view.store.proc_specs.items.len);
+    try testing.expectEqual(compiled.lowered.view.store.getProcSpecs().len, child_view.store.getProcSpecs().len);
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
@@ -295,8 +295,8 @@ test "integration - error handling for non-existent file" {
 
 test "integration - automatic module dependency ordering" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "Leaf", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
-        .{ .name = "Branch", .source = "module [value]\nimport Leaf\nvalue : I64\nvalue = Leaf.value + 2\n" },
+        .{ .name = "Leaf", .source = "Leaf := [].{\n    value : I64\n    value = 40\n}\n" },
+        .{ .name = "Branch", .source = "import Leaf\nBranch := [].{\n    value : I64\n    value = Leaf.value + 2\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -311,8 +311,8 @@ test "integration - automatic module dependency ordering" {
 
 test "integration - transitive module imports (module A imports module B)" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "B", .source = "module [value]\nvalue : I64\nvalue = 40\n" },
-        .{ .name = "A", .source = "module [value]\nimport B\nvalue : I64\nvalue = B.value + 2\n" },
+        .{ .name = "B", .source = "B := [].{\n    value : I64\n    value = 40\n}\n" },
+        .{ .name = "A", .source = "import B\nA := [].{\n    value : I64\n    value = B.value + 2\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -327,10 +327,10 @@ test "integration - transitive module imports (module A imports module B)" {
 
 test "integration - diamond dependency pattern (A imports B and C, both import D)" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "D", .source = "module [value]\nvalue : {} -> I64\nvalue = |_| 10\n" },
-        .{ .name = "B", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 10\n" },
-        .{ .name = "C", .source = "module [value]\nimport D\nvalue : {} -> I64\nvalue = |_| D.value({}) + 12\n" },
-        .{ .name = "A", .source = "module [value]\nimport B\nimport C\nvalue : {} -> I64\nvalue = |_| B.value({}) + C.value({})\n" },
+        .{ .name = "D", .source = "D := [].{\n    value : {} -> I64\n    value = |_| 10\n}\n" },
+        .{ .name = "B", .source = "import D\nB := [].{\n    value : {} -> I64\n    value = |_| D.value({}) + 10\n}\n" },
+        .{ .name = "C", .source = "import D\nC := [].{\n    value : {} -> I64\n    value = |_| D.value({}) + 12\n}\n" },
+        .{ .name = "A", .source = "import B\nimport C\nA := [].{\n    value : {} -> I64\n    value = |_| B.value({}) + C.value({})\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,
@@ -345,8 +345,8 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
 
 test "integration - direct Core and Utils calls from app" {
     const imports = [_]test_helpers.ModuleSource{
-        .{ .name = "Core", .source = "module [inc]\ninc : I64 -> I64\ninc = |x| x + 1\n" },
-        .{ .name = "Utils", .source = "module [double]\ndouble : I64 -> I64\ndouble = |x| x * 2\n" },
+        .{ .name = "Core", .source = "Core := [].{\n    inc : I64 -> I64\n    inc = |x| x + 1\n}\n" },
+        .{ .name = "Utils", .source = "Utils := [].{\n    double : I64 -> I64\n    double = |x| x * 2\n}\n" },
     };
     var compiled = try compileLirImageForSharedTest(
         testing.allocator,

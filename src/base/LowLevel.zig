@@ -5,7 +5,7 @@
 //! no separate semantic/backend enum pair.
 
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
-pub const LowLevel = enum {
+pub const LowLevel = enum(u16) {
     // String operations
     str_is_eq,
     str_is_eq_static_small,
@@ -104,6 +104,16 @@ pub const LowLevel = enum {
     hasher_write_bytes,
     hasher_write_str,
 
+    // Crypto operations
+    crypto_sha256_hash_bytes,
+    crypto_sha256_hasher_empty,
+    crypto_sha256_hasher_write,
+    crypto_sha256_hasher_finish,
+    crypto_blake3_hash_bytes,
+    crypto_blake3_hasher_empty,
+    crypto_blake3_hasher_write,
+    crypto_blake3_hasher_finish,
+
     // Numeric comparison operations
     num_is_eq,
     num_is_gt,
@@ -116,12 +126,21 @@ pub const LowLevel = enum {
     num_abs,
     num_abs_diff,
     num_plus,
+    num_plus_checked,
     num_minus,
+    num_minus_checked,
     num_times,
+    num_times_checked,
     num_div_by,
+    num_div_by_checked,
     num_div_trunc_by,
+    num_div_trunc_by_checked,
     num_rem_by,
+    num_rem_by_checked,
     num_mod_by,
+    num_mod_by_checked,
+    num_negate_checked,
+    num_abs_checked,
     num_pow,
     num_sqrt,
     num_sin,
@@ -564,6 +583,16 @@ pub const LowLevel = enum {
             };
         }
 
+        pub fn runtimeUniquenessMaybeSharedResult(mask: u64) RcEffect {
+            return .{
+                .may_allocate = true,
+                .may_retain_or_release = true,
+                .may_runtime_uniqueness_check_args = mask,
+                .consume_args = mask,
+                .result_aliases_consumed_args = mask,
+            };
+        }
+
         pub fn runtimeUniquenessRetainingArgs(runtime_mask: u64, retain_mask: u64) RcEffect {
             return .{
                 .may_allocate = true,
@@ -580,7 +609,6 @@ pub const LowLevel = enum {
             return .{
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -589,7 +617,6 @@ pub const LowLevel = enum {
                 .may_retain_or_release = mask != 0,
                 .retain_args = mask,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -606,7 +633,6 @@ pub const LowLevel = enum {
                 .may_allocate = true,
                 .may_retain_or_release = true,
                 .result_shares_args = mask,
-                .result_unique = true,
             };
         }
 
@@ -644,10 +670,12 @@ pub const LowLevel = enum {
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .str_drop_prefix,
-            .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
-            .str_find_first,
             => RcEffect.retainsSharingArgs(argMask(&.{0})),
+
+            .str_drop_prefix_caseless_ascii,
+            .str_find_first,
+            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
@@ -659,11 +687,13 @@ pub const LowLevel = enum {
             .list_drop_last,
             .list_take_first,
             .list_take_last,
+            .list_split_first,
+            .list_split_last,
+            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
+
             .list_reverse,
             .list_reserve,
             .list_release_excess_capacity,
-            .list_split_first,
-            .list_split_last,
             => RcEffect.runtimeUniqueness(argMask(&.{0})),
 
             .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
@@ -721,6 +751,14 @@ pub const LowLevel = enum {
             .f64_to_str,
             .num_to_str,
             .list_with_capacity,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
             => RcEffect.allocates(),
 
             .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),
@@ -781,15 +819,24 @@ pub const LowLevel = enum {
             .num_is_lt,
             .num_is_lte,
             .num_negate,
+            .num_negate_checked,
             .num_abs,
+            .num_abs_checked,
             .num_abs_diff,
             .num_plus,
+            .num_plus_checked,
             .num_minus,
+            .num_minus_checked,
             .num_times,
+            .num_times_checked,
             .num_div_by,
+            .num_div_by_checked,
             .num_div_trunc_by,
+            .num_div_trunc_by_checked,
             .num_rem_by,
+            .num_rem_by_checked,
             .num_mod_by,
+            .num_mod_by_checked,
             .num_pow,
             .num_sqrt,
             .num_sin,

@@ -17,30 +17,46 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - external_decl_lookup.md:8:14:8:23
-UNDEFINED VARIABLE - external_decl_lookup.md:9:5:9:17
+DUPLICATE DEFINITION - external_decl_lookup.md:4:1:4:17
+NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
+NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `utf8` in this scope. ───────────────┐
-└┬───────────────────┘                                                        │
+┌──────────────────────┐
+│ DUPLICATE DEFINITION ├─ The name `Json` is being redeclared here. ──────────┐
+└┬─────────────────────┘                                                      │
+ │                                                                            │
+ │  import json.Json                                                          │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                          │
+ └─────────────────────────────────────────────── external_decl_lookup.md:4:1 ┘
+
+    In this scope, `Json` was already defined here:
+      ┌───────────────────────────────────────────────────────────────────────┐
+    1 │  app [main!] { pf: platform "../basic-cli/platform.roc" }             │
+      │  ‾                                                                    │
+      └────────────────────────────────────────── external_decl_lookup.md:1:1 ┘
+
+
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  result = Json.utf8("Hello from external module!")                         │
  │           ‾‾‾‾‾‾‾‾‾                                                        │
  └────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  Stdout.line!(result)                                                      │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────────── external_decl_lookup.md:9:5 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig

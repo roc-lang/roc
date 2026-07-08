@@ -9,18 +9,29 @@ type=snippet
 var topLevelVar_ = 0
 ~~~
 # EXPECTED
-PARSE ERROR - can_var_scoping_invalid_top_level.md:2:1:2:4
+VAR OUTSIDE BODY - can_var_scoping_invalid_top_level.md:2:1:2:4
 # PROBLEMS
 
-┌─────────────┐
-│ PARSE ERROR ├─ A parsing error occurred: var_only_allowed_in_a_body ────────┐
-└┬────────────┘                                                               │
+┌──────────────────┐
+│ VAR OUTSIDE BODY ├─ I was parsing a statement, and `var` appeared outside ──┐
+└┬─────────────────┘  a function or block body.                               │
  │                                                                            │
  │  var topLevelVar_ = 0                                                      │
  │  ‾‾‾                                                                       │
  └────────────────────────────────── can_var_scoping_invalid_top_level.md:2:1 ┘
 
-    This is an unexpected parsing error. Please check your syntax.
+    Mutable variables are local body statements. Move this `var` into a body,
+    or use an ordinary top-level declaration.
+
+    For example:
+        main = {
+            var count = 0
+            count
+        }
+
+    I found `var` here.
+    That word is reserved by Roc, so it cannot be used as a name in this
+    position.
 
 # TOKENS
 ~~~zig

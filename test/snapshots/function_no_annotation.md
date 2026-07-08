@@ -21,18 +21,18 @@ process! = |x| print_number!(multiply(x, 2))
 main! = process!(42)
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - function_no_annotation.md:9:21:9:33
+NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
 # PROBLEMS
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `line!` in this scope. ──────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  print_number! = |n| Stdout.line!(n)                                       │
  │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
  └──────────────────────────────────────────── function_no_annotation.md:9:21 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 # TOKENS
 ~~~zig
@@ -107,7 +107,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "y")))
-			(e-dispatch-call (method "times") (constraint-fn-var 38)
+			(e-dispatch-call (method "times") (constraint-fn-var 41)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -128,10 +128,10 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 81)
+			(e-call (constraint-fn-var 84)
 				(e-lookup-local
 					(p-assign (ident "print_number!")))
-				(e-call (constraint-fn-var 80)
+				(e-call (constraint-fn-var 83)
 					(e-lookup-local
 						(p-assign (ident "multiply")))
 					(e-lookup-local
@@ -139,7 +139,7 @@ NO CHANGE
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 123)
+		(e-call (constraint-fn-var 126)
 			(e-lookup-local
 				(p-assign (ident "process!")))
 			(e-num (value "42"))))

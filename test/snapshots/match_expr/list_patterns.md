@@ -12,44 +12,48 @@ match numbers {
 }
 ~~~
 # EXPECTED
-BAD LIST REST PATTERN SYNTAX - list_patterns.md:3:13:3:19
-UNDEFINED VARIABLE - list_patterns.md:1:7:1:14
-UNDEFINED VARIABLE - list_patterns.md:2:11:2:14
+OLD LIST REST PATTERN - list_patterns.md:3:13:3:19
+NAME NOT IN SCOPE - list_patterns.md:1:7:1:14
+NAME NOT IN SCOPE - list_patterns.md:2:11:2:14
 UNUSED VARIABLE - list_patterns.md:3:6:3:11
 UNUSED VARIABLE - list_patterns.md:3:15:3:15
 # PROBLEMS
 
-┌──────────────────────────────┐
-│ BAD LIST REST PATTERN SYNTAX ├─ List rest patterns should use the `.. as ───┐
-└┬─────────────────────────────┘  name` syntax, not `..name`.                 │
+┌───────────────────────┐
+│ OLD LIST REST PATTERN ├─ I was parsing a list pattern, and this uses the ───┐
+└┬──────────────────────┘  old rest syntax.                                   │
  │                                                                            │
  │  [first, ..rest] => 0 # invalid rest pattern should error                  │
  │          ‾‾‾‾‾‾                                                            │
  └───────────────────────────────────────────────────── list_patterns.md:3:13 ┘
 
-    For example, use `[first, .. as rest]` instead of `[first, ..rest]`.
+    List rest patterns now use `.. as name`. The name is optional, but if it is
+    present it must come after `as`.
+
+    For example:
+        [first, .. as rest]
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `numbers` in this scope. ────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `numbers` in this scope. ─────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  match numbers {                                                           │
  │        ‾‾‾‾‾‾‾                                                             │
  └────────────────────────────────────────────────────── list_patterns.md:1:7 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
-┌────────────────────┐
-│ UNDEFINED VARIABLE ├─ Nothing is named `acc` in this scope. ────────────────┐
-└┬───────────────────┘                                                        │
+┌───────────────────┐
+│ NAME NOT IN SCOPE ├─ Nothing is named `acc` in this scope. ─────────────────┐
+└┬──────────────────┘                                                         │
  │                                                                            │
  │  [] => acc                                                                 │
  │        ‾‾‾                                                                 │
  └───────────────────────────────────────────────────── list_patterns.md:2:11 ┘
 
-    Is there an `import` or `exposing` missing up-top?
+    Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────┐

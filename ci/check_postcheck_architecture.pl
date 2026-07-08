@@ -91,6 +91,21 @@ my @RULES = (
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\barg_bridges\b/, allowed => {} },
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPublishedPromotedWrapperBridge\b/, allowed => {} },
     { category => 'promoted-wrapper-bridge-retired-carrier', regex => qr/\blowerPromotedWrapperBridge[A-Za-z0-9_]*\b/, allowed => {} },
+    # Content-based nominal identity: module/type name TEXT must never decide
+    # identity downstream of import resolution. These deleted text-matching
+    # APIs must stay gone; identity crosses stores only as 32-byte content
+    # hashes (rebase via lookupModuleIdentity/internModuleIdentity).
+    { category => 'text-identity-module-view-match', regex => qr/\bmoduleViewNameMatches\b/, allowed => {} },
+    { category => 'text-identity-owner-remap', regex => qr/\bmethodOwnerInImportedNames\b/, allowed => {} },
+    { category => 'text-identity-owner-env-dedup', regex => qr/\bmoduleEnvNamesMatch\b/, allowed => {} },
+    { category => 'text-identity-owner-env-match', regex => qr/\bownerModuleEnvNameMatches\b/, allowed => {} },
+    { category => 'text-identity-owner-env-map', regex => qr/\bbuildOwnerModuleEnvMap\b/, allowed => {} },
+    { category => 'text-identity-owner-env-map', regex => qr/\bputOwnerModuleEnvNames\b/, allowed => {} },
+    { category => 'text-identity-imported-view-match', regex => qr/\bimportedViewModuleNameMatches\b/, allowed => {} },
+    { category => 'text-identity-public-api-dep', regex => qr/\bpublicApiDependencyViewByModuleName\b/, allowed => {} },
+    { category => 'text-identity-public-api-dep', regex => qr/\bisSelfPublicApiModuleName\b/, allowed => {} },
+    { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
+    { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
 );
 
 sub iter_zig_files {
@@ -133,6 +148,181 @@ for my $rel (iter_zig_files()) {
 
     close $fh or die "failed to close $rel: $!\n";
 }
+
+sub brace_delta {
+    my ($line) = @_;
+    my $opens = ($line =~ tr/{/{/);
+    my $closes = ($line =~ tr/}/}/);
+    return $opens - $closes;
+}
+
+sub check_body_context_output_access {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my %allowed_fn = map { $_ => 1 } qw(
+        addExpr
+        addPat
+        addLocal
+        addLocalWithBinder
+        addFn
+        reserveDef
+        setDef
+        addExprSpan
+        addPatSpan
+        addTypedLocalSpan
+        addStmt
+        addStmtSpan
+        addFieldExprSpan
+        addRecordDestructSpan
+        addBranchSpan
+        addIfBranchSpan
+        addStrPatternStepSpan
+        addStringLiteral
+        addStringView
+        addComptimeSite
+        exprLoc
+        exprRegion
+        exprType
+        patData
+        localType
+    );
+
+    my $direct_output = qr/self\.builder\.program\.(?:addExpr|addPat|addLocal|addLocalWithBinder|addFn|addExprSpan|addPatSpan|addTypedLocalSpan|addStmt|addStmtSpan|addFieldExprSpan|addRecordDestructSpan|addBranchSpan|addIfBranchSpan|addStrPatternStepSpan|addStringLiteral|addStringView|addComptimeSite|defs\.append|defs\.items|exprs\.items|pats\.items|locals\.items)\b/;
+
+    my $in_body_context = 0;
+    my $body_depth = 0;
+    my $current_fn;
+    my $fn_started = 0;
+    my $fn_depth = 0;
+    my $line_no = 0;
+
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+
+        if (!$in_body_context) {
+            if ($line =~ /^\s*const\s+BodyContext\s*=\s*struct\s*\{/) {
+                $in_body_context = 1;
+                $body_depth = brace_delta($line);
+            }
+            next;
+        }
+
+        if (!defined $current_fn && $line =~ /^\s+fn\s+([A-Za-z0-9_]+)\b/) {
+            $current_fn = $1;
+            $fn_started = 0;
+            $fn_depth = 0;
+        }
+
+        if ($line =~ $direct_output && !$allowed_fn{$current_fn // ''}) {
+            push @violations, "$rel:$line_no: body-context-final-output: $line";
+        }
+
+        my $delta = brace_delta($line);
+        $body_depth += $delta;
+
+        if (defined $current_fn) {
+            if (!$fn_started && $line =~ /\{/) {
+                $fn_started = 1;
+            }
+            $fn_depth += $delta if $fn_started;
+            if ($fn_started && $fn_depth <= 0) {
+                undef $current_fn;
+                $fn_started = 0;
+                $fn_depth = 0;
+            }
+        }
+
+        last if $body_depth <= 0;
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+}
+
+check_body_context_output_access();
+
+sub check_active_body_draft_seal_access {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my $current_fn;
+    my $fn_started = 0;
+    my $fn_depth = 0;
+    my $in_test = 0;
+    my $test_started = 0;
+    my $test_depth = 0;
+    my $line_no = 0;
+
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+
+        if (!$in_test && $line =~ /^\s*test\s+"/) {
+            $in_test = 1;
+            $test_started = 0;
+            $test_depth = 0;
+        }
+
+        if (!$in_test && !defined $current_fn && $line =~ /^\s+fn\s+([A-Za-z0-9_]+)\b/) {
+            $current_fn = $1;
+            $fn_started = 0;
+            $fn_depth = 0;
+        }
+
+        if (!$in_test && ($current_fn // '') ne 'sealActiveBodyDraft') {
+            if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.sealCoreIntoProgram\(/) {
+                push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
+            }
+            if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.markNestedReady\(/) {
+                push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
+            }
+            if ($line =~ /\b[A-Za-z_][A-Za-z0-9_]*\.seal\(self,\s*graph,\s*&sealer/) {
+                push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
+            }
+            if ($line =~ /\bBodyDraftStore\.finalIdOffsets\(self\.program\)/) {
+                push @violations, "$rel:$line_no: active-body-draft-seal-bypass: $line";
+            }
+        }
+        if (!$in_test && ($current_fn // '') ne 'activeTypeFromNode') {
+            if ($line =~ /\bactiveTypeViewForNode\(/) {
+                push @violations, "$rel:$line_no: active-graph-view-bypass: $line";
+            }
+        }
+
+        my $delta = brace_delta($line);
+
+        if ($in_test) {
+            if (!$test_started && $line =~ /\{/) {
+                $test_started = 1;
+            }
+            $test_depth += $delta if $test_started;
+            if ($test_started && $test_depth <= 0) {
+                $in_test = 0;
+                $test_started = 0;
+                $test_depth = 0;
+            }
+        }
+
+        if (defined $current_fn) {
+            if (!$fn_started && $line =~ /\{/) {
+                $fn_started = 1;
+            }
+            $fn_depth += $delta if $fn_started;
+            if ($fn_started && $fn_depth <= 0) {
+                undef $current_fn;
+                $fn_started = 0;
+                $fn_depth = 0;
+            }
+        }
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+}
+
+check_active_body_draft_seal_access();
 
 if (@violations) {
     print "Post-check architecture violations found:\n";
