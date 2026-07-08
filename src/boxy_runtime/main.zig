@@ -44,39 +44,21 @@ extern const roc_boxy_sidecar_desc: BoxySidecar;
 
 /// Backing `RocOps` for the global runtime. Under the extern symbol ABI its
 /// methods dispatch to linker-resolved host symbols and never read this value,
-/// so the runtime only needs a stable address to store.
+/// so the runtime only needs a stable address to store. It backs the runtime's
+/// refcounted application allocations (`allocRocDataWithRc`), which the host's
+/// allocation tracker balances against the reference-counting drops the program
+/// emits.
 var startup_ops: RocOps = undefined;
 
-/// A `std.mem.Allocator` over the host allocation symbols (`roc_alloc` and
-/// friends). The runtime's bookkeeping — descriptor tables, the decoded sidecar
-/// view, and its arenas — allocates through the host so the executable needs no
-/// libc allocator of its own.
-const host_allocator = std.mem.Allocator{ .ptr = undefined, .vtable = &host_vtable };
-
-const host_vtable = std.mem.Allocator.VTable{
-    .alloc = hostAlloc,
-    .resize = hostResize,
-    .remap = hostRemap,
-    .free = hostFree,
-};
-
-fn hostAlloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
-    const raw = startup_ops.tryAlloc(len, alignment.toByteUnits()) orelse return null;
-    return @ptrCast(raw);
-}
-
-fn hostResize(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) bool {
-    return false;
-}
-
-fn hostRemap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
-    const raw = startup_ops.tryRealloc(@ptrCast(memory.ptr), new_len, alignment.toByteUnits()) orelse return null;
-    return @ptrCast(raw);
-}
-
-fn hostFree(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, _: usize) void {
-    startup_ops.dealloc(@ptrCast(memory.ptr), alignment.toByteUnits());
-}
+/// A `std.mem.Allocator` for the runtime's own bookkeeping — the descriptor
+/// tables, the decoded sidecar view, and its arenas. This memory lives for the
+/// whole process and is reclaimed by the OS at exit; keeping it off the host
+/// allocation symbols (`roc_alloc` and friends) means the host's Roc-allocation
+/// tracker sees only the program's reference-counted values, so runtime
+/// infrastructure is not mistaken for an application memory leak. Page-granular
+/// mapping needs no libc allocator of its own, matching the app and builtins
+/// objects this runtime links beside.
+const host_allocator = std.heap.page_allocator;
 
 /// Install the process-global boxy runtime from the embedded sidecar. The
 /// entrypoint wrappers call this before invoking any Roc procedure; the first
