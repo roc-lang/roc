@@ -9772,6 +9772,29 @@ const ProcBodyBuilder = struct {
         if (canonical_source_rep != self.canonicalDescriptorRep(hidden_arg.rep)) {
             return null;
         }
+
+        // The source value's live descriptor describes it in the concrete
+        // call-site representation. When the worker receives the argument as a
+        // field-bearing aggregate (record, tuple, or nominal) whose runtime
+        // layout differs from that concrete source, a generic field was boxed
+        // as the value was reshaped across the call boundary, and the concrete
+        // descriptor lacks the nested field descriptors the worker navigates.
+        // The worker representation must then supply the descriptor, so defer
+        // to the worker-rep path. Tag unions (which reshape by row extension,
+        // not field boxing) and whole-value boxing into an opaque worker scalar
+        // both keep the concrete source descriptor.
+        const worker_canonical_rep = self.parent.plan.representations.items[@intFromEnum(self.canonicalDescriptorRep(hidden_arg.worker_rep))];
+        const worker_is_field_aggregate = worker_canonical_rep.tag_variants.len == 0 and switch (worker_canonical_rep.kind) {
+            .record, .record_unbound, .tuple, .nominal => true,
+            else => false,
+        };
+        if (worker_is_field_aggregate) {
+            const source_layout = self.workerRuntimeLayoutForTypeRef(arg_types[index]);
+            const worker_layout = self.workerRuntimeLayoutForRep(hidden_arg.worker_rep);
+            if (source_layout.layoutIdx() != worker_layout.layoutIdx()) {
+                return null;
+            }
+        }
         if (self.parent.plan.representations.items[@intFromEnum(canonical_source_rep)].descriptor == null) {
             // The call-side rep has no descriptor requirement of its own, so
             // its shape is known at this call site. Materialize a descriptor
