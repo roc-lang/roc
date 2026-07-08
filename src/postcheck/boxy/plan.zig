@@ -1959,6 +1959,11 @@ const Builder = struct {
             const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
             const call_children = self.plan.childSlice(call_rep.children);
             if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
+            // A generic argument reachable through an unwrapped sibling (e.g. an
+            // alias's arg that also appears inside its backing) contributes its
+            // descriptor once, via that sibling; skip the duplicate here to
+            // mirror the worker param collection's per-rep dedup.
+            if (seen_reps.contains(worker_child.rep)) continue;
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
                 try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_arg_index, params, next_param, pending, seen_reps);
                 continue;
@@ -2042,6 +2047,11 @@ const Builder = struct {
             const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
             const call_children = self.plan.childSlice(call_rep.children);
             if (!try self.repSubtreeHasDictionary(worker_child.rep)) continue;
+            // A generic argument reachable through an unwrapped sibling (e.g. an
+            // alias's arg that also appears inside its backing) contributes its
+            // dictionary once, via that sibling; skip the duplicate here to
+            // mirror the worker param collection's per-rep dedup.
+            if (seen_reps.contains(worker_child.rep)) continue;
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
                 try self.collectCallHiddenDictionaryArgs(worker_child.rep, call_child.rep, params, next_param, pending, seen_reps);
                 continue;
@@ -2442,6 +2452,28 @@ const Builder = struct {
         return worker_child.rep == worker_backing and !try self.repSubtreeHasDictionaryInOtherChildren(worker_rep_id, worker_child);
     }
 
+    fn repSubtreeContainsRep(self: *Builder, root: TypeRepId, target: TypeRepId) Allocator.Error!bool {
+        var seen = std.AutoHashMap(TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        return try self.repSubtreeContainsRepInner(root, target, &seen);
+    }
+
+    fn repSubtreeContainsRepInner(
+        self: *Builder,
+        root: TypeRepId,
+        target: TypeRepId,
+        seen: *std.AutoHashMap(TypeRepId, void),
+    ) Allocator.Error!bool {
+        if (root == target) return true;
+        const entry = try seen.getOrPut(root);
+        if (entry.found_existing) return false;
+        const rep = self.plan.representations.items[@intFromEnum(root)];
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (try self.repSubtreeContainsRepInner(child.rep, target, seen)) return true;
+        }
+        return false;
+    }
+
     fn repSubtreeHasDescriptorInOtherChildren(
         self: *Builder,
         rep_id: TypeRepId,
@@ -2450,6 +2482,10 @@ const Builder = struct {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.rep == selected_child.rep and std.meta.eql(child.role, selected_child.role)) continue;
+            // A sibling reachable through the selected child's subtree carries the
+            // same descriptor the backing already covers; it does not block the
+            // unwrap because its descriptor is collected once via the backing.
+            if (try self.repSubtreeContainsRep(selected_child.rep, child.rep)) continue;
             if (try self.repSubtreeHasDescriptor(child.rep)) return true;
         }
         return false;
@@ -2463,6 +2499,10 @@ const Builder = struct {
         const rep = self.plan.representations.items[@intFromEnum(rep_id)];
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.rep == selected_child.rep and std.meta.eql(child.role, selected_child.role)) continue;
+            // A sibling reachable through the selected child's subtree carries the
+            // same dictionary the backing already covers; it does not block the
+            // unwrap because its dictionary is collected once via the backing.
+            if (try self.repSubtreeContainsRep(selected_child.rep, child.rep)) continue;
             if (try self.repSubtreeHasDictionary(child.rep)) return true;
         }
         return false;
