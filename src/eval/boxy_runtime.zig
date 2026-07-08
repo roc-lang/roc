@@ -4493,7 +4493,13 @@ pub const BoxyRuntime = struct {
         target_layout: layout_mod.Idx,
         source_mode: LIR.BoxyTransferMode,
     ) Error!BoxyAssignedValue {
-        const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, source_layout, source_desc);
+        const source_payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, source_layout, source_desc);
+        const target_payload_desc = if (target_desc) |resolved_target_desc|
+            try self.boxyBoxAllocationPayloadDesc(hooks, target_layout, resolved_target_desc)
+        else
+            null;
+        const relabel_payload_desc = source_payload_desc orelse target_payload_desc;
+        const payload_desc = source_payload_desc;
         const payload_layout = if (payload_desc) |resolved|
             resolved.payload_layout
         else
@@ -4501,7 +4507,7 @@ pub const BoxyRuntime = struct {
         const source_layout_tag = self.layout_store.getLayout(source_layout).tag;
         const target_layout_value = self.layout_store.getLayout(target_layout);
         const source_is_box = source_layout_tag == .box or source_layout_tag == .box_of_zst;
-        const payload_is_box = if (payload_desc) |resolved| blk: {
+        const relabel_payload_is_box = if (relabel_payload_desc) |resolved| blk: {
             const payload_tag = self.layout_store.getLayout(resolved.payload_layout).tag;
             break :blk payload_tag == .box or payload_tag == .box_of_zst;
         } else false;
@@ -4512,29 +4518,32 @@ pub const BoxyRuntime = struct {
         // describes.
         const target_accepts_relabel = switch (target_layout_value.tag) {
             .box_of_zst => true,
-            .box => target_layout_value.getIdx() == payload_desc.?.payload_layout or
-                self.layout_store.getLayout(target_layout_value.getIdx()).tag == .box_of_zst,
+            .box => if (relabel_payload_desc) |resolved|
+                target_layout_value.getIdx() == resolved.payload_layout or
+                    self.layout_store.getLayout(target_layout_value.getIdx()).tag == .box_of_zst
+            else
+                false,
             else => false,
         };
-        if (source_is_box and target_accepts_relabel and payload_desc != null and !payload_is_box) {
+        if (source_is_box and target_accepts_relabel and relabel_payload_desc != null and !relabel_payload_is_box) {
             // Unboxing a box-family value into another box-family
             // label with a non-box payload is a pure relabel: the
             // result IS the source allocation. Rewrapping would
             // duplicate interior references the surrounding RC
             // statements never account for.
             const relabeled = try self.materializeLocalValue(hooks, source_value, target_layout);
-            return .{ .value = relabeled, .desc = target_desc orelse payload_desc };
+            return .{ .value = relabeled, .desc = target_desc orelse relabel_payload_desc };
         }
         const data_ptr = self.readBoxedDataPointer(source_value);
         const result = if (data_ptr) |ptr| blk: {
-            if (target_desc) |target_payload_desc| {
-                if (payload_desc) |source_payload_desc| {
+            if (target_desc) |target_box_desc| {
+                if (payload_desc) |payload_box_desc| {
                     break :blk try self.materializeBoxyPayloadToLayoutWithTargetDesc(
                         hooks,
                         .{ .ptr = ptr },
                         payload_layout,
-                        source_payload_desc,
-                        target_payload_desc,
+                        payload_box_desc,
+                        target_box_desc,
                         target_layout,
                     );
                 }

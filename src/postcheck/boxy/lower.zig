@@ -3526,6 +3526,8 @@ const ProcBodyBuilder = struct {
     synthetic_adapter: bool,
     arg_locals: std.ArrayList(LIR.LocalId),
     lambda_arg_patterns: []const checked.CheckedPatternId,
+    lambda_arg_binding_locals: []LIR.LocalId,
+    lambda_arg_worker_reps: []Plan.TypeRepId,
     frame_locals: std.ArrayList(LIR.LocalId),
     loop_stack: std.ArrayList(LoopContext),
     binder_locals: []?LIR.LocalId,
@@ -3679,6 +3681,8 @@ const ProcBodyBuilder = struct {
             .synthetic_adapter = false,
             .arg_locals = .empty,
             .lambda_arg_patterns = &.{},
+            .lambda_arg_binding_locals = &.{},
+            .lambda_arg_worker_reps = &.{},
             .frame_locals = .empty,
             .loop_stack = .empty,
             .binder_locals = &.{},
@@ -3711,6 +3715,8 @@ const ProcBodyBuilder = struct {
         self.parent.allocator.free(self.descriptor_locals);
         self.parent.allocator.free(self.binder_locals);
         self.loop_stack.deinit(self.parent.allocator);
+        self.parent.allocator.free(self.lambda_arg_worker_reps);
+        self.parent.allocator.free(self.lambda_arg_binding_locals);
         self.frame_locals.deinit(self.parent.allocator);
         self.arg_locals.deinit(self.parent.allocator);
         self.* = undefined;
@@ -3721,25 +3727,53 @@ const ProcBodyBuilder = struct {
         self.lambda_arg_patterns = args;
 
         const worker_args = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.args);
-        for (args, worker_args) |pattern_id, arg_layout| {
-            const local = try self.addArgLocal(arg_layout.layoutIdx());
-            const pattern_ty = self.module.checked_bodies.pattern(pattern_id).ty;
-            const pattern_layout = self.workerRuntimeLayoutForType(pattern_ty).layoutIdx();
-            if (pattern_layout != arg_layout.layoutIdx()) {
-                boxyLowerInvariant("boxy worker lambda argument layout disagreed with checked pattern type");
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const worker_function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("boxy lambda args reached a non-function worker");
+        if (worker_function.arg_count != args.len or worker_args.len != args.len) {
+            boxyLowerInvariant("boxy lambda argument count disagreed with worker function representation");
+        }
+        const worker_children = self.parent.plan.childSlice(self.parent.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+        const worker_arg_children = worker_children[worker_function.args_start..][0..worker_function.arg_count];
+
+        const binding_locals = try self.parent.allocator.alloc(LIR.LocalId, args.len);
+        errdefer self.parent.allocator.free(binding_locals);
+        const worker_reps = try self.parent.allocator.alloc(Plan.TypeRepId, args.len);
+        errdefer self.parent.allocator.free(worker_reps);
+
+        for (args, worker_args, worker_arg_children, 0..) |pattern_id, arg_layout, worker_arg, index| {
+            const local = try self.addArgLocalForRep(worker_arg.rep);
+            if (self.parent.result.store.getLocal(local).layout_idx != arg_layout.layoutIdx()) {
+                boxyLowerInvariant("boxy worker lambda argument layout disagreed with worker argument representation");
             }
+            const pattern_ty = self.module.checked_bodies.pattern(pattern_id).ty;
+            const pattern_rep = self.repForType(pattern_ty);
+            const binding_local = if (self.representationBoundaryIsDirect(pattern_rep, worker_arg.rep))
+                local
+            else
+                try self.addFrameLocalForRep(pattern_rep);
+            binding_locals[index] = binding_local;
+            worker_reps[index] = worker_arg.rep;
+
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             switch (pattern.data) {
-                .assign => self.bindPatternToLocal(pattern_id, local),
+                .assign => self.bindPatternToLocal(pattern_id, binding_local),
                 else => try self.reservePatternBindings(pattern_id),
             }
         }
+
+        self.lambda_arg_binding_locals = binding_locals;
+        self.lambda_arg_worker_reps = worker_reps;
     }
 
     fn prependLambdaArgPatternBindings(self: *ProcBodyBuilder, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         if (self.lambda_arg_patterns.len == 0) return next;
         const worker_args = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.args);
-        if (self.lambda_arg_patterns.len != worker_args.len or self.lambda_arg_patterns.len > self.arg_locals.items.len) {
+        if (self.lambda_arg_patterns.len != worker_args.len or
+            self.lambda_arg_patterns.len > self.arg_locals.items.len or
+            self.lambda_arg_patterns.len != self.lambda_arg_binding_locals.len or
+            self.lambda_arg_patterns.len != self.lambda_arg_worker_reps.len)
+        {
             boxyLowerInvariant("boxy lambda argument pattern bindings disagreed with worker arguments");
         }
 
@@ -3748,24 +3782,44 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const pattern_id = self.lambda_arg_patterns[index];
+            const binding_local = self.lambda_arg_binding_locals[index];
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             switch (pattern.data) {
-                .assign => continue,
-                else => {},
+                .assign => {},
+                else => continuation = try self.bindPatternFromLocal(pattern_id, binding_local, continuation),
             }
-            continuation = try self.bindPatternFromLocal(pattern_id, self.arg_locals.items[index], continuation);
+
+            const arg_local = self.arg_locals.items[index];
+            if (binding_local != arg_local) {
+                continuation = try self.assignRepresentationBoundary(
+                    binding_local,
+                    arg_local,
+                    self.repForType(pattern.ty),
+                    self.lambda_arg_worker_reps[index],
+                    continuation,
+                );
+            }
         }
         return continuation;
     }
 
     fn bindLambdaArgDescriptors(self: *ProcBodyBuilder) Allocator.Error!void {
         if (self.lambda_arg_patterns.len == 0) return;
-        if (self.lambda_arg_patterns.len > self.arg_locals.items.len) {
+        if (self.lambda_arg_patterns.len > self.arg_locals.items.len or
+            self.lambda_arg_patterns.len != self.lambda_arg_binding_locals.len or
+            self.lambda_arg_patterns.len != self.lambda_arg_worker_reps.len)
+        {
             boxyLowerInvariant("boxy lambda argument descriptor binding disagreed with worker arguments");
         }
-        for (self.lambda_arg_patterns, self.arg_locals.items[0..self.lambda_arg_patterns.len]) |pattern_id, local| {
+        for (
+            self.lambda_arg_patterns,
+            self.arg_locals.items[0..self.lambda_arg_patterns.len],
+            self.lambda_arg_binding_locals,
+            self.lambda_arg_worker_reps,
+        ) |pattern_id, arg_local, binding_local, worker_rep| {
             const pattern = self.module.checked_bodies.pattern(pattern_id);
-            try self.markLocalDescriptorForType(local, pattern.ty);
+            try self.markLocalDescriptorForRep(arg_local, worker_rep);
+            try self.markLocalDescriptorForType(binding_local, pattern.ty);
         }
     }
 
@@ -16435,9 +16489,13 @@ const ProcBodyBuilder = struct {
 
     fn markLocalDescriptorForType(self: *ProcBodyBuilder, local: LIR.LocalId, ty: checked.CheckedTypeId) Allocator.Error!void {
         const rep_id = self.repForType(ty);
+        try self.markLocalDescriptorForRep(local, rep_id);
+    }
+
+    fn markLocalDescriptorForRep(self: *ProcBodyBuilder, local: LIR.LocalId, rep_id: Plan.TypeRepId) Allocator.Error!void {
         const desc_ref = try self.descriptorRefForRepIfNeeded(rep_id);
         if (desc_ref) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(local, desc);
+            self.parent.result.store.replaceLocalBoxyDesc(local, desc);
         }
     }
 
