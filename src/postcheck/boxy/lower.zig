@@ -14008,7 +14008,18 @@ const ProcBodyBuilder = struct {
 
         const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
         const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
-        if (source_record_rep == target_record_rep) return null;
+        if (source_record_rep == target_record_rep) {
+            // The same backing record rep can be laid out at two different byte
+            // layouts: a transparent nominal that opts into declared field order
+            // reserves unnamed padding its structural backing omits (z@0, pad@4,
+            // a@8 vs the structural a@0, z@4). A flat nominal reinterpret would
+            // land each field at the wrong host-visible offset, so when the byte
+            // layouts differ the fields must be repositioned by their canonical
+            // index; when the layouts already match a plain reinterpret suffices.
+            const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+            const source_layout = self.parent.result.store.getLocal(source).layout_idx;
+            if (target_layout == source_layout) return null;
+        }
 
         const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
         const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
@@ -24264,6 +24275,40 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
+const DeclaredNominalBoundary = struct { target: LIR.LocalId, next: LIR.CFStmtId };
+
+/// Verifies a declared-field nominal boundary that repositions a two-field
+/// record between the structural backing layout and the nominal's declared byte
+/// layout: each field is read from `source` at its canonical index, copied to a
+/// fresh local, and the results are assembled into a new struct. A declared-order
+/// nominal reserves unnamed padding its structural backing omits, so the fields
+/// must move by index rather than share one flat reinterpret. Returns the
+/// assembled struct's target and the following statement.
+fn expectDeclaredNominalRecordBoundary(
+    store: *const lir_core.LirStore,
+    start: LIR.CFStmtId,
+    source: LIR.LocalId,
+) !DeclaredNominalBoundary {
+    var cursor = start;
+    var field_locals: [2]LIR.LocalId = undefined;
+    var idx: u16 = 0;
+    while (idx < 2) : (idx += 1) {
+        const read = store.getCFStmt(cursor).assign_ref;
+        try std.testing.expectEqual(source, read.op.field.source);
+        try std.testing.expectEqual(idx, read.op.field.field_idx);
+        const copy = store.getCFStmt(read.next).assign_ref;
+        try std.testing.expectEqual(read.target, copy.op.local);
+        field_locals[idx] = copy.target;
+        cursor = copy.next;
+    }
+    const assembled = store.getCFStmt(cursor).assign_struct;
+    const fields = store.getLocalSpan(assembled.fields);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    try std.testing.expectEqual(field_locals[0], fields[0]);
+    try std.testing.expectEqual(field_locals[1], fields[1]);
+    return .{ .target = assembled.target, .next = assembled.next };
+}
+
 test "boxy lowerer emits nominal boundary before backing record pattern binding" {
     const gpa = std.testing.allocator;
 
@@ -24476,11 +24521,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const construct_nominal = out.lir_result.store.getCFStmt(backing_record.next).assign_ref;
-    const destruct_nominal = out.lir_result.store.getCFStmt(construct_nominal.next).assign_ref;
-    const read_field = out.lir_result.store.getCFStmt(destruct_nominal.next).assign_ref;
-    const bind_field = out.lir_result.store.getCFStmt(read_field.next).assign_ref;
-    const final_copy = out.lir_result.store.getCFStmt(bind_field.next).assign_ref;
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 7), value.value),
@@ -24490,9 +24530,18 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 500), value.value),
         else => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(backing_record.target, construct_nominal.op.nominal.backing_ref);
-    try std.testing.expectEqual(construct_nominal.target, destruct_nominal.op.nominal.backing_ref);
-    try std.testing.expectEqual(destruct_nominal.target, read_field.op.field.source);
+
+    // Construction repositions the backing record's fields into the nominal's
+    // declared byte layout, and the pattern binding projects that nominal back
+    // to a backing record the same way, both field-by-field.
+    const construct_nominal = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, backing_record.next, backing_record.target);
+    const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, construct_nominal.next, construct_nominal.target);
+
+    const read_field = out.lir_result.store.getCFStmt(destruct_backing.next).assign_ref;
+    const bind_field = out.lir_result.store.getCFStmt(read_field.next).assign_ref;
+    const final_copy = out.lir_result.store.getCFStmt(bind_field.next).assign_ref;
+
+    try std.testing.expectEqual(destruct_backing.target, read_field.op.field.source);
     try std.testing.expectEqual(@as(u16, 0), read_field.op.field.field_idx);
     try std.testing.expectEqual(read_field.target, bind_field.op.local);
     try std.testing.expectEqual(bind_field.target, final_copy.op.local);
@@ -24653,13 +24702,14 @@ test "boxy lowerer inspects declared-field nominals through backing projection" 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const construct_nominal = out.lir_result.store.getCFStmt(backing_record.next).assign_ref;
-    const destruct_nominal = out.lir_result.store.getCFStmt(construct_nominal.next).assign_ref;
 
-    try std.testing.expectEqual(backing_record.target, construct_nominal.op.nominal.backing_ref);
-    try std.testing.expectEqual(construct_nominal.target, destruct_nominal.op.nominal.backing_ref);
+    // Construction repositions the backing record's fields into the nominal's
+    // declared byte layout, and inspection projects that nominal back to a
+    // backing record the same way before walking its fields.
+    const construct_nominal = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, backing_record.next, backing_record.target);
+    const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, construct_nominal.next, construct_nominal.target);
 
-    var cursor = destruct_nominal.next;
+    var cursor = destruct_backing.next;
     var reads: [2]u16 = undefined;
     var read_count: usize = 0;
     var guard: usize = 0;
@@ -24668,7 +24718,7 @@ test "boxy lowerer inspects declared-field nominals through backing projection" 
             .assign_ref => |assign| {
                 switch (assign.op) {
                     .field => |field| {
-                        try std.testing.expectEqual(destruct_nominal.target, field.source);
+                        try std.testing.expectEqual(destruct_backing.target, field.source);
                         if (read_count >= reads.len) return error.TestUnexpectedResult;
                         reads[read_count] = field.field_idx;
                         read_count += 1;
@@ -24857,14 +24907,15 @@ test "boxy lowerer hashes declared-field nominals through backing projection" {
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     const backing_record = out.lir_result.store.getCFStmt(second.next).assign_struct;
-    const construct_nominal = out.lir_result.store.getCFStmt(backing_record.next).assign_ref;
+
+    // Construction repositions the backing record's fields into the nominal's
+    // declared byte layout, and hashing projects that nominal back to a backing
+    // record the same way before threading its fields through the hasher.
+    const construct_nominal = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, backing_record.next, backing_record.target);
     const seed = out.lir_result.store.getCFStmt(construct_nominal.next).assign_literal;
-    const destruct_nominal = out.lir_result.store.getCFStmt(seed.next).assign_ref;
+    const destruct_backing = try expectDeclaredNominalRecordBoundary(&out.lir_result.store, seed.next, construct_nominal.target);
 
-    try std.testing.expectEqual(backing_record.target, construct_nominal.op.nominal.backing_ref);
-    try std.testing.expectEqual(construct_nominal.target, destruct_nominal.op.nominal.backing_ref);
-
-    var cursor = destruct_nominal.next;
+    var cursor = destruct_backing.next;
     var reads: [2]u16 = undefined;
     var read_count: usize = 0;
     var guard: usize = 0;
@@ -24873,7 +24924,7 @@ test "boxy lowerer hashes declared-field nominals through backing projection" {
             .assign_ref => |assign| {
                 switch (assign.op) {
                     .field => |field| {
-                        try std.testing.expectEqual(destruct_nominal.target, field.source);
+                        try std.testing.expectEqual(destruct_backing.target, field.source);
                         if (read_count >= reads.len) return error.TestUnexpectedResult;
                         reads[read_count] = field.field_idx;
                         read_count += 1;
