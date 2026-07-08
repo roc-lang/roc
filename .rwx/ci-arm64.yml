@@ -1,9 +1,3 @@
-# arm64 Linux leg — embedded run (called from ci.yml). arch is run-level, so the
-# arm64 matrix lives in its own definition with base.arch: arm64. Runs the
-# arch-sensitive subset of the x64 DAG plus kcov parser coverage (arm64-only:
-# x86_64 hits a Zig DWARF bug, so coverage runs here today).
-# on.cli lets this leg be iterated directly (`rwx run .rwx/ci-arm64.yml --target
-# build-ci-arm64`); it's ignored when this file is embedded via ci.yml.
 on:
   cli:
     init:
@@ -18,6 +12,40 @@ base:
 # tasks declare none (see ci.yml for the rationale).
 tool-cache:
   vault: dylan-roc
+
+# Shared filters/agent shapes — same as ci.yml (see there for the full rationale).
+aliases:
+  pos-build: &pos-build
+    - build.zig
+    - build.zig.zon
+    - src
+    - test
+    - "!test/snapshots" # runtime data for the snapshot tool, not a compile input — see ci.yml
+    - ci
+    - vendor
+    - legal_details # embedded into the roc binary via addAnonymousImport (build.zig:5042)
+
+  pos-leaf: &pos-leaf
+    - build.zig
+    - build.zig.zon
+    - src
+    - test
+    - ci
+    - vendor
+    - legal_details
+    - zig-out
+    - .captain # Captain suite config (.captain/config.yml); without it `captain run` finds no command
+
+  # Leaf inputs + data files imported by the CLI/platform test fixtures (test/fx imports
+  # CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports the repo-root README.md).
+  pos-cli: &pos-cli
+    - *pos-leaf # arrays flatten, so this composes pos-leaf + the two extra entries
+    - CONTRIBUTING/profiling
+    - README.md
+
+  test-agent: &test-agent # CPU-bound test leaves: CO 8c/16g
+    cpus: 8
+    memory: 16gb
 
 tasks:
   # No .git here — preserving it busts the cache key every commit. Only the
@@ -56,18 +84,10 @@ tasks:
   # sync). Both land in ~/.cache/zig, which carries across `use:`.
   # POSITIVE input filter (include only build inputs). Toolchain + local zig cache
   # live in $HOME (outside the workspace), so this workspace-relative filter never
-  # drops them. `&pos-build` defined here (first filtered task on this leg).
+  # drops them.
   - key: zig-deps-arm64
     use: [code, zig-arm64]
-    filter: &pos-build
-      - build.zig
-      - build.zig.zon
-      - src
-      - test
-      - "!test/snapshots" # runtime data for the snapshot tool, not a compile input — see ci.yml
-      - ci
-      - vendor
-      - legal_details # embedded into the roc binary via addAnonymousImport (build.zig:5042)
+    filter: *pos-build
     run: |
       set +e
       pattern="HttpConnectionClosing|EndOfStream|503|Timeout|WriteFailed|TemporaryNameServerFailure|cannot download|ConnectionResetByPeer|ConnectionTimedOut|FetchFailed|invalid HTTP response|bad HTTP response"
@@ -156,26 +176,11 @@ tasks:
       # and only run them (see ci.yml build-ci-x64).
       zig build build-ci -Droc-test-runner -Dfuzz -Dsystem-afl=false
 
-  # Test-execution leaves: CPU-bound, memory-light → compute-optimized 8c/16g.
-  # Leaf positive filter: build inputs + the anchor's compiled binaries (zig-out),
-  # consumed via the filesystem layer. `.zig-cache` + toolchain are in $HOME, so
-  # they're inherited unfiltered. `&pos-leaf` defined here (first leaf).
   # Captain-partitioned module unit tests (see .captain/config.yml, suite roc-unit-debug).
   - key: unit-debug
     use: [build-ci-arm64, captain]
-    filter: &pos-leaf
-      - build.zig
-      - build.zig.zon
-      - src
-      - test
-      - ci
-      - vendor
-      - legal_details
-      - zig-out
-      - .captain # Captain suite config (.captain/config.yml); without it `captain run` finds no command
-    agent: &test-agent # CPU-bound test leaves: CO 8c/16g
-      cpus: 8
-      memory: 16gb
+    filter: *pos-leaf
+    agent: *test-agent
     run: |
       set -euo pipefail
       captain run roc-unit-debug
@@ -186,27 +191,9 @@ tasks:
   # NB: snapshot tests are arch-independent (compiler front-end output, not
   # codegen), so they run once on x64 (ci.yml) — not duplicated here.
 
-  # run-test-cli exercises the fx platform tests (test/fx/file_import_str.roc imports
-  # CONTRIBUTING/profiling/...), and this leaf roc-checks a CONTRIBUTING/profiling
-  # file, so it keeps CONTRIBUTING/profiling on top of the leaf inputs (only
-  # CONTRIBUTING reader on this leg, so the list is inline rather than anchored).
   - key: platforms
     use: [build-ci-arm64, captain, rust-lang]
-    filter:
-      - build.zig
-      - build.zig.zon
-      - src
-      - test
-      - ci
-      - vendor
-      - legal_details
-      - zig-out
-      - .captain # Captain suite config; without it `captain run` finds no command
-      # Data files imported by the CLI test fixtures (run-test-cli): test/fx
-      # imports CONTRIBUTING/profiling/…, test/echo/all_syntax_test.roc imports
-      # the repo-root README.md. Both must survive the filter (FILE NOT FOUND otherwise).
-      - CONTRIBUTING/profiling
-      - README.md
+    filter: *pos-cli
     agent: *test-agent
     run: |
       set -euo pipefail
@@ -270,18 +257,7 @@ tasks:
   # unit-misc). Needs pos-cli inputs (fx fixtures import CONTRIBUTING/profiling + README.md).
   - key: platform-tests
     use: [build-ci-arm64, captain]
-    filter:
-      - build.zig
-      - build.zig.zon
-      - src
-      - test
-      - ci
-      - vendor
-      - legal_details
-      - zig-out
-      - .captain
-      - CONTRIBUTING/profiling
-      - README.md
+    filter: *pos-cli
     agent: *test-agent
     run: |
       set -euo pipefail
