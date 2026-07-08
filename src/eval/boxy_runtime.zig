@@ -893,8 +893,12 @@ pub const BoxyRuntime = struct {
         const start = self.runtime_boxy_desc_refs.items.len;
         try self.runtime_boxy_desc_refs.appendNTimes(self.scratch, .{ .static = @enumFromInt(0) }, source_refs.len);
         for (source_refs, 0..) |source_ref, index| {
-            self.runtime_boxy_desc_refs.items[start + index] =
-                try self.copyBoxyDescRefToRuntime(hooks, source_ref, copied, allow_global_reuse);
+            // Materialize the nested reference before indexing the destination
+            // list: the recursive copy appends to `runtime_boxy_desc_refs`, which
+            // can reallocate its backing buffer. Computing the store address
+            // first would target the pre-reallocation buffer and lose the write.
+            const copied_ref = try self.copyBoxyDescRefToRuntime(hooks, source_ref, copied, allow_global_reuse);
+            self.runtime_boxy_desc_refs.items[start + index] = copied_ref;
         }
         return makeRuntimeBoxySpan(start, source_refs.len);
     }
@@ -918,11 +922,15 @@ pub const BoxyRuntime = struct {
             .payload_layout = .zst,
         }, source_variants.len);
         for (source_variants, 0..) |variant, index| {
+            // Materialize before indexing: the recursive copy can append to and
+            // reallocate `runtime_boxy_tag_variants`, invalidating a destination
+            // address computed ahead of the call.
+            const payload_descs = try self.copyBoxyTagPayloadDescSpanToRuntime(hooks, variant.payload_descs, copied, allow_global_reuse);
             self.runtime_boxy_tag_variants.items[start + index] = .{
                 .name = variant.name,
                 .discriminant = variant.discriminant,
                 .payload_layout = variant.payload_layout,
-                .payload_descs = try self.copyBoxyTagPayloadDescSpanToRuntime(hooks, variant.payload_descs, copied, allow_global_reuse),
+                .payload_descs = payload_descs,
             };
         }
         return makeRuntimeBoxySpan(start, source_variants.len);
@@ -946,9 +954,13 @@ pub const BoxyRuntime = struct {
             .desc = .{ .static = @enumFromInt(0) },
         }, source_descs.len);
         for (source_descs, 0..) |payload_desc, index| {
+            // Materialize before indexing: the recursive copy can append to and
+            // reallocate `runtime_boxy_tag_payload_descs`, invalidating a
+            // destination address computed ahead of the call.
+            const desc_ref = try self.copyBoxyDescRefToRuntime(hooks, payload_desc.desc, copied, allow_global_reuse);
             self.runtime_boxy_tag_payload_descs.items[start + index] = .{
                 .payload_index = payload_desc.payload_index,
-                .desc = try self.copyBoxyDescRefToRuntime(hooks, payload_desc.desc, copied, allow_global_reuse),
+                .desc = desc_ref,
             };
         }
         return makeRuntimeBoxySpan(start, source_descs.len);
@@ -972,13 +984,17 @@ pub const BoxyRuntime = struct {
             .layout_idx = .zst,
         } }, source_steps.len);
         for (source_steps, 0..) |step, index| {
-            self.runtime_boxy_payload_steps.items[start + index] = switch (step) {
+            // Materialize before indexing: the recursive copy can append to and
+            // reallocate `runtime_boxy_payload_steps`, invalidating a destination
+            // address computed ahead of the call.
+            const copied_step: LirProgram.BoxyPayloadStep = switch (step) {
                 .concrete => |concrete| .{ .concrete = concrete },
                 .dynamic => |dynamic| .{ .dynamic = .{
                     .op = dynamic.op,
                     .desc = try self.copyBoxyDescRefToRuntime(hooks, dynamic.desc, copied, allow_global_reuse),
                 } },
             };
+            self.runtime_boxy_payload_steps.items[start + index] = copied_step;
         }
         return makeRuntimeBoxySpan(start, source_steps.len);
     }
