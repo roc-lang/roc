@@ -1665,9 +1665,13 @@ const Builder = struct {
 
             const arg_types = try self.allocator.alloc(TypeRef, call_args.len);
             defer self.allocator.free(arg_types);
-            for (call_args, arg_types) |arg_expr_id, *arg_type| {
-                const arg_expr = call_view.checked_bodies.expr(arg_expr_id);
-                arg_type.* = typeRef(call_view, arg_expr.ty);
+            const source_fn_view = self.moduleForId(direct.source_fn_type.module);
+            const source_function = checkedFunctionPayload(source_fn_view, direct.source_fn_type.ty);
+            if (source_function.args.len != call_args.len) {
+                boxyPlanInvariant("boxy direct call source function type arity disagreed with hidden descriptor args");
+            }
+            for (source_function.args, arg_types) |arg_ty, *arg_type| {
+                arg_type.* = .{ .module = direct.source_fn_type.module, .ty = arg_ty };
             }
             self.plan.direct_calls.items[direct_index].hidden_desc_args =
                 try self.materializeWorkerCallHiddenDescriptorArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
@@ -3105,7 +3109,8 @@ const Builder = struct {
         const dispatch = view.static_dispatch_plans.plans[raw];
         const target = directDispatchTarget(view.static_dispatch_plans, dispatch.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
-        const worker = try self.ensureWorker(lookup.source, .{ .module = lookup.view.key, .ty = target.callable_ty }, null);
+        const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = target.callable_ty };
+        const worker = try self.ensureWorker(lookup.source, source_fn_type, null);
         const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
         if (self.plan.directWorkerForCall(call_ref)) |existing| {
             if (existing != worker) {
@@ -3116,7 +3121,7 @@ const Builder = struct {
         try self.plan.direct_calls.append(self.allocator, .{
             .call = call_ref,
             .worker = worker,
-            .source_fn_type = .{ .module = lookup.view.key, .ty = target.callable_ty },
+            .source_fn_type = source_fn_type,
         });
     }
 

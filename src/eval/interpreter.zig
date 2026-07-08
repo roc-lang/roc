@@ -286,6 +286,7 @@ pub const Interpreter = struct {
 
     pub const ErasedCallableInterpreterContext = extern struct {
         interpreter: *LirInterpreter,
+        capture_desc: ?*const LirProgram.BoxyTypeDesc,
         proc_id: u32,
         capture_layout_plus_one: u32,
         capture_value_offset: u32,
@@ -872,6 +873,19 @@ pub const Interpreter = struct {
         frame: ?*const Frame,
 
         pub fn resolveDescRef(self: BoxyFrameHooks, desc_ref: LIR.BoxyDescRef) Error!*const LirProgram.BoxyTypeDesc {
+            switch (desc_ref) {
+                .static => |desc_id| return self.interp.requireBoxyTypeDesc(desc_id),
+                .runtime => |runtime_id| {
+                    if (runtime_id >= self.interp.runtime_boxy_type_descs.items.len) {
+                        return self.interp.invariantFailedError(
+                            "LIR/interpreter invariant violated: runtime boxy descriptor id {d} exceeded descriptor table length {d}",
+                            .{ runtime_id, self.interp.runtime_boxy_type_descs.items.len },
+                        );
+                    }
+                    return self.interp.runtime_boxy_type_descs.items[runtime_id];
+                },
+                .local => {},
+            }
             const frame = self.frame orelse return self.interp.invariantFailedError(
                 "LIR/interpreter invariant violated: boxy operation resolved a descriptor reference without a frame",
                 .{},
@@ -888,7 +902,7 @@ pub const Interpreter = struct {
         }
 
         pub fn layoutContainsRc(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) bool {
-            return self.interp.layoutContainsRc(layout_idx);
+            return self.interp.layout_store.layoutContainsRcErasedBox(self.interp.layout_store.getLayout(layout_idx));
         }
 
         pub fn allocValue(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) Error!Value {
@@ -900,15 +914,15 @@ pub const Interpreter = struct {
         }
 
         pub fn rcPlanFor(self: BoxyFrameHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
-            return self.interp.cachedRcPlan(helper);
+            return self.interp.layout_store.rcHelperPlanErasedBox(helper);
         }
 
         pub fn rcStructFieldPlan(self: BoxyFrameHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
-            return self.interp.cachedStructFieldPlan(struct_plan, field_index);
+            return self.interp.layout_store.rcHelperStructFieldPlanErasedBox(struct_plan, field_index);
         }
 
         pub fn rcTagVariantPlan(self: BoxyFrameHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
-            return self.interp.cachedTagVariantPlan(tag_plan, variant_index);
+            return self.interp.layout_store.rcHelperTagUnionVariantPlanErasedBox(tag_plan, variant_index);
         }
 
         pub fn traceProcId(self: BoxyFrameHooks) u32 {
@@ -2462,10 +2476,13 @@ pub const Interpreter = struct {
                 },
                 .assign_list => |assign| {
                     self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
+                    frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(assign.target).boxy_desc));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
                     self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
+                    const target_desc = assign.contents_desc orelse self.store.getLocal(assign.target).boxy_desc;
+                    frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, target_desc));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
@@ -3454,7 +3471,7 @@ pub const Interpreter = struct {
         };
     }
 
-    fn interpreterErasedCallableOnDrop(capture: ?[*]u8, _: *RocOps) callconv(.c) void {
+    fn interpreterErasedCallableOnDrop(capture: ?[*]u8, roc_ops: *RocOps) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
         const capture_layout: layout_mod.Idx = if (context.capture_layout_plus_one == 0)
             return
@@ -3462,6 +3479,25 @@ pub const Interpreter = struct {
             @enumFromInt(context.capture_layout_plus_one - 1);
         if (capture_layout == .zst) return;
         const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
+        if (context.capture_desc) |capture_desc| {
+            context.interpreter.boxy_runtime.performBoxyLayoutDrop(
+                context.interpreter.boxyFrameHooks(null),
+                .{ .ptr = capture_value_ptr },
+                capture_layout,
+                capture_desc,
+                .decref,
+                1,
+                .atomic,
+            ) catch |err| switch (err) {
+                error.OutOfMemory => roc_ops.crash("LIR/interpreter erased callable capture drop ran out of memory"),
+                error.RuntimeError => roc_ops.crash("LIR/interpreter erased callable capture drop hit runtime error"),
+                error.ComptimeExhaustiveness => roc_ops.crash("LIR/interpreter erased callable capture drop hit compile-time exhaustiveness marker"),
+                error.DivisionByZero => roc_ops.crash("LIR/interpreter erased callable capture drop hit division by zero"),
+                error.Crash => roc_ops.crash("LIR/interpreter erased callable capture drop hit Roc crash"),
+                error.ExpectErr => unreachable,
+            };
+            return;
+        }
         context.interpreter.performRawRc(.decref, .{ .ptr = capture_value_ptr }, capture_layout, 1);
     }
 
@@ -3682,8 +3718,13 @@ pub const Interpreter = struct {
         };
 
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
+        const capture_desc = if (assign.capture) |capture_local|
+            frame.localDesc(capture_local) orelse try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(capture_local).boxy_desc)
+        else
+            null;
         context.* = .{
             .interpreter = self,
+            .capture_desc = capture_desc,
             .proc_id = @intFromEnum(assign.proc),
             .capture_layout_plus_one = if (assign.capture_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
             .capture_value_offset = @intCast(erased_callable_context_capture_offset),
@@ -4416,7 +4457,7 @@ pub const Interpreter = struct {
     }
 
     fn builtinInternalContainsRefcounted(self: *LirInterpreter, comptime _: []const u8, layout_idx: layout_mod.Idx) bool {
-        return self.layoutContainsRc(layout_idx);
+        return self.layout_store.layoutContainsRcErasedBox(self.layout_store.getLayout(layout_idx));
     }
 
     fn cachedRcPlan(self: *LirInterpreter, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
@@ -4484,7 +4525,7 @@ pub const Interpreter = struct {
     }
 
     fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u16, atomicity: RcAtomicity) void {
-        const plan = self.cachedRcPlan(helper);
+        const plan = self.layout_store.rcHelperPlanErasedBox(helper);
         if (plan == .noop) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}",

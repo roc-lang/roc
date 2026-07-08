@@ -220,7 +220,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         try arc_certify.certifyStoreOrPanic(store.allocator, store, layouts, boxy_rc_descs, .{ .sigs = all_sigs }, options.roots);
     }
-
 }
 
 fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
@@ -1858,6 +1857,7 @@ const Inserter = struct {
                 cloned = try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = assign.target,
                     .fields = assign.fields,
+                    .contents_desc = assign.contents_desc,
                     .next = next,
                 } });
             },

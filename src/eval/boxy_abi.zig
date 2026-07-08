@@ -144,6 +144,14 @@ pub fn initGlobal(
     global = g;
 }
 
+/// Update the host services used by wrappers whose ABI does not take `RocOps`
+/// as an explicit argument. In-process evaluators call this before each root
+/// when several roots share one installed boxy runtime.
+pub fn setGlobalRocOps(roc_ops: *RocOps) void {
+    const g = global orelse return;
+    g.runtime.roc_ops = roc_ops;
+}
+
 /// Initialize the process-global boxy runtime from a mapped boxy sidecar
 /// view. The view (and the buffer behind it) and `roc_ops` must outlive the
 /// global.

@@ -1066,6 +1066,9 @@ fn collectStmt(
         },
         .assign_struct => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
+            if (assign.contents_desc) |contents_desc| {
+                if (contents_desc.localOrNull()) |local| noteDemand(solver, local);
+            }
             const fields = store.getLocalSpan(assign.fields);
             for (0..GuardedList.borrowLen(fields)) |index| {
                 const field = GuardedList.at(fields, index);
@@ -1422,6 +1425,11 @@ pub fn computeVisibility(
                 }
             },
             .assign_struct => |assign| {
+                if (assign.contents_desc) |contents_desc| {
+                    if (contents_desc.localOrNull()) |local| {
+                        try addEdge(&edges, allocator, rc_local, @intFromEnum(assign.target), @intFromEnum(local));
+                    }
+                }
                 const fields = store.getLocalSpan(assign.fields);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
@@ -2033,6 +2041,9 @@ pub fn computeUniqueness(
                 }
             },
             .assign_struct => |assign| {
+                if (assign.contents_desc) |contents_desc| {
+                    if (contents_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                }
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
                 const fields = store.getLocalSpan(assign.fields);

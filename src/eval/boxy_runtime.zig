@@ -399,13 +399,6 @@ pub const BoxyRuntime = struct {
         discriminant: u16,
     ) *const LirProgram.BoxyTagVariant {
         if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
-        if (builtin.mode == .Debug) {
-            debugPrint("boxy descriptor variants for payload_layout={d}:", .{@intFromEnum(desc.payload_layout)});
-            for (self.requireBoxyTagVariants(desc.tag_variants)) |*variant| {
-                debugPrint(" {s}:{d}", .{ self.store.getString(variant.name), variant.discriminant });
-            }
-            debugPrint(" tag_ext_desc={any}\n", .{desc.tag_ext_desc});
-        }
         self.invariantFailed(
             "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d}",
             .{
@@ -2606,20 +2599,6 @@ pub const BoxyRuntime = struct {
                 if (self.helper.sizeOf(payload_desc.payload_layout) == 0) {
                     return .{ .value = Value.zst, .layout = payload_desc.payload_layout, .desc = payload_desc };
                 }
-                trace_rc.log(
-                    "debug_null_box_payload proc={d} layout={d} desc_payload={d} desc_nested={d}+{d} payload_desc_payload={d} payload_desc_nested={d}+{d} payload_desc_contains={}",
-                    .{
-                        hooks.traceProcId(),
-                        @intFromEnum(layout_idx),
-                        @intFromEnum(desc.payload_layout),
-                        desc.nested_descs.start,
-                        desc.nested_descs.len,
-                        @intFromEnum(payload_desc.payload_layout),
-                        payload_desc.nested_descs.start,
-                        payload_desc.nested_descs.len,
-                        payload_desc.contains_refcounted,
-                    },
-                );
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: boxy source box layout {d} had null data for payload layout {d}",
                     .{ @intFromEnum(layout_idx), @intFromEnum(payload_desc.payload_layout) },
@@ -2886,26 +2865,6 @@ pub const BoxyRuntime = struct {
             } else null;
             const target_field_desc = if (self.layoutNeedsBoxyStructuralDesc(expected_field_layout)) blk: {
                 if (next_target_desc >= target_desc_refs.len) {
-                    if (builtin.mode == .Debug) {
-                        debugPrint(
-                            "debug_struct_target_missing actual={d} expected={d} field={d} expected_field={d} expected_field_tag={s} source_payload={d} source_nested={d}+{d} target_payload={d} target_nested={d}+{d} target_variants={d}+{d}\n",
-                            .{
-                                @intFromEnum(actual_layout),
-                                @intFromEnum(expected_layout),
-                                original_index,
-                                @intFromEnum(expected_field_layout),
-                                @tagName(self.layout_store.getLayout(expected_field_layout).tag),
-                                @intFromEnum(source_desc.payload_layout),
-                                source_desc.nested_descs.start,
-                                source_desc.nested_descs.len,
-                                @intFromEnum(target_desc.payload_layout),
-                                target_desc.nested_descs.start,
-                                target_desc.nested_descs.len,
-                                target_desc.tag_variants.start,
-                                target_desc.tag_variants.len,
-                            },
-                        );
-                    }
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: target boxy struct descriptor for layout {d} was missing nested descriptor {d}",
                         .{ @intFromEnum(expected_layout), next_target_desc },

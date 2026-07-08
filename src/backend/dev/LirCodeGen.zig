@@ -136,13 +136,11 @@ fn updateModeImmForArg0(unique_args: u64) i64 {
 
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = ls.builtinListAbi(list_layout_idx);
-    // An erased `box_of_zst` element carries a real refcounted heap allocation,
-    // so a list of erased boxes maintains its elements' refcounts. The plain
-    // `builtinListAbi` reports `box_of_zst` as unrefcounted (its canonical null
-    // form), which would skip refcounting the boxes on clone/drop and corrupt
-    // them. This matches the interpreter, which drives the same runtime.
-    const elements_refcounted = abi.contains_refcounted or
-        (abi.elem_layout_idx != null and ls.getLayout(abi.elem_layout_idx.?).tag == .box_of_zst);
+    // Erased `box_of_zst` values carry real refcounted heap allocations in
+    // boxy mode, so containers that store them need the refcounted list prefix
+    // and element callbacks even though the canonical null form is not
+    // refcounted.
+    const elements_refcounted = abi.contains_refcounted or ls.layoutContainsRcErasedBox(abi.elem_layout);
     return .{
         .elem_layout_idx = abi.elem_layout_idx,
         .elem_layout = abi.elem_layout,
@@ -10629,7 +10627,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .key = .{ .op = op, .layout_idx = layout_idx },
                 .atomicity = .atomic,
             };
-            if (self.layout_store.rcHelperPlan(helper.key) == .noop) return null;
+            if (self.layout_store.rcHelperPlanErasedBox(helper.key) == .noop) return null;
 
             const callback_reg = try self.allocTempGeneral();
             try self.emitPendingRcAddr(helper, callback_reg);
@@ -10936,7 +10934,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // callable's `on_drop` stays atomic because it is selected at
             // closure creation, where no RC statement exists.
             const single_thread = helper.atomicity == .single_thread;
-            switch (self.layout_store.rcHelperPlan(helper.key)) {
+            switch (self.layout_store.rcHelperPlanErasedBox(helper.key)) {
                 .noop => {},
                 .str_incref => if (single_thread)
                     try self.emitBuiltinInternalRcHelperStrIncref(.incref_data_ptr_single_thread, @intFromPtr(&increfDataPtrSingleThreadC), ptr_slot, count_slot.?, roc_ops_slot)
@@ -11114,7 +11112,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return code_offset;
             }
 
-            const helper_plan = self.layout_store.rcHelperPlan(helper.key);
+            const helper_plan = self.layout_store.rcHelperPlanErasedBox(helper.key);
             if (helper_plan == .noop) {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
@@ -12237,7 +12235,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (on_drop) {
                 .none => try self.codegen.emitLoadImm(on_drop_reg, 0),
                 .rc_helper => |helper_key| {
-                    if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
+                    if (self.layout_store.rcHelperPlanErasedBox(helper_key) == .noop) {
                         try self.codegen.emitLoadImm(on_drop_reg, 0);
                     } else {
                         // `on_drop` is selected here at closure creation, which
