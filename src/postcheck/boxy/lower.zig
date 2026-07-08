@@ -12861,6 +12861,33 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// Like `dynamicLiteralTarget`, but for literals whose payload layout the
+    /// literal kind already fixes statically (str, f32, f64). A runtime-only
+    /// descriptor conveys the target's representation at runtime and cannot
+    /// supply the payload layout, so the known layout is used to box against it.
+    fn dynamicLiteralTargetForLayout(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        known_payload_layout: layout.Idx,
+    ) ?DynamicLiteralTarget {
+        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
+        if (!self.layoutIsBoxyDynamicStorage(target_layout)) return null;
+
+        const payload_desc = self.parent.result.store.getLocal(target).boxy_desc orelse
+            boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
+        const payload_layout = switch (payload_desc) {
+            .static => |desc_id| self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)].payload_layout,
+            .local, .runtime => known_payload_layout,
+        };
+        if (payload_layout == target_layout) {
+            boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
+        }
+        return .{
+            .payload_layout = payload_layout,
+            .payload_desc = payload_desc,
+        };
+    }
+
     fn assignBoxedLiteralPayload(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -13081,7 +13108,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn assignF32Literal(self: *ProcBodyBuilder, target: LIR.LocalId, value: f32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        if (self.dynamicLiteralTarget(target)) |info| {
+        if (self.dynamicLiteralTargetForLayout(target, .f32)) |info| {
             if (info.payload_layout != .f32) {
                 boxyLowerInvariant("boxy dynamic f32 literal descriptor did not resolve to f32 payload layout");
             }
@@ -13101,7 +13128,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn assignF64Literal(self: *ProcBodyBuilder, target: LIR.LocalId, value: f64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
-        if (self.dynamicLiteralTarget(target)) |info| {
+        if (self.dynamicLiteralTargetForLayout(target, .f64)) |info| {
             if (info.payload_layout != .f64) {
                 boxyLowerInvariant("boxy dynamic f64 literal descriptor did not resolve to f64 payload layout");
             }
@@ -13178,7 +13205,7 @@ const ProcBodyBuilder = struct {
         len: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        if (self.dynamicLiteralTarget(target)) |info| {
+        if (self.dynamicLiteralTargetForLayout(target, .str)) |info| {
             if (info.payload_layout != .str) {
                 boxyLowerInvariant("boxy dynamic string literal descriptor did not resolve to string payload layout");
             }
