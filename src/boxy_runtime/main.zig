@@ -50,15 +50,77 @@ extern const roc_boxy_sidecar_desc: BoxySidecar;
 /// emits.
 var startup_ops: RocOps = undefined;
 
-/// A `std.mem.Allocator` for the runtime's own bookkeeping — the descriptor
-/// tables, the decoded sidecar view, and its arenas. This memory lives for the
-/// whole process and is reclaimed by the OS at exit; keeping it off the host
-/// allocation symbols (`roc_alloc` and friends) means the host's Roc-allocation
-/// tracker sees only the program's reference-counted values, so runtime
-/// infrastructure is not mistaken for an application memory leak. Page-granular
-/// mapping needs no libc allocator of its own, matching the app and builtins
-/// objects this runtime links beside.
-const host_allocator = std.heap.page_allocator;
+/// A bump allocator for the runtime's own bookkeeping — the descriptor tables,
+/// the decoded sidecar view, and its arenas. This memory lives for the whole
+/// process and is reclaimed by the OS at exit, so it never frees. Keeping it off
+/// the host allocation symbols (`roc_alloc` and friends) means the host's
+/// Roc-allocation tracker sees only the program's reference-counted values, so
+/// runtime infrastructure is not mistaken for an application memory leak. The
+/// region is reserved with a raw `mmap` syscall (demand-paged, so the large
+/// reservation costs no physical memory until touched) rather than
+/// `std.heap.page_allocator`, whose posix `mmap`/`munmap` pull `__errno_location`
+/// — a symbol absent from this freestanding standalone object.
+const RuntimeArena = struct {
+    base: [*]u8 = undefined,
+    cap: usize = 0,
+    used: usize = 0,
+    ready: bool = false,
+
+    fn ensure(self: *RuntimeArena) bool {
+        if (self.ready) return true;
+        const linux = std.os.linux;
+        const cap: usize = 1 << 30;
+        const raw = linux.mmap(
+            null,
+            cap,
+            .{ .READ = true, .WRITE = true },
+            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+            -1,
+            0,
+        );
+        if (linux.errno(raw) != .SUCCESS) return false;
+        self.base = @ptrFromInt(raw);
+        self.cap = cap;
+        self.used = 0;
+        self.ready = true;
+        return true;
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        _ = ret_addr;
+        const self: *RuntimeArena = @ptrCast(@alignCast(ctx));
+        if (!self.ensure()) return null;
+        const start = std.mem.alignForward(usize, self.used, alignment.toByteUnits());
+        const end = start + len;
+        if (end > self.cap) return null;
+        self.used = end;
+        return self.base + start;
+    }
+
+    fn resize(_: *anyopaque, memory: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
+        return new_len <= memory.len;
+    }
+
+    fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+        return null;
+    }
+
+    fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {}
+
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = alloc,
+        .resize = resize,
+        .remap = remap,
+        .free = free,
+    };
+
+    fn allocator(self: *RuntimeArena) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &vtable };
+    }
+};
+
+var runtime_arena: RuntimeArena = .{};
+const host_allocator = runtime_arena.allocator();
 
 /// Install the process-global boxy runtime from the embedded sidecar. The
 /// entrypoint wrappers call this before invoking any Roc procedure; the first
