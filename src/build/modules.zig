@@ -499,8 +499,9 @@ pub const RocModules = struct {
         self.setupModuleDependencies();
 
         // `embedded_lld` is created outside the dependency table above; it only
-        // needs `collections` for the single-threaded arena.
+        // needs a couple of explicit imports.
         self.embedded_lld.addImport("collections", self.collections);
+        self.embedded_lld.addImport("build_options", self.build_options);
 
         // The vendored ELF loader reaches one roc helper (`elf_self_relocate`)
         // through the `base` module.

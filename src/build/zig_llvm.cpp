@@ -10,6 +10,10 @@
 
 #include "zig_llvm.h"
 
+#ifndef ROC_USE_EMBEDDED_LLD
+#define ROC_USE_EMBEDDED_LLD 1
+#endif
+
 #if __GNUC__ >= 9
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Winit-list-lifetime"
@@ -64,7 +68,9 @@
 #include <llvm/Transforms/Utils/LowerMemIntrinsics.h>
 #include <llvm/Transforms/Utils/NameAnonGlobals.h>
 
+#if ROC_USE_EMBEDDED_LLD
 #include <lld/Common/Driver.h>
+#endif
 
 #if __GNUC__ >= 9
 #pragma GCC diagnostic pop
@@ -704,6 +710,7 @@ bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size
     return false;
 }
 
+#if ROC_USE_EMBEDDED_LLD
 // The header file in LLD 16 exposed these functions. As of 17 they are only
 // exposed via a macro ("LLD_HAS_DRIVER") which I have copied and pasted the
 // body of here so that you don't have to wonder what it is doing.
@@ -745,6 +752,7 @@ bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disab
     std::vector<const char *> args(argv, argv + argc);
     return lld::wasm::link(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
 }
+#endif
 
 static_assert((FloatABI::ABIType)ZigLLVMFloatABI_Default == FloatABI::ABIType::Default, "");
 static_assert((FloatABI::ABIType)ZigLLVMFloatABI_Soft == FloatABI::ABIType::Soft, "");

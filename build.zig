@@ -2270,7 +2270,8 @@ pub fn build(b: *std.Build) void {
     const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
-    const build_playground_step = b.step("build-playground", "Build the WASM playground");
+    const build_wasm_playground_step = b.step("build-wasm-playground", "Build the WASM playground to zig-out/bin/playground.wasm");
+    const build_playground_step = b.step("build-playground", "Alias for build-wasm-playground");
     const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
     const run_test_playground_step = b.step("run-test-playground", "Run the integration test suite for the WASM playground");
     const build_test_cli_runners_step = b.step("build-test-cli-runners", "Build CLI integration test runners");
@@ -2351,6 +2352,8 @@ pub fn build(b: *std.Build) void {
     // (e.g., for AFL++ fuzzing which requires system LLVM).
     const use_system_llvm = b.option(bool, "system-llvm", "Use system-installed LLVM instead of bundled LLVM (required for AFL++)") orelse false;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
+    const dynamic_llvm = b.option(bool, "dynamic-llvm", "Link LLVM dynamically instead of linking LLVM component archives") orelse false;
+    const external_lld = b.option(bool, "external-lld", "Use the Zig executable's lld driver instead of embedding lld") orelse no_bin;
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
 
@@ -2388,6 +2391,8 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(u64, "test_progress_interval_ms", test_progress_interval_ms);
     build_options.addOption(bool, "eval_no_fork", eval_no_fork);
     build_options.addOption(bool, "eval_time_worker", eval_time_worker);
+    build_options.addOption(bool, "external_lld", external_lld);
+    build_options.addOption([]const u8, "external_lld_zig_exe", b.graph.zig_exe);
     const compiler_version_git = getCompilerVersionGit(b);
     build_options.addOption([]const u8, "compiler_version_git", compiler_version_git);
     build_options.addOption([32]u8, "compiler_artifact_hash", getCompilerArtifactHash(b, compiler_version_git));
@@ -2468,13 +2473,41 @@ pub fn build(b: *std.Build) void {
 
     const write_compiled_builtins = b.addWriteFiles();
 
-    // Always regenerate .bin files to ensure they match the current compiler
-    const builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
-    write_compiled_builtins.step.dependOn(&builtin_compiler.run.step);
+    const BuiltinOutputs = struct {
+        builtin_bin: std.Build.LazyPath,
+        builtin_indices_zig: std.Build.LazyPath,
+        builtin_artifact_bin: std.Build.LazyPath,
+    };
+
+    const builtin_outputs: BuiltinOutputs = if (no_bin) .{
+        .builtin_bin = b.path("zig-out/builtins/Builtin.bin"),
+        .builtin_indices_zig = b.path("zig-out/builtins/builtin_indices.zig"),
+        .builtin_artifact_bin = b.path("zig-out/builtins/Builtin.artifact.bin"),
+    } else blk: {
+        // Always regenerate .bin files to ensure they match the current compiler.
+        const builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+        write_compiled_builtins.step.dependOn(&builtin_compiler.run.step);
+
+        const install_builtin_bin = b.addInstallFileWithDir(builtin_compiler.builtin_bin, .prefix, "builtins/Builtin.bin");
+        const install_builtin_indices = b.addInstallFileWithDir(builtin_compiler.builtin_indices_zig, .prefix, "builtins/builtin_indices.zig");
+        const install_builtin_artifact = b.addInstallFileWithDir(builtin_compiler.builtin_artifact_bin, .prefix, "builtins/Builtin.artifact.bin");
+        b.getInstallStep().dependOn(&install_builtin_bin.step);
+        b.getInstallStep().dependOn(&install_builtin_indices.step);
+        b.getInstallStep().dependOn(&install_builtin_artifact.step);
+        build_roc_step.dependOn(&install_builtin_bin.step);
+        build_roc_step.dependOn(&install_builtin_indices.step);
+        build_roc_step.dependOn(&install_builtin_artifact.step);
+
+        break :blk .{
+            .builtin_bin = builtin_compiler.builtin_bin,
+            .builtin_indices_zig = builtin_compiler.builtin_indices_zig,
+            .builtin_artifact_bin = builtin_compiler.builtin_artifact_bin,
+        };
+    };
 
     // Copy tracked outputs from the builtin compiler run step.
     _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_bin,
+        builtin_outputs.builtin_bin,
         "Builtin.bin",
     );
 
@@ -2486,7 +2519,7 @@ pub fn build(b: *std.Build) void {
 
     // Copy the baked CheckedModuleArtifact
     _ = write_compiled_builtins.addCopyFile(
-        builtin_compiler.builtin_artifact_bin,
+        builtin_outputs.builtin_artifact_bin,
         "Builtin.artifact.bin",
     );
 
@@ -2519,7 +2552,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = compiled_builtins_source,
     });
     compiled_builtins_module.addImport("builtin_indices", b.createModule(.{
-        .root_source_file = builtin_compiler.builtin_indices_zig,
+        .root_source_file = builtin_outputs.builtin_indices_zig,
     }));
 
     const bytebox = b.dependency("bytebox", .{
@@ -2617,52 +2650,60 @@ pub fn build(b: *std.Build) void {
 
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
-    const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const wasm32_builtins_obj = b.addObject(.{
-        .name = "roc_builtins_wasm32_eval",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = wasm32_resolved_target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
-        }),
-    });
-    wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    wasm32_builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    wasm32_builtins_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    wasm32_builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io_wasm32_eval", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    wasm32_builtins_obj.bundle_compiler_rt = false;
-    configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
+    const wasm32_eval_builtins_file: std.Build.LazyPath = if (no_bin) b.path("zig-out/builtins/roc_builtins_wasm32_eval.o") else blk: {
+        const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+        const wasm32_builtins_obj = b.addObject(.{
+            .name = "roc_builtins_wasm32_eval",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib.zig"),
+                .target = wasm32_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+        });
+        wasm32_builtins_obj.root_module.addImport("tracy", b.addModule("tracy_stub_wasm32_eval", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        wasm32_builtins_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        wasm32_builtins_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        wasm32_builtins_obj.root_module.addImport("shim_io", b.addModule("shim_io_wasm32_eval", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        wasm32_builtins_obj.bundle_compiler_rt = false;
+        configureBackend(wasm32_builtins_obj, wasm32_resolved_target);
 
-    const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
-    const wasm32_compiler_rt_obj = b.addObject(.{
-        .name = "compiler_rt_wasm32_eval",
-        .root_module = b.createModule(.{
-            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
-            .target = wasm32_resolved_target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
-        }),
-    });
-    wasm32_compiler_rt_obj.bundle_compiler_rt = false;
-    configureBackend(wasm32_compiler_rt_obj, wasm32_resolved_target);
+        const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+        const wasm32_compiler_rt_obj = b.addObject(.{
+            .name = "compiler_rt_wasm32_eval",
+            .root_module = b.createModule(.{
+                .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
+                .target = wasm32_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+        });
+        wasm32_compiler_rt_obj.bundle_compiler_rt = false;
+        configureBackend(wasm32_compiler_rt_obj, wasm32_resolved_target);
 
-    const link_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
-    link_wasm32_builtins.addArg("-o");
-    const merged_wasm32_builtins = link_wasm32_builtins.addOutputFileArg("roc_builtins.o");
-    link_wasm32_builtins.addFileArg(wasm32_builtins_obj.getEmittedBin());
-    link_wasm32_builtins.addFileArg(wasm32_compiler_rt_obj.getEmittedBin());
+        const link_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
+        link_wasm32_builtins.addArg("-o");
+        const merged_wasm32_builtins = link_wasm32_builtins.addOutputFileArg("roc_builtins.o");
+        link_wasm32_builtins.addFileArg(wasm32_builtins_obj.getEmittedBin());
+        link_wasm32_builtins.addFileArg(wasm32_compiler_rt_obj.getEmittedBin());
+
+        const install_wasm32_eval_builtins = b.addInstallFileWithDir(merged_wasm32_builtins, .prefix, "builtins/roc_builtins_wasm32_eval.o");
+        b.getInstallStep().dependOn(&install_wasm32_eval_builtins.step);
+        build_roc_step.dependOn(&install_wasm32_eval_builtins.step);
+
+        break :blk merged_wasm32_builtins;
+    };
 
     const wasm32_builtins_files = b.addWriteFiles();
-    _ = wasm32_builtins_files.addCopyFile(merged_wasm32_builtins, "roc_builtins.o");
+    _ = wasm32_builtins_files.addCopyFile(wasm32_eval_builtins_file, "roc_builtins.o");
     const wasm32_builtins_module = b.createModule(.{
         .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
             \\pub const bytes = @embedFile("roc_builtins.o");
@@ -2697,7 +2738,7 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true, valgrind_support) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, dynamic_llvm, external_lld, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true, valgrind_support, no_bin) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
@@ -2730,6 +2771,8 @@ pub fn build(b: *std.Build) void {
             null, // Default frame pointer handling
             use_system_llvm,
             user_llvm_path,
+            dynamic_llvm,
+            external_lld,
             null, // No tracy for release
             release_zstd,
             compiled_builtins_module,
@@ -2738,6 +2781,7 @@ pub fn build(b: *std.Build) void {
             null, // No tracy
             false,
             valgrind_support,
+            false,
         );
         if (release_exe) |exe| {
             roc_modules.addAll(exe);
@@ -2830,7 +2874,12 @@ pub fn build(b: *std.Build) void {
     const run_builtin_compiler_force = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, roc_files_force);
     run_builtin_compiler_force.run.step.dependOn(&clean_out_step.step);
     run_builtin_compiler_force.run.step.dependOn(clear_roc_cache_step);
-    rebuild_builtins_step.dependOn(&run_builtin_compiler_force.run.step);
+    const install_forced_builtin_bin = b.addInstallFileWithDir(run_builtin_compiler_force.builtin_bin, .prefix, "builtins/Builtin.bin");
+    const install_forced_builtin_indices = b.addInstallFileWithDir(run_builtin_compiler_force.builtin_indices_zig, .prefix, "builtins/builtin_indices.zig");
+    const install_forced_builtin_artifact = b.addInstallFileWithDir(run_builtin_compiler_force.builtin_artifact_bin, .prefix, "builtins/Builtin.artifact.bin");
+    rebuild_builtins_step.dependOn(&install_forced_builtin_bin.step);
+    rebuild_builtins_step.dependOn(&install_forced_builtin_indices.step);
+    rebuild_builtins_step.dependOn(&install_forced_builtin_artifact.step);
 
     // Add the compiled builtins module to roc exe and make it depend on the builtins being ready
     roc_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
@@ -2851,250 +2900,310 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
-    const builtins64_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_bc_obj.root_module.stack_check = false;
-    builtins64_bc_obj.root_module.link_libc = false;
-    builtins64_bc_obj.use_llvm = true;
-    builtins64_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_bc_obj.getEmittedBin();
-    const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
+    const LlvmEmbeddedInputs = struct {
+        builtins32_bc: std.Build.LazyPath,
+        builtins64_bc: std.Build.LazyPath,
+        builtins32_core_bc: std.Build.LazyPath,
+        builtins64_core_bc: std.Build.LazyPath,
+        builtins32_extern_bc: std.Build.LazyPath,
+        builtins64_extern_bc: std.Build.LazyPath,
+        builtins32_core_extern_bc: std.Build.LazyPath,
+        builtins64_core_extern_bc: std.Build.LazyPath,
+        eval_compiler_rt_libcalls_obj: std.Build.LazyPath,
+    };
 
-    const builtins64_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_bc_obj.root_module.stack_check = false;
-    builtins64_core_bc_obj.root_module.link_libc = false;
-    builtins64_core_bc_obj.use_llvm = true;
-    builtins64_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_bc_obj.getEmittedBin();
-    const builtins64_core_bc_file = builtins64_core_bc_obj.getEmittedLlvmBc();
+    const llvm_embedded_inputs: LlvmEmbeddedInputs = if (no_bin) .{
+        .builtins32_bc = b.path("zig-out/builtins/builtins32.bc"),
+        .builtins64_bc = b.path("zig-out/builtins/builtins64.bc"),
+        .builtins32_core_bc = b.path("zig-out/builtins/builtins32_core.bc"),
+        .builtins64_core_bc = b.path("zig-out/builtins/builtins64_core.bc"),
+        .builtins32_extern_bc = b.path("zig-out/builtins/builtins32_extern.bc"),
+        .builtins64_extern_bc = b.path("zig-out/builtins/builtins64_extern.bc"),
+        .builtins32_core_extern_bc = b.path("zig-out/builtins/builtins32_core_extern.bc"),
+        .builtins64_core_extern_bc = b.path("zig-out/builtins/builtins64_core_extern.bc"),
+        .eval_compiler_rt_libcalls_obj = b.path("zig-out/builtins/eval_compiler_rt_libcalls.obj"),
+    } else blk: {
+        const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
+        const builtins64_bc_obj = b.addObject(.{
+            .name = "roc_builtins64_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib.zig"),
+                .target = builtins64_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins64_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins64_bc_obj.root_module.omit_frame_pointer = true;
+        builtins64_bc_obj.root_module.stack_check = false;
+        builtins64_bc_obj.root_module.link_libc = false;
+        builtins64_bc_obj.use_llvm = true;
+        builtins64_bc_obj.bundle_compiler_rt = false;
+        _ = builtins64_bc_obj.getEmittedBin();
+        const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
 
-    const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const builtins32_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_bc_obj.root_module.stack_check = false;
-    builtins32_bc_obj.use_llvm = true;
-    builtins32_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_bc_obj.getEmittedBin();
-    const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
+        const builtins64_core_bc_obj = b.addObject(.{
+            .name = "roc_builtins64_core_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib_core.zig"),
+                .target = builtins64_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins64_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins64_core_bc_obj.root_module.omit_frame_pointer = true;
+        builtins64_core_bc_obj.root_module.stack_check = false;
+        builtins64_core_bc_obj.root_module.link_libc = false;
+        builtins64_core_bc_obj.use_llvm = true;
+        builtins64_core_bc_obj.bundle_compiler_rt = false;
+        _ = builtins64_core_bc_obj.getEmittedBin();
+        const builtins64_core_bc_file = builtins64_core_bc_obj.getEmittedLlvmBc();
 
-    const builtins32_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_bc_obj.root_module.stack_check = false;
-    builtins32_core_bc_obj.use_llvm = true;
-    builtins32_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_bc_obj.getEmittedBin();
-    const builtins32_core_bc_file = builtins32_core_bc_obj.getEmittedLlvmBc();
+        const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+        const builtins32_bc_obj = b.addObject(.{
+            .name = "roc_builtins32_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib.zig"),
+                .target = builtins32_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins32_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins32_bc_obj.root_module.omit_frame_pointer = true;
+        builtins32_bc_obj.root_module.stack_check = false;
+        builtins32_bc_obj.use_llvm = true;
+        builtins32_bc_obj.bundle_compiler_rt = false;
+        _ = builtins32_bc_obj.getEmittedBin();
+        const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
 
-    const builtins64_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_extern_bc_obj.root_module.stack_check = false;
-    builtins64_extern_bc_obj.use_llvm = true;
-    builtins64_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_extern_bc_obj.getEmittedBin();
-    const builtins64_extern_bc_file = builtins64_extern_bc_obj.getEmittedLlvmBc();
+        const builtins32_core_bc_obj = b.addObject(.{
+            .name = "roc_builtins32_core_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib_core.zig"),
+                .target = builtins32_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins32_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins32_core_bc_obj.root_module.omit_frame_pointer = true;
+        builtins32_core_bc_obj.root_module.stack_check = false;
+        builtins32_core_bc_obj.use_llvm = true;
+        builtins32_core_bc_obj.bundle_compiler_rt = false;
+        _ = builtins32_core_bc_obj.getEmittedBin();
+        const builtins32_core_bc_file = builtins32_core_bc_obj.getEmittedLlvmBc();
 
-    const builtins64_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_extern_bc_obj.root_module.stack_check = false;
-    builtins64_core_extern_bc_obj.use_llvm = true;
-    builtins64_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_extern_bc_obj.getEmittedBin();
-    const builtins64_core_extern_bc_file = builtins64_core_extern_bc_obj.getEmittedLlvmBc();
+        const builtins64_extern_bc_obj = b.addObject(.{
+            .name = "roc_builtins64_extern_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+                .target = builtins64_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins64_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins64_extern_bc_obj.root_module.omit_frame_pointer = true;
+        builtins64_extern_bc_obj.root_module.stack_check = false;
+        builtins64_extern_bc_obj.use_llvm = true;
+        builtins64_extern_bc_obj.bundle_compiler_rt = false;
+        _ = builtins64_extern_bc_obj.getEmittedBin();
+        const builtins64_extern_bc_file = builtins64_extern_bc_obj.getEmittedLlvmBc();
 
-    const builtins32_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_extern_bc_obj.root_module.stack_check = false;
-    builtins32_extern_bc_obj.use_llvm = true;
-    builtins32_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_extern_bc_obj.getEmittedBin();
-    const builtins32_extern_bc_file = builtins32_extern_bc_obj.getEmittedLlvmBc();
+        const builtins64_core_extern_bc_obj = b.addObject(.{
+            .name = "roc_builtins64_core_extern_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
+                .target = builtins64_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins64_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins64_core_extern_bc_obj.root_module.omit_frame_pointer = true;
+        builtins64_core_extern_bc_obj.root_module.stack_check = false;
+        builtins64_core_extern_bc_obj.use_llvm = true;
+        builtins64_core_extern_bc_obj.bundle_compiler_rt = false;
+        _ = builtins64_core_extern_bc_obj.getEmittedBin();
+        const builtins64_core_extern_bc_file = builtins64_core_extern_bc_obj.getEmittedLlvmBc();
 
-    const builtins32_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_extern_bc_obj.root_module.stack_check = false;
-    builtins32_core_extern_bc_obj.use_llvm = true;
-    builtins32_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_extern_bc_obj.getEmittedBin();
-    const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
+        const builtins32_extern_bc_obj = b.addObject(.{
+            .name = "roc_builtins32_extern_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
+                .target = builtins32_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins32_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins32_extern_bc_obj.root_module.omit_frame_pointer = true;
+        builtins32_extern_bc_obj.root_module.stack_check = false;
+        builtins32_extern_bc_obj.use_llvm = true;
+        builtins32_extern_bc_obj.bundle_compiler_rt = false;
+        _ = builtins32_extern_bc_obj.getEmittedBin();
+        const builtins32_extern_bc_file = builtins32_extern_bc_obj.getEmittedLlvmBc();
 
-    // Native object exporting the compiler-rt 128-bit libcalls (`__divti3`,
-    // `__fixdfti`, ...) that the eval LLVM backend's host re-codegen emits but
-    // does not define. The eval shared library links this in on Windows, whose
-    // LoadLibrary cannot bind undefined symbols the way the Unix loaders do (see
-    // src/builtins/eval_compiler_rt_libcalls.zig). Built for the host target
-    // since the eval backend only ever runs natively.
-    const eval_compiler_rt_obj = b.addObject(.{
-        .name = "eval_compiler_rt_libcalls",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/eval_compiler_rt_libcalls.zig"),
-            .target = target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .single_threaded = true,
-        }),
-    });
-    eval_compiler_rt_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    eval_compiler_rt_obj.root_module.stack_check = false;
-    eval_compiler_rt_obj.bundle_compiler_rt = false;
-    configureBackend(eval_compiler_rt_obj, target);
-    const eval_compiler_rt_obj_file = eval_compiler_rt_obj.getEmittedBin();
+        const builtins32_core_extern_bc_obj = b.addObject(.{
+            .name = "roc_builtins32_core_extern_bc",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
+                .target = builtins32_target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .pic = true,
+                .single_threaded = true,
+            }),
+        });
+        builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
+            .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+        }));
+        builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+        builtins32_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
+            .root_source_file = b.path("src/shim_io.zig"),
+        }));
+        builtins32_core_extern_bc_obj.root_module.omit_frame_pointer = true;
+        builtins32_core_extern_bc_obj.root_module.stack_check = false;
+        builtins32_core_extern_bc_obj.use_llvm = true;
+        builtins32_core_extern_bc_obj.bundle_compiler_rt = false;
+        _ = builtins32_core_extern_bc_obj.getEmittedBin();
+        const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
+
+        // Native object exporting the compiler-rt 128-bit libcalls (`__divti3`,
+        // `__fixdfti`, ...) that the eval LLVM backend's host re-codegen emits but
+        // does not define. The eval shared library links this in on Windows, whose
+        // LoadLibrary cannot bind undefined symbols the way the Unix loaders do (see
+        // src/builtins/eval_compiler_rt_libcalls.zig). Built for the host target
+        // since the eval backend only ever runs natively.
+        const eval_compiler_rt_obj = b.addObject(.{
+            .name = "eval_compiler_rt_libcalls",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/eval_compiler_rt_libcalls.zig"),
+                .target = target,
+                .optimize = .ReleaseFast,
+                .strip = true,
+                .single_threaded = true,
+            }),
+        });
+        eval_compiler_rt_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+        eval_compiler_rt_obj.root_module.stack_check = false;
+        eval_compiler_rt_obj.bundle_compiler_rt = false;
+        configureBackend(eval_compiler_rt_obj, target);
+        const eval_compiler_rt_obj_file = eval_compiler_rt_obj.getEmittedBin();
+
+        const install_builtins32_bc = b.addInstallFileWithDir(builtins32_bc_file, .prefix, "builtins/builtins32.bc");
+        const install_builtins64_bc = b.addInstallFileWithDir(builtins64_bc_file, .prefix, "builtins/builtins64.bc");
+        const install_builtins32_core_bc = b.addInstallFileWithDir(builtins32_core_bc_file, .prefix, "builtins/builtins32_core.bc");
+        const install_builtins64_core_bc = b.addInstallFileWithDir(builtins64_core_bc_file, .prefix, "builtins/builtins64_core.bc");
+        const install_builtins32_extern_bc = b.addInstallFileWithDir(builtins32_extern_bc_file, .prefix, "builtins/builtins32_extern.bc");
+        const install_builtins64_extern_bc = b.addInstallFileWithDir(builtins64_extern_bc_file, .prefix, "builtins/builtins64_extern.bc");
+        const install_builtins32_core_extern_bc = b.addInstallFileWithDir(builtins32_core_extern_bc_file, .prefix, "builtins/builtins32_core_extern.bc");
+        const install_builtins64_core_extern_bc = b.addInstallFileWithDir(builtins64_core_extern_bc_file, .prefix, "builtins/builtins64_core_extern.bc");
+        const install_eval_compiler_rt_libcalls = b.addInstallFileWithDir(eval_compiler_rt_obj_file, .prefix, "builtins/eval_compiler_rt_libcalls.obj");
+        for ([_]*Step{
+            &install_builtins32_bc.step,
+            &install_builtins64_bc.step,
+            &install_builtins32_core_bc.step,
+            &install_builtins64_core_bc.step,
+            &install_builtins32_extern_bc.step,
+            &install_builtins64_extern_bc.step,
+            &install_builtins32_core_extern_bc.step,
+            &install_builtins64_core_extern_bc.step,
+            &install_eval_compiler_rt_libcalls.step,
+        }) |install_step| {
+            b.getInstallStep().dependOn(install_step);
+            build_roc_step.dependOn(install_step);
+        }
+
+        break :blk .{
+            .builtins32_bc = builtins32_bc_file,
+            .builtins64_bc = builtins64_bc_file,
+            .builtins32_core_bc = builtins32_core_bc_file,
+            .builtins64_core_bc = builtins64_core_bc_file,
+            .builtins32_extern_bc = builtins32_extern_bc_file,
+            .builtins64_extern_bc = builtins64_extern_bc_file,
+            .builtins32_core_extern_bc = builtins32_core_extern_bc_file,
+            .builtins64_core_extern_bc = builtins64_core_extern_bc_file,
+            .eval_compiler_rt_libcalls_obj = eval_compiler_rt_obj_file,
+        };
+    };
 
     const llvm_embedded_files = b.addWriteFiles();
-    _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins64_bc_file, "builtins64.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins32_core_bc_file, "builtins32_core.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins64_core_bc_file, "builtins64_core.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins32_extern_bc_file, "builtins32_extern.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
-    _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
-    _ = llvm_embedded_files.addCopyFile(eval_compiler_rt_obj_file, "eval_compiler_rt_libcalls.obj");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins32_bc, "builtins32.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins64_bc, "builtins64.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins32_core_bc, "builtins32_core.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins64_core_bc, "builtins64_core.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins32_extern_bc, "builtins32_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins64_extern_bc, "builtins64_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins32_core_extern_bc, "builtins32_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.builtins64_core_extern_bc, "builtins64_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(llvm_embedded_inputs.eval_compiler_rt_libcalls_obj, "eval_compiler_rt_libcalls.obj");
 
     const llvm_embedded_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
@@ -3157,6 +3266,8 @@ pub fn build(b: *std.Build) void {
         target,
         use_system_llvm,
         user_llvm_path,
+        dynamic_llvm,
+        external_lld,
         roc_modules,
         llvm_codegen_module,
         llvm_embedded_module,
@@ -3216,6 +3327,8 @@ pub fn build(b: *std.Build) void {
         target,
         use_system_llvm,
         user_llvm_path,
+        dynamic_llvm,
+        external_lld,
         roc_modules,
         llvm_codegen_module,
         llvm_embedded_module,
@@ -3268,6 +3381,8 @@ pub fn build(b: *std.Build) void {
         target,
         use_system_llvm,
         user_llvm_path,
+        dynamic_llvm,
+        external_lld,
         roc_modules,
         llvm_codegen_module,
         llvm_embedded_module,
@@ -3327,7 +3442,8 @@ pub fn build(b: *std.Build) void {
     }), false, null);
 
     const playground_install = b.addInstallArtifact(playground_exe, .{});
-    build_playground_step.dependOn(&playground_install.step);
+    build_wasm_playground_step.dependOn(&playground_install.step);
+    build_playground_step.dependOn(build_wasm_playground_step);
 
     // Build echo.wasm — echo platform compiled to wasm32-freestanding.
     // Also serves as a regression test that the compile module stays wasm-compatible.
@@ -3365,7 +3481,6 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_install = b.addInstallArtifact(echo_wasm, .{
             .dest_dir = .{ .override = .lib },
         });
-        build_playground_step.dependOn(&echo_wasm_install.step);
         echo_wasm_step.dependOn(&echo_wasm_install.step);
 
         // build-echo-wasm-archive: compress echo.wasm into echo.wasm.zst using
@@ -3391,7 +3506,6 @@ pub fn build(b: *std.Build) void {
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
             const install_file = b.addInstallFile(b.path("src/echo_platform/www/" ++ filename), "lib/" ++ filename);
-            build_playground_step.dependOn(&install_file.step);
             echo_wasm_step.dependOn(&install_file.step);
         }
 
@@ -3486,7 +3600,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Build playground integration tests - now enabled for all optimization modes.
-    const playground_test_install = blk: {
+    {
         const playground_test_optimize: std.builtin.OptimizeMode = if (optimize == .Debug) .ReleaseSafe else optimize;
         const playground_wasm_target = b.resolveTargetQuery(.{
             .cpu_arch = .wasm32,
@@ -3540,9 +3654,7 @@ pub fn build(b: *std.Build) void {
         }
         run_playground_test.step.dependOn(&install.step);
         run_test_playground_step.dependOn(&run_playground_test.step);
-
-        break :blk install;
-    };
+    }
 
     // Add serialization size check
     // This verifies that Serialized types have the same size on 32-bit and 64-bit platforms
@@ -4037,6 +4149,8 @@ pub fn build(b: *std.Build) void {
                 target,
                 use_system_llvm,
                 user_llvm_path,
+                dynamic_llvm,
+                external_lld,
                 roc_modules,
                 llvm_codegen_module,
                 llvm_embedded_module,
@@ -4060,6 +4174,8 @@ pub fn build(b: *std.Build) void {
                 target,
                 use_system_llvm,
                 user_llvm_path,
+                dynamic_llvm,
+                external_lld,
                 roc_modules,
                 llvm_codegen_module,
                 llvm_embedded_module,
@@ -4156,6 +4272,8 @@ pub fn build(b: *std.Build) void {
             target,
             use_system_llvm,
             user_llvm_path,
+            dynamic_llvm,
+            external_lld,
             roc_modules,
             llvm_codegen_module,
             llvm_embedded_module,
@@ -4211,6 +4329,8 @@ pub fn build(b: *std.Build) void {
             target,
             use_system_llvm,
             user_llvm_path,
+            dynamic_llvm,
+            external_lld,
             roc_modules,
             llvm_codegen_module,
             llvm_embedded_module,
@@ -4257,6 +4377,8 @@ pub fn build(b: *std.Build) void {
         target,
         use_system_llvm,
         user_llvm_path,
+        dynamic_llvm,
+        external_lld,
         roc_modules,
         llvm_codegen_module,
         llvm_embedded_module,
@@ -4302,6 +4424,8 @@ pub fn build(b: *std.Build) void {
         target,
         use_system_llvm,
         user_llvm_path,
+        dynamic_llvm,
+        external_lld,
         roc_modules,
         llvm_codegen_module,
         llvm_embedded_module,
@@ -4350,6 +4474,8 @@ pub fn build(b: *std.Build) void {
             target,
             use_system_llvm,
             user_llvm_path,
+            dynamic_llvm,
+            external_lld,
             roc_modules,
             llvm_codegen_module,
             llvm_embedded_module,
@@ -4469,12 +4595,6 @@ pub fn build(b: *std.Build) void {
 
     run_test_zig_step.dependOn(&tests_summary.step);
 
-    b.default_step.dependOn(build_playground_step);
-    {
-        const install = playground_test_install;
-        b.default_step.dependOn(&install.step);
-    }
-
     // Fmt zig code.
     const fmt_paths = .{ "src", "build.zig" };
     const fmt = b.addFmt(.{ .paths = &fmt_paths });
@@ -4592,6 +4712,8 @@ pub fn build(b: *std.Build) void {
                     target,
                     use_system_llvm,
                     user_llvm_path,
+                    dynamic_llvm,
+                    external_lld,
                     roc_modules,
                     llvm_codegen_module,
                     llvm_embedded_module,
@@ -4696,7 +4818,8 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_lsp_integration_runner_step);
     build_ci_step.dependOn(build_test_eval_runner_step);
     build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
-    build_ci_step.dependOn(build_playground_step);
+    build_ci_step.dependOn(build_wasm_playground_step);
+    build_ci_step.dependOn(echo_wasm_step);
     build_ci_step.dependOn(build_test_playground_runner_step);
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);
@@ -5304,6 +5427,8 @@ fn addMainExe(
     omit_frame_pointer: ?bool,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
+    dynamic_llvm: bool,
+    external_lld: bool,
     tracy: ?[]const u8,
     zstd: *Dependency,
     compiled_builtins_module: *std.Build.Module,
@@ -5312,6 +5437,7 @@ fn addMainExe(
     flag_enable_tracy: ?[]const u8,
     add_machine_code_shim_test: bool,
     valgrind_support: ?bool,
+    no_bin: bool,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -5325,6 +5451,9 @@ fn addMainExe(
             .valgrind = valgrind_support,
         }),
     });
+    if (no_bin) {
+        exe.pie = false;
+    }
     // The in-process interpreter (used by `--opt=interpreter`) recurses Zig stack
     // frames per Roc call. With Zig 0.16 codegen frame sizes, the Windows 1 MiB
     // default reserve isn't enough — recursion-heavy Roc programs trip our
@@ -5351,7 +5480,9 @@ fn addMainExe(
             strip,
             omit_frame_pointer,
         );
-        b.getInstallStep().dependOn(copy_step);
+        if (!no_bin) {
+            b.getInstallStep().dependOn(copy_step);
+        }
     }
 
     // Cross-compile for all Linux targets (musl + glibc)
@@ -5369,14 +5500,18 @@ fn addMainExe(
                 strip,
                 omit_frame_pointer,
             );
-            b.getInstallStep().dependOn(copy_step);
+            if (!no_bin) {
+                b.getInstallStep().dependOn(copy_step);
+            }
         }
 
         // Generate glibc stubs for gnu targets
         if (cross_target.query.abi == .gnu) {
             const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
             if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
+                if (!no_bin) {
+                    b.getInstallStep().dependOn(&stub.step);
+                }
             }
         }
     }
@@ -5479,16 +5614,18 @@ fn addMainExe(
     // Include the pre-built builtins object
     interpreter_shim_lib.root_module.addObjectFile(builtins_obj.getEmittedBin());
     interpreter_shim_lib.bundle_compiler_rt = true;
-    // Install shim library to the output directory
-    const install_interpreter_shim = b.addInstallArtifact(interpreter_shim_lib, .{});
-    b.getInstallStep().dependOn(&install_interpreter_shim.step);
-    // Copy the shim library to the src/ directory for embedding as binary data
-    // This is because @embedFile happens at compile time and needs the file to exist already
-    // and zig doesn't permit embedding files from directories outside the source tree.
-    const copy_interpreter_shim = b.addUpdateSourceFiles();
-    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
-    copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
-    exe.step.dependOn(&copy_interpreter_shim.step);
+    if (!no_bin) {
+        // Install shim library to the output directory
+        const install_interpreter_shim = b.addInstallArtifact(interpreter_shim_lib, .{});
+        b.getInstallStep().dependOn(&install_interpreter_shim.step);
+        // Copy the shim library to the src/ directory for embedding as binary data
+        // This is because @embedFile happens at compile time and needs the file to exist already
+        // and zig doesn't permit embedding files from directories outside the source tree.
+        const copy_interpreter_shim = b.addUpdateSourceFiles();
+        const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+        copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
+        exe.step.dependOn(&copy_interpreter_shim.step);
+    }
 
     // Create machine-code shim static library for dev backend run images.
     const machine_code_shim_lib = b.addLibrary(.{
@@ -5559,25 +5696,27 @@ fn addMainExe(
         run_machine_code_shim_test_step.dependOn(&run_machine_code_shim_test.step);
     }
 
-    const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
-    b.getInstallStep().dependOn(&install_machine_code_shim.step);
+    if (!no_bin) {
+        const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
+        b.getInstallStep().dependOn(&install_machine_code_shim.step);
 
-    const copy_machine_code_shim = b.addUpdateSourceFiles();
-    const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
-    copy_machine_code_shim.addCopyFileToSource(machine_code_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
-    exe.step.dependOn(&copy_machine_code_shim.step);
+        const copy_machine_code_shim = b.addUpdateSourceFiles();
+        const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
+        copy_machine_code_shim.addCopyFileToSource(machine_code_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
+        exe.step.dependOn(&copy_machine_code_shim.step);
 
-    // Copy builtins object for the host target for embedding into CLI
-    // This is used by `roc build --opt=dev` to link the app object with builtins
-    const copy_builtins = b.addUpdateSourceFiles();
-    const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
-    copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
-    exe.step.dependOn(&copy_builtins.step);
+        // Copy builtins object for the host target for embedding into CLI
+        // This is used by `roc build --opt=dev` to link the app object with builtins
+        const copy_builtins = b.addUpdateSourceFiles();
+        const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
+        copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
+        exe.step.dependOn(&copy_builtins.step);
 
-    const copy_builtins_extern = b.addUpdateSourceFiles();
-    const host_builtins_extern_filename = if (target.result.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
-    copy_builtins_extern.addCopyFileToSource(builtins_extern_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_extern_filename }));
-    exe.step.dependOn(&copy_builtins_extern.step);
+        const copy_builtins_extern = b.addUpdateSourceFiles();
+        const host_builtins_extern_filename = if (target.result.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
+        copy_builtins_extern.addCopyFileToSource(builtins_extern_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_extern_filename }));
+        exe.step.dependOn(&copy_builtins_extern.step);
+    }
 
     // Add tracy support (required by parse/can/check modules)
     add_tracy(b, roc_modules.build_options, interpreter_shim_lib, b.graph.host, false, flag_enable_tracy);
@@ -5670,7 +5809,9 @@ fn addMainExe(
             cross_builtins_bin,
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
-        exe.step.dependOn(&copy_cross_builtins.step);
+        if (!no_bin) {
+            exe.step.dependOn(&copy_cross_builtins.step);
+        }
 
         // Extern-symbol-mode builtins object for this target (the symbol ABI).
         const cross_builtins_extern_obj = b.addObject(.{
@@ -5703,7 +5844,9 @@ fn addMainExe(
             cross_builtins_extern_obj.getEmittedBin(),
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_extern_ext }),
         );
-        exe.step.dependOn(&copy_cross_builtins_extern.step);
+        if (!no_bin) {
+            exe.step.dependOn(&copy_cross_builtins_extern.step);
+        }
 
         if (!cross_is_wasm) {
             const default_platform_runtime_obj = b.addObject(.{
@@ -5732,7 +5875,9 @@ fn addMainExe(
                 default_platform_runtime_obj.getEmittedBin(),
                 b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
             );
-            exe.step.dependOn(&copy_default_platform_runtime.step);
+            if (!no_bin) {
+                exe.step.dependOn(&copy_default_platform_runtime.step);
+            }
         }
     }
 
@@ -5744,7 +5889,7 @@ fn addMainExe(
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
     exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
     exe.root_module.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
-    try addStaticLlvmOptionsToModule(exe.root_module);
+    try addStaticLlvmOptionsToModule(exe.root_module, llvm_paths_exe.lib, dynamic_llvm, external_lld);
 
     add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
 
@@ -5805,6 +5950,8 @@ fn addLlvmSupportToStep(
     target: ResolvedTarget,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
+    dynamic_llvm: bool,
+    external_lld: bool,
     roc_modules: anytype,
     llvm_codegen_module: *std.Build.Module,
     llvm_embedded_module: *std.Build.Module,
@@ -5813,7 +5960,7 @@ fn addLlvmSupportToStep(
     const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
     step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-    try addStaticLlvmOptionsToModule(step.root_module);
+    try addStaticLlvmOptionsToModule(step.root_module, llvm_paths.lib, dynamic_llvm, external_lld);
     step.root_module.addImport("llvm_codegen", llvm_codegen_module);
     step.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -6008,8 +6155,11 @@ const supported_deps_triples = std.StaticStringMap([]const u8).initComptime(.{
 });
 
 // The following is adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
-fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
-    const cpp_cflags = exe_cflags ++ [_][]const u8{"-DNDEBUG=1"};
+fn addStaticLlvmOptionsToModule(mod: *std.Build.Module, llvm_lib_dir: []const u8, dynamic_llvm: bool, external_lld: bool) !void {
+    const cpp_cflags = if (external_lld)
+        exe_cflags ++ [_][]const u8{ "-DNDEBUG=1", "-DROC_USE_EMBEDDED_LLD=0" }
+    else
+        exe_cflags ++ [_][]const u8{ "-DNDEBUG=1", "-DROC_USE_EMBEDDED_LLD=1" };
     mod.addCSourceFiles(.{
         .files = &cpp_sources,
         .flags = &cpp_cflags,
@@ -6019,15 +6169,28 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
         .preferred_link_mode = .static,
         .search_strategy = .mode_first,
     };
-    for (lld_libs) |lib_name| {
-        mod.linkSystemLibrary(lib_name, link_static);
+    const link_dynamic = std.Build.Module.LinkSystemLibraryOptions{
+        .preferred_link_mode = .dynamic,
+        .search_strategy = .mode_first,
+    };
+    if (!external_lld) {
+        for (lld_libs) |lib_name| {
+            mod.linkSystemLibrary(lib_name, link_static);
+        }
     }
 
-    for (llvm_libs) |lib_name| {
-        mod.linkSystemLibrary(lib_name, link_static);
+    if (dynamic_llvm) {
+        mod.linkSystemLibrary("LLVM-21", link_dynamic);
+        mod.addRPath(.{ .cwd_relative = llvm_lib_dir });
+    } else {
+        for (llvm_libs) |lib_name| {
+            mod.linkSystemLibrary(lib_name, link_static);
+        }
     }
 
-    mod.linkSystemLibrary("z", link_static);
+    if (!dynamic_llvm) {
+        mod.linkSystemLibrary("z", link_static);
+    }
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
         // Use Zig's bundled static libc++ to keep the binary statically linked
