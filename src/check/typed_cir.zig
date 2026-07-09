@@ -382,7 +382,7 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
-    pub fn exprNeedsInstantiation(self: @This(), idx: CIR.Expr.Idx) bool {
+    pub fn exprNeedsInstantiation(self: @This(), idx: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
         return self.typeStoreConst().needsInstantiation(self.exprType(idx));
     }
 

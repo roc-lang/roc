@@ -3297,9 +3297,14 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             // generalized scheme may legitimately hold an anonymous cycle
             // that every use site resolves by lifting into a nominal type
             // (e.g. a local recursive closure whose instantiations always
-            // unify with `Iter`) — rejecting it here would reject working
-            // code, so local roots only reject structurally infinite types.
-            if (comptime Idx == CIR.Pattern.Idx) return;
+            // unify with `Iter`). If a local binding has no lookup sites,
+            // however, there is no instantiation site that can lift the
+            // anonymous cycle into a nominal type. Report that local root
+            // directly instead of letting it be masked by an unused-variable
+            // diagnostic.
+            if (comptime Idx == CIR.Pattern.Idx) {
+                if (self.localBindingHasLookup(idx)) return;
+            }
 
             std.debug.assert(self.occurs_scratch.err_var != null);
             const err_var = self.occurs_scratch.err_var.?;
@@ -3326,6 +3331,13 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
             try self.types.setVarContent(var_, .err);
         },
     }
+}
+
+fn localBindingHasLookup(self: *const Self, pattern_idx: CIR.Pattern.Idx) bool {
+    for (self.value_lookup_tracking.items) |entry| {
+        if (entry.pattern_idx == pattern_idx) return true;
+    }
+    return false;
 }
 
 /// The settled-state occurs sweep: check every binding root — top-level defs

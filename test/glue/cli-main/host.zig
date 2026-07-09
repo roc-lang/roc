@@ -306,7 +306,7 @@ export fn roc_cli_many(
     return std.mem.zeroes(abi.CliHostManyResult);
 }
 
-export fn roc_cli_shape(arg0: abi.CircleOrEmptyOrRect, arg1: abi.__AnonStruct22) callconv(.c) abi.CliHostNamedRecord {
+export fn roc_cli_shape(arg0: abi.CircleOrEmptyOrRect, arg1: abi.CliHostShapeArg1) callconv(.c) abi.CliHostNamedRecord {
     _ = .{ arg0, arg1 };
     contract_env.fail("roc_cli_shape was called", .{});
     return std.mem.zeroes(abi.CliHostNamedRecord);

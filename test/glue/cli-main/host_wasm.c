@@ -421,19 +421,19 @@ CliHostManyResult roc_cli_many(
     return (CliHostManyResult){{0}};
 }
 
-CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, AnonStruct22 arg1) {
+CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, CliHostShapeArg1 arg1) {
     (void)arg0;
     (void)arg1;
     record_failure("roc_cli_shape was called");
     return (CliHostNamedRecord){{0}};
 }
 
-AnonStruct25 roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
+CliHostWide roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
     (void)arg0;
     (void)arg1;
     (void)arg2;
     record_failure("roc_cli_wide was called");
-    return (AnonStruct25){{0}};
+    return (CliHostWide){{0}};
 }
 
 static void reset_contract(void) {

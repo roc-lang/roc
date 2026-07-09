@@ -742,7 +742,7 @@ pub const Store = struct {
         // Check if any arguments need instantiation
         var needs_inst = false;
         for (args) |arg| {
-            if (self.needsInstantiation(arg)) {
+            if (try self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
             }
@@ -750,7 +750,7 @@ pub const Store = struct {
 
         // Also check the return type
         if (!needs_inst) {
-            needs_inst = self.needsInstantiation(ret);
+            needs_inst = try self.needsInstantiation(ret);
         }
 
         return Content{ .structure = .{ .fn_unbound = .{
@@ -768,7 +768,7 @@ pub const Store = struct {
         // Check if any arguments need instantiation
         var needs_inst = false;
         for (args) |arg| {
-            if (self.needsInstantiation(arg)) {
+            if (try self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
             }
@@ -776,7 +776,7 @@ pub const Store = struct {
 
         // Also check the return type
         if (!needs_inst) {
-            needs_inst = self.needsInstantiation(ret);
+            needs_inst = try self.needsInstantiation(ret);
         }
 
         return Content{ .structure = .{ .fn_pure = .{
@@ -794,7 +794,7 @@ pub const Store = struct {
         // Check if any arguments need instantiation
         var needs_inst = false;
         for (args) |arg| {
-            if (self.needsInstantiation(arg)) {
+            if (try self.needsInstantiation(arg)) {
                 needs_inst = true;
                 break;
             }
@@ -802,7 +802,7 @@ pub const Store = struct {
 
         // Also check the return type
         if (!needs_inst) {
-            needs_inst = self.needsInstantiation(ret);
+            needs_inst = try self.needsInstantiation(ret);
         }
 
         return Content{ .structure = .{ .fn_effectful = .{
@@ -812,86 +812,181 @@ pub const Store = struct {
         } } };
     }
 
-    // Helper to check if a type variable needs instantiation
-    pub fn needsInstantiation(self: *const Self, var_: Var) bool {
-        const resolved = self.resolveVar(var_);
+    /// Return whether using this type outside its defining scope requires
+    /// instantiating it. This is a graph query over the solved type store, so it
+    /// must tolerate invalid anonymous cycles; those are diagnosed by the
+    /// occurs check, while this predicate only answers whether any reachable
+    /// variable is generalized, flex, or rigid.
+    pub fn needsInstantiation(self: *const Self, var_: Var) Allocator.Error!bool {
+        var checker = NeedsInstantiation.init(self);
+        defer checker.deinit();
+        return checker.checkVar(var_);
+    }
 
-        // Generalized variables (rank 0) always need instantiation
-        if (resolved.desc.rank == Rank.generalized) {
-            return true;
+    pub fn needsInstantiationContent(self: *const Self, content: Content) Allocator.Error!bool {
+        var checker = NeedsInstantiation.init(self);
+        defer checker.deinit();
+        return checker.checkContentRoot(content);
+    }
+
+    pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) Allocator.Error!bool {
+        var checker = NeedsInstantiation.init(self);
+        defer checker.deinit();
+        return checker.checkFlatTypeRoot(flat_type);
+    }
+
+    pub fn needsInstantiationRecord(self: *const Self, record: Record) Allocator.Error!bool {
+        var checker = NeedsInstantiation.init(self);
+        defer checker.deinit();
+        return checker.checkRecordRoot(record);
+    }
+
+    pub fn needsInstantiationRecordFields(self: *const Self, fields: RecordField.SafeMultiList.Range) Allocator.Error!bool {
+        var checker = NeedsInstantiation.init(self);
+        defer checker.deinit();
+        return checker.checkRecordFieldsRoot(fields);
+    }
+
+    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: TagUnion) Allocator.Error!bool {
+        var checker = NeedsInstantiation.init(self);
+        defer checker.deinit();
+        return checker.checkTagUnionRoot(tag_union);
+    }
+
+    const NeedsInstantiation = struct {
+        store: *const Self,
+        work: std.ArrayList(Var) = .empty,
+        seen_descs: std.AutoHashMapUnmanaged(DescStore.Idx, void) = .{},
+
+        fn init(store: *const Self) NeedsInstantiation {
+            return .{ .store = store };
         }
 
-        return self.needsInstantiationContent(resolved.desc.content);
-    }
+        fn deinit(self: *NeedsInstantiation) void {
+            self.work.deinit(self.store.gpa);
+            self.seen_descs.deinit(self.store.gpa);
+        }
 
-    pub fn needsInstantiationContent(self: *const Self, content: Content) bool {
-        return switch (content) {
-            .flex => true, // Flexible variables need instantiation
-            .rigid => true, // Rigid variables need instantiation when used outside their defining scope
-            // An alias is transparent: it needs instantiation exactly when its
-            // backing type does. Aliases cannot be recursive, so this walk
-            // terminates. Treating every alias as needing instantiation would
-            // (among other things) exclude concrete alias-annotated top-level
-            // values from compile-time evaluation.
-            .alias => |alias| self.needsInstantiation(self.getAliasBackingVar(alias)),
-            .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
-            .err => false,
-        };
-    }
+        fn checkVar(self: *NeedsInstantiation, var_: Var) Allocator.Error!bool {
+            try self.work.append(self.store.gpa, var_);
+            return self.drainWork();
+        }
 
-    pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) bool {
-        return switch (flat_type) {
-            .tuple => |tuple| blk: {
-                const elems_slice = self.sliceVars(tuple.elems);
-                for (elems_slice) |elem_var| {
-                    if (self.needsInstantiation(elem_var)) break :blk true;
+        fn checkContentRoot(self: *NeedsInstantiation, content: Content) Allocator.Error!bool {
+            if (try self.checkContent(content)) return true;
+            return self.drainWork();
+        }
+
+        fn checkFlatTypeRoot(self: *NeedsInstantiation, flat_type: FlatType) Allocator.Error!bool {
+            if (try self.checkFlatType(flat_type)) return true;
+            return self.drainWork();
+        }
+
+        fn checkRecordRoot(self: *NeedsInstantiation, record: Record) Allocator.Error!bool {
+            if (try self.checkRecord(record)) return true;
+            return self.drainWork();
+        }
+
+        fn checkRecordFieldsRoot(self: *NeedsInstantiation, fields: RecordField.SafeMultiList.Range) Allocator.Error!bool {
+            if (try self.checkRecordFields(fields)) return true;
+            return self.drainWork();
+        }
+
+        fn checkTagUnionRoot(self: *NeedsInstantiation, tag_union: TagUnion) Allocator.Error!bool {
+            if (try self.checkTagUnion(tag_union)) return true;
+            return self.drainWork();
+        }
+
+        fn drainWork(self: *NeedsInstantiation) Allocator.Error!bool {
+            while (self.work.pop()) |next_var| {
+                const resolved = self.store.resolveVar(next_var);
+
+                // Generalized variables (rank 0) always need instantiation.
+                if (resolved.desc.rank == Rank.generalized) {
+                    return true;
                 }
-                break :blk false;
-            },
-            .nominal_type => |nominal| blk: {
-                const args = self.sliceNominalArgs(nominal);
-                for (args) |arg_var| {
-                    if (self.needsInstantiation(arg_var)) break :blk true;
+
+                const seen = try self.seen_descs.getOrPut(self.store.gpa, resolved.desc_idx);
+                if (seen.found_existing) continue;
+
+                if (try self.checkContent(resolved.desc.content)) {
+                    return true;
                 }
-                break :blk false;
-            },
-            .fn_pure => |func| func.needs_instantiation,
-            .fn_effectful => |func| func.needs_instantiation,
-            .fn_unbound => |func| func.needs_instantiation,
-            .record => |record| self.needsInstantiationRecord(record),
-            .record_unbound => |fields| self.needsInstantiationRecordFields(fields),
-            .empty_record => false,
-            .tag_union => |tag_union| self.needsInstantiationTagUnion(tag_union),
-            .empty_tag_union => false,
-        };
-    }
+            }
 
-    pub fn needsInstantiationRecord(self: *const Self, record: Record) bool {
-        const fields_slice = self.getRecordFieldsSlice(record.fields);
-        for (fields_slice.items(.var_)) |type_var| {
-            if (self.needsInstantiation(type_var)) return true;
+            return false;
         }
-        return self.needsInstantiation(record.ext);
-    }
 
-    pub fn needsInstantiationRecordFields(self: *const Self, fields: RecordField.SafeMultiList.Range) bool {
-        const fields_slice = self.getRecordFieldsSlice(fields);
-        for (fields_slice.items(.var_)) |type_var| {
-            if (self.needsInstantiation(type_var)) return true;
+        fn checkContent(self: *NeedsInstantiation, content: Content) Allocator.Error!bool {
+            switch (content) {
+                .flex => return true,
+                .rigid => return true,
+                // An alias is transparent: it needs instantiation exactly when
+                // its backing type does. Treating every alias as needing
+                // instantiation would (among other things) exclude concrete
+                // alias-annotated top-level values from compile-time evaluation.
+                .alias => |alias| try self.work.append(self.store.gpa, self.store.getAliasBackingVar(alias)),
+                .structure => |flat_type| return try self.checkFlatType(flat_type),
+                .err => {},
+            }
+            return false;
         }
-        return false;
-    }
 
-    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: TagUnion) bool {
-        const tags_slice = self.getTagsSlice(tag_union.tags);
-        for (tags_slice.items(.args)) |tag_args| {
-            const args_slice = self.sliceVars(tag_args);
-            for (args_slice) |arg_var| {
-                if (self.needsInstantiation(arg_var)) return true;
+        fn checkFlatType(self: *NeedsInstantiation, flat_type: FlatType) Allocator.Error!bool {
+            switch (flat_type) {
+                .tuple => |tuple| {
+                    const elems_slice = self.store.sliceVars(tuple.elems);
+                    try self.pushVars(elems_slice);
+                },
+                .nominal_type => |nominal| {
+                    const args = self.store.sliceNominalArgs(nominal);
+                    try self.pushVars(args);
+                },
+                .fn_pure => |func| return func.needs_instantiation,
+                .fn_effectful => |func| return func.needs_instantiation,
+                .fn_unbound => |func| return func.needs_instantiation,
+                .record => |record| return try self.checkRecord(record),
+                .record_unbound => |fields| return try self.checkRecordFields(fields),
+                .empty_record => {},
+                .tag_union => |tag_union| return try self.checkTagUnion(tag_union),
+                .empty_tag_union => {},
+            }
+            return false;
+        }
+
+        fn checkRecord(self: *NeedsInstantiation, record: Record) Allocator.Error!bool {
+            try self.pushRecordFields(record.fields);
+            try self.work.append(self.store.gpa, record.ext);
+            return false;
+        }
+
+        fn checkRecordFields(self: *NeedsInstantiation, fields: RecordField.SafeMultiList.Range) Allocator.Error!bool {
+            try self.pushRecordFields(fields);
+            return false;
+        }
+
+        fn checkTagUnion(self: *NeedsInstantiation, tag_union: TagUnion) Allocator.Error!bool {
+            const tags_slice = self.store.getTagsSlice(tag_union.tags);
+            for (tags_slice.items(.args)) |tag_args| {
+                const args_slice = self.store.sliceVars(tag_args);
+                try self.pushVars(args_slice);
+            }
+            try self.work.append(self.store.gpa, tag_union.ext);
+            return false;
+        }
+
+        fn pushRecordFields(self: *NeedsInstantiation, fields: RecordField.SafeMultiList.Range) Allocator.Error!void {
+            const fields_slice = self.store.getRecordFieldsSlice(fields);
+            try self.pushVars(fields_slice.items(.var_));
+        }
+
+        fn pushVars(self: *NeedsInstantiation, vars: []const Var) Allocator.Error!void {
+            try self.work.ensureUnusedCapacity(self.store.gpa, vars.len);
+            for (vars) |var_| {
+                self.work.appendAssumeCapacity(var_);
             }
         }
-        return self.needsInstantiation(tag_union.ext);
-    }
+    };
 
     // sub list setters //
 

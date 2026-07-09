@@ -407,7 +407,7 @@ pub extern "C" fn roc_cli_many(
 }
 
 #[no_mangle]
-pub extern "C" fn roc_cli_shape(arg0: abi::CircleOrEmptyOrRect, arg1: abi::AnonStruct22) -> abi::CliHostNamedRecord {
+pub extern "C" fn roc_cli_shape(arg0: abi::CircleOrEmptyOrRect, arg1: abi::CliHostShapeArg1) -> abi::CliHostNamedRecord {
     let _ = (arg0, arg1);
     env_mut().fail(format_args!("roc_cli_shape was called"));
     unsafe { core::mem::zeroed() }

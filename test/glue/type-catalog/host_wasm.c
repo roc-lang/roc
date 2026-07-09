@@ -175,12 +175,12 @@ enum {
 };
 
 static void run_contract(void) {
-    CatalogPointType16 point = roc_point();
+    __typeof__(roc_point()) point = roc_point();
     if (read_i32(point.bytes + 0) != -17 || read_i32(point.bytes + 4) != 42) {
         record_failure("point bytes mismatch");
     }
 
-    AnonStruct19 structural = roc_structural();
+    __typeof__(roc_structural()) structural = roc_structural();
     if (read_u64(structural.bytes + 0) != 19) {
         record_failure("structural count mismatch");
     }
