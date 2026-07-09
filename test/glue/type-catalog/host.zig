@@ -6,7 +6,7 @@ extern fn free(ptr: ?*anyopaque) callconv(.c) void;
 extern fn write(fd: c_int, buf: [*]const u8, count: usize) callconv(.c) isize;
 
 var failure_count: usize = 0;
-var report: [512]u8 = [_]u8{0} ** 512;
+var report: [512]u8 = @as([512]u8, @splat(0));
 var report_len: usize = 0;
 var alloc_count: usize = 0;
 var dealloc_count: usize = 0;
@@ -128,12 +128,12 @@ fn expectStr(str: *const abi.RocStr, expected: []const u8, label: []const u8) vo
 
 fn runContract() void {
     const point = abi.roc_point();
-    if (point.@"x" != -17 or point.@"y" != 42) fail("point mismatch", .{});
+    if (point.x != -17 or point.y != 42) fail("point mismatch", .{});
 
     const structural = abi.roc_structural();
-    if (structural.@"count" != 19) fail("structural count mismatch", .{});
-    expectStr(&structural.@"name", "catalog", "structural name");
-    if (structural.@"nested".@"byte" != 7 or structural.@"nested".@"flag" != true) {
+    if (structural.count != 19) fail("structural count mismatch", .{});
+    expectStr(&structural.name, "catalog", "structural name");
+    if (structural.nested.byte != 7 or structural.nested.flag != true) {
         fail("structural nested mismatch", .{});
     }
 
@@ -145,8 +145,8 @@ fn runContract() void {
     const result_b = abi.roc_result_b();
     if (result_b.tag != .Err) fail("B.Result tag mismatch", .{});
     const b_payload = result_b.payload_err();
-    if (b_payload.@"code" != 5) fail("B.Result code mismatch", .{});
-    expectStr(&b_payload.@"message", "bravo", "B.Result message");
+    if (b_payload.code != 5) fail("B.Result code mismatch", .{});
+    expectStr(&b_payload.message, "bravo", "B.Result message");
 
     const dec = abi.RocDec{ .num = 1_250_000_000_000_000_000 };
     if (abi.roc_dec(dec).num != dec.num) fail("Dec identity mismatch", .{});

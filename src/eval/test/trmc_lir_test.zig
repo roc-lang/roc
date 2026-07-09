@@ -437,7 +437,7 @@ fn runProcU64Args(
 ) TrmcLirTestError!u64 {
     var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
     defer interp.deinit();
-    const arg_layouts = [_]layout.Idx{.u64} ** 4;
+    const arg_layouts = @as([4]layout.Idx, @splat(.u64));
     var packed_args: [4]u64 = undefined;
     @memcpy(packed_args[0..args.len], args);
     const result = try interp.eval(.{

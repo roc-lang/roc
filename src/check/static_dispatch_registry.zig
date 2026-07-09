@@ -1911,7 +1911,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 12);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".field_names.len == 12);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);

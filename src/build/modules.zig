@@ -16,6 +16,33 @@ const FilterInjection = struct {
 
 const wrapper_scan_max_bytes = 16 * 1024 * 1024;
 
+fn absolutePathFromCwd(b: *Build, path: []const u8) []const u8 {
+    if (std.fs.path.isAbsolute(path)) return path;
+    return b.pathResolve(&.{path});
+}
+
+fn buildRootPath(b: *Build, sub_path: []const u8) []const u8 {
+    if (comptime @hasField(Build, "build_root")) {
+        return b.pathFromRoot(sub_path);
+    } else {
+        const joined = b.root.joinString(b.allocator, sub_path) catch @panic("OOM");
+        return absolutePathFromCwd(b, joined);
+    }
+}
+
+fn lazyPathPath(b: *Build, lazy_path: Build.LazyPath) []const u8 {
+    if (comptime @hasField(Build, "build_root")) {
+        return lazy_path.getPath(b);
+    } else {
+        return switch (lazy_path) {
+            .src_path => |src_path| buildRootPath(src_path.owner, src_path.sub_path),
+            .cwd_relative => |path| absolutePathFromCwd(b, path),
+            .dependency => |dependency| buildRootPath(dependency.dependency.builder, dependency.sub_path),
+            else => @panic("wrapper test scan requires a source path"),
+        };
+    }
+}
+
 fn filtersContain(haystack: []const []const u8, needle: []const u8) bool {
     for (haystack) |item| {
         if (std.mem.eql(u8, item, needle)) return true;
@@ -53,7 +80,7 @@ const FileToScan = struct {
 // wrappers they inevitably execute even when Zig test filters are set.
 fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
     const lazy_path = module.root_source_file orelse return 0;
-    const root_file_path = lazy_path.getPath(b);
+    const root_file_path = lazyPathPath(b, lazy_path);
     const aggregator_names = aggregatorFilters(module_type);
     const has_aggregators = aggregator_names.len != 0;
 
@@ -422,8 +449,42 @@ pub const RocModules = struct {
     vendor_macho: *Module,
     vendor_llvm_ir: *Module,
     vendor_llvm_compile_bindings: *Module,
+    zstd_c: ?*Module,
 
-    pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency, valgrind: ?bool) RocModules {
+    fn createZstdCModule(
+        b: *Build,
+        zstd: ?*Dependency,
+        target: ResolvedTarget,
+        optimize: OptimizeMode,
+    ) ?*Module {
+        const z = zstd orelse return null;
+        const zstd_artifact = z.artifact("zstd");
+        const write_files = b.addWriteFiles();
+        const header = write_files.add("zstd_import.h",
+            \\#define ZSTD_STATIC_LINKING_ONLY 1
+            \\#include <zstd.h>
+            \\
+        );
+        const translate_c = b.addTranslateC(.{
+            .root_source_file = header,
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        translate_c.addIncludePath(zstd_artifact.getEmittedIncludeTree());
+        return translate_c.createModule();
+    }
+
+    pub fn create(
+        b: *Build,
+        build_options_step: *Step.Options,
+        zstd: ?*Dependency,
+        target: ResolvedTarget,
+        optimize: OptimizeMode,
+        valgrind: ?bool,
+    ) RocModules {
+        const zstd_c = createZstdCModule(b, zstd, target, optimize);
+
         const self = RocModules{
             .collections = b.addModule(
                 "collections",
@@ -477,6 +538,7 @@ pub const RocModules = struct {
             .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
             .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
             .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
+            .zstd_c = zstd_c,
         };
 
         if (valgrind) |enabled| {
@@ -584,6 +646,11 @@ pub const RocModules = struct {
             },
             .eval => {
                 module.addImport("vendor_eval_loader", self.vendor_eval_loader);
+            },
+            .bundle => {
+                if (self.zstd_c) |zstd_c| {
+                    module.addImport("zstd_c", zstd_c);
+                }
             },
             else => {},
         }

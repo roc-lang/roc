@@ -6143,8 +6143,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             locals: *std.AutoHashMap(u64, LocalId),
             visited: *std.AutoHashMap(u32, void),
         ) Allocator.Error!void {
-            var sfa = std.heap.stackFallback(64 * @sizeOf(CFStmtId), self.allocator);
-            const sa = sfa.get();
+            var sfa_buffer: [64 * @sizeOf(CFStmtId)]u8 = undefined;
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const sa = sfa.allocator();
             var stack = std.ArrayList(CFStmtId).empty;
             defer stack.deinit(sa);
             try stack.append(sa, root_stmt_id);
@@ -6294,8 +6295,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             locals: *std.AutoHashMap(u64, LocalId),
             visited: *std.AutoHashMap(u32, void),
         ) Allocator.Error!void {
-            var sfa = std.heap.stackFallback(64 * @sizeOf(CFStmtId), self.allocator);
-            const sa = sfa.get();
+            var sfa_buffer: [64 * @sizeOf(CFStmtId)]u8 = undefined;
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const sa = sfa.allocator();
             var stack = std.ArrayList(CFStmtId).empty;
             defer stack.deinit(sa);
             try stack.append(sa, root_stmt_id);
@@ -8517,8 +8519,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 list_finish: *EqListState,
             };
 
-            var sfa = std.heap.stackFallback(32 * @sizeOf(EqWork), self.allocator);
-            const wa = sfa.get();
+            var sfa_buffer: [32 * @sizeOf(EqWork)]u8 = undefined;
+
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const wa = sfa.allocator();
             var work = std.ArrayList(EqWork).empty;
             defer work.deinit(wa);
 
@@ -10705,9 +10709,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
-            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.general_owners = @as([CodeGen.NUM_GENERAL_REGS]?u32, @splat(null));
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
-            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
+            self.codegen.float_owners = @as([CodeGen.NUM_FLOAT_REGS]?u32, @splat(null));
             self.roc_ops_reg = null;
             self.ret_ptr_slot = null;
             self.uses_caller_stack_arg_base = false;
@@ -11495,8 +11499,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc_spec = self.store.getProcSpec(call.proc);
             const arg_refs = self.store.getLocalSpan(call.args);
             const param_refs = self.store.getLocalSpan(proc_spec.args);
-            var args_sfa = std.heap.stackFallback(8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx)), self.allocator);
-            const args_alloc = args_sfa.get();
+            var args_sfa_buffer: [8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx))]u8 = undefined;
+            var args_sfa = std.heap.BufferFirstAllocator.init(&args_sfa_buffer, self.allocator);
+            const args_alloc = args_sfa.allocator();
             var arg_locs = try args_alloc.alloc(ValueLocation, arg_refs.len);
             defer args_alloc.free(arg_locs);
             var arg_layouts = try args_alloc.alloc(layout.Idx, arg_refs.len);
@@ -11561,8 +11566,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const arg_refs = self.store.getLocalSpan(call_args);
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
 
-            var args_sfa = std.heap.stackFallback(8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx)), self.allocator);
-            const args_alloc = args_sfa.get();
+            var args_sfa_buffer: [8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx))]u8 = undefined;
+
+            var args_sfa = std.heap.BufferFirstAllocator.init(&args_sfa_buffer, self.allocator);
+            const args_alloc = args_sfa.allocator();
             var arg_layouts = try args_alloc.alloc(layout.Idx, arg_refs.len);
             defer args_alloc.free(arg_layouts);
             var arg_locs = try args_alloc.alloc(ValueLocation, arg_refs.len);
@@ -14060,9 +14067,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.callee_saved_used = 0;
             self.codegen.callee_saved_available = CodeGen.CALLEE_SAVED_GENERAL_MASK;
             self.codegen.free_general = CodeGen.INITIAL_FREE_GENERAL;
-            self.codegen.general_owners = [_]?u32{null} ** CodeGen.NUM_GENERAL_REGS;
+            self.codegen.general_owners = @as([CodeGen.NUM_GENERAL_REGS]?u32, @splat(null));
             self.codegen.free_float = CodeGen.INITIAL_FREE_FLOAT;
-            self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
+            self.codegen.float_owners = @as([CodeGen.NUM_FLOAT_REGS]?u32, @splat(null));
             self.roc_ops_reg = null;
             self.uses_caller_stack_arg_base = false;
             self.current_proc_name = proc.name;
@@ -15570,8 +15577,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Most control-flow graphs are shallow, so keep the work stack in a
             // small on-stack buffer and only spill to the heap for deep nesting.
-            var sfa = std.heap.stackFallback(64 * @sizeOf(StmtWork), self.allocator);
-            const wa = sfa.get();
+            var sfa_buffer: [64 * @sizeOf(StmtWork)]u8 = undefined;
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const wa = sfa.allocator();
             var work = std.ArrayList(StmtWork).empty;
             defer work.deinit(wa);
             try work.append(wa, .{ .node = root_stmt_id });
@@ -16572,7 +16580,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_offset = self.codegen.allocStackSlot(roc_str_size);
 
             if (backing_bytes.len < roc_str_size and str_bytes.len < roc_str_size) {
-                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
+                var bytes: [roc_str_size]u8 = @as([roc_str_size]u8, @splat(0));
                 @memcpy(bytes[0..str_bytes.len], str_bytes);
                 bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80);
 
@@ -16788,7 +16796,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(tmp, @bitCast(chunk));
                     try self.emitStore(.w64, base_reg, msg_slot + @as(i32, @intCast(offset)), tmp);
                 } else {
-                    var padded: [8]u8 = .{0} ** 8;
+                    var padded: [8]u8 = @as([8]u8, @splat(0));
                     @memcpy(padded[0..remaining], msg[offset..][0..remaining]);
                     const chunk: u64 = @bitCast(padded);
                     try self.codegen.emitLoadImm(tmp, @bitCast(chunk));

@@ -64,7 +64,7 @@ pub const Header = extern struct {
     magic: u32,
     format_version: u32,
     image_size: u64,
-    _padding: [8]u8 = [_]u8{0} ** 8,
+    _padding: [8]u8 = @as([8]u8, @splat(0)),
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
     store: LirStoreImage,

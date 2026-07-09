@@ -605,7 +605,7 @@ const linux = struct {
             .family = os.AF.INET,
             .port = hostToNetwork16(0),
             .addr = loopback_addr_network_order,
-            .zero = .{0} ** 8,
+            .zero = @splat(0),
         };
         if (isErr(os.bind(fd, @ptrCast(&addr), @sizeOf(os.sockaddr.in)))) return error.BindFailed;
         if (isErr(os.listen(fd, listen_backlog))) return error.ListenFailed;
@@ -725,7 +725,7 @@ const darwin = struct {
             .family = AF_INET,
             .port = hostToNetwork16(0),
             .addr = .{ .s_addr = loopback_addr_network_order },
-            .zero = .{0} ** 8,
+            .zero = @splat(0),
         };
         if (bind(fd, @ptrCast(&addr), @sizeOf(SockAddrIn)) == -1) return error.BindFailed;
         if (listen(fd, listen_backlog) == -1) return error.ListenFailed;
@@ -846,7 +846,7 @@ const windows = struct {
             .family = AF_INET,
             .port = hostToNetwork16(0),
             .addr = .{ .s_addr = loopback_addr_network_order },
-            .zero = .{0} ** 8,
+            .zero = @splat(0),
         };
         if (bind(fd, @ptrCast(&addr), @sizeOf(SockAddrIn)) == SOCKET_ERROR) return error.BindFailed;
         if (listen(fd, listen_backlog) == SOCKET_ERROR) return error.ListenFailed;

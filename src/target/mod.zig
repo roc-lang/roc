@@ -60,9 +60,9 @@ pub const RocTarget = enum {
     /// Parse target from string (e.g., "arm64mac", "x64musl")
     pub fn fromString(str: []const u8) ?RocTarget {
         const enum_info = @typeInfo(RocTarget);
-        inline for (enum_info.@"enum".fields) |field| {
-            if (std.mem.eql(u8, str, field.name)) {
-                return @enumFromInt(field.value);
+        inline for (enum_info.@"enum".field_names, enum_info.@"enum".field_values) |field_name, field_value| {
+            if (std.mem.eql(u8, str, field_name)) {
+                return @enumFromInt(field_value);
             }
         }
         return null;

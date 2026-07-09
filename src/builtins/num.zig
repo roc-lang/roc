@@ -1261,14 +1261,14 @@ fn expectMulWithOverflowOracle(comptime T: type, lhs: T, rhs: T) NumTestHelperEr
     try std.testing.expectEqual(expected[1] == 1, actual.has_overflowed);
 }
 
-fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: std.meta.Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) NumTestHelperError!void {
+fn expectParseFloatBits(comptime T: type, text: []const u8, expected_bits: @Int(.unsigned, @bitSizeOf(T)), roc_ops: *RocOps) NumTestHelperError!void {
     const roc_str = @import("str.zig").RocStr.fromSlice(text, roc_ops);
     defer roc_str.decref(roc_ops);
 
     const result = parseFloatFromStr(T, roc_str);
     try std.testing.expectEqual(@as(u8, 0), result.errorcode);
 
-    const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const Bits = @Int(.unsigned, @bitSizeOf(T));
     try std.testing.expectEqual(@as(Bits, expected_bits), @as(Bits, @bitCast(result.value)));
 }
 

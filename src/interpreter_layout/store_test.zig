@@ -105,7 +105,7 @@ test "fromTypeVar - unresolved boxed type vars use box_of_zst" {
 
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), base.Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), base.Ident.Idx.NONE);
 
     try lt.initLayoutStore();
 
@@ -134,7 +134,7 @@ test "fromTypeVar - zero-sized types (ZST)" {
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -178,7 +178,7 @@ test "fromTypeVar - record with only zero-sized fields" {
 
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), base.Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), base.Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -238,7 +238,7 @@ test "deeply nested containers with inner ZST" {
     // Setup identifiers BEFORE Store.init so list_ident and box_ident get set correctly
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -297,7 +297,7 @@ test "nested ZST detection - List of record with ZST field" {
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -327,7 +327,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
 
     // Set up builtin module ident and Box ident for Box recognition
     const box_ident_idx = try lt.module_env.insertIdent(base.Ident.for_text("Box")); // Insert Box ident first
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), base.Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), base.Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -362,7 +362,7 @@ test "nested ZST detection - deeply nested" {
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box")); // Insert Box ident for box_ident lookup
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -418,7 +418,7 @@ test "fromTypeVar - flex var with method constraint returning open tag union" {
     const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
     const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
 
     lt.module_env_ptr[0] = &lt.module_env;
@@ -543,7 +543,7 @@ test "fromTypeVar - type alias inside Try nominal (issue #8708)" {
     // Setup identifiers
     const try_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Try"));
     const token_contents_ident_idx = try lt.module_env.insertIdent(Ident.for_text("TokenContents"));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -634,7 +634,7 @@ test "fromTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8
     // Setup identifiers
     const rich_doc_ident_idx = try lt.module_env.insertIdent(Ident.for_text("RichDoc"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -734,7 +734,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
     try testing.expectEqualStrings("Box", lt.module_env.getIdent(box_ident_idx));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);
@@ -849,7 +849,7 @@ test "fromTypeVar - recursive nominal with Box has no double-boxing (issue #8916
     // Setup identifiers
     const nat_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Nat"));
     const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
-    const builtin_module_idx = try lt.module_env.internModuleIdentity(&([_]u8{0x55} ** 32), Ident.Idx.NONE);
+    const builtin_module_idx = try lt.module_env.internModuleIdentity(&@as([32]u8, @splat(0x55)), Ident.Idx.NONE);
 
     lt.module_env_ptr[0] = &lt.module_env;
     lt.layout_store = try Store.init(&lt.module_env_ptr, null, lt.gpa, base.target.TargetUsize.native);

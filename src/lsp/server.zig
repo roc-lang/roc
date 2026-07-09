@@ -401,7 +401,7 @@ fn resolveTempDir(allocator: std.mem.Allocator) Allocator.Error![]u8 {
 
     for (env_names) |name| {
         const value = blk: {
-            const key_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+            const key_z = allocator.dupeSentinel(u8, name, 0) catch return error.OutOfMemory;
             defer allocator.free(key_z);
             const cval = std.c.getenv(key_z) orelse continue;
             const len = std.mem.len(cval);

@@ -107,6 +107,7 @@ fn linuxOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!s
         .file_write_streaming => |op| .{ .file_write_streaming = linuxFileWriteStreaming(op.file, op.header, op.data, op.splat) },
         .device_io_control => @panic("device_io_control unsupported in shim"),
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+        else => std.Io.failing.vtable.operate(null, operation),
     };
 }
 
@@ -476,6 +477,7 @@ fn windowsOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable
         .file_write_streaming => |op| .{ .file_write_streaming = windowsFileWriteStreaming(op.file, op.header, op.data, op.splat) },
         .device_io_control => @panic("device_io_control unsupported in shim"),
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+        else => std.Io.failing.vtable.operate(null, operation),
     };
 }
 
@@ -779,6 +781,7 @@ fn macosOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!s
         .file_write_streaming => |op| .{ .file_write_streaming = macosFileWriteStreaming(op.file, op.header, op.data, op.splat) },
         .device_io_control => @panic("device_io_control unsupported in shim"),
         .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+        else => std.Io.failing.vtable.operate(null, operation),
     };
 }
 

@@ -49,8 +49,7 @@
             .lazy = true,
         },
         .bytebox = .{
-            .url = "https://github.com/lukewilliamboswell/bytebox/archive/88a4b79230eece88030e6779f69ed9683906c02a.tar.gz",
-            .hash = "bytebox-0.0.1-SXc2saRyDwDEw8AkDhp4Hfmd9ZhRmMnIzS7FfzDCmc8r",
+            .path = "vendor/bytebox",
         },
         .zstd = .{
             .url = "https://github.com/allyourcodebase/zstd/archive/e1a501be57f42c541e8a5597e4b59a074dfd09a3.tar.gz", // 1.5.7-1
@@ -67,6 +66,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "vendor/bytebox",
         "LICENSE",
         "legal_details",
     },

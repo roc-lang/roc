@@ -628,7 +628,7 @@ pub fn extractAndRelocateElf(allocator: Allocator, object_bytes: []const u8) All
     }
 
     // Build section index → buffer offset map
-    var sec_buf_offsets: [256]u64 = [_]u64{0} ** 256;
+    var sec_buf_offsets: [256]u64 = @splat(0);
     for (sections[0..section_count]) |sec| {
         if (sec.index < sec_buf_offsets.len) {
             sec_buf_offsets[sec.index] = sec.buf_offset;
@@ -1083,7 +1083,7 @@ test "resolve float trig wrappers" {
 
 test "detect ELF magic" {
     // Minimal ELF header (just magic)
-    const elf_bytes = [_]u8{ 0x7F, 'E', 'L', 'F', 2, 1, 1, 0 } ++ [_]u8{0} ** 56;
+    const elf_bytes = [_]u8{ 0x7F, 'E', 'L', 'F', 2, 1, 1, 0 } ++ @as([56]u8, @splat(0));
     const result = extractCodeSection(&elf_bytes);
     // Should fail to find .text but not fail on format detection
     try std.testing.expectError(Error.TextSectionNotFound, result);
@@ -1091,7 +1091,7 @@ test "detect ELF magic" {
 
 test "detect Mach-O magic" {
     // Minimal Mach-O 64-bit header
-    var macho_bytes = [_]u8{0} ** 64;
+    var macho_bytes = @as([64]u8, @splat(0));
     macho_bytes[0] = 0xCF;
     macho_bytes[1] = 0xFA;
     macho_bytes[2] = 0xED;
@@ -1102,7 +1102,7 @@ test "detect Mach-O magic" {
 
 test "detect COFF by machine type" {
     // Minimal COFF header for x86_64
-    var coff_bytes = [_]u8{0} ** 64;
+    var coff_bytes = @as([64]u8, @splat(0));
     coff_bytes[0] = 0x64; // Machine type low byte
     coff_bytes[1] = 0x86; // Machine type high byte (0x8664 = x86_64)
     const result = extractCodeSection(&coff_bytes);
@@ -1110,7 +1110,7 @@ test "detect COFF by machine type" {
 }
 
 test "reject unknown format" {
-    const unknown_bytes = [_]u8{ 0x00, 0x00, 0x00, 0x00 } ++ [_]u8{0} ** 60;
+    const unknown_bytes = [_]u8{ 0x00, 0x00, 0x00, 0x00 } ++ @as([60]u8, @splat(0));
     const result = extractCodeSection(&unknown_bytes);
     try std.testing.expectError(Error.UnsupportedFormat, result);
 }

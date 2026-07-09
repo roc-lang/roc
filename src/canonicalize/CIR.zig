@@ -259,9 +259,9 @@ pub const BUILTIN_INDICES_LAYOUT_HASH: u64 = blk: {
     var hash = hashBytes(hash_offset, "roc-builtin-indices-layout-v1");
     hash = hashInt(hash, @sizeOf(BuiltinIndices));
     hash = hashInt(hash, @alignOf(BuiltinIndices));
-    for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
-        hash = hashBytes(hash, field.name);
-        hash = hashBytes(hash, @typeName(field.type));
+    for (@typeInfo(BuiltinIndices).@"struct".field_names, @typeInfo(BuiltinIndices).@"struct".field_types) |field_name, FieldType| {
+        hash = hashBytes(hash, field_name);
+        hash = hashBytes(hash, @typeName(FieldType));
     }
     break :blk hash;
 };

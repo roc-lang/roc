@@ -499,7 +499,7 @@ fn shiftField(comptime T: type, bytes: []u8, offset: usize, shift: u64) void {
 }
 
 fn makeName(name: []const u8) [16]u8 {
-    var out = [_]u8{0} ** 16;
+    var out = @as([16]u8, @splat(0));
     @memcpy(out[0..name.len], name);
     return out;
 }

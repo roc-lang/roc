@@ -505,16 +505,16 @@ fn checkerProblemsAllowLoweringWithUserErrors(checker: *const Check) bool {
 }
 
 test "problem lowerability rationale covers every problem kind" {
-    inline for (@typeInfo(check.problem.Problem.Tag).@"enum".fields) |field| {
-        const tag: check.problem.Problem.Tag = @enumFromInt(field.value);
+    inline for (@typeInfo(check.problem.Problem.Tag).@"enum".field_values) |field_value| {
+        const tag: check.problem.Problem.Tag = @enumFromInt(field_value);
         try std.testing.expect(problemLoweringWithUserErrorsRationale(tag).len != 0);
     }
 }
 
 test "static dispatch lowerability rationale covers every static dispatch kind" {
     const StaticDispatchTag = std.meta.Tag(check.problem.StaticDispatch);
-    inline for (@typeInfo(StaticDispatchTag).@"enum".fields) |field| {
-        const tag: StaticDispatchTag = @enumFromInt(field.value);
+    inline for (@typeInfo(StaticDispatchTag).@"enum".field_values) |field_value| {
+        const tag: StaticDispatchTag = @enumFromInt(field_value);
         try std.testing.expect(staticDispatchLoweringWithUserErrorsRationale(tag).len != 0);
     }
 }

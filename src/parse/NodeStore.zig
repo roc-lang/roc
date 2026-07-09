@@ -155,7 +155,7 @@ pub const AST_PATTERN_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 11;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = std.meta.fields(AST.Expr).len;
+pub const AST_EXPR_NODE_COUNT = @typeInfo(AST.Expr).@"union".field_names.len;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens

@@ -289,7 +289,7 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) TestError![]u8 
 }
 
 fn getEnvVarOwnedOrNull(allocator: std.mem.Allocator, key: []const u8) TestError!?[]u8 {
-    const key_z = try allocator.dupeZ(u8, key);
+    const key_z = try allocator.dupeSentinel(u8, key, 0);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
     return try allocator.dupe(u8, value[0..std.mem.len(value)]);

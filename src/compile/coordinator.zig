@@ -5436,7 +5436,7 @@ test "Coordinator collectWatchInputStates includes package root state" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{11} ** 32;
+    const root_hash = @as([32]u8, @splat(11));
     const pkg = try coord.ensurePackage("pkg", "/test/pkg");
     try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
 
@@ -5509,8 +5509,8 @@ test "Coordinator collectWatchInputStates includes module source file state" {
     defer coord.deinit();
     coord.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{11} ** 32;
-    const module_hash = [_]u8{22} ** 32;
+    const root_hash = @as([32]u8, @splat(11));
+    const module_hash = @as([32]u8, @splat(22));
     const pkg = try coord.ensurePackage("pkg", "/test/pkg");
     try pkg.setRootInput(allocator, "/test/pkg/main.roc", .{ .hash = root_hash });
     const module_id = try pkg.ensureModule(allocator, "Foo", "/test/pkg/Foo.roc");

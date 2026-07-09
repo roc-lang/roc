@@ -262,8 +262,10 @@ pub const Instantiator = struct {
         var arg_span = alias.vars.nonempty;
         arg_span.dropFirstElem();
 
-        var fresh_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
-        const fresh_vars_alloc = fresh_vars_sfa.get();
+        var fresh_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+
+        var fresh_vars_sfa = std.heap.BufferFirstAllocator.init(&fresh_vars_sfa_buffer, self.store.gpa);
+        const fresh_vars_alloc = fresh_vars_sfa.allocator();
         var fresh_vars = try std.ArrayList(Var).initCapacity(fresh_vars_alloc, arg_span.count);
         defer fresh_vars.deinit(fresh_vars_alloc);
 
@@ -306,8 +308,9 @@ pub const Instantiator = struct {
         const fresh_backing_var = try self.instantiateVar(backing_var);
 
         const arg_span = TypesStore.getNominalArgsRange(nominal);
-        var fresh_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
-        const fresh_vars_alloc = fresh_vars_sfa.get();
+        var fresh_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+        var fresh_vars_sfa = std.heap.BufferFirstAllocator.init(&fresh_vars_sfa_buffer, self.store.gpa);
+        const fresh_vars_alloc = fresh_vars_sfa.allocator();
         var fresh_vars = try std.ArrayList(Var).initCapacity(fresh_vars_alloc, arg_span.count);
         defer fresh_vars.deinit(fresh_vars_alloc);
 
@@ -331,8 +334,9 @@ pub const Instantiator = struct {
     fn instantiateTuple(self: *Self, tuple: Tuple) std.mem.Allocator.Error!Tuple {
         // Use index-based iteration to avoid iterator invalidation
         // (see comment in instantiateFunc for details)
-        var fresh_elems_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
-        const fresh_elems_alloc = fresh_elems_sfa.get();
+        var fresh_elems_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+        var fresh_elems_sfa = std.heap.BufferFirstAllocator.init(&fresh_elems_sfa_buffer, self.store.gpa);
+        const fresh_elems_alloc = fresh_elems_sfa.allocator();
         var fresh_elems = try std.ArrayList(Var).initCapacity(fresh_elems_alloc, tuple.elems.count);
         defer fresh_elems.deinit(fresh_elems_alloc);
 
@@ -350,8 +354,9 @@ pub const Instantiator = struct {
         // The slice would point into the backing ArrayList, but instantiateVar
         // can recursively call appendVars which may reallocate the array,
         // invalidating the slice pointer.
-        var fresh_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
-        const fresh_args_alloc = fresh_args_sfa.get();
+        var fresh_args_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+        var fresh_args_sfa = std.heap.BufferFirstAllocator.init(&fresh_args_sfa_buffer, self.store.gpa);
+        const fresh_args_alloc = fresh_args_sfa.allocator();
         var fresh_args = try std.ArrayList(Var).initCapacity(fresh_args_alloc, func.args.count);
         defer fresh_args.deinit(fresh_args_alloc);
 
@@ -380,8 +385,10 @@ pub const Instantiator = struct {
             return try self.store.appendRecordFields(&.{});
         }
 
-        var fresh_fields_sfa = std.heap.stackFallback(16 * @sizeOf(RecordField), self.store.gpa);
-        const fresh_fields_alloc = fresh_fields_sfa.get();
+        var fresh_fields_sfa_buffer: [16 * @sizeOf(RecordField)]u8 = undefined;
+
+        var fresh_fields_sfa = std.heap.BufferFirstAllocator.init(&fresh_fields_sfa_buffer, self.store.gpa);
+        const fresh_fields_alloc = fresh_fields_sfa.allocator();
         var fresh_fields = try std.ArrayList(RecordField).initCapacity(fresh_fields_alloc, fields.count);
         defer fresh_fields.deinit(fresh_fields_alloc);
 
@@ -411,8 +418,10 @@ pub const Instantiator = struct {
             };
         }
 
-        var fresh_fields_sfa = std.heap.stackFallback(16 * @sizeOf(RecordField), self.store.gpa);
-        const fresh_fields_alloc = fresh_fields_sfa.get();
+        var fresh_fields_sfa_buffer: [16 * @sizeOf(RecordField)]u8 = undefined;
+
+        var fresh_fields_sfa = std.heap.BufferFirstAllocator.init(&fresh_fields_sfa_buffer, self.store.gpa);
+        const fresh_fields_alloc = fresh_fields_sfa.allocator();
         var fresh_fields = try std.ArrayList(RecordField).initCapacity(fresh_fields_alloc, record.fields.count);
         defer fresh_fields.deinit(fresh_fields_alloc);
 
@@ -446,8 +455,10 @@ pub const Instantiator = struct {
             };
         }
 
-        var fresh_tags_sfa = std.heap.stackFallback(16 * @sizeOf(Tag), self.store.gpa);
-        const fresh_tags_alloc = fresh_tags_sfa.get();
+        var fresh_tags_sfa_buffer: [16 * @sizeOf(Tag)]u8 = undefined;
+
+        var fresh_tags_sfa = std.heap.BufferFirstAllocator.init(&fresh_tags_sfa_buffer, self.store.gpa);
+        const fresh_tags_alloc = fresh_tags_sfa.allocator();
         var fresh_tags = try std.ArrayList(Tag).initCapacity(fresh_tags_alloc, tag_union.tags.count);
         defer fresh_tags.deinit(fresh_tags_alloc);
 
@@ -458,8 +469,10 @@ pub const Instantiator = struct {
             const tag_name = tag.name;
             const tag_args = tag.args;
 
-            var fresh_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.store.gpa);
-            const fresh_args_alloc = fresh_args_sfa.get();
+            var fresh_args_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+
+            var fresh_args_sfa = std.heap.BufferFirstAllocator.init(&fresh_args_sfa_buffer, self.store.gpa);
+            const fresh_args_alloc = fresh_args_sfa.allocator();
             var fresh_args = try std.ArrayList(Var).initCapacity(fresh_args_alloc, tag_args.count);
             defer fresh_args.deinit(fresh_args_alloc);
 
@@ -507,8 +520,9 @@ pub const Instantiator = struct {
         if (constraints_len == 0) {
             return StaticDispatchConstraint.SafeList.Range.empty();
         } else {
-            var fresh_constraints_sfa = std.heap.stackFallback(8 * @sizeOf(StaticDispatchConstraint), self.store.gpa);
-            const fresh_constraints_alloc = fresh_constraints_sfa.get();
+            var fresh_constraints_sfa_buffer: [8 * @sizeOf(StaticDispatchConstraint)]u8 = undefined;
+            var fresh_constraints_sfa = std.heap.BufferFirstAllocator.init(&fresh_constraints_sfa_buffer, self.store.gpa);
+            const fresh_constraints_alloc = fresh_constraints_sfa.allocator();
             var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(fresh_constraints_alloc, constraints.len());
             defer fresh_constraints.deinit(fresh_constraints_alloc);
 

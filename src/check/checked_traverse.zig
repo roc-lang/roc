@@ -278,7 +278,7 @@ test "BoolPredicateTraversal memoizes shared DAG nodes" {
         .{ .key = 3, .children = &children_3 },
         .{ .key = 4 },
     };
-    var visits = [_]u8{0} ** 8;
+    var visits = @as([8]u8, @splat(0));
     var context = PredicateTestContext{ .edges = &edges, .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, PredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();
@@ -294,7 +294,7 @@ test "BoolPredicateTraversal active cycle hit returns false" {
         .{ .key = 1, .children = &children_1 },
         .{ .key = 2, .children = &children_2 },
     };
-    var visits = [_]u8{0} ** 8;
+    var visits = @as([8]u8, @splat(0));
     var context = PredicateTestContext{ .edges = &edges, .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, PredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();
@@ -312,7 +312,7 @@ test "BoolPredicateTraversal still finds true branch beside a cycle" {
         .{ .key = 2, .children = &children_2 },
         .{ .key = 3, .result = true },
     };
-    var visits = [_]u8{0} ** 8;
+    var visits = @as([8]u8, @splat(0));
     var context = PredicateTestContext{ .edges = &edges, .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, PredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();
@@ -337,7 +337,7 @@ const RehashPredicateTestContext = struct {
 };
 
 test "BoolPredicateTraversal completes root after recursive inserts rehash memo" {
-    var visits = [_]u8{0} ** 256;
+    var visits = @as([256]u8, @splat(0));
     var context = RehashPredicateTestContext{ .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, RehashPredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();

@@ -2368,12 +2368,12 @@ test "builtin_nested_type_owners lists every numeric type under Num" {
     // to the table — otherwise its external links would 404 at `…/U8`.
     const tt = @import("types").types;
     inline for (.{ tt.Int.Precision, tt.Frac.Precision }) |Precision| {
-        inline for (@typeInfo(Precision).@"enum".fields) |field| {
+        inline for (@typeInfo(Precision).@"enum".field_names) |field_name| {
             var owner: ?[]const u8 = null;
             for (builtin_nested_type_owners) |nested| {
                 // Enum fields are lower-case (`u8`, `dec`); the docs names are
                 // capitalized (`U8`, `Dec`).
-                if (std.ascii.eqlIgnoreCase(nested.name, field.name)) {
+                if (std.ascii.eqlIgnoreCase(nested.name, field_name)) {
                     owner = nested.owner;
                     break;
                 }
@@ -2385,7 +2385,7 @@ test "builtin_nested_type_owners lists every numeric type under Num" {
                     "numeric type '{s}' is missing from builtin_nested_type_owners " ++
                         "in render_html.zig; add it (owner \"Num\") so external doc " ++
                         "links resolve to the right page.\n",
-                    .{field.name},
+                    .{field_name},
                 );
                 return error.NumericTypeMissingFromTable;
             }

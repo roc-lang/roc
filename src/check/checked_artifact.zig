@@ -89,12 +89,12 @@ pub const ModuleEnvStorage = union(enum) {
 /// inline field of `CheckedModuleArtifact.Serialized` (all fields are byte
 /// arrays, so the extern layout is identical to the auto layout).
 pub const CheckedModuleArtifactKey = extern struct {
-    source_hash: [32]u8 = [_]u8{0} ** 32,
-    compiler_artifact_hash: [32]u8 = [_]u8{0} ** 32,
-    module_identity_hash: [32]u8 = [_]u8{0} ** 32,
-    checking_context_identity_hash: [32]u8 = [_]u8{0} ** 32,
-    direct_import_artifact_keys_hash: [32]u8 = [_]u8{0} ** 32,
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    source_hash: [32]u8 = @as([32]u8, @splat(0)),
+    compiler_artifact_hash: [32]u8 = @as([32]u8, @splat(0)),
+    module_identity_hash: [32]u8 = @as([32]u8, @splat(0)),
+    checking_context_identity_hash: [32]u8 = @as([32]u8, @splat(0)),
+    direct_import_artifact_keys_hash: [32]u8 = @as([32]u8, @splat(0)),
+    bytes: [32]u8 = @as([32]u8, @splat(0)),
 
     pub fn compute(
         source: []const u8,
@@ -158,21 +158,21 @@ fn computeCheckedArtifactKeyBytes(
 }
 
 test "checked artifact key final bytes include compiler artifact hash" {
-    const source_hash = [_]u8{1} ** 32;
-    const module_identity_hash = [_]u8{2} ** 32;
-    const checking_context_identity_hash = [_]u8{3} ** 32;
-    const direct_import_artifact_keys_hash = [_]u8{4} ** 32;
+    const source_hash = @as([32]u8, @splat(1));
+    const module_identity_hash = @as([32]u8, @splat(2));
+    const checking_context_identity_hash = @as([32]u8, @splat(3));
+    const direct_import_artifact_keys_hash = @as([32]u8, @splat(4));
 
     const first = computeCheckedArtifactKeyBytes(
         source_hash,
-        [_]u8{5} ** 32,
+        @as([32]u8, @splat(5)),
         module_identity_hash,
         checking_context_identity_hash,
         direct_import_artifact_keys_hash,
     );
     const second = computeCheckedArtifactKeyBytes(
         source_hash,
-        [_]u8{6} ** 32,
+        @as([32]u8, @splat(6)),
         module_identity_hash,
         checking_context_identity_hash,
         direct_import_artifact_keys_hash,
@@ -183,7 +183,7 @@ test "checked artifact key final bytes include compiler artifact hash" {
 
 /// Public `ModuleIdentity` declaration.
 pub const ModuleIdentity = struct {
-    stable_hash: [32]u8 = [_]u8{0} ** 32,
+    stable_hash: [32]u8 = @as([32]u8, @splat(0)),
     module_idx: u32,
     module_name: canonical.ModuleNameId,
     display_module_name: canonical.ModuleNameId,
@@ -193,7 +193,7 @@ pub const ModuleIdentity = struct {
 
 /// Public `ImportIdentity` declaration.
 pub const ImportIdentity = struct {
-    import_name_hash: [32]u8 = [_]u8{0} ** 32,
+    import_name_hash: [32]u8 = @as([32]u8, @splat(0)),
     artifact_key: ?CheckedModuleArtifactKey = null,
 };
 
@@ -327,7 +327,7 @@ fn artifactRef(key: CheckedModuleArtifactKey) canonical.ArtifactRef {
 
 /// Public `PlatformRequirementContextKey` declaration.
 pub const PlatformRequirementContextKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @as([32]u8, @splat(0)),
 
     pub fn compute(
         platform_identity: ModuleIdentity,
@@ -6800,7 +6800,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
 
     const builtin_module_name = try builtin_names.internModuleName(builtin_env.module_name);
     const builtin_identity = ModuleIdentity{
-        .stable_hash = [_]u8{0} ** 32,
+        .stable_hash = @as([32]u8, @splat(0)),
         .module_idx = 1,
         .module_name = builtin_module_name,
         .display_module_name = builtin_module_name,
@@ -14876,7 +14876,7 @@ pub const HostedProcTable = struct {
 
 /// Public `PlatformAppRelationKey` declaration.
 pub const PlatformAppRelationKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
+    bytes: [32]u8 = @as([32]u8, @splat(0)),
 
     pub fn compute(
         app_artifact: CheckedModuleArtifactKey,
@@ -22719,8 +22719,8 @@ pub const ClosurePool = struct {
 test "ClosurePool: commit/reconstruct then serialize/relocate round-trip" {
     const gpa = std.testing.allocator;
 
-    const key_a = CheckedModuleArtifactKey{ .bytes = [_]u8{1} ** 32 };
-    const key_b = CheckedModuleArtifactKey{ .bytes = [_]u8{2} ** 32 };
+    const key_a = CheckedModuleArtifactKey{ .bytes = @as([32]u8, @splat(1)) };
+    const key_b = CheckedModuleArtifactKey{ .bytes = @as([32]u8, @splat(2)) };
 
     // An owned closure view (slices allocated by the caller, freed by commit).
     var closure = ImportedTemplateClosureView{};
@@ -22758,7 +22758,7 @@ test "ClosurePool: commit/reconstruct then serialize/relocate round-trip" {
 test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closures" {
     const gpa = std.testing.allocator;
 
-    const key_a = CheckedModuleArtifactKey{ .bytes = [_]u8{3} ** 32 };
+    const key_a = CheckedModuleArtifactKey{ .bytes = @as([32]u8, @splat(3)) };
 
     var closure = ImportedTemplateClosureView{};
     closure.checked_type_roots = try gpa.dupe(ArtifactCheckedTypeRef, &.{
@@ -28672,7 +28672,7 @@ fn expectProvidedExportKind(
 }
 
 fn unionFieldCount(comptime Union: type) usize {
-    return @typeInfo(Union).@"union".fields.len;
+    return @typeInfo(Union).@"union".field_names.len;
 }
 
 test "compile-time finalization route is explicit and non-optional" {
@@ -28931,7 +28931,7 @@ test "platform app relation resolver handles same recursive checked root" {
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
 
-    const module_name = try names.internModuleIdentity(&([_]u8{0x88} ** 32));
+    const module_name = try names.internModuleIdentity(&@as([32]u8, @splat(0x88)));
     const type_name = try names.internTypeName("Tree");
     const tag_name = try names.internTagLabel("Node");
 
@@ -28962,7 +28962,7 @@ test "platform app relation resolver handles distinct recursive checked roots" {
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
 
-    const module_name = try names.internModuleIdentity(&([_]u8{0x88} ** 32));
+    const module_name = try names.internModuleIdentity(&@as([32]u8, @splat(0x88)));
     const type_name = try names.internTypeName("Tree");
     const tag_name = try names.internTagLabel("Node");
 
@@ -29008,7 +29008,7 @@ test "platform app relation resolver substitutes required identity in provided f
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
 
-    const module_identity = try names.internModuleIdentity(&([_]u8{0x89} ** 32));
+    const module_identity = try names.internModuleIdentity(&@as([32]u8, @splat(0x89)));
     const type_name = try names.internTypeName("Player");
     const model_alias_name = try names.internTypeName("Model");
     const tag_name = try names.internTagLabel("Player");
@@ -29079,7 +29079,7 @@ test "platform app relation resolver refines repeated identity substitution thro
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
 
-    const module_identity = try names.internModuleIdentity(&([_]u8{0x90} ** 32));
+    const module_identity = try names.internModuleIdentity(&@as([32]u8, @splat(0x90)));
     const alias_name = try names.internTypeName("Model");
     const pins_field = try names.internRecordFieldLabel("pins");
 
@@ -29317,7 +29317,7 @@ test "checked type identity scan terminates on self-referential alias backing" {
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
 
-    const module_identity = try names.internModuleIdentity(&([_]u8{0x90} ** 32));
+    const module_identity = try names.internModuleIdentity(&@as([32]u8, @splat(0x90)));
     const alias_name = try names.internTypeName("Self");
 
     var store = CheckedTypeStore{};
@@ -29502,25 +29502,25 @@ fn isSliceField(comptime FT: type) bool {
 fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestError!void {
     const gpa = std.testing.allocator;
     var store: Store = .{};
-    inline for (std.meta.fields(Store)) |field| {
-        comptime std.debug.assert(isSliceField(field.type));
-        const Elem = std.meta.Child(field.type);
+    inline for (@typeInfo(Store).@"struct".field_names, @typeInfo(Store).@"struct".field_types) |field_name, FieldType| {
+        comptime std.debug.assert(isSliceField(FieldType));
+        const Elem = std.meta.Child(FieldType);
         const buf = try gpa.alloc(Elem, 3);
         artifact_serialize.poisonSlice(Elem, buf, 0x5A);
         // Canonicalize padding to match the deterministic serializer, so the
         // byte-compare below reflects logical fidelity, not padding bytes.
         artifact_serialize.zeroSlicePadding(Elem, buf);
-        @field(store, field.name) = buf;
+        @field(store, field_name) = buf;
     }
-    defer inline for (std.meta.fields(Store)) |field| {
-        gpa.free(@field(store, field.name));
+    defer inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
+        gpa.free(@field(store, field_name));
     };
 
     const rt = try artifact_serialize.roundTripForTest(gpa, Store, &store);
     defer gpa.free(rt.buffer);
-    inline for (std.meta.fields(Store)) |field| {
-        const Elem = std.meta.Child(field.type);
-        try artifact_serialize.expectSlicesByteEqual(Elem, @field(store, field.name), @field(rt.loaded, field.name));
+    inline for (@typeInfo(Store).@"struct".field_names, @typeInfo(Store).@"struct".field_types) |field_name, FieldType| {
+        const Elem = std.meta.Child(FieldType);
+        try artifact_serialize.expectSlicesByteEqual(Elem, @field(store, field_name), @field(rt.loaded, field_name));
     }
 }
 
@@ -29552,7 +29552,7 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
 
 fn testCheckedArtifactKey(byte: u8) CheckedModuleArtifactKey {
     var key: CheckedModuleArtifactKey = .{};
-    key.bytes = [_]u8{byte} ** 32;
+    key.bytes = @as([32]u8, @splat(byte));
     return key;
 }
 
@@ -29771,7 +29771,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .numeric_default_phase = .mono_specialization,
         .row_default = null,
     } });
-    try store.roots.append(gpa, .{ .id = a, .key = .{ .bytes = [_]u8{1} ** 32 } });
+    try store.roots.append(gpa, .{ .id = a, .key = .{ .bytes = @as([32]u8, @splat(1)) } });
     try store.payloads.append(gpa, flex_stored);
 
     // 1: a tag_union with one tag carrying args [a].
@@ -29779,10 +29779,10 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const tags = try gpa.alloc(CheckedTagBuild, 1);
     tags[0] = .{ .name = @enumFromInt(3), .args = tag_args };
     const tu_stored = try store.commitPayload(gpa, .{ .tag_union = .{ .tags = tags, .ext = a } });
-    try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = [_]u8{2} ** 32 } });
+    try store.roots.append(gpa, .{ .id = b, .key = .{ .bytes = @as([32]u8, @splat(2)) } });
     try store.payloads.append(gpa, tu_stored);
 
-    const alias_owner: ModuleId = .{ .bytes = [_]u8{0xA1} ** 32 };
+    const alias_owner: ModuleId = .{ .bytes = @as([32]u8, @splat(0xA1)) };
     const alias_args = try gpa.dupe(CheckedTypeId, &.{ a, b });
     const alias_stored = try store.commitPayload(gpa, .{ .alias = .{
         .name = @enumFromInt(11),
@@ -29793,10 +29793,10 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .backing = b,
         .args = alias_args,
     } });
-    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = [_]u8{4} ** 32 } });
+    try store.roots.append(gpa, .{ .id = c, .key = .{ .bytes = @as([32]u8, @splat(4)) } });
     try store.payloads.append(gpa, alias_stored);
 
-    const nominal_owner: ModuleId = .{ .bytes = [_]u8{0xB2} ** 32 };
+    const nominal_owner: ModuleId = .{ .bytes = @as([32]u8, @splat(0xB2)) };
     const nominal_args = try gpa.dupe(CheckedTypeId, &.{c});
     const nominal_padding = try gpa.dupe(CheckedTypeId, &.{a});
     const nominal_stored = try store.commitPayload(gpa, .{ .nominal = .{
@@ -29811,14 +29811,14 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .args = nominal_args,
         .padding_field_types = nominal_padding,
     } });
-    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = [_]u8{5} ** 32 } });
+    try store.roots.append(gpa, .{ .id = d, .key = .{ .bytes = @as([32]u8, @splat(5)) } });
     try store.payloads.append(gpa, nominal_stored);
 
     // A scheme with generalized vars [a, b].
     const gv = try store.appendTypeIds(gpa, &.{ a, b });
     try store.schemes.append(gpa, .{
         .id = @enumFromInt(@as(u32, @intCast(store.schemes.items.len))),
-        .key = .{ .bytes = [_]u8{3} ** 32 },
+        .key = .{ .bytes = @as([32]u8, @splat(3)) },
         .root = a,
         .gv_start = gv.start,
         .gv_len = gv.len,
@@ -29996,8 +29996,8 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
 
     var checked_types_src = CheckedTypeStore{};
     defer checked_types_src.deinit(gpa);
-    const ty0_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xAB} ** 32 };
-    const ty1_key = canonical.CanonicalTypeKey{ .bytes = [_]u8{0xCD} ** 32 };
+    const ty0_key = canonical.CanonicalTypeKey{ .bytes = @as([32]u8, @splat(0xAB)) };
+    const ty1_key = canonical.CanonicalTypeKey{ .bytes = @as([32]u8, @splat(0xCD)) };
     try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty0_key });
     try checked_types_src.roots.append(gpa, .{ .id = @enumFromInt(@as(u32, @intCast(checked_types_src.roots.items.len))), .key = ty1_key });
     try checked_types_src.payloads.append(gpa, .empty_record);
@@ -30030,7 +30030,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     };
 
     const identity = ModuleIdentity{
-        .stable_hash = [_]u8{0x42} ** 32,
+        .stable_hash = @as([32]u8, @splat(0x42)),
         .module_idx = 9,
         .module_name = @enumFromInt(1),
         .display_module_name = @enumFromInt(2),
@@ -30148,7 +30148,7 @@ test "module source input hash uses explicit file dependency state" {
     missing_env.setFileDependencyMissing(missing_idx);
     const missing_hash = hashModuleSourceInputs(&missing_env);
 
-    missing_env.file_dependencies.items.items[@intFromEnum(missing_idx)].content_hash = [_]u8{0xFE} ** 32;
+    missing_env.file_dependencies.items.items[@intFromEnum(missing_idx)].content_hash = @as([32]u8, @splat(0xFE));
     const missing_hash_after_payload_change = hashModuleSourceInputs(&missing_env);
     try std.testing.expectEqualSlices(u8, &missing_hash, &missing_hash_after_payload_change);
 
@@ -30163,7 +30163,7 @@ test "module source input hash uses explicit file dependency state" {
     defer present_env.deinit();
     try present_env.initCIRFields("Test");
     const present_idx = try present_env.recordFileDependency("data.txt");
-    present_env.setFileDependencyContentHash(present_idx, [_]u8{0} ** 32);
+    present_env.setFileDependencyContentHash(present_idx, @as([32]u8, @splat(0)));
     const present_hash = hashModuleSourceInputs(&present_env);
 
     const missing_bits: u256 = @bitCast(missing_hash);

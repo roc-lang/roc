@@ -195,13 +195,17 @@ fn wasmSizeAlign(root_idx: layout.Idx, ls: *const layout.Store) Error!SizeAlign 
         combine_tag: u32,
     };
 
-    var work_sfa = std.heap.stackFallback(64 * @sizeOf(Item), ls.allocator);
-    const wa = work_sfa.get();
+    var work_sfa_buffer: [64 * @sizeOf(Item)]u8 = undefined;
+
+    var work_sfa = std.heap.BufferFirstAllocator.init(&work_sfa_buffer, ls.allocator);
+    const wa = work_sfa.allocator();
     var work = std.ArrayList(Item).empty;
     defer work.deinit(wa);
 
-    var res_sfa = std.heap.stackFallback(64 * @sizeOf(SizeAlign), ls.allocator);
-    const ra = res_sfa.get();
+    var res_sfa_buffer: [64 * @sizeOf(SizeAlign)]u8 = undefined;
+
+    var res_sfa = std.heap.BufferFirstAllocator.init(&res_sfa_buffer, ls.allocator);
+    const ra = res_sfa.allocator();
     var results = std.ArrayList(SizeAlign).empty;
     defer results.deinit(ra);
 

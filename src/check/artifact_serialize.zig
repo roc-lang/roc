@@ -31,10 +31,10 @@ pub fn assertRelocatablePod(comptime T: type) void {
         .optional => |o| assertRelocatablePod(o.child),
         .array => |a| assertRelocatablePod(a.child),
         .@"struct" => |s| {
-            for (s.fields) |f| assertRelocatablePod(f.type);
+            for (s.field_types) |FieldType| assertRelocatablePod(FieldType);
         },
         .@"union" => |u| {
-            for (u.fields) |f| assertRelocatablePod(f.type);
+            for (u.field_types) |FieldType| assertRelocatablePod(FieldType);
         },
         .pointer => @compileError("SerializedSlice element type '" ++ @typeName(T) ++
             "' contains a pointer/slice; it is not relocation-invariant. Use a side-list (transform B) instead."),
@@ -72,7 +72,7 @@ fn assertPortableSerializedInner(comptime T: type) void {
                 if (@hasDecl(T, "SerializedElement")) {
                     assertPortableSerializedInner(T.SerializedElement);
                 }
-                for (s.fields) |f| assertPortableSerializedInner(f.type);
+                for (s.field_types) |FieldType| assertPortableSerializedInner(FieldType);
             },
             .@"union" => |u| {
                 if (u.tag_type) |tag| {
@@ -83,7 +83,7 @@ fn assertPortableSerializedInner(comptime T: type) void {
                             "' contains an untagged union; use an explicit serialized representation or a proven extern payload");
                     }
                 }
-                for (u.fields) |f| assertPortableSerializedInner(f.type);
+                for (u.field_types) |FieldType| assertPortableSerializedInner(FieldType);
             },
             .pointer => @compileError("Serialized type '" ++ @typeName(T) ++
                 "' contains a pointer/slice; use a relocatable marker or explicit fixed-width storage"),
@@ -104,8 +104,9 @@ pub fn assertSerializedDefaultsDefined(comptime T: type) void {
     comptime {
         @setEvalBranchQuota(1_000_000);
         if (@typeInfo(T) != .@"struct") return;
-        for (@typeInfo(T).@"struct".fields) |field| {
-            if (field.defaultValue()) |default| touchAllDefined(field.type, default);
+        const info = @typeInfo(T).@"struct";
+        for (info.field_types, info.field_attrs) |FieldType, attrs| {
+            if (attrs.defaultValue(FieldType)) |default| touchAllDefined(FieldType, default);
         }
     }
 }
@@ -119,7 +120,7 @@ fn touchAllDefined(comptime T: type, comptime value: T) void {
             .bool, .int, .float, .@"enum" => _ = (value == value),
             .optional => |o| if (value) |inner| touchAllDefined(o.child, inner),
             .array => |a| for (value) |elem| touchAllDefined(a.child, elem),
-            .@"struct" => |s| for (s.fields) |f| touchAllDefined(f.type, @field(value, f.name)),
+            .@"struct" => |s| for (s.field_names, s.field_types) |field_name, FieldType| touchAllDefined(FieldType, @field(value, field_name)),
             .@"union" => |u| if (u.tag_type != null) switch (value) {
                 inline else => |payload| touchAllDefined(@TypeOf(payload), payload),
             },
@@ -145,10 +146,10 @@ pub fn assertSerializedRelocatable(comptime T: type) void {
         switch (@typeInfo(T)) {
             .@"struct" => |s| {
                 if (@hasDecl(T, "serialized_relocatable_pointers")) return;
-                for (s.fields) |f| assertSerializedRelocatable(f.type);
+                for (s.field_types) |FieldType| assertSerializedRelocatable(FieldType);
             },
             .@"union" => |u| {
-                for (u.fields) |f| assertSerializedRelocatable(f.type);
+                for (u.field_types) |FieldType| assertSerializedRelocatable(FieldType);
             },
             .array => |a| assertSerializedRelocatable(a.child),
             .optional => |o| assertSerializedRelocatable(o.child),
@@ -276,7 +277,7 @@ pub fn relocatablePointerCount(comptime T: type) usize {
         .@"struct" => |s| blk: {
             if (@hasDecl(T, "serialized_relocatable_pointers")) break :blk T.serialized_relocatable_pointers;
             var n: usize = 0;
-            inline for (s.fields) |f| n += relocatablePointerCount(f.type);
+            inline for (s.field_types) |FieldType| n += relocatablePointerCount(FieldType);
             break :blk n;
         },
         .array => |a| a.len * relocatablePointerCount(a.child),
@@ -303,20 +304,20 @@ pub fn serializedLayoutFingerprint(comptime T: type, hasher: anytype) void {
                 hasher.update(">");
             }
             hasher.update("struct{");
-            inline for (s.fields) |f| {
-                hasher.update(f.name);
+            inline for (s.field_names, s.field_types) |field_name, FieldType| {
+                hasher.update(field_name);
                 hasher.update(":");
-                serializedLayoutFingerprint(f.type, hasher);
+                serializedLayoutFingerprint(FieldType, hasher);
                 hasher.update(",");
             }
             hasher.update("}");
         },
         .@"union" => |u| {
             hasher.update("union{");
-            inline for (u.fields) |f| {
-                hasher.update(f.name);
+            inline for (u.field_names, u.field_types) |field_name, FieldType| {
+                hasher.update(field_name);
                 hasher.update(":");
-                serializedLayoutFingerprint(f.type, hasher);
+                serializedLayoutFingerprint(FieldType, hasher);
                 hasher.update(",");
             }
             hasher.update("}");
@@ -456,8 +457,9 @@ fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
 /// The store's `serialized: bool` frozen flag, if present. `deserialize` sets it to
 /// `true`; it never appears in `Serialized` (it is build-only state).
 fn frozenFlagField(comptime Store: type) ?[]const u8 {
-    for (@typeInfo(Store).@"struct".fields) |f| {
-        if (comptimeStrEq(f.name, "serialized") and f.type == bool) return "serialized";
+    const info = @typeInfo(Store).@"struct";
+    for (info.field_names, info.field_types) |field_name, FieldType| {
+        if (comptimeStrEq(field_name, "serialized") and FieldType == bool) return "serialized";
     }
     return null;
 }
@@ -466,8 +468,9 @@ fn frozenFlagField(comptime Store: type) ?[]const u8 {
 /// with one keeps the load allocator for its build-only fields; its `deserialize`
 /// takes the allocator as a parameter (`deserializeWithAllocator`).
 fn allocatorField(comptime Store: type) ?[]const u8 {
-    for (@typeInfo(Store).@"struct".fields) |f| {
-        if (comptimeStrEq(f.name, "allocator") and f.type == std.mem.Allocator) return "allocator";
+    const info = @typeInfo(Store).@"struct";
+    for (info.field_names, info.field_types) |field_name, FieldType| {
+        if (comptimeStrEq(field_name, "allocator") and FieldType == std.mem.Allocator) return "allocator";
     }
     return null;
 }
@@ -522,21 +525,21 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     comptime {
         // Every Serialized field must map to a store field of the same name.
-        for (@typeInfo(Serialized).@"struct".fields) |sf| {
-            if (!@hasField(Store, sf.name)) @compileError(
-                "SliceStoreSerde: Serialized field '" ++ sf.name ++ "' has no matching field in " ++ @typeName(Store),
+        for (@typeInfo(Serialized).@"struct".field_names) |field_name| {
+            if (!@hasField(Store, field_name)) @compileError(
+                "SliceStoreSerde: Serialized field '" ++ field_name ++ "' has no matching field in " ++ @typeName(Store),
             );
         }
         // Every store field must be accounted for: serialized, the frozen flag, the
         // allocator, or a declared transient. A forgotten data field is a compile error.
         const flag = frozenFlagField(Store);
         const alloc = allocatorField(Store);
-        for (@typeInfo(Store).@"struct".fields) |f| {
-            const persistent = @hasField(Serialized, f.name);
-            const is_flag = flag != null and comptimeStrEq(f.name, flag.?);
-            const is_alloc = alloc != null and comptimeStrEq(f.name, alloc.?);
-            if (!persistent and !is_flag and !is_alloc and !isTransientField(Store, f.name)) @compileError(
-                "SliceStoreSerde: store field '" ++ f.name ++ "' of " ++ @typeName(Store) ++
+        for (@typeInfo(Store).@"struct".field_names) |field_name| {
+            const persistent = @hasField(Serialized, field_name);
+            const is_flag = flag != null and comptimeStrEq(field_name, flag.?);
+            const is_alloc = alloc != null and comptimeStrEq(field_name, alloc.?);
+            if (!persistent and !is_flag and !is_alloc and !isTransientField(Store, field_name)) @compileError(
+                "SliceStoreSerde: store field '" ++ field_name ++ "' of " ++ @typeName(Store) ++
                     " is neither serialized, the frozen flag, the allocator, nor a declared transient" ++
                     " (add it to `Serialized` or `serde_transient_fields`).",
             );
@@ -544,18 +547,18 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     }
     return struct {
         pub fn serialize(self: *Serialized, store: *const Store, gpa: std.mem.Allocator, writer: *CompactWriter) std.mem.Allocator.Error!void {
-            inline for (@typeInfo(Serialized).@"struct".fields) |field| {
+            inline for (@typeInfo(Serialized).@"struct".field_names, @typeInfo(Serialized).@"struct".field_types) |field_name, FieldType| {
                 // `SerializedSlice.serialize` takes the slice by value; `SerializedOptional`
                 // and a nested `Serialized` take a pointer. Pick the form from the field's
                 // own `serialize` signature so all shapes are handled uniformly, and pull the
                 // slice out of an `ArrayList`-backed store field via `.items`.
-                const SourceParam = @typeInfo(@TypeOf(field.type.serialize)).@"fn".params[1].type.?;
+                const SourceParam = @typeInfo(@TypeOf(FieldType.serialize)).@"fn".param_types[1].?;
                 if (@typeInfo(SourceParam).pointer.size == .one) {
-                    try @field(self, field.name).serialize(&@field(store, field.name), gpa, writer);
-                } else if (comptime isArrayListType(@TypeOf(@field(store, field.name)))) {
-                    try @field(self, field.name).serialize(@field(store, field.name).items, gpa, writer);
+                    try @field(self, field_name).serialize(&@field(store, field_name), gpa, writer);
+                } else if (comptime isArrayListType(@TypeOf(@field(store, field_name)))) {
+                    try @field(self, field_name).serialize(@field(store, field_name).items, gpa, writer);
                 } else {
-                    try @field(self, field.name).serialize(@field(store, field.name), gpa, writer);
+                    try @field(self, field_name).serialize(@field(store, field_name), gpa, writer);
                 }
             }
         }
@@ -568,29 +571,29 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
             // `SafeList.Serialized` names its buffer-aliasing loader `deserializeInto`;
             // `SerializedSlice`/`SerializedOptional`/nested interners use `deserialize`.
             // Pick whichever the marker provides.
-            inline for (@typeInfo(Serialized).@"struct".fields) |field| {
-                const value = if (comptime @hasDecl(field.type, "deserializeInto"))
-                    @field(self, field.name).deserializeInto(base_addr)
-                else if (comptime @hasDecl(field.type, "deserializeWithAllocator"))
-                    @field(self, field.name).deserializeWithAllocator(base_addr, allocator)
+            inline for (@typeInfo(Serialized).@"struct".field_names, @typeInfo(Serialized).@"struct".field_types) |field_name, FieldType| {
+                const value = if (comptime @hasDecl(FieldType, "deserializeInto"))
+                    @field(self, field_name).deserializeInto(base_addr)
+                else if (comptime @hasDecl(FieldType, "deserializeWithAllocator"))
+                    @field(self, field_name).deserializeWithAllocator(base_addr, allocator)
                 else
-                    @field(self, field.name).deserialize(base_addr);
-                if (comptime isArrayListType(@TypeOf(@field(store, field.name)))) {
-                    @field(store, field.name) = arrayListFromSlice(@typeInfo(@TypeOf(value)).pointer.child, value);
+                    @field(self, field_name).deserialize(base_addr);
+                if (comptime isArrayListType(@TypeOf(@field(store, field_name)))) {
+                    @field(store, field_name) = arrayListFromSlice(@typeInfo(@TypeOf(value)).pointer.child, value);
                 } else {
-                    @field(store, field.name) = value;
+                    @field(store, field_name) = value;
                 }
             }
             // The remaining (build-only) fields: the frozen flag is set, the retained
             // allocator is injected, and every declared transient resets to its default.
-            inline for (@typeInfo(Store).@"struct".fields) |f| {
-                if (comptime @hasField(Serialized, f.name)) continue;
-                if (comptime flag != null and comptimeStrEq(f.name, flag.?)) {
-                    @field(store, f.name) = true;
-                } else if (comptime alloc != null and comptimeStrEq(f.name, alloc.?)) {
-                    @field(store, f.name) = allocator;
+            inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
+                if (comptime @hasField(Serialized, field_name)) continue;
+                if (comptime flag != null and comptimeStrEq(field_name, flag.?)) {
+                    @field(store, field_name) = true;
+                } else if (comptime alloc != null and comptimeStrEq(field_name, alloc.?)) {
+                    @field(store, field_name) = allocator;
                 } else {
-                    @field(store, f.name) = initTransient(@FieldType(Store, f.name), Store, f.name, allocator);
+                    @field(store, field_name) = initTransient(@FieldType(Store, field_name), Store, field_name, allocator);
                 }
             }
             return store;
@@ -609,8 +612,9 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
 }
 
 fn fieldDefaultValue(comptime Store: type, comptime name: []const u8) ?@FieldType(Store, name) {
-    for (@typeInfo(Store).@"struct".fields) |f| {
-        if (comptimeStrEq(f.name, name)) return f.defaultValue();
+    const info = @typeInfo(Store).@"struct";
+    for (info.field_names, info.field_types, info.field_attrs) |field_name, FieldType, attrs| {
+        if (comptimeStrEq(field_name, name)) return attrs.defaultValue(FieldType);
     }
     unreachable;
 }
@@ -619,8 +623,8 @@ fn initTakesOnlyAllocator(comptime FT: type) bool {
     if (!@hasDecl(FT, "init")) return false;
     const info = @typeInfo(@TypeOf(FT.init));
     if (info != .@"fn") return false;
-    const params = info.@"fn".params;
-    return params.len == 1 and params[0].type == std.mem.Allocator;
+    const params = info.@"fn".param_types;
+    return params.len == 1 and params[0] != null and params[0].? == std.mem.Allocator;
 }
 
 /// Reset value for a transient store field on deserialize: its struct default if it

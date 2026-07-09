@@ -2074,9 +2074,9 @@ const Cloner = struct {
     }
 
     fn cloneContinue(self: *Cloner, continue_: anytype) Common.LowerError!Ast.ExprData {
-        const loop = self.loop_stack.getLastOrNull() orelse return .{ .continue_ = .{
+        const loop = if (self.loop_stack.items.len == 0) return .{ .continue_ = .{
             .values = try self.cloneExprSpan(continue_.values),
-        } };
+        } } else self.loop_stack.items[self.loop_stack.items.len - 1];
         const values = self.pass.program.exprSpan(continue_.values);
         const source_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, values);
         defer self.pass.allocator.free(source_values);

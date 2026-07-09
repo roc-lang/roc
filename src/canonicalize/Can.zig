@@ -1899,8 +1899,9 @@ const AliasCycleContext = struct {
         };
 
         const gpa = self.can.env.gpa;
-        var stack_allocator_state = std.heap.stackFallback(4096, gpa);
-        const stack_allocator = stack_allocator_state.get();
+        var stack_allocator_state_buffer: [4096]u8 = undefined;
+        var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, gpa);
+        const stack_allocator = stack_allocator_state.allocator();
         var frames: std.ArrayList(VisitFrame) = .empty;
         defer frames.deinit(stack_allocator);
 
@@ -4792,8 +4793,9 @@ fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Er
 /// Walk `pattern_idx` and append every `assign`/`as` binder it introduces to
 /// `target`, recursing through tuple/record/list/tag/nominal/str-interp shapes.
 fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx) Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.env.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
     defer pending.deinit(stack_allocator);
 
@@ -4937,8 +4939,9 @@ fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.env.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
     defer pending.deinit(stack_allocator);
 
@@ -8550,8 +8553,9 @@ const DefiniteInitAnalyzer = struct {
     }
 
     fn markAssignedPattern(self: *@This(), state: *InitState, pattern_idx: Pattern.Idx) Allocator.Error!void {
-        var stack_allocator_state = std.heap.stackFallback(1024, self.allocator);
-        const stack_allocator = stack_allocator_state.get();
+        var stack_allocator_state_buffer: [1024]u8 = undefined;
+        var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.allocator);
+        const stack_allocator = stack_allocator_state.allocator();
         var pending: std.ArrayList(Pattern.Idx) = .empty;
         defer pending.deinit(stack_allocator);
 
@@ -9468,8 +9472,9 @@ fn isBuiltinBoolExternalNominal(self: *const Self, module_idx: Import.Idx, targe
 }
 
 fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopExitFacts {
-    var stack_allocator_state = std.heap.stackFallback(4096, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [4096]u8 = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.env.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var pending: std.ArrayList(LoopScanFrame) = .empty;
     defer pending.deinit(stack_allocator);
 
@@ -9769,8 +9774,10 @@ fn runExprKernel(
 
     self.env.debugAssertArraysInSync();
 
-    var fallback_state = std.heap.stackFallback(8192, self.env.gpa);
-    const frame_allocator = fallback_state.get();
+    var fallback_state_buffer: [8192]u8 = undefined;
+
+    var fallback_state = std.heap.BufferFirstAllocator.init(&fallback_state_buffer, self.env.gpa);
+    const frame_allocator = fallback_state.allocator();
 
     var block_state_arena = std.heap.ArenaAllocator.init(frame_allocator);
     defer block_state_arena.deinit();
@@ -16661,8 +16668,10 @@ pub fn canonicalizePattern(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var fallback_state = std.heap.stackFallback(8192, self.env.gpa);
-    const frame_allocator = fallback_state.get();
+    var fallback_state_buffer: [8192]u8 = undefined;
+
+    var fallback_state = std.heap.BufferFirstAllocator.init(&fallback_state_buffer, self.env.gpa);
+    const frame_allocator = fallback_state.allocator();
 
     var stacks: PatternKernelWork = .{};
     defer stacks.deinit(frame_allocator);
@@ -17959,8 +17968,10 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    var frame_allocator_state = std.heap.stackFallback(8192, self.env.gpa);
-    const frame_allocator = frame_allocator_state.get();
+    var frame_allocator_state_buffer: [8192]u8 = undefined;
+
+    var frame_allocator_state = std.heap.BufferFirstAllocator.init(&frame_allocator_state_buffer, self.env.gpa);
+    const frame_allocator = frame_allocator_state.allocator();
     var stacks: TypeAnnoKernelWork = .{};
     defer stacks.deinit(frame_allocator);
 
@@ -19592,8 +19603,9 @@ fn introduceTypeParametersFromHeader(self: *Self, header_idx: CIR.TypeHeader.Idx
 }
 
 fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, idents_start_idx: u32) std.mem.Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.env.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var pending: std.ArrayList(AST.TypeAnno.Idx) = .empty;
     defer pending.deinit(stack_allocator);
 
@@ -20760,8 +20772,9 @@ fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error
         const hint_name = self.env.getIdent(h);
         // Use # prefix which can't appear in user code (reserved for comments)
         // Format: #N_hint where N is the counter
-        var tag_name_sfa = std.heap.stackFallback(64, self.env.gpa);
-        const tag_name_alloc = tag_name_sfa.get();
+        var tag_name_sfa_buffer: [64]u8 = undefined;
+        var tag_name_sfa = std.heap.BufferFirstAllocator.init(&tag_name_sfa_buffer, self.env.gpa);
+        const tag_name_alloc = tag_name_sfa.allocator();
         const tag_name = try std.fmt.allocPrint(
             tag_name_alloc,
             "#{d}_{s}",
@@ -20772,8 +20785,9 @@ fn generateClosureTagName(self: *Self, hint: ?Ident.Idx) std.mem.Allocator.Error
     }
 
     // Otherwise generate a numeric name
-    var tag_name_sfa = std.heap.stackFallback(16, self.env.gpa);
-    const tag_name_alloc = tag_name_sfa.get();
+    var tag_name_sfa_buffer: [16]u8 = undefined;
+    var tag_name_sfa = std.heap.BufferFirstAllocator.init(&tag_name_sfa_buffer, self.env.gpa);
+    const tag_name_alloc = tag_name_sfa.allocator();
     const tag_name = try std.fmt.allocPrint(
         tag_name_alloc,
         "#{d}",

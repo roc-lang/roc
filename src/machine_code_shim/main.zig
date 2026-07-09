@@ -394,8 +394,8 @@ fn ensureFunctionStub(gpa: Allocator, stubs: *std.ArrayList(FunctionStub), name:
 }
 
 fn resolveShimFunction(name: []const u8) ?usize {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BuiltinFn)) |field| {
-        const builtin_fn: backend.LirCodeGenMod.BuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(backend.LirCodeGenMod.BuiltinFn).@"enum".field_values) |field_value| {
+        const builtin_fn: backend.LirCodeGenMod.BuiltinFn = @enumFromInt(field_value);
         const symbol_name = comptime builtin_fn.symbolName();
         if (std.mem.eql(u8, name, symbol_name)) {
             return @intFromPtr(&@field(dev_wrappers, symbol_name));

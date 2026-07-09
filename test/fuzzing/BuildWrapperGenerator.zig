@@ -12,10 +12,10 @@ const Type = TypedCodeGenerator.Type;
 const Method = TypedCodeGenerator.Method;
 
 pub const build_targets = blk: {
-    const fields = @typeInfo(roc_target.RocTarget).@"enum".fields;
-    var targets: [fields.len]roc_target.RocTarget = undefined;
-    for (fields, 0..) |field, index| {
-        targets[index] = @enumFromInt(field.value);
+    const field_values = @typeInfo(roc_target.RocTarget).@"enum".field_values;
+    var targets: [field_values.len]roc_target.RocTarget = undefined;
+    for (field_values, 0..) |field_value, index| {
+        targets[index] = @enumFromInt(field_value);
     }
     break :blk targets;
 };

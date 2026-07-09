@@ -2405,8 +2405,8 @@ const OpenSyntaxStack = struct {
     type_fn_ret: std.ArrayList(TypeFnAfterRetState) = .empty,
 
     fn deinit(self: *OpenSyntaxStack, allocator: std.mem.Allocator) void {
-        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
-            @field(self, field.name).deinit(allocator);
+        inline for (@typeInfo(OpenSyntaxStack).@"struct".field_names) |field_name| {
+            @field(self, field_name).deinit(allocator);
         }
     }
 
@@ -2415,10 +2415,10 @@ const OpenSyntaxStack = struct {
         const Stack = std.ArrayList(Payload);
         comptime var matches = 0;
         comptime var stack_field_name: []const u8 = "";
-        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
-            if (field.type == Stack) {
+        inline for (@typeInfo(OpenSyntaxStack).@"struct".field_names, @typeInfo(OpenSyntaxStack).@"struct".field_types) |field_name, FieldType| {
+            if (FieldType == Stack) {
                 matches += 1;
-                stack_field_name = field.name;
+                stack_field_name = field_name;
             }
         }
         if (matches == 0) {
@@ -2547,14 +2547,14 @@ const OpenSyntaxStack = struct {
     }
 
     fn clearRetainingCapacity(self: *OpenSyntaxStack) void {
-        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
-            @field(self, field.name).clearRetainingCapacity();
+        inline for (@typeInfo(OpenSyntaxStack).@"struct".field_names) |field_name| {
+            @field(self, field_name).clearRetainingCapacity();
         }
     }
 
     fn isEmpty(self: *const OpenSyntaxStack) bool {
-        inline for (std.meta.fields(OpenSyntaxStack)) |field| {
-            if (@field(self, field.name).items.len != 0) return false;
+        inline for (@typeInfo(OpenSyntaxStack).@"struct".field_names) |field_name| {
+            if (@field(self, field_name).items.len != 0) return false;
         }
         return true;
     }
@@ -2570,20 +2570,20 @@ const ParserKernelScratch = struct {
     associated_blocks: StatementAssociatedBlockStack = .{},
 
     fn deinit(self: *ParserKernelScratch, allocator: std.mem.Allocator) void {
-        inline for (std.meta.fields(ParserKernelScratch)) |field| {
-            @field(self, field.name).deinit(allocator);
+        inline for (@typeInfo(ParserKernelScratch).@"struct".field_names) |field_name| {
+            @field(self, field_name).deinit(allocator);
         }
     }
 
     fn clearRetainingCapacity(self: *ParserKernelScratch) void {
-        inline for (std.meta.fields(ParserKernelScratch)) |field| {
-            @field(self, field.name).clearRetainingCapacity();
+        inline for (@typeInfo(ParserKernelScratch).@"struct".field_names) |field_name| {
+            @field(self, field_name).clearRetainingCapacity();
         }
     }
 
     fn isEmpty(self: *const ParserKernelScratch) bool {
-        inline for (std.meta.fields(ParserKernelScratch)) |field| {
-            if (!@field(self, field.name).isEmpty()) return false;
+        inline for (@typeInfo(ParserKernelScratch).@"struct".field_names) |field_name| {
+            if (!@field(self, field_name).isEmpty()) return false;
         }
         return true;
     }
@@ -6286,8 +6286,9 @@ fn recordTypeDependenciesFromAnnoWorklist(
     root: AST.TypeAnno.Idx,
     mode: TypeDependencyWalkMode,
 ) std.mem.Allocator.Error!void {
-    var pending_allocator_state = std.heap.stackFallback(4096, self.gpa);
-    const pending_allocator = pending_allocator_state.get();
+    var pending_allocator_state_buffer: [4096]u8 = undefined;
+    var pending_allocator_state = std.heap.BufferFirstAllocator.init(&pending_allocator_state_buffer, self.gpa);
+    const pending_allocator = pending_allocator_state.allocator();
     var pending: std.ArrayList(TypeDependencyWalkItem) = .empty;
     defer pending.deinit(pending_allocator);
 
@@ -6448,7 +6449,7 @@ const no_bin_op_bp = BinOpBp{ .left = 0, .right = 0 };
 const bin_op_bp_table = blk: {
     const start = @intFromEnum(Token.Tag.OpPlus);
     const len = @intFromEnum(Token.Tag.OpEquals) - start + 1;
-    var table = [_]BinOpBp{no_bin_op_bp} ** len;
+    var table = @as([len]BinOpBp, @splat(no_bin_op_bp));
     // `*`, `/`, `//`, and `%` form a single multiplicative precedence group,
     // left-associative among each other (`right > left` makes a following
     // same-group operator fail `left >= min_bp`, so `1 % 10 // 100` parses as
@@ -6494,8 +6495,8 @@ pub fn getTokenBP(tok: Token.Tag) ?BinOpBp {
 }
 
 comptime {
-    for (@typeInfo(Token.Tag).@"enum".fields) |field| {
-        const tok: Token.Tag = @enumFromInt(field.value);
+    for (@typeInfo(Token.Tag).@"enum".field_values) |field_value| {
+        const tok: Token.Tag = @enumFromInt(field_value);
         if (getTokenBP(tok) != null and !isInBinOpTokenRange(tok)) {
             @compileError("binary operator binding-power token outside parser operator range");
         }

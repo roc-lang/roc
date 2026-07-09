@@ -3552,8 +3552,9 @@ fn tryResolveStructuralRecordFieldDispatch(
 
     const constraint_fn = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
     const arg_expr_idxs = self.cir.store.sliceExpr(dispatch_call.args);
-    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const arg_vars_alloc = arg_vars_sfa.get();
+    var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+    var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.allocator();
     const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
     defer arg_vars_alloc.free(arg_vars);
     for (arg_expr_idxs, 0..) |arg_expr_idx, arg_i| {
@@ -4836,7 +4837,7 @@ fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiter
     const fit_set = if (literal.isMaterialized())
         try exact_numeral.computeFitSet(self.gpa, exact)
     else
-        exact_numeral.FitSet.initEmpty();
+        exact_numeral.FitSet.empty;
     return types_mod.NumeralInfo.fromExact(exact, fit_set, literal.isMaterialized(), region);
 }
 
@@ -8736,8 +8737,10 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
 fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     try self.types.resetVarToUnbound(ModuleEnv.varFrom(annotation_idx), Rank.outermost);
 
-    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 = undefined;
+
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
     defer nodes.deinit(stack_allocator);
     try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
@@ -8749,8 +8752,9 @@ fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem
 /// Whether the annotation's type (or any of its where-clause method
 /// signatures) contains an `_` inference hole.
 fn annotationContainsUnderscore(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!bool {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
     defer nodes.deinit(stack_allocator);
     try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
@@ -10141,8 +10145,9 @@ fn validateRecordRow(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
-    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
+    var names_sfa_buffer: [32 * @sizeOf(Ident.Idx)]u8 = undefined;
+    var names_sfa = std.heap.BufferFirstAllocator.init(&names_sfa_buffer, self.gpa);
+    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.allocator());
     defer names.deinit();
 
     const field_slice = self.types.getRecordFieldsSlice(fields);
@@ -10223,8 +10228,9 @@ fn validateTagUnionRow(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!bool {
-    var names_sfa = std.heap.stackFallback(32 * @sizeOf(Ident.Idx), self.gpa);
-    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.get());
+    var names_sfa_buffer: [32 * @sizeOf(Ident.Idx)]u8 = undefined;
+    var names_sfa = std.heap.BufferFirstAllocator.init(&names_sfa_buffer, self.gpa);
+    var names = std.AutoHashMap(Ident.Idx, void).init(names_sfa.allocator());
     defer names.deinit();
 
     const tag_slice = self.types.getTagsSlice(tags);
@@ -12100,8 +12106,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // This must happen *before* checking against the expected type so
             // all the pattern types are inferred
             const arg_count = lambda.args.span.len;
-            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-            const arg_vars_alloc = arg_vars_sfa.get();
+            var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+            var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.allocator();
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_count);
             defer arg_vars_alloc.free(arg_vars);
             const pattern_ctx: PatternCtx = if (mb_anno_func != null) .from_annotation else .fn_arg;
@@ -12634,8 +12641,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             var did_err = self.types.resolveVar(receiver_var).desc.content == .err;
 
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
-            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-            const arg_vars_alloc = arg_vars_sfa.get();
+            var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+            var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.allocator();
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
             defer arg_vars_alloc.free(arg_vars);
 
@@ -12707,8 +12715,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.unify(hasher_var, expr_var, env);
         },
         .e_method_eq => |eq| {
-            var arg_vars_sfa = std.heap.stackFallback(@sizeOf(Var), self.gpa);
-            const arg_vars_alloc = arg_vars_sfa.get();
+            var arg_vars_sfa_buffer: [@sizeOf(Var)]u8 = undefined;
+            var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.allocator();
             const arg_vars = try arg_vars_alloc.alloc(Var, 1);
             defer arg_vars_alloc.free(arg_vars);
 
@@ -12744,8 +12753,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_type_method_call => |method_call| {
             const arg_expr_idxs = self.cir.store.sliceExpr(method_call.args);
-            var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-            const arg_vars_alloc = arg_vars_sfa.get();
+            var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+            var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+            const arg_vars_alloc = arg_vars_sfa.allocator();
             const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
             defer arg_vars_alloc.free(arg_vars);
 
@@ -15725,8 +15735,9 @@ fn mkReceiverDispatchConstraint(
     region: Region,
     method_expr_idx: ?CIR.Expr.Idx,
 ) Allocator.Error!Var {
-    var all_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const all_args_alloc = all_args_sfa.get();
+    var all_args_sfa_buffer: [16 * @sizeOf(Var)]u8 = undefined;
+    var all_args_sfa = std.heap.BufferFirstAllocator.init(&all_args_sfa_buffer, self.gpa);
+    const all_args_alloc = all_args_sfa.allocator();
     const all_args = try all_args_alloc.alloc(Var, arg_vars.len + 1);
     defer all_args_alloc.free(all_args);
     all_args[0] = receiver_var;
@@ -16718,7 +16729,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // precomputed fit sets keeps the check O(1) per candidate and
             // makes the outcome independent of which member carries the
             // driving constraint (mirror-image programs commit identically).
-            var component_fits = exact_numeral.FitSet.initFull();
+            var component_fits = exact_numeral.FitSet.full;
             for (self.literal_defaulting_open_roots.items, 0..) |member_root, member_idx| {
                 if (componentFind(self.literal_defaulting_component_parent.items, member_idx) != leader) continue;
                 member_count += 1;

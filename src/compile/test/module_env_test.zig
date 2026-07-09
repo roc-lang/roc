@@ -225,7 +225,7 @@ test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
     try original.initCIRFields("Test");
 
     const present_idx = try original.recordFileDependency("data.txt");
-    const present_hash = [_]u8{0x11} ** 32;
+    const present_hash = @as([32]u8, @splat(0x11));
     original.setFileDependencyContentHash(present_idx, present_hash);
 
     const missing_idx = try original.recordFileDependency("missing.txt");
@@ -277,7 +277,7 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     const str_literal_idx = try env.insertString("hello");
     const str_ident = try env.insertIdent(Ident.for_text("Str"));
-    const builtin_ident = try env.internModuleIdentity(&([_]u8{0x66} ** 32), Ident.Idx.NONE);
+    const builtin_ident = try env.internModuleIdentity(&@as([32]u8, @splat(0x66)), Ident.Idx.NONE);
 
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
     const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));

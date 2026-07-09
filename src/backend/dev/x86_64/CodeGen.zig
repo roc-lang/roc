@@ -99,8 +99,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
                 .callee_saved_used = 0,
                 .callee_saved_available = CALLEE_SAVED_GENERAL_MASK,
-                .general_owners = [_]?u32{null} ** NUM_GENERAL_REGS,
-                .float_owners = [_]?u32{null} ** NUM_FLOAT_REGS,
+                .general_owners = @as([NUM_GENERAL_REGS]?u32, @splat(null)),
+                .float_owners = @as([NUM_FLOAT_REGS]?u32, @splat(null)),
             };
         }
 
@@ -119,8 +119,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
             self.callee_saved_used = 0;
             self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
-            self.general_owners = [_]?u32{null} ** NUM_GENERAL_REGS;
-            self.float_owners = [_]?u32{null} ** NUM_FLOAT_REGS;
+            self.general_owners = @as([NUM_GENERAL_REGS]?u32, @splat(null));
+            self.float_owners = @as([NUM_FLOAT_REGS]?u32, @splat(null));
         }
 
         /// Get the generated code

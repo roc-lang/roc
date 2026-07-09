@@ -2250,13 +2250,13 @@ fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
             .one, .many, .c => {},
         },
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                assertNoNodeId(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                assertNoNodeId(FieldType, path ++ "." ++ field_name);
             }
         },
         .@"union" => |info| {
-            inline for (info.fields) |field| {
-                assertNoNodeId(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                assertNoNodeId(FieldType, path ++ "." ++ field_name);
             }
         },
         else => {},
@@ -2318,7 +2318,7 @@ test "alias unification does not make the alias its own backing" {
     const backing = try graph.newNode(.{ .primitive = .u64 });
     const alias = try graph.newNode(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
-        .def = .{ .module = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32)), .type_name = @enumFromInt(1) },
+        .def = .{ .module = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB))), .type_name = @enumFromInt(1) },
         .kind = .alias,
         .builtin_owner = null,
         .args = try graph.arena().alloc(NodeId, 0),
@@ -2569,7 +2569,7 @@ test "issue 9647: same nominal backing wrapper resolves to structural backing on
     const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Role");
     const tag_name = try name_store.internTagLabel("Tile");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(1) };
@@ -2628,7 +2628,7 @@ test "issue 9647: recursive nominal backing cycle is not chased as structural ba
     const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Recursive");
     const tag_name = try name_store.internTagLabel("Wrap");
     const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(2) };
@@ -2671,7 +2671,7 @@ test "recursive nominal backing can meet an alias to that nominal" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const nominal_name = try name_store.internTypeName("Role");
     const alias_name = try name_store.internTypeName("Wrapper.Role");
     const nominal_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(3) };

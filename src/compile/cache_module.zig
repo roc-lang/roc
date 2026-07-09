@@ -48,7 +48,7 @@ pub const Header = struct {
     warning_count: u32,
 
     /// Padding to ensure alignment
-    _padding: [4]u8 = [_]u8{0} ** 4,
+    _padding: [4]u8 = @as([4]u8, @splat(0)),
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
@@ -128,7 +128,7 @@ pub const CacheModule = struct {
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
-            ._padding = [_]u8{0} ** 4,
+            ._padding = @as([4]u8, @splat(0)),
         };
 
         // Consolidate the scattered iovecs into the cache data buffer

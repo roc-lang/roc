@@ -104,7 +104,7 @@ pub const Sig = struct {
 };
 
 /// Builtin signatures indexed by `BuiltinKind`.
-pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
+pub const sigs: [@typeInfo(BuiltinKind).@"enum".field_names.len]Sig = .{
     .{ .name = "roc_builtins_dec_mul", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_dec_div", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
     .{ .name = "roc_builtins_dec_div_trunc", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
@@ -222,7 +222,7 @@ comptime {
     for (sigs) |sig| {
         if (!@hasDecl(dw, sig.name)) @compileError("missing dev wrapper: " ++ sig.name);
         const wrapper_type = @typeInfo(@TypeOf(@field(dw, sig.name))).@"fn";
-        if (wrapper_type.params.len != sig.wasm_params.len) {
+        if (wrapper_type.param_types.len != sig.wasm_params.len) {
             @compileError("builtin arity mismatch: " ++ sig.name);
         }
     }

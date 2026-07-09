@@ -1424,7 +1424,7 @@ test "NodeStore round trip - Pattern" {
     });
 
     // Test the round-trip for all patterns with their original regions
-    var regions = [_]base.Region{undefined} ** NodeStore.MODULEENV_PATTERN_NODE_COUNT;
+    var regions = @as([NodeStore.MODULEENV_PATTERN_NODE_COUNT]base.Region, @splat(undefined));
     for (&regions) |*region| {
         region.* = rand_region();
     }
@@ -1457,8 +1457,8 @@ test "SurfaceOrigin encode/decode round-trips" {
         );
     }
     // Every binop form.
-    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".fields) |field| {
-        const op: CIR.Expr.Binop.Op = @enumFromInt(field.value);
+    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".field_values) |field_value| {
+        const op: CIR.Expr.Binop.Op = @enumFromInt(field_value);
         const origin = SurfaceOrigin{ .binop = op };
         try testing.expectEqual(
             origin,

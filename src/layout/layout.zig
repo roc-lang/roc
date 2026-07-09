@@ -81,7 +81,7 @@ pub const Scalar = packed struct {
 };
 
 /// Index into a Layout Store
-pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
+pub const Idx = enum(@Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
     // Sentinel values for scalar builtin layouts. When we init the layout store, it automatically
     // adds entries for each of these at an index equal to the enum's value. That way, if you
     // look up one of these in the store, it's always returns the correct layout, and we can have
@@ -156,7 +156,7 @@ pub const Closure = struct {
 /// Raw backing type for the Layout data (28 bits).
 /// In Zig 0.16, packed unions require uniform field widths, so we use
 /// a raw integer with typed accessors on the Layout struct instead.
-pub const LayoutData = std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
+pub const LayoutData = @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
 
 /// Unified struct field layout — used for both records and tuples at the layout level.
 /// At the shared LIR/layout commit, records and tuples become contiguous fields that are
@@ -207,7 +207,7 @@ pub const TupleLayout = StructLayout;
 
 /// Index into the Store's struct data
 pub const StructIdx = packed struct {
-    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
+    int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Backwards-compat alias for `StructIdx`.
@@ -278,7 +278,7 @@ pub const TagUnionLayout = packed struct {
 
 /// Index into the Store's tag union data
 pub const TagUnionIdx = packed struct {
-    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
+    int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Tag union data stored in the layout Store
@@ -649,7 +649,7 @@ pub const Layout = packed struct {
     // -- Typed accessors for unpacking the raw data field --
 
     pub fn getScalar(self: Layout) Scalar {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(Scalar)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(Scalar)), @truncate(self.data)));
     }
 
     pub fn getIdx(self: Layout) Idx {
@@ -657,21 +657,21 @@ pub const Layout = packed struct {
     }
 
     pub fn getStruct(self: Layout) StructLayout {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(StructLayout)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(StructLayout)), @truncate(self.data)));
     }
 
     pub fn getClosure(self: Layout) ClosureLayout {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(ClosureLayout)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(ClosureLayout)), @truncate(self.data)));
     }
 
     pub fn getTagUnion(self: Layout) TagUnionLayout {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TagUnionLayout)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(TagUnionLayout)), @truncate(self.data)));
     }
 
     fn packData(val: anytype) LayoutData {
         const T = @TypeOf(val);
         const bits = @bitSizeOf(T);
-        return @intCast(@as(std.meta.Int(.unsigned, bits), @bitCast(val)));
+        return @intCast(@as(@Int(.unsigned, bits), @bitCast(val)));
     }
 
     /// This layout's alignment, given a particular target usize.

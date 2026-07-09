@@ -735,14 +735,14 @@ pub fn SafeMultiList(comptime T: type) type {
             // Write only len elements, not capacity, to avoid storing garbage memory.
             const data_offset = if (self.items.len > 0) blk: {
                 const slice = self.items.slice();
-                const fields = std.meta.fields(T);
+                const field_names = comptime @typeInfo(T).@"struct".field_names;
 
                 // MultiArrayList lays out fields in order, with alignment padding as
                 // necessary between the end of one field's elements and the beginning of
                 // the next. So we need to append entries to the writer for all fields.
                 const first_field_offset = writer.total_bytes;
 
-                inline for (fields, 0..) |_, i| {
+                inline for (field_names, 0..) |_, i| {
                     const field_ptr = slice.items(@as(Field, @enumFromInt(i))).ptr;
 
                     // Write the field data (only len elements' worth).
@@ -813,8 +813,8 @@ pub fn SafeMultiList(comptime T: type) type {
                 if (total_capacity == 0 or total_capacity <= list_len) return;
 
                 const slice = list.items.slice();
-                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
-                    const field_size = @sizeOf(field_info.type);
+                inline for (@typeInfo(T).@"struct".field_types, 0..) |FieldType, field_index| {
+                    const field_size = @sizeOf(FieldType);
                     if (field_size == 0) continue;
 
                     const capacity_bytes = field_size * total_capacity;
@@ -837,8 +837,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 if (list_len == 0) return;
 
                 const slice = list.items.slice();
-                inline for (std.meta.fields(T), 0..) |field_info, field_index| {
-                    const FieldType = field_info.type;
+                inline for (@typeInfo(T).@"struct".field_types, 0..) |FieldType, field_index| {
                     const field_size = @sizeOf(FieldType);
                     if (field_size == 0) continue;
 
@@ -2164,15 +2163,15 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
             var i: usize = 0;
             while (i < len) : (i += 1) {
                 var item: TestType = undefined;
-                inline for (std.meta.fields(TestType), 0..) |field, fi| {
-                    const field_type_info = @typeInfo(field.type);
+                inline for (@typeInfo(TestType).@"struct".field_names, @typeInfo(TestType).@"struct".field_types, 0..) |field_name, FieldType, fi| {
+                    const field_type_info = @typeInfo(FieldType);
                     const value = switch (field_type_info) {
-                        .int => @as(field.type, @intCast(@min(i * (fi + 1) + 1, std.math.maxInt(field.type)))),
-                        .float => @as(field.type, @floatFromInt(i * (fi + 1) + 1)),
-                        .bool => @as(field.type, (i + fi) % 2 == 0),
-                        else => @compileError("Unsupported field type in TestType: " ++ @typeName(field.type)),
+                        .int => @as(FieldType, @intCast(@min(i * (fi + 1) + 1, std.math.maxInt(FieldType)))),
+                        .float => @as(FieldType, @floatFromInt(i * (fi + 1) + 1)),
+                        .bool => @as(FieldType, (i + fi) % 2 == 0),
+                        else => @compileError("Unsupported field type in TestType: " ++ @typeName(FieldType)),
                     };
-                    @field(item, field.name) = value;
+                    @field(item, field_name) = value;
                 }
                 const idx = try list.append(gpa, item);
                 try testing.expectEqual(i, @intFromEnum(idx));
@@ -2211,8 +2210,8 @@ test "SafeMultiList CompactWriter various field alignments and sizes" {
                 const original_item = list.get(@enumFromInt(i));
                 const deser_item = deserialized.get(@enumFromInt(i));
 
-                inline for (std.meta.fields(TestType)) |field| {
-                    try testing.expectEqual(@field(original_item, field.name), @field(deser_item, field.name));
+                inline for (@typeInfo(TestType).@"struct".field_names) |field_name| {
+                    try testing.expectEqual(@field(original_item, field_name), @field(deser_item, field_name));
                 }
             }
         }

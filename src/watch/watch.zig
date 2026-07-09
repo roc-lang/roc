@@ -573,7 +573,7 @@ pub const Watcher = struct {
         defer self.allocator.free(cf_strings);
 
         for (self.paths, 0..) |path, i| {
-            const path_z = self.allocator.dupeZ(u8, path) catch {
+            const path_z = self.allocator.dupeSentinel(u8, path, 0) catch {
                 std.log.warn("Failed to create null-terminated path", .{});
                 self.markStartupFailed();
                 return;
@@ -839,7 +839,7 @@ pub const Watcher = struct {
             std.os.linux.IN.MODIFY | std.os.linux.IN.MOVED_FROM |
             std.os.linux.IN.MOVED_TO | std.os.linux.IN.CLOSE_WRITE;
 
-        const path_z = try self.allocator.dupeZ(u8, path);
+        const path_z = try self.allocator.dupeSentinel(u8, path, 0);
         defer self.allocator.free(path_z);
 
         const add_result = std.os.linux.inotify_add_watch(self.impl.inotify_fd, path_z, flags);

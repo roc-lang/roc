@@ -7654,7 +7654,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     var solved = emptySolvedProgramForTest(allocator);
     defer solved.deinit();
 
-    const module_identity = try solved.lifted.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try solved.lifted.names.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const repro_name = try solved.lifted.names.internTypeName("Repro");
     const alias_name = try solved.lifted.names.internTypeName("Alias");
     const wrap_name = try solved.lifted.names.internTagLabel("Wrap");

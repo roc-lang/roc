@@ -429,32 +429,27 @@ pub const MODULEENV_PATTERN_NODE_COUNT = 18;
 
 comptime {
     // Check the number of CIR.Diagnostic nodes
-    const diagnostic_fields = @typeInfo(CIR.Diagnostic).@"union".fields;
-    std.debug.assert(diagnostic_fields.len == MODULEENV_DIAGNOSTIC_NODE_COUNT);
+    std.debug.assert(@typeInfo(CIR.Diagnostic).@"union".field_names.len == MODULEENV_DIAGNOSTIC_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.Expr nodes
-    const expr_fields = @typeInfo(CIR.Expr).@"union".fields;
-    std.debug.assert(expr_fields.len == MODULEENV_EXPR_NODE_COUNT);
+    std.debug.assert(@typeInfo(CIR.Expr).@"union".field_names.len == MODULEENV_EXPR_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.Statement nodes
-    const statement_fields = @typeInfo(CIR.Statement).@"union".fields;
-    std.debug.assert(statement_fields.len == MODULEENV_STATEMENT_NODE_COUNT);
+    std.debug.assert(@typeInfo(CIR.Statement).@"union".field_names.len == MODULEENV_STATEMENT_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.TypeAnno nodes
-    const type_anno_fields = @typeInfo(CIR.TypeAnno).@"union".fields;
-    std.debug.assert(type_anno_fields.len == MODULEENV_TYPE_ANNO_NODE_COUNT);
+    std.debug.assert(@typeInfo(CIR.TypeAnno).@"union".field_names.len == MODULEENV_TYPE_ANNO_NODE_COUNT);
 }
 
 comptime {
     // Check the number of CIR.Pattern nodes
-    const pattern_fields = @typeInfo(CIR.Pattern).@"union".fields;
-    std.debug.assert(pattern_fields.len == MODULEENV_PATTERN_NODE_COUNT);
+    std.debug.assert(@typeInfo(CIR.Pattern).@"union".field_names.len == MODULEENV_PATTERN_NODE_COUNT);
 }
 
 /// Helper function to get a region by node index, handling the type conversion
@@ -518,8 +513,8 @@ comptime {
     // The binop range starts after the unit (payload-less) tags; keep the offset
     // in sync so a new unit variant can't collide with a `Binop.Op` slot.
     var unit_count: u32 = 0;
-    for (@typeInfo(CIR.Expr.SurfaceOrigin).@"union".fields) |field| {
-        if (field.type == void) unit_count += 1;
+    for (@typeInfo(CIR.Expr.SurfaceOrigin).@"union".field_types) |FieldType| {
+        if (FieldType == void) unit_count += 1;
     }
     std.debug.assert(surface_origin_binop_offset == unit_count);
 }

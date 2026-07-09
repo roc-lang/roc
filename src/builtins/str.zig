@@ -294,8 +294,8 @@ pub const RocStr = extern struct {
         }
 
         if (self.isSmallStr() and other.isSmallStr()) {
-            const self_bytes: [@sizeOf(RocStr)]u8 = @bitCast(self);
-            const other_bytes: [@sizeOf(RocStr)]u8 = @bitCast(other);
+            const self_bytes: [@sizeOf(RocStr)]u8 = std.mem.toBytes(self);
+            const other_bytes: [@sizeOf(RocStr)]u8 = std.mem.toBytes(other);
             return smallBytesEqual(self_bytes, other_bytes, self_len);
         }
 
@@ -661,7 +661,7 @@ inline fn bytesEqualStaticSmall(bytes: [*]const u8, len: usize, word0: u64, word
 
 inline fn staticSmallRuntimeWord(str: RocStr, offset: usize, active_len: usize) u64 {
     if (str.isSmallStr()) {
-        const bytes: [@sizeOf(RocStr)]u8 = @bitCast(str);
+        const bytes: [@sizeOf(RocStr)]u8 = std.mem.toBytes(str);
         return readSmallStringU64(bytes, offset);
     }
 
@@ -844,7 +844,7 @@ fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) FloatToStr
 
     if (std.math.isFinite(value)) {
         const parsed = try parse_float.parseFloat(T, actual);
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const Bits = @Int(.unsigned, @bitSizeOf(T));
         try testing.expectEqual(@as(Bits, @bitCast(value)), @as(Bits, @bitCast(parsed)));
     }
 }
@@ -2380,7 +2380,7 @@ pub fn strCloneTo(
 ) callconv(.c) usize {
     const WIDTH: usize = @sizeOf(RocStr);
     if (string.isSmallStr()) {
-        const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
+        const array: [@sizeOf(RocStr)]u8 = std.mem.toBytes(string);
 
         var i: usize = 0;
         while (i < WIDTH) : (i += 1) {

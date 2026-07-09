@@ -162,7 +162,7 @@ pub const SyntaxChecker = struct {
         defer self.allocator.free(path);
 
         const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch
-            try self.allocator.dupeZ(u8, path);
+            try self.allocator.dupeSentinel(u8, path, 0);
 
         return .{
             .absolute_path = absolute_path,

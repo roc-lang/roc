@@ -30,7 +30,7 @@ else
     }.print;
 
 fn readIntLittle(comptime T: type, buffer: []const u8, offset: usize) T {
-    const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const UInt = @Int(.unsigned, @bitSizeOf(T));
     var result: UInt = 0;
     var i: usize = 0;
     while (i < @sizeOf(T)) : (i += 1) {
@@ -40,7 +40,7 @@ fn readIntLittle(comptime T: type, buffer: []const u8, offset: usize) T {
 }
 
 fn writeIntLittle(comptime T: type, buffer: []u8, offset: usize, value: T) void {
-    const UInt = std.meta.Int(.unsigned, @bitSizeOf(T));
+    const UInt = @Int(.unsigned, @bitSizeOf(T));
     var remaining: UInt = @bitCast(value);
     var i: usize = 0;
     while (i < @sizeOf(T)) : (i += 1) {
@@ -1435,7 +1435,7 @@ fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params
 
     const result_len = slice.len + extra + 2;
     if (result_len < 12) {
-        var small: [12]u8 = .{0} ** 12;
+        var small: [12]u8 = @as([12]u8, @splat(0));
         small[0] = '"';
         var pos: usize = 1;
         for (slice) |ch| {

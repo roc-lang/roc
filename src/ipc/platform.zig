@@ -256,7 +256,7 @@ fn createUnlinkedTempFileMapping(io: std.Io, size: usize) SharedMemoryError!Hand
     const random_val = std.mem.readInt(u64, &random_buf, .little);
 
     var file_path_buf: [std.fmt.count("/tmp/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
-    const file_path = std.fmt.bufPrintZ(&file_path_buf, "/tmp/roc_shm_{}", .{random_val}) catch unreachable;
+    const file_path = std.fmt.bufPrintSentinel(&file_path_buf, "/tmp/roc_shm_{}", .{random_val}, 0) catch unreachable;
     const fd = std.c.open(
         file_path,
         std.c.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true },
@@ -285,7 +285,7 @@ fn createPosixShmMapping(io: std.Io, size: usize) SharedMemoryError!Handle {
     // The name is "/roc_shm_" + a u64, so size the buffer to the longest
     // possible such name (largest u64) plus a NUL - it can never overflow.
     var shm_name_buf: [std.fmt.count("/roc_shm_{}", .{@as(u64, std.math.maxInt(u64))}) + 1]u8 = undefined;
-    const shm_name_null_terminated = std.fmt.bufPrintZ(&shm_name_buf, "/roc_shm_{}", .{random_val}) catch unreachable;
+    const shm_name_null_terminated = std.fmt.bufPrintSentinel(&shm_name_buf, "/roc_shm_{}", .{random_val}, 0) catch unreachable;
     const fd = posix.shm_open(
         shm_name_null_terminated,
         @as(u32, @bitCast(std.posix.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true })),

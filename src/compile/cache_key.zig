@@ -51,7 +51,7 @@ pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
 }
 
 fn hashWithByte(byte: u8) [32]u8 {
-    return [_]u8{byte} ** 32;
+    return @as([32]u8, @splat(byte));
 }
 
 fn moduleIdentity(byte: u8) CheckedArtifact.ModuleIdentity {
@@ -119,15 +119,15 @@ test "checked artifact cache key changes for semantic inputs" {
 }
 
 test "checked artifact cache key input has no target or layout ABI fields" {
-    const fields = @typeInfo(CacheKeyInput).@"struct".fields;
-    inline for (fields) |field| {
-        try std.testing.expect(!std.mem.eql(u8, field.name, "target"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "target_config"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "layout"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "layout_abi"));
-        try std.testing.expect(!std.mem.eql(u8, field.name, "backend"));
+    const field_names = @typeInfo(CacheKeyInput).@"struct".field_names;
+    inline for (field_names) |field_name| {
+        try std.testing.expect(!std.mem.eql(u8, field_name, "target"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "target_config"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "layout"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "layout_abi"));
+        try std.testing.expect(!std.mem.eql(u8, field_name, "backend"));
     }
 
-    try std.testing.expectEqual(@as(usize, 4), fields.len);
+    try std.testing.expectEqual(@as(usize, 4), field_names.len);
     _ = checkedModuleArtifactKey(testInput());
 }

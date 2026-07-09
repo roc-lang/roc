@@ -3946,31 +3946,31 @@ fn decodePaddedI32(bytes: []const u8) i32 {
 }
 
 test "overwritePaddedU32 — value 0 encodes as [0x80, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32 — value 1 encodes as [0x81, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 1);
     try std.testing.expectEqualSlices(u8, &.{ 0x81, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32 — value 0x7F encodes as [0xFF, 0x80, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0x7F);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0x80, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32 — value 128 encodes as [0x80, 0x81, 0x80, 0x80, 0x00]" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 128);
     try std.testing.expectEqualSlices(u8, &.{ 0x80, 0x81, 0x80, 0x80, 0x00 }, &buf);
 }
 
 test "overwritePaddedU32 — max u32 (0xFFFFFFFF) encodes correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedU32(&buf, 0, 0xFFFFFFFF);
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x0F }, &buf);
 }
@@ -3978,14 +3978,14 @@ test "overwritePaddedU32 — max u32 (0xFFFFFFFF) encodes correctly" {
 test "overwritePaddedU32 — round-trip: write then decode matches original value" {
     const test_values = [_]u32{ 0, 1, 127, 128, 255, 256, 16383, 16384, 2097151, 2097152, 0x0FFFFFFF, 0xFFFFFFFF };
     for (test_values) |val| {
-        var buf = [_]u8{0} ** 5;
+        var buf = @as([5]u8, @splat(0));
         overwritePaddedU32(&buf, 0, val);
         try std.testing.expectEqual(val, decodePaddedU32(&buf));
     }
 }
 
 test "overwritePaddedI32 — negative value (-1) encodes correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
     overwritePaddedI32(&buf, 0, -1);
     // -1 in signed padded LEB128: all 7-bit groups are 0x7F, last byte keeps sign bit
     try std.testing.expectEqualSlices(u8, &.{ 0xFF, 0xFF, 0xFF, 0xFF, 0x7F }, &buf);
@@ -3994,7 +3994,7 @@ test "overwritePaddedI32 — negative value (-1) encodes correctly" {
 test "overwritePaddedI32 — positive value round-trips correctly" {
     const test_values = [_]i32{ 0, 1, -1, 127, -128, 32767, -32768, std.math.maxInt(i32), std.math.minInt(i32) };
     for (test_values) |val| {
-        var buf = [_]u8{0} ** 5;
+        var buf = @as([5]u8, @splat(0));
         overwritePaddedI32(&buf, 0, val);
         try std.testing.expectEqual(val, decodePaddedI32(&buf));
     }
@@ -5542,7 +5542,7 @@ test "mergeModule — later weak definition resolves earlier undefined function 
     try std.testing.expectEqual(@as(u32, 2), host.table_func_indices.items[0]);
 
     try host.resolveRelocations();
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedU32(&expected, 0, 2);
     try std.testing.expectEqualSlices(u8, &expected, host.code_bytes.items[3..8]);
 
@@ -5705,7 +5705,7 @@ test "resolveCodeRelocations — table_index_sleb resolves to table index not fu
     try module.resolveCodeRelocations();
 
     // Should be patched to table index 2 (position in table_func_indices), NOT function index 4
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedI32(&expected, 0, 2);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -5814,7 +5814,7 @@ test "resolveCodeRelocations — patches function call in code_bytes" {
     try module.resolveCodeRelocations();
 
     // Read the patched value at offset 3 (5-byte padded LEB128).
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     overwritePaddedU32(&expected, 0, 42);
     try std.testing.expectEqualSlices(u8, &expected, module.code_bytes.items[3..8]);
 }
@@ -6418,7 +6418,7 @@ test "eliminateDeadCode — exported function and its callees are preserved" {
     defer module.deinit();
 
     // No extra called_fns — only exports seed the live set.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // main_fn (3) is exported → live.
@@ -6445,7 +6445,7 @@ test "eliminateDeadCode — unreachable function body replaced with unreachable 
     var module = try buildDCETestModule(allocator);
     defer module.deinit();
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -6465,7 +6465,7 @@ test "eliminateDeadCode — dead import removed, dead_import_dummy_count increme
     const orig_import_count = module.imports.items.len;
     const orig_dummy_count = module.dead_import_dummy_count;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // js_unused (import 1) is only called by dead_fn which is dead.
@@ -6495,7 +6495,7 @@ test "eliminateDeadCode — non-function imports are preserved" {
     module.has_memory = true;
     module.has_table = true;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try std.testing.expect(module.has_memory);
@@ -6512,7 +6512,7 @@ test "eliminateDeadCode — indirect call targets (element section) preserved" {
     // it's in the table.
     try module.table_func_indices.append(allocator, 5);
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -6531,7 +6531,7 @@ test "eliminateDeadCode — transitive callees preserved (A calls B calls C → 
     // main_fn (3) → helper_fn (4) → js_helper (import 2)
     // All three should be live. js_helper is an import that's called by
     // helper_fn which is called by exported main_fn.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // js_helper should still be in imports.
@@ -6553,7 +6553,7 @@ test "eliminateDeadCode — init functions preserved" {
     // But mark dead_fn (sym 5) as an init function — it should stay live.
     try module.linking.init_funcs.append(allocator, .{ .priority = 0, .symbol_index = 5 });
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -6598,7 +6598,7 @@ test "eliminateDeadCode — call_indirect conservatively keeps matching-signatur
     // Remove the direct call to helper_fn (reloc at offset 10) so the only
     // reason dead_fn stays live is the indirect call.
     // Actually, let's keep things simple: just verify dead_fn is live.
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     try module.materializeFuncBodies();
@@ -6618,7 +6618,7 @@ test "eliminateDeadCode — function indices unchanged after elimination" {
     // Record original function count.
     const orig_defined_count = module.function_offsets.items.len;
 
-    var called_fns = [_]bool{false} ** 6;
+    var called_fns = @as([6]bool, @splat(false));
     try module.eliminateDeadCode(&called_fns);
 
     // The number of function_offsets entries should be unchanged

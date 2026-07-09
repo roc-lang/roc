@@ -25,8 +25,8 @@ pub fn PackedDataSpan(comptime start_bits: u6, comptime length_bits: u6) type {
     }
 
     return packed struct(u32) {
-        start: std.meta.Int(.unsigned, start_bits),
-        len: std.meta.Int(.unsigned, length_bits),
+        start: @Int(.unsigned, start_bits),
+        len: @Int(.unsigned, length_bits),
 
         const Self = @This();
 

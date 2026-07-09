@@ -1706,8 +1706,9 @@ pub const MonoLlvmCodeGen = struct {
         if (self.target.os.tag != .macos) {
             return builder.strtabString(name) catch return error.OutOfMemory;
         }
-        var exact_name_sfa = std.heap.stackFallback(128, self.allocator);
-        const exact_name_alloc = exact_name_sfa.get();
+        var exact_name_sfa_buffer: [128]u8 = undefined;
+        var exact_name_sfa = std.heap.BufferFirstAllocator.init(&exact_name_sfa_buffer, self.allocator);
+        const exact_name_alloc = exact_name_sfa.allocator();
         const exact_name = try std.fmt.allocPrint(exact_name_alloc, "\x01_{s}", .{name});
         defer exact_name_alloc.free(exact_name);
         return builder.strtabString(exact_name) catch return error.OutOfMemory;
@@ -1891,8 +1892,9 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     fn compileStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
-        var sfa = std.heap.stackFallback(64 * @sizeOf(StmtWork), self.allocator);
-        const wa = sfa.get();
+        var sfa_buffer: [64 * @sizeOf(StmtWork)]u8 = undefined;
+        var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+        const wa = sfa.allocator();
         var work = std.ArrayList(StmtWork).empty;
         defer work.deinit(wa);
         try work.append(wa, .{ .node = stmt_id });
@@ -3856,7 +3858,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn strMatchSetDistinctFirstByteCount(self: *MonoLlvmCodeGen, arms: anytype, start: usize, end: usize) usize {
-        var seen = [_]bool{false} ** 256;
+        var seen = @as([256]bool, @splat(false));
         var count: usize = 0;
         for (start..end) |i| {
             const arm = GuardedList.at(arms, i);
@@ -3910,7 +3912,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const usize_ty = self.ptrSizedIntType();
 
-        var bucket_blocks = [_]?LlvmBuilder.Function.Block.Index{null} ** 256;
+        var bucket_blocks = @as([256]?LlvmBuilder.Function.Block.Index, @splat(null));
         var bucket_bytes = std.ArrayList(u8).empty;
         defer bucket_bytes.deinit(self.allocator);
 
@@ -6575,8 +6577,9 @@ pub const MonoLlvmCodeGen = struct {
     /// parent reads in its continuation.
     fn emitValueEqual(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
         var result: LlvmBuilder.Value = undefined;
-        var sfa = std.heap.stackFallback(64 * @sizeOf(EqWork), self.allocator);
-        const wa = sfa.get();
+        var sfa_buffer: [64 * @sizeOf(EqWork)]u8 = undefined;
+        var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+        const wa = sfa.allocator();
         var work = std.ArrayList(EqWork).empty;
         defer work.deinit(wa);
         try work.append(wa, .{ .eval = .{ .lhs_ptr = lhs_ptr, .rhs_ptr = rhs_ptr, .layout_idx = layout_idx, .out = &result } });

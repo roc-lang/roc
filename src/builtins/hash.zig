@@ -29,7 +29,7 @@ const primes = [_]u64{
 };
 
 fn read_bytes(comptime bytes: u8, data: []const u8) u64 {
-    const T = std.meta.Int(.unsigned, 8 * bytes);
+    const T = @Int(.unsigned, 8 * bytes);
     return mem.readInt(T, data[0..bytes], .little);
 }
 
@@ -297,7 +297,7 @@ test "test vectors streaming" {
     const pattern = "1234567890";
     const count = 8;
     const result = 0x829e9c148b75970e;
-    try std.testing.expectEqual(Wyhash.hash(6, pattern ** 8), result);
+    try std.testing.expectEqual(Wyhash.hash(6, "12345678901234567890123456789012345678901234567890123456789012345678901234567890"), result);
 
     wh = Wyhash.init(6);
     var i: u32 = 0;

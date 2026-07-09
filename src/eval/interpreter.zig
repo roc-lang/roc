@@ -6495,7 +6495,7 @@ pub const Interpreter = struct {
         // Truncate to same-width as Dst, then bitcast if signedness differs
         const DstBits = @typeInfo(Dst).int.bits;
         std.debug.assert(@typeInfo(Src).int.bits >= DstBits);
-        const SameSigned = std.meta.Int(@typeInfo(Src).int.signedness, DstBits);
+        const SameSigned = @Int(@typeInfo(Src).int.signedness, DstBits);
         const truncated: SameSigned = @truncate(sv);
         val.write(Dst, @bitCast(truncated));
         return val;
@@ -6609,7 +6609,7 @@ pub const Interpreter = struct {
         const int_info = @typeInfo(Dst).int;
 
         if (int_info.bits <= 64) {
-            const U = std.meta.Int(.unsigned, int_info.bits);
+            const U = @Int(.unsigned, int_info.bits);
             const modulus: Src = @floatFromInt(@as(u128, 1) << int_info.bits);
             var remainder = @mod(truncated, modulus);
             if (remainder < 0) remainder += modulus;
@@ -7159,7 +7159,7 @@ pub const Interpreter = struct {
             .shl => av << shift,
             .shr => av >> shift,
             .shr_zf => blk: {
-                const U = std.meta.Int(.unsigned, max_bits);
+                const U = @Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
         };

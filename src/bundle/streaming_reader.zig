@@ -6,10 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const c = @cImport({
-    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
-    @cInclude("zstd.h");
-});
+const c = @import("zstd_c");
 
 /// A reader that decompresses zstd data and verifies hash incrementally
 pub const DecompressingHashReader = struct {

@@ -167,10 +167,10 @@ pub const SpecializationCacheHeader = extern struct {
     /// Hash of section order and every fixed record layout read by the mapper.
     /// This rejects cache files written by a compiler with incompatible Zig
     /// layout decisions even when `FORMAT_VERSION` is unchanged.
-    compiler_layout_hash: [32]u8 = [_]u8{0} ** 32,
+    compiler_layout_hash: [32]u8 = @as([32]u8, @splat(0)),
     /// Hash of the checked modules, root requests, Monotype configuration, and
     /// stored specialization identities consumed by this cache file.
-    validity_id: [32]u8 = [_]u8{0} ** 32,
+    validity_id: [32]u8 = @as([32]u8, @splat(0)),
 
     /// Relocatable checked-name store bytes.
     names: FileSlice = .{},
@@ -863,7 +863,7 @@ pub fn buildImage(
     validity_id: [32]u8,
     payloads: []const SectionPayload,
 ) (std.mem.Allocator.Error || CacheError)![]u8 {
-    var seen = [_]bool{false} ** SECTION_COUNT;
+    var seen = @as([SECTION_COUNT]bool, @splat(false));
     for (payloads) |payload| {
         const index = sectionIndex(payload.id);
         if (seen[index]) return error.InvalidSpecializationCacheFile;
@@ -1054,11 +1054,11 @@ pub fn computeCompilerLayoutHash() [32]u8 {
 }
 
 fn writeMappedSectionLayouts(hasher: *std.crypto.hash.sha2.Sha256) void {
-    inline for (@typeInfo(MappedSections).@"struct".fields) |field| {
-        const Pointer = @typeInfo(field.type).pointer;
+    inline for (@typeInfo(MappedSections).@"struct".field_names, @typeInfo(MappedSections).@"struct".field_types) |field_name, FieldType| {
+        const Pointer = @typeInfo(FieldType).pointer;
         if (Pointer.size != .slice) @compileError("mapped cache section field is not a slice");
 
-        writeHashBytes(hasher, field.name);
+        writeHashBytes(hasher, field_name);
         if (Pointer.child == u8) {
             writeHashBytes(hasher, "raw-bytes");
         } else {
@@ -1545,7 +1545,7 @@ test "monotype specialization cache rejects wrong version and hashes" {
     try std.testing.expectError(error.UnsupportedSpecializationCacheVersion, validateHeader(header, bytes.len, zeroHash(), zeroHash()));
 
     header.format_version = FORMAT_VERSION;
-    var hash = [_]u8{0} ** 32;
+    var hash = @as([32]u8, @splat(0));
     hash[0] = 1;
     try std.testing.expectError(error.InvalidSpecializationCacheFile, validateHeader(header, bytes.len, hash, zeroHash()));
     try std.testing.expectError(error.InvalidSpecializationCacheFile, validateHeader(header, bytes.len, zeroHash(), hash));
@@ -1593,9 +1593,9 @@ test "monotype specialization cache writes deterministic aligned section image" 
     const fn_bytes = std.mem.sliceAsBytes(fn_values[0..]);
     const expr_payload = "exprs";
 
-    var layout_hash = [_]u8{0} ** 32;
+    var layout_hash = @as([32]u8, @splat(0));
     layout_hash[0] = 7;
-    var validity_id = [_]u8{0} ** 32;
+    var validity_id = @as([32]u8, @splat(0));
     validity_id[0] = 9;
 
     const image = try buildImage(allocator, layout_hash, validity_id, &.{
@@ -1882,7 +1882,7 @@ test "monotype specialization cache round trips empty program functions imports 
     defer name_store.deinit();
     const field_a = try name_store.internRecordFieldLabel("a");
     const tag_ok = try name_store.internTagLabel("Ok");
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x77} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0x77)));
     const type_name = try name_store.internTypeName("Boxed");
 
     const first_type_index: u32 = std.math.minInt(u32);
@@ -2012,7 +2012,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
 
     const field_name = try program.names.internRecordFieldLabel("field");
     const tag_name = try program.names.internTagLabel("Ok");
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0x77} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&@as([32]u8, @splat(0x77)));
     const type_name = try program.names.internTypeName("Boxed");
 
     const unit_ty = try program.types.add(.zst);
@@ -2391,7 +2391,7 @@ test "monotype specialization cache validity includes module ids roots and confi
     });
     try std.testing.expect(!std.mem.eql(u8, empty[0..], debug_names[0..]));
 
-    var builtin_data_id = [_]u8{0} ** 32;
+    var builtin_data_id = @as([32]u8, @splat(0));
     builtin_data_id[0] = 1;
     const builtin_data = computeValidityId(.{
         .root_module = root_module,
@@ -2507,11 +2507,12 @@ fn expectEquivalentProgramViews(
 }
 
 fn assertMappedSectionPayloadsContainNoRuntimeOwnedFields() void {
-    const fields = @typeInfo(MappedSections).@"struct".fields;
-    inline for (fields) |field| {
-        const pointer = @typeInfo(field.type).pointer;
+    const field_names = @typeInfo(MappedSections).@"struct".field_names;
+    const field_types = @typeInfo(MappedSections).@"struct".field_types;
+    inline for (field_names, field_types) |field_name, FieldType| {
+        const pointer = @typeInfo(FieldType).pointer;
         if (pointer.child == u8) continue;
-        assertNoRuntimeOwnedFields(pointer.child, "MappedSections." ++ field.name);
+        assertNoRuntimeOwnedFields(pointer.child, "MappedSections." ++ field_name);
     }
 }
 
@@ -2525,14 +2526,14 @@ fn assertNoRuntimeOwnedFields(comptime T: type, comptime path: []const u8) void 
         .array => |array| assertNoRuntimeOwnedFields(array.child, path ++ "[]"),
         .optional => |optional| assertNoRuntimeOwnedFields(optional.child, path ++ "?"),
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                assertNoRuntimeOwnedFields(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                assertNoRuntimeOwnedFields(FieldType, path ++ "." ++ field_name);
             }
         },
         .@"union" => |info| {
             if (info.tag_type) |tag_type| assertFixedTagInteger(tag_type, path);
-            inline for (info.fields) |field| {
-                assertNoRuntimeOwnedFields(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                assertNoRuntimeOwnedFields(FieldType, path ++ "." ++ field_name);
             }
         },
         .pointer => @compileError(path ++ " contains pointer or slice type " ++ @typeName(T)),
@@ -2544,6 +2545,7 @@ fn assertNoRuntimeOwnedFields(comptime T: type, comptime path: []const u8) void 
         .@"anyframe",
         .vector,
         .type,
+        .spirv,
         => @compileError(path ++ " contains non-durable type " ++ @typeName(T)),
     }
 }
@@ -2576,5 +2578,5 @@ fn testProcedureTemplate(proc_base: u32, template: u32) checked_names.ProcTempla
 }
 
 fn zeroHash() [32]u8 {
-    return [_]u8{0} ** 32;
+    return @as([32]u8, @splat(0));
 }

@@ -15,19 +15,19 @@ const LIR = @import("lir_core").LIR;
 const names = check.CheckedNames;
 
 fn unionFieldCount(comptime T: type) comptime_int {
-    return @typeInfo(T).@"union".fields.len;
+    return @typeInfo(T).@"union".field_names.len;
 }
 
 fn structFieldType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
+    inline for (@typeInfo(T).@"struct".field_names, @typeInfo(T).@"struct".field_types) |field_name, FieldType| {
+        if (std.mem.eql(u8, field_name, name)) return FieldType;
     }
     @compileError("missing struct field: " ++ name);
 }
 
 fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"union".fields) |field| {
-        if (std.mem.eql(u8, field.name, name)) return field.type;
+    inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, FieldType| {
+        if (std.mem.eql(u8, field_name, name)) return FieldType;
     }
     @compileError("missing union field: " ++ name);
 }
@@ -268,13 +268,13 @@ fn assertNoPostCheckType(comptime T: type, comptime path: []const u8) void {
         .optional => |optional| assertNoPostCheckType(optional.child, path ++ "?"),
         .pointer => |pointer| assertNoPostCheckType(pointer.child, path ++ ".*"),
         .@"struct" => |info| {
-            inline for (info.fields) |field| {
-                assertNoPostCheckType(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                assertNoPostCheckType(FieldType, path ++ "." ++ field_name);
             }
         },
         .@"union" => |info| {
-            inline for (info.fields) |field| {
-                assertNoPostCheckType(field.type, path ++ "." ++ field.name);
+            inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                assertNoPostCheckType(FieldType, path ++ "." ++ field_name);
             }
         },
         else => {},

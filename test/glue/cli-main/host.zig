@@ -21,14 +21,14 @@ const Allocation = struct {
 };
 
 const ContractEnv = struct {
-    allocations: [max_allocations]Allocation = [_]Allocation{.{}} ** max_allocations,
+    allocations: [max_allocations]Allocation = @as([max_allocations]Allocation, @splat(.{})),
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     live_alloc_count: usize = 0,
     allocator_error_count: usize = 0,
     failure_count: usize = 0,
     log_count: usize = 0,
-    report: [1024]u8 = [_]u8{0} ** 1024,
+    report: [1024]u8 = @as([1024]u8, @splat(0)),
     report_len: usize = 0,
 
     fn fail(self: *ContractEnv, comptime fmt: []const u8, args: anytype) void {

@@ -1086,7 +1086,7 @@ pub fn recordFileDependency(self: *Self, relative_path: []const u8) Allocator.Er
         .relative_path = path_idx,
         .state = .pending,
         ._padding = .{ 0, 0, 0 },
-        .content_hash = [_]u8{0} ** 32,
+        .content_hash = @as([32]u8, @splat(0)),
     });
 }
 
@@ -1094,14 +1094,14 @@ pub fn recordFileDependency(self: *Self, relative_path: []const u8) Allocator.Er
 pub fn setFileDependencyMissing(self: *Self, idx: FileDependency.SafeList.Idx) void {
     const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
     dep.state = .missing;
-    dep.content_hash = [_]u8{0} ** 32;
+    dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Mark a previously recorded file dependency as unreadable.
 pub fn setFileDependencyUnreadable(self: *Self, idx: FileDependency.SafeList.Idx) void {
     const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
     dep.state = .unreadable;
-    dep.content_hash = [_]u8{0} ** 32;
+    dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Set the content hash for a previously recorded file dependency.

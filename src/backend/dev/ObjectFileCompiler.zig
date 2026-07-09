@@ -588,8 +588,8 @@ fn crossCompileDispatch(
     enable_default_platform_runtime: bool,
 ) CompilationError!CompilationResult {
     const enum_info = @typeInfo(RocTarget).@"enum";
-    inline for (enum_info.fields) |field| {
-        const comptime_target: RocTarget = @enumFromInt(field.value);
+    inline for (enum_info.field_values) |field_value| {
+        const comptime_target: RocTarget = @enumFromInt(field_value);
         if (target == comptime_target) {
             const arch = comptime comptime_target.toCpuArch();
             if (comptime (arch == .x86_64 or arch == .aarch64 or arch == .aarch64_be)) {

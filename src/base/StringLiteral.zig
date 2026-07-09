@@ -9,6 +9,14 @@ const testing = std.testing;
 const CompactWriter = collections.CompactWriter;
 const InternedBytes = @import("InternedBytes.zig");
 
+fn repeatBytes(comptime bytes: []const u8, comptime count: usize) [bytes.len * count]u8 {
+    var result: [bytes.len * count]u8 = undefined;
+    for (0..count) |index| {
+        @memcpy(result[index * bytes.len ..][0..bytes.len], bytes);
+    }
+    return result;
+}
+
 /// The index of this string in a `Store`.
 pub const Idx = enum(u32) {
     none = 0,
@@ -573,6 +581,7 @@ test "Store comprehensive CompactWriter roundtrip" {
     defer original.deinit(gpa);
     var builder = BuilderState{};
     defer builder.deinit(gpa);
+    const very_long_string = repeatBytes("very long string ", 50);
 
     // Test various string types
     const test_strings = [_][]const u8{
@@ -585,7 +594,7 @@ test "Store comprehensive CompactWriter roundtrip" {
         "line1\nline2\r\nline3", // line breaks
         "tab\tseparated\tvalues", // tabs
         "quotes: 'single' and \"double\"", // quotes
-        "very long string " ** 50, // long string
+        &very_long_string, // long string
     };
 
     var indices = std.ArrayList(Idx).empty;
@@ -753,8 +762,8 @@ test "Store edge case indices CompactWriter roundtrip" {
     const idx3 = try builder.insert(&original, gpa, "");
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "".len), @intFromEnum(idx3));
 
-    const long_str = "x" ** 1000;
-    const idx4 = try builder.insert(&original, gpa, long_str);
+    const long_str = repeatBytes("x", 1000);
+    const idx4 = try builder.insert(&original, gpa, &long_str);
     try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, long_str.len), @intFromEnum(idx4));
 
     // Create a temp file
@@ -793,5 +802,5 @@ test "Store edge case indices CompactWriter roundtrip" {
     try std.testing.expectEqualStrings("first", deserialized.get(idx1));
     try std.testing.expectEqualStrings("second", deserialized.get(idx2));
     try std.testing.expectEqualStrings("", deserialized.get(idx3));
-    try std.testing.expectEqualStrings(long_str, deserialized.get(idx4));
+    try std.testing.expectEqualStrings(&long_str, deserialized.get(idx4));
 }

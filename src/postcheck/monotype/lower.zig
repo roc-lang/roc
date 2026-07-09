@@ -7400,7 +7400,7 @@ const BodyContext = struct {
                 .kind = 0,
                 .binder = @intFromEnum(entry.key_ptr.*),
                 .local = @intFromEnum(entry.value_ptr.*),
-                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
+                .type_digest = .{ .bytes = @as([32]u8, @splat(0)) },
             };
             index += 1;
         }
@@ -24336,7 +24336,7 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     var program = Ast.Program.init(std.testing.allocator);
     defer program.deinit();
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try program.names.internTypeName("Alias");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
@@ -25579,7 +25579,7 @@ test "body draft sealed output maps back from specialization cache without body 
         digest.* = program.types.typeDigest(&program.names, @enumFromInt(@as(u32, @intCast(index))));
     }
 
-    const zero_hash = [_]u8{0} ** 32;
+    const zero_hash = @as([32]u8, @splat(0));
     const image = try serialize.buildImage(gpa, zero_hash, zero_hash, &.{
         .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(fresh.types.types) },
         .{ .id = .type_args, .bytes = std.mem.sliceAsBytes(fresh.types.spans) },

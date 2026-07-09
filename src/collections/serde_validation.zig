@@ -63,19 +63,19 @@ pub fn assertBidirectionalFieldSet(
             }
         }
 
-        for (@typeInfo(Serialized).@"struct".fields) |field| {
-            if (@hasField(Owner, field.name)) continue;
-            if (containsName(serialized_only_fields, field.name)) continue;
-            if (renamedOwnerField(renames, field.name) != null) continue;
-            @compileError("field-set audit: serialized field '" ++ field.name ++
+        for (@typeInfo(Serialized).@"struct".field_names) |field_name| {
+            if (@hasField(Owner, field_name)) continue;
+            if (containsName(serialized_only_fields, field_name)) continue;
+            if (renamedOwnerField(renames, field_name) != null) continue;
+            @compileError("field-set audit: serialized field '" ++ field_name ++
                 "' has no owner field in " ++ @typeName(Owner));
         }
 
-        for (@typeInfo(Owner).@"struct".fields) |field| {
-            if (@hasField(Serialized, field.name)) continue;
-            if (containsName(owner_only_fields, field.name)) continue;
-            if (renamedSerializedField(renames, field.name) != null) continue;
-            @compileError("field-set audit: owner field '" ++ field.name ++
+        for (@typeInfo(Owner).@"struct".field_names) |field_name| {
+            if (@hasField(Serialized, field_name)) continue;
+            if (containsName(owner_only_fields, field_name)) continue;
+            if (renamedSerializedField(renames, field_name) != null) continue;
+            @compileError("field-set audit: owner field '" ++ field_name ++
                 "' is neither serialized nor explicitly owner-only in " ++ @typeName(Owner));
         }
     }
@@ -85,14 +85,14 @@ fn comptimeHasRelocationMarker(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .@"struct" => |s| blk: {
             if (@hasDecl(T, "serialized_relocatable_pointers")) break :blk true;
-            inline for (s.fields) |field| {
-                if (comptimeHasRelocationMarker(field.type)) break :blk true;
+            inline for (s.field_types) |FieldType| {
+                if (comptimeHasRelocationMarker(FieldType)) break :blk true;
             }
             break :blk false;
         },
         .@"union" => |u| blk: {
-            inline for (u.fields) |field| {
-                if (comptimeHasRelocationMarker(field.type)) break :blk true;
+            inline for (u.field_types) |FieldType| {
+                if (comptimeHasRelocationMarker(FieldType)) break :blk true;
             }
             break :blk false;
         },
@@ -113,10 +113,10 @@ pub fn assertSerializedRelocatable(comptime T: type) void {
         switch (@typeInfo(T)) {
             .@"struct" => |s| {
                 if (@hasDecl(T, "serialized_relocatable_pointers")) return;
-                for (s.fields) |field| assertSerializedRelocatable(field.type);
+                for (s.field_types) |FieldType| assertSerializedRelocatable(FieldType);
             },
             .@"union" => |u| {
-                for (u.fields) |field| assertSerializedRelocatable(field.type);
+                for (u.field_types) |FieldType| assertSerializedRelocatable(FieldType);
             },
             .array => |a| assertSerializedRelocatable(a.child),
             .optional => |o| assertSerializedRelocatable(o.child),
@@ -144,8 +144,8 @@ pub fn validateSerializedRelocations(comptime T: type, self: *const T, backing_l
                 }
                 return;
             }
-            inline for (s.fields) |field| {
-                try validateSerializedRelocations(field.type, &@field(self, field.name), backing_len);
+            inline for (s.field_names, s.field_types) |field_name, FieldType| {
+                try validateSerializedRelocations(FieldType, &@field(self, field_name), backing_len);
             }
         },
         .array => |a| {

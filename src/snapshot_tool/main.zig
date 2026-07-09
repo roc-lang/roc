@@ -3940,14 +3940,15 @@ fn processDevObjectSnapshot(
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
-    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+    const roc_target_names = @typeInfo(RocTarget).@"enum".field_names;
+    const roc_target_values = @typeInfo(RocTarget).@"enum".field_values;
 
-    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var hash_results: [roc_target_names.len]TargetHashResult = undefined;
     var object_compiler = backend.ObjectFileCompiler.init(allocator);
 
-    inline for (roc_target_fields, 0..) |field, i| {
-        const target: RocTarget = @enumFromInt(field.value);
-        hash_results[i].target_name = field.name;
+    inline for (roc_target_names, roc_target_values, 0..) |field_name, field_value, i| {
+        const target: RocTarget = @enumFromInt(field_value);
+        hash_results[i].target_name = field_name;
 
         target_snapshot: {
             const arch = target.toCpuArch();
@@ -3999,7 +4000,7 @@ fn processDevObjectSnapshot(
                 &lowered,
                 target,
             ) catch |err| {
-                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field_name, err });
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;

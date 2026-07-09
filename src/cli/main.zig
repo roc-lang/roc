@@ -721,8 +721,8 @@ fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator
         }
     } else {
         // On POSIX systems, use the link system call
-        const source_c = try ctx.arena.dupeZ(u8, source);
-        const dest_c = try ctx.arena.dupeZ(u8, dest);
+        const source_c = try ctx.arena.dupeSentinel(u8, source, 0);
+        const dest_c = try ctx.arena.dupeSentinel(u8, dest, 0);
 
         const result = c.link(source_c, dest_c);
         if (result != 0) {
@@ -2062,7 +2062,7 @@ fn shimHostExeCacheName(
 }
 
 fn testDigest(byte: u8) [32]u8 {
-    return [_]u8{byte} ** 32;
+    return @as([32]u8, @splat(byte));
 }
 
 fn testCacheDigest(checked_host_identity: [32]u8, link_inputs_identity: [32]u8) [32]u8 {
@@ -5983,7 +5983,7 @@ fn getRocCacheDir(allocator: std.mem.Allocator) (Allocator.Error || error{NoCach
 /// Cross-platform helper to get environment variable.
 /// Returns null if the variable is not set. Caller must free the returned slice.
 fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error!?[]const u8 {
-    const key_z = try allocator.dupeZ(u8, key);
+    const key_z = try allocator.dupeSentinel(u8, key, 0);
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return null;
     const len = std.mem.len(value);

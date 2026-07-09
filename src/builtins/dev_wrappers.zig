@@ -464,7 +464,7 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
     const small_string_size = @sizeOf(RocStr);
 
     if (result_len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        var buf: [small_string_size]u8 = @splat(0);
         buf[0] = '"';
         var pos: usize = 1;
         for (slice) |ch| {
@@ -477,7 +477,7 @@ pub fn roc_builtins_str_escape_and_quote(out: *RocStr, str_bytes: ?[*]u8, str_le
         }
         buf[pos] = '"';
         buf[small_string_size - 1] = @intCast(result_len | 0x80);
-        out.* = @bitCast(buf);
+        out.* = std.mem.bytesToValue(RocStr, &buf);
     } else {
         const heap_ptr = allocateWithRefcountC(result_len, 1, false, roc_ops);
         heap_ptr[0] = '"';
@@ -1268,10 +1268,10 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
     const small_string_size = @sizeOf(RocStr);
 
     if (slice.len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        var buf: [small_string_size]u8 = @splat(0);
         @memcpy(buf[0..slice.len], slice);
         buf[small_string_size - 1] = @intCast(slice.len | 0x80);
-        out.* = @bitCast(buf);
+        out.* = std.mem.bytesToValue(RocStr, &buf);
     } else {
         const heap_ptr = allocateWithRefcountC(slice.len, 1, false, roc_ops);
         @memcpy(heap_ptr[0..slice.len], slice);
@@ -1492,8 +1492,8 @@ pub fn roc_builtins_dec_mul(out_low: *u64, out_high: *u64, a_low: u64, a_high: u
     const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
     const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
     const result = dec.mulOrPanicC(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, roc_ops);
-    out_low.* = @truncate(@as(u128, @bitCast(result)));
-    out_high.* = i128h.hi64(@as(u128, @bitCast(result)));
+    out_low.* = @truncate(@as(u128, @bitCast(result.num)));
+    out_high.* = i128h.hi64(@as(u128, @bitCast(result.num)));
 }
 
 /// Dec multiply saturated (decomposed)

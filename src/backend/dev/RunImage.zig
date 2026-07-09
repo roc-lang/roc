@@ -87,7 +87,7 @@ pub const RelocationRecord = extern struct {
     code_offset: u64,
     symbol: StringRef,
     kind: u8,
-    _padding: [7]u8 = [_]u8{0} ** 7,
+    _padding: [7]u8 = @as([7]u8, @splat(0)),
 
     pub fn relocationKind(self: RelocationRecord) ImageError!RelocationKind {
         return switch (self.kind) {

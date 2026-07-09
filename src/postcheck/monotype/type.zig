@@ -2221,7 +2221,7 @@ test "monotype type interner checks exact equality after digest match" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -2352,7 +2352,7 @@ test "monotype named type digest includes generic arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Box");
 
     var store = Store.init(std.testing.allocator);
@@ -2596,7 +2596,7 @@ test "monotype digest treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
@@ -2630,7 +2630,7 @@ test "monotype type equality treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Pretty");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
 
@@ -2666,7 +2666,7 @@ test "monotype type equality compares exact types across stores" {
     defer loaded.deinit();
 
     const field_name = try name_store.internRecordFieldLabel("value");
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Alias");
 
     const current_unit = try current.add(.zst);
@@ -2722,7 +2722,7 @@ test "monotype type equality rejects digest-equal aliases without backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -2754,7 +2754,7 @@ test "monotype named type digest includes backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Wrap");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2791,7 +2791,7 @@ test "monotype specialization digest includes builtin evidence backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("FieldNames");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });
@@ -2826,7 +2826,7 @@ test "monotype named type digest includes nested named backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const outer_type_name = try name_store.internTypeName("Outer");
     const inner_type_name = try name_store.internTypeName("Inner");
     const outer_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
@@ -2875,7 +2875,7 @@ test "monotype named type digest includes declared field order" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Pair");
     const field_a = try name_store.internRecordFieldLabel("a");
     const field_b = try name_store.internRecordFieldLabel("b");
@@ -2924,7 +2924,7 @@ test "monotype named type digest includes padding backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&@as([32]u8, @splat(0xAB)));
     const type_name = try name_store.internTypeName("Padded");
     const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
     const i64_ty = try store.add(.{ .primitive = .i64 });

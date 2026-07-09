@@ -1410,7 +1410,7 @@ pub fn toIntWrap(comptime T: type, arg: RocDec) T {
     // Truncate to the target type (wrapping)
     // First cast the i128 to u128, then truncate to the target size, then cast back to T if needed
     const as_u128: u128 = @bitCast(whole_part);
-    const truncated = @as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(as_u128));
+    const truncated = @as(@Int(.unsigned, @bitSizeOf(T)), @truncate(as_u128));
     return @bitCast(truncated);
 }
 

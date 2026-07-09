@@ -2,7 +2,17 @@
 //! Taken from the anyline library: https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 
-const windows = @cImport(@cInclude("windows.h"));
+const windows = std.os.windows;
+
+extern "kernel32" fn GetConsoleMode(
+    hConsoleHandle: windows.HANDLE,
+    lpMode: *windows.DWORD,
+) callconv(.winapi) c_int;
+
+extern "kernel32" fn SetConsoleMode(
+    hConsoleHandle: windows.HANDLE,
+    dwMode: windows.DWORD,
+) callconv(.winapi) c_int;
 
 output_mode: windows.DWORD,
 input_mode: windows.DWORD,
@@ -19,10 +29,10 @@ pub fn init() Error!Windows {
 
     var output_mode: windows.DWORD = 0;
     var input_mode: windows.DWORD = 0;
-    if (0 == windows.GetConsoleMode(h_out, &output_mode)) {
+    if (0 == GetConsoleMode(h_out, &output_mode)) {
         return error.GetConsoleModeFailure;
     }
-    if (0 == windows.GetConsoleMode(h_in, &input_mode)) {
+    if (0 == GetConsoleMode(h_in, &input_mode)) {
         return error.GetConsoleModeFailure;
     }
 
@@ -39,7 +49,7 @@ pub fn init() Error!Windows {
     requested_out_mode.ENABLE_VIRTUAL_TERMINAL_PROCESSING = true;
     requested_out_mode.DISABLE_NEWLINE_AUTO_RETURN = true;
 
-    if (0 == windows.SetConsoleMode(h_out, @bitCast(requested_out_mode))) {
+    if (0 == SetConsoleMode(h_out, @bitCast(requested_out_mode))) {
         return error.SetConsoleModeFailure;
     }
 
@@ -65,7 +75,7 @@ pub fn init() Error!Windows {
     requested_in_mode.ENABLE_QUICK_EDIT_MODE = false;
     requested_in_mode.ENABLE_VIRTUAL_TERMINAL_INPUT = true;
 
-    if (0 == windows.SetConsoleMode(h_in, @bitCast(requested_in_mode))) {
+    if (0 == SetConsoleMode(h_in, @bitCast(requested_in_mode))) {
         return error.SetConsoleModeFailure;
     }
 
@@ -80,6 +90,6 @@ pub fn deinit(state: Windows) void {
     const h_out = std.Io.File.stdout().handle;
     const h_in = std.Io.File.stdin().handle;
 
-    _ = windows.SetConsoleMode(h_out, state.output_mode);
-    _ = windows.SetConsoleMode(h_in, state.input_mode);
+    _ = SetConsoleMode(h_out, state.output_mode);
+    _ = SetConsoleMode(h_in, state.input_mode);
 }

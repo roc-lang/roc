@@ -544,7 +544,7 @@ test "RelocationSection.applyRelocsU32 — patches function_index_leb at correct
     reloc.applyRelocsU32(&buf, 0, 42);
 
     // Verify the 5 bytes at offset 2 encode 42 in padded LEB128
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     WasmModule.overwritePaddedU32(&expected, 0, 42);
     try testing.expectEqualSlices(u8, &expected, buf[2..7]);
 
@@ -555,7 +555,7 @@ test "RelocationSection.applyRelocsU32 — patches function_index_leb at correct
 }
 
 test "RelocationSection.applyRelocsU32 — patches multiple sites for same symbol" {
-    var buf = [_]u8{0} ** 15;
+    var buf = @as([15]u8, @splat(0));
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
     defer entries.deinit(testing.allocator);
@@ -580,14 +580,14 @@ test "RelocationSection.applyRelocsU32 — patches multiple sites for same symbo
     reloc.applyRelocsU32(&buf, 3, 99);
 
     // Both sites should be patched
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     WasmModule.overwritePaddedU32(&expected, 0, 99);
     try testing.expectEqualSlices(u8, &expected, buf[0..5]);
     try testing.expectEqualSlices(u8, &expected, buf[10..15]);
 }
 
 test "RelocationSection.applyRelocsU32 — ignores entries for different symbols" {
-    var buf = [_]u8{0} ** 10;
+    var buf = @as([10]u8, @splat(0));
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
     defer entries.deinit(testing.allocator);
@@ -611,7 +611,7 @@ test "RelocationSection.applyRelocsU32 — ignores entries for different symbols
     // Only patch symbol 1
     reloc.applyRelocsU32(&buf, 1, 77);
 
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     WasmModule.overwritePaddedU32(&expected, 0, 77);
     try testing.expectEqualSlices(u8, &expected, buf[0..5]);
 
@@ -620,7 +620,7 @@ test "RelocationSection.applyRelocsU32 — ignores entries for different symbols
 }
 
 test "RelocationSection.applyRelocsU32 — memory_addr_leb adds addend correctly" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
     defer entries.deinit(testing.allocator);
@@ -640,13 +640,13 @@ test "RelocationSection.applyRelocsU32 — memory_addr_leb adds addend correctly
     // value=100, addend=16, patched address should be 116
     reloc.applyRelocsU32(&buf, 0, 100);
 
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     WasmModule.overwritePaddedU32(&expected, 0, 116);
     try testing.expectEqualSlices(u8, &expected, &buf);
 }
 
 test "RelocationSection.applyRelocsU32 — memory_addr_sleb handles negative addend" {
-    var buf = [_]u8{0} ** 5;
+    var buf = @as([5]u8, @splat(0));
 
     var entries: std.ArrayList(RelocationEntry) = .empty;
     defer entries.deinit(testing.allocator);
@@ -666,7 +666,7 @@ test "RelocationSection.applyRelocsU32 — memory_addr_sleb handles negative add
     // value=100, addend=-4, patched address should be 96
     reloc.applyRelocsU32(&buf, 0, 100);
 
-    var expected = [_]u8{0} ** 5;
+    var expected = @as([5]u8, @splat(0));
     WasmModule.overwritePaddedI32(&expected, 0, 96);
     try testing.expectEqualSlices(u8, &expected, &buf);
 }

@@ -437,7 +437,7 @@ fn testDescriptor(base_ptr: [*]align(1) u8, offset: usize) *ImageDescriptor {
 }
 
 test "hot reload control publishes and acknowledges generations" {
-    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = @splat(0);
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -508,7 +508,7 @@ test "hot reload control block fits in shared memory reserved header bytes" {
 }
 
 test "hot reload image descriptors can be retained and released" {
-    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 4096;
+    var bytes: [4096]u8 align(@alignOf(ImageDescriptor)) = @splat(0);
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 
@@ -527,7 +527,7 @@ test "hot reload image descriptors can be retained and released" {
 }
 
 test "hot reload image retain rejects descriptors that stopped being current" {
-    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = [_]u8{0} ** 8192;
+    var bytes: [8192]u8 align(@alignOf(ImageDescriptor)) = @splat(0);
     const base: [*]align(1) u8 = &bytes;
     var control = std.mem.zeroes(Control);
 

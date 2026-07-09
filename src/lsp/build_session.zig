@@ -54,7 +54,7 @@ pub const BuildSession = struct {
         defer allocator.free(path);
 
         const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std_io, path, allocator) catch
-            try allocator.dupeZ(u8, path);
+            try allocator.dupeSentinel(u8, path, 0);
         errdefer allocator.free(absolute_path);
 
         // Set up file override if override text provided.

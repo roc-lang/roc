@@ -262,7 +262,7 @@ fn FloatSpec(comptime F: type) type {
         /// the smallest subnormal's rounding bits are integer bits, with
         /// margin so the ULP cutoff below stays positive.
         const fixed_point_shift = -(exponent_min - (precision - 1)) + 8;
-        const Mantissa = std.meta.Int(.unsigned, precision + 1);
+        const Mantissa = @Int(.unsigned, precision + 1);
     };
 }
 
@@ -498,7 +498,7 @@ fn limbsExtractTop(limbs: []const std.math.big.Limb, bit_length: usize, count: u
 /// bits are always set. Allocates only when the fractional digit magnitude
 /// exceeds u128 (adversarial literals).
 pub fn computeFitSet(allocator: Allocator, exact: Exact) Allocator.Error!FitSet {
-    var set = FitSet.initEmpty();
+    var set = FitSet.empty;
     set.insert(.f32);
     set.insert(.f64);
 
@@ -700,7 +700,7 @@ fn expectFloatBitsMatchParseFloat(comptime F: type, gpa: Allocator, text: []cons
     defer parsed.deinit(gpa);
     const actual = try floatBits(F, gpa, parsed.exact);
     const expected = try std.fmt.parseFloat(F, text);
-    try testing.expectEqual(@as(std.meta.Int(.unsigned, @bitSizeOf(F)), @bitCast(expected)), @as(std.meta.Int(.unsigned, @bitSizeOf(F)), @bitCast(actual)));
+    try testing.expectEqual(@as(@Int(.unsigned, @bitSizeOf(F)), @bitCast(expected)), @as(@Int(.unsigned, @bitSizeOf(F)), @bitCast(actual)));
 }
 
 test "floatBits matches correctly-rounded parseFloat on curated cases" {

@@ -34,7 +34,7 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
     if (comptime builtin.mode == .Debug) {
         const ptr_info = @typeInfo(T);
         const alignment = switch (ptr_info) {
-            .pointer => |p| p.alignment orelse 0,
+            .pointer => std.meta.alignment(T),
             else => @compileError("alignedPtrCast target must be a pointer type"),
         };
         const ptr_int = @intFromPtr(ptr);
@@ -1024,8 +1024,8 @@ pub const DebugRefcountTracker = struct {
         site: Site,
     };
 
-    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
-    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    var rc_addrs: [max_tracked]usize = @splat(0);
+    var shadow_rcs: [max_tracked]isize = @splat(0);
     var count: usize = 0;
     var active: bool = false;
 

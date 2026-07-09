@@ -117,8 +117,9 @@ const EmitFrame = union(enum) {
 };
 
 fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
-    var stack_allocator_state = std.heap.stackFallback(8192, self.allocator);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [8192]u8 = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.allocator);
+    const stack_allocator = stack_allocator_state.allocator();
     var frames: std.ArrayList(EmitFrame) = .empty;
     defer frames.deinit(stack_allocator);
 
@@ -803,8 +804,8 @@ comptime {
     // never panic. A future `binopOpToToken` mapping onto a non-operator (or
     // zero-binding-power) token becomes a compile error here instead of a runtime
     // crash during re-emission.
-    for (@typeInfo(Expr.Binop.Op).@"enum".fields) |field| {
-        const op: Expr.Binop.Op = @enumFromInt(field.value);
+    for (@typeInfo(Expr.Binop.Op).@"enum".field_values) |field_value| {
+        const op: Expr.Binop.Op = @enumFromInt(field_value);
         std.debug.assert(parse.Parser.getTokenBP(binopOpToToken(op)) != null);
     }
 }

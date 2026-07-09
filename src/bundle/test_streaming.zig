@@ -7,10 +7,7 @@ const std = @import("std");
 const bundle = @import("bundle.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const streaming_reader = @import("streaming_reader.zig");
-const c = @cImport({
-    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
-    @cInclude("zstd.h");
-});
+const c = @import("zstd_c");
 
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;

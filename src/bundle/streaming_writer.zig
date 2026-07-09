@@ -6,10 +6,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const c = @cImport({
-    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
-    @cInclude("zstd.h");
-});
+const c = @import("zstd_c");
 
 const WriterError = std.Io.Writer.Error;
 const Writer = std.Io.Writer;
