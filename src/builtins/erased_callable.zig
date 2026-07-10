@@ -55,6 +55,27 @@ pub const HotReloadCaptureHeader = extern struct {
     original_on_drop: ?OnDropFn,
 };
 
+/// Metadata appended after a Roc-created callable's ordinary capture bytes.
+/// It is private to compiler-generated values and does not change `Payload`
+/// or the capture pointer exposed by the host ABI.
+pub const CompilerMetadata = extern struct {
+    result_desc: ?*const anyopaque,
+};
+
+pub const compiler_metadata_alignment: u32 = @alignOf(CompilerMetadata);
+
+pub fn compilerMetadataOffset(capture_size: usize) usize {
+    return std.mem.alignForward(usize, capture_size, compiler_metadata_alignment);
+}
+
+pub fn compilerPayloadSize(capture_size: usize) usize {
+    return payloadSize(compilerMetadataOffset(capture_size) + @sizeOf(CompilerMetadata));
+}
+
+pub fn compilerMetadataPtr(capture_ptr: [*]u8, metadata_offset: usize) *CompilerMetadata {
+    return @ptrCast(@alignCast(capture_ptr + metadata_offset));
+}
+
 /// Captures are aligned to this boundary so any legal Roc capture layout can be
 /// copied inline without an extra descriptor or runtime offset field.
 pub const capture_alignment: u32 = 16;

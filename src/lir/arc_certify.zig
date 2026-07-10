@@ -234,7 +234,7 @@ fn computeLocalContainsRefcounted(
                 .assign_call_dict => |assign| if (assign.result_desc != null) {
                     changed = markLocalRc(contains, assign.target) or changed;
                 },
-                .assign_call_erased => |assign| if (assign.result_desc != null) {
+                .assign_call_erased => |assign| if (assign.result_desc != null or assign.out_desc != null) {
                     changed = markLocalRc(contains, assign.target) or changed;
                 },
                 else => {},
@@ -633,6 +633,7 @@ fn writeFailureContext(
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
+                if (a.out_desc) |out_desc| context.append(" out_desc={d}", .{@intFromEnum(out_desc)});
                 context.append(" next={d}", .{@intFromEnum(a.next)});
             },
             .assign_low_level => |a| {
@@ -818,8 +819,8 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_ref => |a| a.target == needle or refOpReadsLocal(a.op, needle),
         .assign_literal => |a| a.target == needle,
         .assign_call => |a| a.target == needle or (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)) or spanHasLocal(store, a.args, needle),
-        .assign_call_erased => |a| a.target == needle or a.closure == needle or (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)) or spanHasLocal(store, a.args, needle),
-        .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle),
+        .assign_call_erased => |a| a.target == needle or a.out_desc == needle or a.closure == needle or (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)) or spanHasLocal(store, a.args, needle),
+        .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)),
         .assign_boxy_desc_ref => |a| a.target == needle or boxyDescRefReadsLocal(a.desc, needle) or
             (a.tag_residual_for != null and boxyDescRefReadsLocal(a.tag_residual_for.?, needle)) or
             spanHasLocal(store, a.captures, needle),
@@ -1828,6 +1829,7 @@ const Certifier = struct {
                 },
                 .assign_call_erased => |assign| {
                     try self.noteProcLocal(assign.target);
+                    if (assign.out_desc) |out_desc| try self.noteProcLocal(out_desc);
                     try self.noteProcLocal(assign.closure);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
@@ -1838,6 +1840,9 @@ const Certifier = struct {
                 .assign_packed_erased_fn => |assign| {
                     try self.noteProcLocal(assign.target);
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    }
                     try stack.append(self.allocator, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| {
@@ -2202,10 +2207,14 @@ const Certifier = struct {
                         if (result_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
                     }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -2837,9 +2846,11 @@ const Certifier = struct {
                     _ = try self.requireLive(&state, assign.closure);
                     if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    if (assign.out_desc) |out_desc| state.bindValue(out_desc, no_value);
                     cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
+                    if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     const capture_value = if (assign.capture) |capture|
                         try self.requireLive(&state, capture)
                     else

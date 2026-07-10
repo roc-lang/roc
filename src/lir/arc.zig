@@ -310,7 +310,11 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
                     }
                 },
                 .assign_call_erased => |assign| {
-                    if (assign.result_desc) |result_desc| {
+                    const assigned_desc: ?LIR.BoxyDescRef = if (assign.out_desc) |out_desc|
+                        .{ .local = out_desc }
+                    else
+                        assign.result_desc;
+                    if (assigned_desc) |result_desc| {
                         changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
                     }
                 },
@@ -426,7 +430,7 @@ fn computeLocalContainsRefcounted(
                 .assign_call_dict => |assign| if (assign.result_desc != null) {
                     changed = markLocalRc(contains, assign.target) or changed;
                 },
-                .assign_call_erased => |assign| if (assign.result_desc != null) {
+                .assign_call_erased => |assign| if (assign.result_desc != null or assign.out_desc != null) {
                     changed = markLocalRc(contains, assign.target) or changed;
                 },
                 else => {},
@@ -1168,6 +1172,11 @@ const Inserter = struct {
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
+                    if (!transfer.transfer_single) {
+                        if (assign.capture) |capture| {
+                            current_start = try self.retainLocalIfRc(capture, current_start);
+                        }
+                    }
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.target };
@@ -1223,6 +1232,9 @@ const Inserter = struct {
                     else
                         false;
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.payload_mode == .move and !transfer_single) {
+                        current_start = try self.retainLocalIfRc(assign.payload, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1239,6 +1251,9 @@ const Inserter = struct {
                 .assign_boxy_reuse_box => |assign| {
                     const transfer_single = try self.singleTransfer(assign.source, assign.next, assign.target, &path.owned, path.options.loop_keep);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (!transfer_single) {
+                        current_start = try self.retainLocalIfRc(assign.source, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1258,6 +1273,9 @@ const Inserter = struct {
                     else
                         false;
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.source_mode == .move and !transfer_single) {
+                        current_start = try self.retainLocalIfRc(assign.source, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1277,6 +1295,9 @@ const Inserter = struct {
                     else
                         false;
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.source_mode == .move and !transfer_single) {
+                        current_start = try self.retainLocalIfRc(assign.source, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1296,6 +1317,9 @@ const Inserter = struct {
                     else
                         false;
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.source_mode == .move and !transfer_single) {
+                        current_start = try self.retainLocalIfRc(assign.source, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1316,6 +1340,10 @@ const Inserter = struct {
                         _ = try self.singleTransfer(assign.rhs, assign.next, assign.target, &path.owned, path.options.loop_keep);
                     }
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.source_mode == .move) {
+                        current_start = try self.retainLocalIfRc(assign.rhs, current_start);
+                        current_start = try self.retainLocalIfRc(assign.lhs, current_start);
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1337,6 +1365,11 @@ const Inserter = struct {
                         }
                     }
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.payload_mode == .move and !transfer_single) {
+                        if (assign.payload) |payload| {
+                            current_start = try self.retainLocalIfRc(payload, current_start);
+                        }
+                    }
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1357,6 +1390,9 @@ const Inserter = struct {
                         false;
                     const retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
+                    if (assign.source_mode == .move and !transfer_single) {
+                        current_start = try self.retainLocalIfRc(assign.source, current_start);
+                    }
                     if (!self.isBindingBorrowed(assign.target)) self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
@@ -1715,21 +1751,18 @@ const Inserter = struct {
                     .closure = assign.closure,
                     .args = assign.args,
                     .result_desc = assign.result_desc,
+                    .out_desc = assign.out_desc,
                     .next = next,
                 } });
             },
             .assign_packed_erased_fn => |assign| {
-                if (assign.capture) |capture| {
-                    if (!frame.transfer_single) {
-                        next = try self.retainLocalIfRc(capture, next);
-                    }
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = assign.target,
                     .proc = assign.proc,
                     .capture = assign.capture,
                     .capture_layout = assign.capture_layout,
                     .on_drop = assign.on_drop,
+                    .result_desc = assign.result_desc,
                     .next = next,
                 } });
             },
@@ -1752,9 +1785,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_box => |assign| {
-                if (assign.payload_mode == .move and !frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.payload, next);
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = assign.target,
                     .payload = assign.payload,
@@ -1766,9 +1796,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_reuse_box => |assign| {
-                if (!frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.source, next);
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
                     .target = assign.target,
                     .source = assign.source,
@@ -1777,9 +1804,7 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_unbox => |assign| {
-                if (assign.source_mode == .move and !frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.source, next);
-                } else if (assign.source_mode != .move and self.localMayNeedBoxyRc(assign.target)) {
+                if (assign.source_mode != .move and self.localMayNeedBoxyRc(assign.target)) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
@@ -1793,9 +1818,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_adapt => |assign| {
-                if (assign.source_mode == .move and !frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.source, next);
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
                     .target = assign.target,
                     .source = assign.source,
@@ -1807,9 +1829,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_inspect => |assign| {
-                if (assign.source_mode == .move and !frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.source, next);
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
                     .target = assign.target,
                     .source = assign.source,
@@ -1819,10 +1838,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_eq => |assign| {
-                if (assign.source_mode == .move and !frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.rhs, next);
-                    next = try self.retainLocalIfRc(assign.lhs, next);
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_eq = .{
                     .target = assign.target,
                     .lhs = assign.lhs,
@@ -1833,11 +1848,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_tag => |assign| {
-                if (assign.payload) |payload| {
-                    if (assign.payload_mode == .move and !frame.transfer_single) {
-                        next = try self.retainLocalIfRc(payload, next);
-                    }
-                }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = assign.target,
                     .target_desc = assign.target_desc,
@@ -1850,9 +1860,6 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_tag_payload => |assign| {
-                if (assign.source_mode == .move and !frame.transfer_single) {
-                    next = try self.retainLocalIfRc(assign.source, next);
-                }
                 if (frame.retain_assign_ref_target) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
@@ -3689,11 +3696,12 @@ const Inserter = struct {
                 .assign_call_erased => |assign| {
                     if (assign.closure == local or self.spanUsesLocal(assign.args, local)) return false;
                     if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
-                    if (assign.target == local) return false;
+                    if (assign.target == local or assign.out_desc == local) return false;
                     cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and assign.capture.? == local) return false;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
                     if (assign.target == local) return false;
                     cursor = assign.next;
                 },
@@ -4996,10 +5004,14 @@ const Inserter = struct {
                         if (result_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
                     }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
+                    if (assign.out_desc) |out_desc| setReadBeforeRebindDef(&graph, node_index, out_desc);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, capture);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    }
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -5326,11 +5338,12 @@ const Inserter = struct {
                 .assign_call_erased => |assign| {
                     if (assign.closure == needle or self.spanUsesLocal(assign.args, needle)) return true;
                     if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (local == needle) return true;
-                    if (assign.target == needle) continue;
+                    if (assign.target == needle or assign.out_desc == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and assign.capture.? == needle) return true;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (local == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -5648,6 +5661,7 @@ const Inserter = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture != null and needles.contains(assign.capture.?)) return true;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_boxy_desc_ref => |assign| {
@@ -6717,12 +6731,12 @@ const ArcTest = struct {
         return error.CyclicPath;
     }
 
-    fn expectReachableDecrefBeforeDescRebind(
+    fn expectReachableDecrefBeforeSet(
         self: *const ArcTest,
         start: LIR.CFStmtId,
         value: LIR.LocalId,
-        desc_target: LIR.LocalId,
-    ) error{ ExpectedDecref, DescRebindBeforeDecref, NonLinearPath, CyclicPath }!void {
+        set_target: LIR.LocalId,
+    ) error{ ExpectedDecref, SetBeforeDecref, NonLinearPath, CyclicPath }!void {
         var cursor = start;
         var remaining = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
@@ -6732,8 +6746,8 @@ const ArcTest = struct {
                     if (rc.value == value) return;
                     cursor = rc.next;
                 },
-                .assign_boxy_desc_ref => |assign| {
-                    if (assign.target == desc_target) return error.DescRebindBeforeDecref;
+                .set_local => |assign| {
+                    if (assign.target == set_target) return error.SetBeforeDecref;
                     cursor = assign.next;
                 },
                 .incref => |rc| cursor = rc.next,
@@ -6745,6 +6759,7 @@ const ArcTest = struct {
                 .assign_call => |assign| cursor = assign.next,
                 .assign_call_erased => |assign| cursor = assign.next,
                 .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_boxy_desc_ref => |assign| cursor = assign.next,
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
                 .assign_boxy_reuse_box => |assign| cursor = assign.next,
@@ -6759,7 +6774,6 @@ const ArcTest = struct {
                 .assign_list => |assign| cursor = assign.next,
                 .assign_struct => |assign| cursor = assign.next,
                 .assign_tag => |assign| cursor = assign.next,
-                .set_local => |assign| cursor = assign.next,
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
@@ -8948,7 +8962,7 @@ test "RC alias into set_local moves the leader unit" {
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
-test "RC releases descriptor-backed old set_local value before descriptor rebind" {
+test "RC releases descriptor-backed old set_local value before immutable replacement" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
 
@@ -8959,12 +8973,7 @@ test "RC releases descriptor-backed old set_local value before descriptor rebind
 
     const ret = try f.ret(current);
     const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
-    const rebind_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
-        .target = desc,
-        .desc = .{ .static = @enumFromInt(1) },
-        .next = set_current,
-    } });
-    const assign_replacement = try f.assignStr(replacement, "new", rebind_desc);
+    const assign_replacement = try f.assignStr(replacement, "new", set_current);
     const assign_current = try f.assignStr(current, "old", assign_replacement);
     const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
@@ -8974,7 +8983,39 @@ test "RC releases descriptor-backed old set_local value before descriptor rebind
     _ = try f.addProc(&.{}, init_desc, .str);
 
     try f.run();
-    try f.expectReachableDecrefBeforeDescRebind(f.procBody(), current, desc);
+    try f.expectReachableDecrefBeforeSet(f.procBody(), current, current);
+}
+
+test "RC preserves a surviving source before a consuming boxy adapter" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const source = try f.local(f.list_i64);
+    const adapted = try f.local(f.list_i64);
+    const result = try f.local(.i64);
+    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(0) };
+    f.store.setLocalBoxyDesc(source, desc);
+    f.store.setLocalBoxyDesc(adapted, desc);
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, 1, ret);
+    const use_source = try f.expectStmt(source, assign_result);
+    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
+        .target = adapted,
+        .source = source,
+        .adapter = @enumFromInt(0),
+        .source_desc = desc,
+        .target_desc = desc,
+        .source_mode = .move,
+        .next = use_source,
+    } });
+    const body = try f.assignList(source, &.{}, adapt);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    // Certification verifies that the retain precedes the consuming move.
+    try f.run();
+    try f.expectRc(source, 1, 1, 0);
+    try f.expectRc(adapted, 0, 1, 0);
 }
 
 test "RC alias passed as a dying call argument moves the leader unit" {

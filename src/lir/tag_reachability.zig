@@ -304,6 +304,9 @@ const Pass = struct {
             },
             .assign_call_erased => |s| {
                 if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
+                if (s.out_desc) |out_desc| {
+                    if (self.localInfoMut(out_desc).markAll(self.allocator)) changed = true;
+                }
                 try self.pushStmt(s.next);
             },
             .assign_packed_erased_fn => |s| {
@@ -460,10 +463,14 @@ const Pass = struct {
             },
             .assign_call_erased => |s| {
                 self.noteUse(s.closure);
+                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
                 const args = self.store.getLocalSpan(s.args);
                 for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
             },
-            .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
+            .assign_packed_erased_fn => |s| {
+                if (s.capture) |capture| self.noteUse(capture);
+                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
             .assign_boxy_desc_ref => |s| {
                 if (s.desc.localOrNull()) |local| self.noteUse(local);
                 if (s.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteUse(local);

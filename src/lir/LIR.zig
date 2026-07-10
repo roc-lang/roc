@@ -584,7 +584,11 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        /// Descriptor requested by the callable type at this call site.
         result_desc: ?BoxyDescRef = null,
+        /// Fresh descriptor local initialized with the descriptor governing
+        /// the value written to `target`.
+        out_desc: ?LocalId = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -593,6 +597,9 @@ pub const CFStmt = union(enum) {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: ErasedCallableOnDrop,
+        /// Exact descriptor of the worker result stored in compiler-private
+        /// callable metadata. Host-created callables carry no such metadata.
+        result_desc: ?BoxyDescRef = null,
         next: CFStmtId,
     },
     assign_boxy_desc_ref: struct {

@@ -944,6 +944,7 @@ fn collectStmt(
         },
         .assign_call_erased => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
+            if (assign.out_desc) |out_desc| noteDef(solver.defs, out_desc, .fresh);
             noteDemand(solver, assign.closure);
             if (assign.result_desc) |result_desc| {
                 if (result_desc.localOrNull()) |local| noteDemand(solver, local);
@@ -959,6 +960,9 @@ fn collectStmt(
         .assign_packed_erased_fn => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             if (assign.capture) |capture| noteDemand(solver, capture);
+            if (assign.result_desc) |result_desc| {
+                if (result_desc.localOrNull()) |local| noteDemand(solver, local);
+            }
             try solver.stack.append(allocator, assign.next);
         },
         .assign_boxy_desc_ref => |assign| {
@@ -1540,6 +1544,7 @@ pub fn computeVisibility(
                     try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(arg));
                 }
                 try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(assign.target));
+                if (assign.out_desc) |out_desc| try seedLocal(&visible, &work, allocator, rc_local, @intFromEnum(out_desc));
             },
             .assign_low_level => |assign| {
                 const target = @intFromEnum(assign.target);
@@ -1647,8 +1652,10 @@ pub const Uniqueness = struct {
 /// at the local's definition with nothing later adding a holder: born unique
 /// by a fresh allocation or a direct call to a unique-returning callee,
 /// destroyed by any occurrence that can create another handle to the
-/// allocation — an incref, an aggregate or capture operand, a `set_local`
-/// value or target, or a second consuming use. Consuming uses (a consumed
+/// allocation — an incref, an aggregate or capture operand, an ordinary
+/// mutable rebind, or a second consuming use. Join-parameter initialization
+/// is an ownership phi: it is born unique only when every explicit incoming
+/// value is born unique. Consuming uses (a consumed
 /// low-level argument, an owned-position direct-call argument, a return)
 /// take the value's single unit with them, so the first one preserves
 /// uniqueness and any further one destroys it; borrowed-position call
@@ -1704,6 +1711,15 @@ pub fn computeUniqueness(
     @memset(alias_source, no_local);
     var alias_targets = std.ArrayList(u32).empty;
     defer alias_targets.deinit(allocator);
+
+    const JoinIncoming = struct {
+        target: u32,
+        source: u32,
+    };
+    var join_incoming = std.ArrayList(JoinIncoming).empty;
+    defer join_incoming.deinit(allocator);
+    var join_targets = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer join_targets.deinit(allocator);
 
     const Marks = struct {
         rc: []const bool,
@@ -1883,6 +1899,10 @@ pub fn computeUniqueness(
             .assign_call_erased => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
+                if (assign.out_desc) |out_desc| {
+                    marks.trackDef(&has_def, &multi_def, out_desc);
+                    marks.destroy(&foreign_def, out_desc);
+                }
                 marks.destroy(&destroyed, assign.closure);
                 if (assign.result_desc) |result_desc| {
                     if (result_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
@@ -1897,6 +1917,9 @@ pub fn computeUniqueness(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
+                if (assign.result_desc) |result_desc| {
+                    if (result_desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                }
             },
             .assign_boxy_desc_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
@@ -2076,10 +2099,27 @@ pub fn computeUniqueness(
                 if (assign.payload) |payload| marks.destroy(&destroyed, payload);
             },
             .set_local => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-                marks.destroy(&destroyed, assign.target);
-                marks.destroy(&destroyed, assign.value);
+                switch (assign.mode) {
+                    .initialize_join_param => {
+                        const target = @intFromEnum(assign.target);
+                        const source = @intFromEnum(assign.value);
+                        if (target < rc_local.len and rc_local[target] and source < rc_local.len and rc_local[source]) {
+                            if (target != source) {
+                                try join_incoming.append(allocator, .{ .target = target, .source = source });
+                                join_targets.set(target);
+                                marks.consume(&consumed_once, &destroyed, assign.value);
+                            }
+                        } else {
+                            marks.destroy(&foreign_def, assign.target);
+                        }
+                    },
+                    .replace_existing, .initialize_join_result => {
+                        marks.trackDef(&has_def, &multi_def, assign.target);
+                        marks.destroy(&foreign_def, assign.target);
+                        marks.destroy(&destroyed, assign.target);
+                        marks.destroy(&destroyed, assign.value);
+                    },
+                }
             },
             .incref => |rc| marks.destroy(&destroyed, rc.value),
             .join => |join_stmt| {
@@ -2087,7 +2127,6 @@ pub fn computeUniqueness(
                 for (0..GuardedList.borrowLen(params)) |param_index| {
                     const param = GuardedList.at(params, param_index);
                     marks.trackDef(&has_def, &multi_def, param);
-                    marks.destroy(&foreign_def, param);
                 }
             },
             // Returning is the value's consuming use: the unit moves to the
@@ -2121,17 +2160,13 @@ pub fn computeUniqueness(
         if (multi_def.isSet(target)) destroyed.set(target);
     }
 
-    // Pure-alias chains settle to a fixpoint. The scan above fixed every
-    // input (foreign poisons, holder-adding destroys, reads, multi-bound
-    // defs), so the loop's bits flip monotonically: a target's birth only
-    // turns on once its source has settled born, and destroys only
-    // accumulate down the chain. Each round either flips at least one bit
-    // or the loop stops, so the round count is bounded by two flips per
-    // alias target.
-    var alias_rounds: usize = 0;
-    while (true) : (alias_rounds += 1) {
-        if (alias_rounds > 2 * alias_targets.items.len + 1) {
-            solveInvariant("ARC alias uniqueness solving did not converge");
+    // Pure aliases and ownership phis settle together because either may feed
+    // the other. Every bit changes monotonically, so the number of rounds is
+    // bounded by the number of possible birth and destruction flips.
+    var uniqueness_rounds: usize = 0;
+    while (true) : (uniqueness_rounds += 1) {
+        if (uniqueness_rounds > 2 * (alias_targets.items.len + join_targets.count()) + 1) {
+            solveInvariant("ARC alias/join uniqueness solving did not converge");
         }
         var changed = false;
         for (alias_targets.items) |target| {
@@ -2148,6 +2183,30 @@ pub fn computeUniqueness(
             if (!destroyed.isSet(target) and
                 (destroyed.isSet(source) or borrow_used.isSet(source)))
             {
+                destroyed.set(target);
+                changed = true;
+            }
+        }
+        var join_target_iter = join_targets.iterator(.{});
+        while (join_target_iter.next()) |target| {
+            var has_incoming = false;
+            var all_born = true;
+            var incoming_destroyed = false;
+            for (join_incoming.items) |incoming| {
+                if (incoming.target != target) continue;
+                has_incoming = true;
+                all_born = all_born and born.isSet(incoming.source);
+                incoming_destroyed = incoming_destroyed or
+                    destroyed.isSet(incoming.source) or
+                    borrow_used.isSet(incoming.source);
+            }
+            if (has_incoming and !foreign_def.isSet(target) and
+                !born.isSet(target) and all_born)
+            {
+                born.set(target);
+                changed = true;
+            }
+            if (!destroyed.isSet(target) and incoming_destroyed) {
                 destroyed.set(target);
                 changed = true;
             }

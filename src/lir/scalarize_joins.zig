@@ -656,10 +656,14 @@ const Pass = struct {
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
+                    if (assign.out_desc) |out_desc| try self.noteWrite(out_desc);
                     try self.stack.append(self.allocator, assign.next);
                 },
                 .assign_packed_erased_fn => |assign| {
                     if (assign.capture) |capture| try self.noteUse(capture);
+                    if (assign.result_desc) |result_desc| {
+                        if (result_desc.localOrNull()) |local| try self.noteUse(local);
+                    }
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },

@@ -2425,6 +2425,15 @@ capture bytes as opaque. The value pointer and header layout do not change.
 Zero-capture functions may use a static or otherwise canonical erased callable
 payload, but their value shape is still the erased callable pointer.
 
+The erased-callable header and public capture pointer are host ABI contracts.
+Compiler-created callables may append compiler-private metadata after the
+ordinary capture bytes, aligned independently of the public header. This
+metadata is not part of `Payload`, does not move the capture pointer, and is
+never required on host-created callable values. A compiler-created callable
+records the exact immutable descriptor of the value its worker returns. The
+runtime registration for that worker records its actual return layout and the
+offset of the private metadata; it does not infer either from the call site.
+
 Source `Box(a)` does not add a second box merely because `.boxy` already
 represents the internal type variable `a` as a boxed payload pointer. The
 compiler-internal boxiness of `a` and the source-level `Box(a)` representation
@@ -4286,10 +4295,23 @@ For every checked function value expression, the boxy lowerer emits an
 payload. The payload stores the function entry and capture bytes. Capture bytes
 store ordinary captured Roc values plus any hidden descriptors or dictionaries
 the function body needs. The erased callable's `on_drop` plan is explicit LIR
-data selected before backend lowering.
+data selected before backend lowering. The statement also names the exact
+immutable result descriptor stored in compiler-private callable metadata. If a
+callable adapter boxes a result, the box carries the exact source payload
+descriptor, not an unspecified box template.
 
 For every checked call through a function value, the boxy lowerer emits an
-erased-call LIR statement. For every checked direct call to a known procedure, it
+erased-call LIR statement. Its result descriptor operand is the call site's
+expected representation descriptor; a distinct descriptor output local receives
+the descriptor of the value actually written to the result local. A registered
+compiler worker supplies that descriptor from its immutable callable metadata,
+including when its actual return layout must first be adapted. An unregistered
+host callable already writes the public call-site ABI and therefore produces the
+call site's expected descriptor. ARC and every consumer use the descriptor
+output attached to the returned value; they do not treat the expected descriptor
+as evidence about bytes returned by a compiler worker.
+
+For every checked direct call to a known procedure, the lowerer
 emits a direct LIR call to the corresponding private boxy worker and supplies
 the hidden descriptors and dictionaries required by that worker. For every
 checked static-dispatch call, it emits either:

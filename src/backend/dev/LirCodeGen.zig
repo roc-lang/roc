@@ -6515,6 +6515,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (assign.capture) |capture| {
                             try locals.put(localKey(capture), capture);
                         }
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         try stack.append(sa, assign.next);
                     },
                     .assign_boxy_desc_ref => |assign| {
@@ -6752,6 +6755,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .assign_call_erased => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
+                        if (assign.out_desc) |out_desc| try locals.put(localKey(out_desc), out_desc);
                         try locals.put(localKey(assign.closure), assign.closure);
                         if (assign.result_desc) |result_desc| {
                             if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
@@ -6766,6 +6770,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_packed_erased_fn => |assign| {
                         try locals.put(localKey(assign.target), assign.target);
                         if (assign.capture) |capture| try locals.put(localKey(capture), capture);
+                        if (assign.result_desc) |result_desc| {
+                            if (result_desc.localOrNull()) |local| try locals.put(localKey(local), local);
+                        }
                         try stack.append(sa, assign.next);
                     },
                     .assign_boxy_desc_ref => |assign| {
@@ -12421,6 +12428,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             call_args: LocalSpan,
             ret_layout: layout.Idx,
             result_desc: ?lir.LIR.BoxyDescRef,
+            out_desc: ?LocalId,
         ) Allocator.Error!ValueLocation {
             // Resolve the result descriptor first: descriptor resolution can
             // itself emit calls, which must not happen while temporary
@@ -12494,6 +12502,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const ret_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
             const ret_buffer_offset = if (ret_size == 0) 0 else self.codegen.allocStackSlot(ret_size);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
 
             // Load the closure's function pointer into a stack slot so the
             // wrapper call's argument shuffling cannot clobber it.
@@ -12533,9 +12542,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, args_slot);
             }
             try builder.addMemArg(frame_ptr, capture_stack_offset);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             try builder.addImmArg(@intFromEnum(runtime_ret_layout));
             try self.callBoxyBuiltin(&builder, .call_erased);
+
+            if (out_desc) |local| {
+                try self.bindAssignedLocal(
+                    local,
+                    self.stackLocationForLayout(self.localLayout(local), out_desc_slot),
+                );
+            }
 
             const result: ValueLocation = if (ret_size == 0)
                 .{ .immediate_i64 = 0 }
@@ -12554,6 +12571,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             target_layout: layout.Idx,
             capture_layout: ?layout.Idx,
             on_drop: lir.LIR.ErasedCallableOnDrop,
+            result_desc: ?lir.LIR.BoxyDescRef,
         ) Allocator.Error!ValueLocation {
             const target_layout_val = self.layout_store.getLayout(target_layout);
             if (builtin.mode == .Debug and target_layout_val.tag != .erased_callable) {
@@ -12582,7 +12600,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 builtins.erased_callable.hot_reload_capture_prefix_size
             else
                 0;
-            const payload_size = builtins.erased_callable.payloadSize(capture_prefix_size + capture_size);
+            const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_prefix_size + capture_size));
+            const payload_size = builtins.erased_callable.compilerPayloadSize(capture_prefix_size + capture_size);
+            const result_desc_slot: ?i32 = if (result_desc) |desc| try self.boxyDescRefToSlot(desc) else null;
             const roc_ops_reg = self.roc_ops_reg orelse unreachable;
             const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
 
@@ -12677,6 +12697,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
+            const metadata_result_desc = try self.allocTempGeneral();
+            if (result_desc_slot) |slot|
+                try self.emitLoad(.w64, metadata_result_desc, frame_ptr, slot)
+            else
+                try self.codegen.emitLoadImm(metadata_result_desc, 0);
+            try self.emitStore(
+                .w64,
+                heap_ptr,
+                @intCast(builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
+                metadata_result_desc,
+            );
+            self.codegen.freeGeneral(metadata_result_desc);
+
             // Record this worker's actual return layout under its runtime code
             // address so an erased call whose site expects a different layout
             // materializes the worker's result into that layout. The address is
@@ -12692,6 +12725,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(worker_ret_layout));
+                try builder.addImmArg(metadata_offset);
                 try self.callBoxyBuiltin(&builder, .register_erased_proc);
                 self.codegen.freeGeneral(addr_reg);
             }
@@ -17279,6 +17313,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.args,
                                 self.localLayout(assign.target),
                                 assign.result_desc,
+                                assign.out_desc,
                             );
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
@@ -17291,6 +17326,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.localLayout(assign.target),
                                 assign.capture_layout,
                                 assign.on_drop,
+                                assign.result_desc,
                             );
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });

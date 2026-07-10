@@ -287,6 +287,7 @@ pub const Interpreter = struct {
     pub const ErasedCallableInterpreterContext = extern struct {
         interpreter: *LirInterpreter,
         capture_desc: ?*const LirProgram.BoxyTypeDesc,
+        result_desc: ?*const LirProgram.BoxyTypeDesc,
         proc_id: u32,
         capture_layout_plus_one: u32,
         capture_value_offset: u32,
@@ -2177,9 +2178,9 @@ pub const Interpreter = struct {
                         frame,
                         current,
                         assign.target,
-                        materialized_result,
+                        materialized_result.value,
                     );
-                    frame.setLocalDesc(assign.target, (try self.resolveOptionalBoxyDescRef(frame, assign.result_desc)) orelse result.desc);
+                    frame.setLocalDesc(assign.target, materialized_result.desc);
                     current = assign.next;
                 },
                 .assign_call_erased => |assign| {
@@ -2197,20 +2198,30 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
                         return err;
                     };
+                    const materialized_result = try self.materializeCallResultToLayout(
+                        frame,
+                        result.value,
+                        result.layout,
+                        result.desc,
+                        assign.result_desc,
+                        self.store.getLocal(assign.target).layout_idx,
+                    );
                     self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
-                        try self.materializeCallResultToLayout(
-                            frame,
-                            result.value,
-                            result.layout,
-                            result.desc,
-                            assign.result_desc,
-                            self.store.getLocal(assign.target).layout_idx,
-                        ),
+                        materialized_result.value,
                     );
-                    frame.setLocalDesc(assign.target, (try self.resolveOptionalBoxyDescRef(frame, assign.result_desc)) orelse result.desc);
+                    frame.setLocalDesc(assign.target, materialized_result.desc);
+                    if (assign.out_desc) |out_desc| {
+                        const desc = materialized_result.desc orelse {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: erased call declared a descriptor output but produced no descriptor",
+                                .{},
+                            );
+                        };
+                        self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)));
+                    }
                     current = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
@@ -2295,9 +2306,9 @@ pub const Interpreter = struct {
                                 frame,
                                 current,
                                 assign.target,
-                                materialized_result,
+                                materialized_result.value,
                             );
-                            frame.setLocalDesc(assign.target, (try self.resolveOptionalBoxyDescRef(frame, assign.result_desc)) orelse result.desc);
+                            frame.setLocalDesc(assign.target, materialized_result.desc);
                         },
                     }
                     current = assign.next;
@@ -3617,6 +3628,7 @@ pub const Interpreter = struct {
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
         if (@intFromPtr(payload.callable_fn_ptr) == @intFromPtr(&interpreterErasedCallableTrampoline)) {
             const proc_id = erasedCallableInterpreterProcId(closure_ptr);
+            const context = erasedCallableInterpreterContextFromPayload(closure_ptr);
             const proc_spec = self.store.getProcSpec(proc_id);
 
             const proc_params = self.store.getLocalSpan(proc_spec.args);
@@ -3664,7 +3676,7 @@ pub const Interpreter = struct {
             return .{
                 .value = proc_result.value,
                 .layout = proc_spec.ret_layout,
-                .desc = proc_result.desc,
+                .desc = proc_result.desc orelse context.result_desc,
             };
         }
 
@@ -3755,9 +3767,11 @@ pub const Interpreter = struct {
             frame.localDesc(capture_local) orelse try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(capture_local).boxy_desc)
         else
             null;
+        const result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc);
         context.* = .{
             .interpreter = self,
             .capture_desc = capture_desc,
+            .result_desc = result_desc,
             .proc_id = @intFromEnum(assign.proc),
             .capture_layout_plus_one = if (assign.capture_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
             .capture_value_offset = @intCast(erased_callable_context_capture_offset),
@@ -8380,7 +8394,7 @@ pub const Interpreter = struct {
         actual_desc: ?*const LirProgram.BoxyTypeDesc,
         result_desc_ref: ?LIR.BoxyDescRef,
         expected_layout: layout_mod.Idx,
-    ) Error!Value {
+    ) Error!boxy_runtime.BoxyAssignedValue {
         const result_desc = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
         return try self.boxy_runtime.materializeCallResult(
             self.boxyFrameHooks(frame),

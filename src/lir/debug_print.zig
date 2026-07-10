@@ -131,6 +131,7 @@ const Printer = struct {
                         try writer.writeAll(" result_desc=");
                         try writeBoxyDescRef(result_desc, writer);
                     }
+                    if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     try writer.writeByte('\n');
                     current = s.next;
                 },
@@ -144,7 +145,12 @@ const Printer = struct {
                         try writer.writeAll(" capture_layout=");
                         try writeLayout(self.layouts, capture_layout, writer);
                     }
-                    try writer.print(" on_drop={s}\n", .{@tagName(s.on_drop)});
+                    try writer.print(" on_drop={s}", .{@tagName(s.on_drop)});
+                    if (s.result_desc) |result_desc| {
+                        try writer.writeAll(" result_desc=");
+                        try writeBoxyDescRef(result_desc, writer);
+                    }
+                    try writer.writeByte('\n');
                     current = s.next;
                 },
                 .assign_boxy_desc_ref => |s| {
@@ -749,7 +755,7 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.indexOf(u8, printed, "l3:opaque_ptr = boxy_box payload=l0 layout=str desc=desc=l1 mode=copy\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 mode=move\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);

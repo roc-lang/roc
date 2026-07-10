@@ -5271,10 +5271,10 @@ const ProcBodyBuilder = struct {
         if (try self.callableBoundaryNeedsAdapter(value_function, worker_function)) {
             const raw_target = try self.addFrameLocalForRep(worker_function.rep);
             const adapted = try self.assignErasedCallableBoundary(target, raw_target, value_function, worker_function, next);
-            return try self.lowerRawWorkerValueInto(raw_target, source, maybe_expr, worker_id, value_function, value_function, adapted);
+            return try self.lowerRawWorkerValueInto(raw_target, source, maybe_expr, worker_id, value_function, value_function, worker_function, adapted);
         }
 
-        return try self.lowerRawWorkerValueInto(target, source, maybe_expr, worker_id, value_function, value_function, next);
+        return try self.lowerRawWorkerValueInto(target, source, maybe_expr, worker_id, value_function, value_function, value_function, next);
     }
 
     fn lowerRawWorkerValueInto(
@@ -5285,6 +5285,7 @@ const ProcBodyBuilder = struct {
         worker_id: Plan.WorkerPlanId,
         call_function: FunctionChildren,
         value_function: FunctionChildren,
+        result_function: FunctionChildren,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const erased_proc = try self.parent.emitErasedWorker(worker_id);
@@ -5301,14 +5302,21 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(capture_desc_reps);
         const capture_dict_reps = try self.erasedCaptureDictionaryRepsForFunctionUse(worker_id, value_function, captures);
         defer self.parent.allocator.free(capture_dict_reps);
+        var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer result_desc_initializers.deinit(self.parent.allocator);
 
         if (captures.len == 0) {
+            const result_desc = try self.packedCallableResultDescriptorRef(result_function, call_function, &result_desc_initializers);
+            if (result_desc_initializers.items.len != 0) {
+                boxyLowerInvariant("zero-capture erased callable result descriptor unexpectedly needed runtime captures");
+            }
             return try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                 .target = target,
                 .proc = erased_proc,
                 .capture = null,
                 .capture_layout = null,
                 .on_drop = .none,
+                .result_desc = result_desc.desc,
                 .next = next,
             } });
         }
@@ -5414,12 +5422,15 @@ const ProcBodyBuilder = struct {
             } };
         } else self.erasedCallableOnDrop(capture_layout);
 
+        const result_desc = try self.packedCallableResultDescriptorRef(result_function, call_function, &result_desc_initializers);
+
         const assign = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = erased_proc,
             .capture = capture_local,
             .capture_layout = capture_layout,
             .on_drop = on_drop,
+            .result_desc = result_desc.desc,
             .next = next,
         } });
 
@@ -5432,6 +5443,7 @@ const ProcBodyBuilder = struct {
                 .contents_desc = capture_contents_desc,
                 .next = assign,
             } });
+        continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(capture_desc_initializer, continuation);
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
 
@@ -5977,30 +5989,31 @@ const ProcBodyBuilder = struct {
         const callee_ret_rep = callee_function.ret;
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         const callee_ret_layout = self.workerRuntimeLayoutForRep(callee_ret_rep).layoutIdx();
+        const target_desc_is_shared = if (self.parent.result.store.getLocal(target).boxy_desc) |desc|
+            if (desc.localOrNull()) |local| self.localIsDescriptorSlot(local) else false
+        else
+            false;
 
         var continuation = next;
-        const call_target = if (target_layout == callee_ret_layout and self.canonicalDescriptorRep(target_rep) == self.canonicalDescriptorRep(callee_ret_rep))
+        const call_target = if (!target_desc_is_shared and target_layout == callee_ret_layout and self.canonicalDescriptorRep(target_rep) == self.canonicalDescriptorRep(callee_ret_rep))
             target
         else blk: {
-            const raw_ret = try self.addFrameLocalForRep(callee_ret_rep);
+            const raw_ret = try self.addFrameLocalForRepWithFreshDescriptor(callee_ret_rep);
             continuation = try self.assignRepresentationBoundary(target, raw_ret, target_rep, callee_ret_rep, continuation);
             break :blk raw_ret;
         };
 
-        const result_desc_info = self.resultDescriptorForCallTarget(
-            call_target,
-            try self.erasedCallResultDescriptorRef(callee_ret_rep),
-        );
+        const result_desc_info = try self.erasedCallResultDescriptorRef(callee_ret_rep);
         const result_desc = result_desc_info.desc;
-        if (result_desc) |desc| {
-            self.parent.result.store.replaceLocalBoxyDesc(call_target, desc);
-        }
+        const out_desc = self.callResultOutputDescriptorLocal(call_target);
+        if (out_desc) |local| try self.markDescriptorLocalBound(local);
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .closure = callee_local,
             .args = try self.parent.result.store.addLocalSpan(call_args),
             .result_desc = result_desc,
+            .out_desc = out_desc,
             .next = continuation,
         } });
         if (result_desc_info.materialize) |materialize| {
@@ -7446,6 +7459,19 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!ResultDescriptorRef {
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("planned call adapter source descriptor was unavailable");
+        const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
+        const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
+        const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
+        const source_tag = self.parent.result.layouts.getLayout(source_layout).tag;
+        const target_is_box = target_tag == .box or target_tag == .box_of_zst;
+        const source_is_box = source_tag == .box or source_tag == .box_of_zst;
+
+        // Boxing stores the source value under its exact payload descriptor.
+        // The resulting box local carries that payload descriptor directly,
+        // so callable metadata for the adapter must carry the same descriptor
+        // instead of the target representation's unspecified box template.
+        if (target_is_box and !source_is_box) return source_desc_info;
+
         if (try self.adapterTagDescriptorForCallBoundary(
             target_rep,
             source_rep,
@@ -7479,10 +7505,6 @@ const ProcBodyBuilder = struct {
             return tuple_desc;
         }
         const known = try self.adapterDescriptorForKnownRep(target_rep);
-        const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
-        const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
-        const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
-        const source_tag = self.parent.result.layouts.getLayout(source_layout).tag;
         if ((target_tag != .list and target_tag != .list_of_zst) or
             (source_tag != .list and source_tag != .list_of_zst))
         {
@@ -12386,6 +12408,59 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    fn exactCallResultDescriptorRef(
+        self: *ProcBodyBuilder,
+        result_rep: Plan.TypeRepId,
+    ) Allocator.Error!ResultDescriptorRef {
+        const materialization = try self.descriptorMaterializationForSourceRep(result_rep);
+        if (materialization.captures.len == 0) {
+            return .{ .desc = materialization.desc };
+        }
+
+        const local = try self.addFrameLocal(.opaque_ptr);
+        return .{
+            .desc = .{ .local = local },
+            .materialize = .{
+                .local = local,
+                .materialize = materialization.desc,
+                .captures = materialization.captures,
+            },
+        };
+    }
+
+    fn packedCallableResultDescriptorRef(
+        self: *ProcBodyBuilder,
+        result_function: FunctionChildren,
+        call_function: FunctionChildren,
+        initializers: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!ResultDescriptorRef {
+        if (result_function.rep == call_function.rep) {
+            const result = try self.exactCallResultDescriptorRef(result_function.ret);
+            try self.appendResultDescriptorInitializers(initializers, result);
+            return result;
+        }
+
+        const call_desc = try self.exactCallResultDescriptorRef(call_function.ret);
+        try self.appendResultDescriptorInitializers(initializers, call_desc);
+        const result = try self.adapterDescriptorForCallBoundary(
+            result_function.ret,
+            call_function.ret,
+            call_desc,
+            initializers,
+        );
+        try self.appendResultDescriptorInitializers(initializers, result);
+        return result;
+    }
+
+    fn callResultOutputDescriptorLocal(
+        self: *const ProcBodyBuilder,
+        target: LIR.LocalId,
+    ) ?LIR.LocalId {
+        const desc = self.parent.result.store.getLocal(target).boxy_desc orelse return null;
+        const local = desc.localOrNull() orelse return null;
+        return if (self.localIsReadOnlyDescriptorInput(local)) null else local;
+    }
+
     fn resultDescriptorForCallTarget(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -16297,12 +16372,19 @@ const ProcBodyBuilder = struct {
             });
         }
 
+        const result_desc = try self.packedCallableResultDescriptorRef(
+            target_function,
+            source_function,
+            &descriptor_materializations,
+        );
+
         const assign_callable = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = adapter.proc,
             .capture = capture_local,
             .capture_layout = adapter.capture_layout,
             .on_drop = self.erasedCallableOnDrop(adapter.capture_layout),
+            .result_desc = result_desc.desc,
             .next = next,
         } });
 
@@ -16421,7 +16503,7 @@ const ProcBodyBuilder = struct {
         const ret_stmt = try self.parent.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var continuation = ret_stmt;
 
-        const raw_ret = try adapter_proc.addFrameLocalForRep(source_function.ret);
+        const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
         continuation = try adapter_proc.assignRepresentationBoundaryConsumingSource(
             ret_local,
             raw_ret,
@@ -16431,14 +16513,10 @@ const ProcBodyBuilder = struct {
         );
         const call_target = raw_ret;
 
-        const result_desc_info = adapter_proc.resultDescriptorForCallTarget(
-            call_target,
-            try adapter_proc.erasedCallResultDescriptorRef(source_function.ret),
-        );
+        const result_desc_info = try adapter_proc.erasedCallResultDescriptorRef(source_function.ret);
         const result_desc = result_desc_info.desc;
-        if (result_desc) |desc| {
-            self.parent.result.store.replaceLocalBoxyDesc(call_target, desc);
-        }
+        const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
+        if (out_desc) |local| try adapter_proc.markDescriptorLocalBound(local);
 
         const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_function.arg_count);
         defer self.parent.allocator.free(call_args);
@@ -16454,6 +16532,7 @@ const ProcBodyBuilder = struct {
             .closure = source_closure,
             .args = try self.parent.result.store.addLocalSpan(call_args),
             .result_desc = result_desc,
+            .out_desc = out_desc,
             .next = continuation,
         } });
         if (result_desc_info.materialize) |materialize| {
@@ -19410,8 +19489,10 @@ const ProcBodyBuilder = struct {
 
     fn addFrameBoundaryTargetLocalForRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
         const runtime = self.workerRuntimeLayoutForRep(rep_id);
-        const planned_desc = try self.descriptorRefForRepIfNeeded(rep_id);
-        const desc: ?LIR.BoxyDescRef = if (planned_desc != null)
+        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const exact = self.parent.plan.representations.items[@intFromEnum(rep_id)];
+        const canonical = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
+        const desc: ?LIR.BoxyDescRef = if (exact.descriptor != null or canonical.descriptor != null)
             .{ .local = try self.addFrameLocal(.opaque_ptr) }
         else
             null;
@@ -19921,6 +20002,13 @@ const ProcBodyBuilder = struct {
             if (input == local) return true;
         }
         return self.localIsHiddenDescriptorArg(local) or self.localIsHiddenDescriptorCapture(local);
+    }
+
+    fn localIsDescriptorSlot(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {
+        for (self.descriptor_slots) |maybe_local| {
+            if (maybe_local == local) return true;
+        }
+        return false;
     }
 
     fn reservePatternBindings(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {

@@ -2980,7 +2980,7 @@ pub const BoxyRuntime = struct {
                     target_elem_desc,
                     target_elem_layout,
                 );
-                @memcpy(output_bytes[index * target_elem_size ..][0..target_elem_size], materialized.readBytes(target_elem_size));
+                @memcpy(output_bytes[index * target_elem_size ..][0..target_elem_size], materialized.value.readBytes(target_elem_size));
             }
         }
 
@@ -5249,8 +5249,8 @@ pub const BoxyRuntime = struct {
                         target_desc.?,
                         adapter.target_layout,
                     )
-                else
-                    try self.materializeCallResult(
+                else call_result: {
+                    const assigned = try self.materializeCallResult(
                         hooks,
                         source_value,
                         adapter.source_layout,
@@ -5258,6 +5258,8 @@ pub const BoxyRuntime = struct {
                         target_desc,
                         adapter.target_layout,
                     );
+                    break :call_result assigned.value;
+                };
                 break :blk materialized;
             },
         };
@@ -5541,16 +5543,16 @@ pub const BoxyRuntime = struct {
         actual_desc: ?*const LirProgram.BoxyTypeDesc,
         result_desc: ?*const LirProgram.BoxyTypeDesc,
         expected_layout: layout_mod.Idx,
-    ) Error!Value {
+    ) Error!BoxyAssignedValue {
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);
         const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
         const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
         if (actual_desc) |returned_desc| {
             if (result_desc) |target_desc| {
-                if (actual_layout == expected_layout and returned_desc == target_desc) return value;
+                if (actual_layout == expected_layout and returned_desc == target_desc) return .{ .value = value, .desc = returned_desc };
                 if (actual_is_box and !expected_is_box) {
-                    const unboxed = try self.boxyUnboxValue(
+                    return try self.boxyUnboxValue(
                         hooks,
                         value,
                         actual_layout,
@@ -5559,7 +5561,6 @@ pub const BoxyRuntime = struct {
                         expected_layout,
                         .move,
                     );
-                    return unboxed.value;
                 }
                 const materialized = try self.materializeBoxyPayloadToLayoutWithTargetDesc(
                     hooks,
@@ -5588,10 +5589,18 @@ pub const BoxyRuntime = struct {
                         target_desc,
                     );
                 }
-                return materialized;
+                const assigned_desc = if (actual_layout == expected_layout and !try self.descriptorContainsUnspecifiedBox(hooks, target_desc))
+                    target_desc
+                else if (actual_layout == expected_layout)
+                    returned_desc
+                else if (expected_is_box and try self.boxyBoxAllocationPayloadDesc(hooks, expected_layout, target_desc) == null)
+                    returned_desc
+                else
+                    target_desc;
+                return .{ .value = materialized, .desc = assigned_desc };
             }
             if (actual_is_box and !expected_is_box) {
-                const unboxed = try self.boxyUnboxValue(
+                return try self.boxyUnboxValue(
                     hooks,
                     value,
                     actual_layout,
@@ -5600,7 +5609,6 @@ pub const BoxyRuntime = struct {
                     expected_layout,
                     .move,
                 );
-                return unboxed.value;
             }
             const materialized = try self.materializeBoxyPayloadToLayout(
                 hooks,
@@ -5628,14 +5636,14 @@ pub const BoxyRuntime = struct {
                     null,
                 );
             }
-            return materialized;
+            return .{ .value = materialized, .desc = returned_desc };
         }
 
-        if (actual_layout == expected_layout) return value;
+        if (actual_layout == expected_layout) return .{ .value = value, .desc = result_desc };
 
         if (result_desc) |target_desc| {
             if (actual_is_box and !expected_is_box) {
-                const unboxed = try self.boxyUnboxValue(
+                return try self.boxyUnboxValue(
                     hooks,
                     value,
                     actual_layout,
@@ -5644,7 +5652,6 @@ pub const BoxyRuntime = struct {
                     expected_layout,
                     .move,
                 );
-                return unboxed.value;
             }
             const materialized = try self.materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
                 hooks,
@@ -5654,10 +5661,59 @@ pub const BoxyRuntime = struct {
                 target_desc,
                 expected_layout,
             );
-            return materialized;
+            return .{ .value = materialized, .desc = target_desc };
         }
 
-        return try self.coerceExplicitRefValueToLayout(hooks, value, actual_layout, expected_layout);
+        return .{
+            .value = try self.coerceExplicitRefValueToLayout(hooks, value, actual_layout, expected_layout),
+            .desc = null,
+        };
+    }
+
+    fn descriptorContainsUnspecifiedBox(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!bool {
+        var visited = std.AutoHashMap(*const LirProgram.BoxyTypeDesc, void).init(self.scratch);
+        defer visited.deinit();
+        return try self.descriptorContainsUnspecifiedBoxInner(hooks, desc, &visited);
+    }
+
+    fn descriptorContainsUnspecifiedBoxInner(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        desc: *const LirProgram.BoxyTypeDesc,
+        visited: *std.AutoHashMap(*const LirProgram.BoxyTypeDesc, void),
+    ) Error!bool {
+        const entry = try visited.getOrPut(desc);
+        if (entry.found_existing) return false;
+
+        const layout_value = self.layout_store.getLayout(desc.payload_layout);
+        if (layout_value.tag == .box or layout_value.tag == .box_of_zst) {
+            if (try self.boxyBoxAllocationPayloadDesc(hooks, desc.payload_layout, desc) == null) return true;
+        }
+
+        const nested = self.requireBoxyDescRefs(desc.nested_descs);
+        for (nested) |desc_ref| {
+            const child = try hooks.resolveDescRef(desc_ref);
+            if (try self.descriptorContainsUnspecifiedBoxInner(hooks, child, visited)) return true;
+        }
+
+        const variants = self.requireBoxyTagVariants(desc.tag_variants);
+        for (variants) |variant| {
+            const payload_descs = self.requireBoxyTagPayloadDescs(variant.payload_descs);
+            for (payload_descs) |payload_desc| {
+                const child = try hooks.resolveDescRef(payload_desc.desc);
+                if (try self.descriptorContainsUnspecifiedBoxInner(hooks, child, visited)) return true;
+            }
+        }
+
+        if (desc.tag_ext_desc) |ext_ref| {
+            const ext = try hooks.resolveDescRef(ext_ref);
+            if (try self.descriptorContainsUnspecifiedBoxInner(hooks, ext, visited)) return true;
+        }
+        return false;
     }
 
     /// Resolve one dictionary method call into either the structural-equality
@@ -5756,7 +5812,7 @@ pub const BoxyRuntime = struct {
                     try hooks.resolveDescRef(adapter_arg_descs[explicit_index])
                 else
                     null;
-                arg_values[call_arg_index] = try self.materializeCallResult(
+                const assigned = try self.materializeCallResult(
                     hooks,
                     arg.value,
                     arg.layout,
@@ -5764,8 +5820,9 @@ pub const BoxyRuntime = struct {
                     target_desc,
                     target_layout,
                 );
+                arg_values[call_arg_index] = assigned.value;
                 arg_layouts[call_arg_index] = target_layout;
-                arg_descs[call_arg_index] = target_desc orelse arg.source_desc;
+                arg_descs[call_arg_index] = assigned.desc;
             } else {
                 arg_values[call_arg_index] = arg.value;
                 arg_layouts[call_arg_index] = arg.layout;

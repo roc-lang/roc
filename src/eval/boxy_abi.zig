@@ -70,6 +70,11 @@ const RegisteredProc = struct {
     ret_lenders: u64,
 };
 
+const RegisteredErasedProc = struct {
+    ret_layout: layout_mod.Idx,
+    metadata_offset: u32,
+};
+
 /// The process-global boxy runtime state behind the C-ABI wrappers.
 pub const GlobalBoxyRuntime = struct {
     gpa: Allocator,
@@ -94,7 +99,7 @@ pub const GlobalBoxyRuntime = struct {
     /// layout here to materialize the worker's result into the caller's
     /// expected layout. Host-provided callables are absent (the host does not
     /// register them); their result already uses the caller's exact layout.
-    erased_procs: std.AutoHashMapUnmanaged(usize, layout_mod.Idx) = .empty,
+    erased_procs: std.AutoHashMapUnmanaged(usize, RegisteredErasedProc) = .empty,
     /// Local-id to descriptor bindings for the descriptor template being
     /// materialized by the active `roc_boxy_desc_copy` call.
     capture_ids: []const u32 = &.{},
@@ -400,10 +405,13 @@ pub fn roc_boxy_register_proc(
 /// worker whose actual return layout differs from the call site's expected
 /// layout. Registration happens as each erased callable value is built, so the
 /// address is the relocated runtime address.
-pub fn roc_boxy_register_erased_proc(fn_ptr: ?*const anyopaque, ret_layout: u32) callconv(.c) void {
+pub fn roc_boxy_register_erased_proc(fn_ptr: ?*const anyopaque, ret_layout: u32, metadata_offset: u32) callconv(.c) void {
     const g = global orelse return;
     const ptr = fn_ptr orelse return;
-    g.erased_procs.put(g.gpa, @intFromPtr(ptr), layoutIdx(ret_layout)) catch abiCrash(g, "erased proc registration");
+    g.erased_procs.put(g.gpa, @intFromPtr(ptr), .{
+        .ret_layout = layoutIdx(ret_layout),
+        .metadata_offset = metadata_offset,
+    }) catch abiCrash(g, "erased proc registration");
 }
 
 /// Invoke an erased callable and deliver its result in the caller's expected
@@ -419,6 +427,7 @@ pub fn roc_boxy_call_erased(
     ret: ?[*]u8,
     args: ?[*]const u8,
     capture: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
     result_desc: ?*const BoxyTypeDesc,
     expected_layout: u32,
 ) callconv(.c) void {
@@ -430,16 +439,27 @@ pub fn roc_boxy_call_erased(
     // every erased result already uses the caller's exact layout.
     const g = global orelse {
         callable(ops, ret, args, capture);
+        out_desc.* = result_desc;
         return;
     };
 
     const actual = g.erased_procs.get(@intFromPtr(raw));
-    if (actual == null or actual.? == expected) {
+    if (actual == null) {
         callable(ops, ret, args, capture);
+        out_desc.* = result_desc;
         return;
     }
 
-    const actual_layout = actual.?;
+    const capture_ptr = capture orelse @panic("registered boxy erased callable had no capture pointer");
+    const metadata = builtins.erased_callable.compilerMetadataPtr(capture_ptr, actual.?.metadata_offset);
+    const actual_desc: ?*const BoxyTypeDesc = if (metadata.result_desc) |ptr| @ptrCast(@alignCast(ptr)) else null;
+    if (actual.?.ret_layout == expected) {
+        callable(ops, ret, args, capture);
+        out_desc.* = actual_desc orelse result_desc;
+        return;
+    }
+
+    const actual_layout = actual.?.ret_layout;
     enter(g);
     defer leave(g);
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
@@ -449,11 +469,12 @@ pub fn roc_boxy_call_erased(
         hooks(g),
         worker_result,
         actual_layout,
-        null,
+        actual_desc,
         result_desc,
         expected,
     ) catch abiCrash(g, "erased call result materialization");
-    writeResult(g, ret, materialized, expected);
+    writeResult(g, ret, materialized.value, expected);
+    out_desc.* = materialized.desc;
 }
 
 /// Box a payload into dynamic storage. Writes the boxed value through `out`
@@ -1099,8 +1120,8 @@ pub fn roc_boxy_materialize_call_result(
         result_desc,
         layoutIdx(expected_layout),
     ) catch abiCrash(g, "call result materialization");
-    writeResult(g, out, materialized, layoutIdx(expected_layout));
-    out_desc.* = result_desc orelse actual_desc;
+    writeResult(g, out, materialized.value, layoutIdx(expected_layout));
+    out_desc.* = materialized.desc;
 }
 
 /// Resolve a static dictionary id to its dictionary pointer in the global
@@ -1327,8 +1348,8 @@ pub fn roc_boxy_call_dict(
                 result_desc,
                 layoutIdx(out_layout),
             ) catch abiCrash(g, "dictionary call result materialization");
-            writeResult(g, out, materialized, layoutIdx(out_layout));
-            out_desc.* = result_desc orelse resolved_ret_desc;
+            writeResult(g, out, materialized.value, layoutIdx(out_layout));
+            out_desc.* = materialized.desc;
         },
     }
 }
