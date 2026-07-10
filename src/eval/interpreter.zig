@@ -2224,20 +2224,7 @@ pub const Interpreter = struct {
                 },
                 .assign_call_dict => |assign| {
                     const dict = try self.resolveBoxyDictRef(frame, assign.dict);
-                    const method_slots = self.requireBoxyMethodSlots(dict.method_slots);
                     const required_method = @intFromEnum(assign.method);
-                    const adapts_args = blk: {
-                        if (assign.method_slot < method_slots.len and @intFromEnum(method_slots[assign.method_slot].method) == required_method) {
-                            const slot = method_slots[assign.method_slot];
-                            break :blk !slot.structural_eq and slot.adapter.arg_layouts.len != 0;
-                        }
-                        for (method_slots) |slot| {
-                            if (@intFromEnum(slot.method) == required_method) {
-                                break :blk !slot.structural_eq and slot.adapter.arg_layouts.len != 0;
-                            }
-                        }
-                        break :blk false;
-                    };
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const hidden_arg_locals = self.store.getLocalSpan(assign.hidden_args);
                     const call_args = try self.arena.allocator().alloc(boxy_runtime.DictCallArg, arg_locals.len);
@@ -2246,13 +2233,10 @@ pub const Interpreter = struct {
                         call_args[arg_index] = .{
                             .value = try self.getLocalChecked(frame, local),
                             .layout = self.store.getLocal(local).layout_idx,
-                            .source_desc = if (!adapts_args)
-                                null
+                            .source_desc = frame.localDesc(local) orelse if (self.store.getLocal(local).boxy_desc) |desc_ref|
+                                try self.resolveBoxyDescRef(frame, desc_ref)
                             else
-                                frame.localDesc(local) orelse if (self.store.getLocal(local).boxy_desc) |desc_ref|
-                                    try self.resolveBoxyDescRef(frame, desc_ref)
-                                else
-                                    null,
+                                null,
                         };
                     }
                     const hidden_values = try self.arena.allocator().alloc(Value, hidden_arg_locals.len);
@@ -2279,6 +2263,9 @@ pub const Interpreter = struct {
                                 call_args[0].layout,
                                 operand_desc,
                             )) 1 else 0);
+                            for (call_args) |arg| {
+                                try self.performBoxyLayoutDrop(frame, arg.value, arg.layout, arg.source_desc, .decref, 1, .atomic);
+                            }
                             self.setLocalChecked(frame, current, assign.target, result);
                         },
                         .call => |call| {
@@ -2288,6 +2275,14 @@ pub const Interpreter = struct {
                                 self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
                                 return err;
                             };
+                            const proc = self.store.getProcSpec(call.proc);
+                            if (proc.rc_ret_borrowed) {
+                                try self.performBoxyLayoutDrop(frame, result.value, result.layout, result.desc, .incref, 1, .atomic);
+                            }
+                            for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
+                                if (arg_index >= 64 or ((proc.rc_borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
+                                try self.performBoxyLayoutDrop(frame, arg_value, arg_layout, arg_desc, .decref, 1, .atomic);
+                            }
                             const materialized_result = try self.materializeCallResultToLayout(
                                 frame,
                                 result.value,
@@ -5733,34 +5728,21 @@ pub const Interpreter = struct {
                     .interp = self,
                     .elem_layout = self.listElemLayout(arg_layout),
                 };
-                // listReplace requires a scratch slot for the old element; we discard it here
-                // because list_set returns only the new list (replace semantics return a pair).
-                const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
-                const result = if (updateModeForArg0(ll.unique_args) == .InPlace)
-                    builtins.list.listReplaceInPlace(
-                        self.valueToRocListForLayout(args[0], arg_layout),
-                        args[1].read(u64),
-                        @ptrCast(args[2].ptr),
-                        info.width,
-                        @ptrCast(old_elem.ptr),
-                        &builtins.list.copy_fallback,
-                    )
-                else
-                    builtins.list.listReplace(
-                        self.valueToRocListForLayout(args[0], arg_layout),
-                        info.alignment,
-                        args[1].read(u64),
-                        @ptrCast(args[2].ptr),
-                        info.width,
-                        elems_rc,
-                        if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                        if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-                        if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-                        if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-                        @ptrCast(old_elem.ptr),
-                        &builtins.list.copy_fallback,
-                        &self.roc_ops,
-                    );
+                const result = builtins.list.listSet(
+                    self.valueToRocListForLayout(args[0], arg_layout),
+                    info.alignment,
+                    args[1].read(u64),
+                    @ptrCast(args[2].ptr),
+                    info.width,
+                    elems_rc,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
+                    if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
+                    if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
+                    updateModeForArg0(ll.unique_args),
+                    &builtins.list.copy_fallback,
+                    &self.roc_ops,
+                );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .list_with_capacity => blk: {

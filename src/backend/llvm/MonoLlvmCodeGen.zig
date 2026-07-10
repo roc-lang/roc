@@ -6368,7 +6368,6 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         if (abi.elem_size == 0) {
             try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(args, 0)).ptr, self.slot(target).size, self.slot(target).alignment);
@@ -6377,28 +6376,16 @@ pub const MonoLlvmCodeGen = struct {
 
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        // listReplace copies the displaced element into out_element before
-        // overwriting it. list_set discards that value, but the builtin still
-        // needs a real slot to write.
-        const old_elem_ptr = wip.alloca(
-            .normal,
-            .i8,
-            builder.intValue(.i32, abi.elem_size) catch return error.OutOfMemory,
-            LlvmBuilder.Alignment.fromByteUnits(@max(abi.elem_alignment, 1)),
-            .default,
-            "list_set_old_elem",
-        ) catch return error.OutOfMemory;
 
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
         try call_args.append(self.allocator, try self.ptrType(), self.slot(GuardedList.at(args, 2)).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, try self.ptrType(), old_elem_ptr);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid("roc_builtins_list_replace", call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid("roc_builtins_list_set", call_args.types.items, call_args.values.items);
     }
 
     fn emitListReplaceUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {

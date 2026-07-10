@@ -6705,6 +6705,7 @@ const ProcBodyBuilder = struct {
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
         source_desc_info: ResultDescriptorRef,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
     ) Allocator.Error!?ResultDescriptorRef {
         const source_tag_rep = self.parent.tagVariantRepForDesc(source_rep);
         const source_tag = self.parent.plan.representations.items[@intFromEnum(source_tag_rep)];
@@ -6738,10 +6739,16 @@ const ProcBodyBuilder = struct {
 
         var specialized_tag_variants: ?LIR.BoxySpan = null;
         var payload_desc_specialized = false;
+        var extra_captures = std.ArrayList(LIR.LocalId).empty;
+        defer extra_captures.deinit(self.parent.allocator);
         if (source_template) |source_template_value| {
             const target_plan_rep = self.parent.tagVariantRepForDesc(target_rep);
+            const source_plan_rep = self.parent.tagVariantRepForDesc(source_rep);
             const target_plan_variants = self.parent.plan.tagVariantSlice(
                 self.parent.plan.representations.items[@intFromEnum(target_plan_rep)].tag_variants,
+            );
+            const source_plan_variants = self.parent.plan.tagVariantSlice(
+                self.parent.plan.representations.items[@intFromEnum(source_plan_rep)].tag_variants,
             );
             const target_template_variants = self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len];
             const source_template_variants = self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len];
@@ -6758,6 +6765,13 @@ const ProcBodyBuilder = struct {
                         break;
                     }
                 }
+                var source_plan_variant: ?Plan.TagVariant = null;
+                for (source_plan_variants) |plan_variant| {
+                    if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
+                        source_plan_variant = plan_variant;
+                        break;
+                    }
+                }
                 var source_variant: ?LirProgram.BoxyTagVariant = null;
                 for (source_template_variants) |candidate| {
                     if (std.mem.eql(u8, target_name, self.parent.result.store.getString(candidate.name))) {
@@ -6766,8 +6780,12 @@ const ProcBodyBuilder = struct {
                     }
                 }
 
-                if (target_plan_variant != null and source_variant != null and target_variant.payload_descs.len != 0) {
+                if (target_plan_variant != null and source_plan_variant != null and source_variant != null and target_variant.payload_descs.len != 0) {
                     const target_payloads = self.parent.plan.childSlice(target_plan_variant.?.payloads);
+                    const source_payloads = self.parent.plan.childSlice(source_plan_variant.?.payloads);
+                    if (target_payloads.len != source_payloads.len) {
+                        boxyLowerInvariant("boxy tag adapter matching variants had different payload counts");
+                    }
                     const target_descs = self.parent.result.boxy_tag_payload_descs.items[target_variant.payload_descs.start..][0..target_variant.payload_descs.len];
                     const source_descs = self.parent.result.boxy_tag_payload_descs.items[source_variant.?.payload_descs.start..][0..source_variant.?.payload_descs.len];
                     var specialized_descs = std.ArrayList(LirProgram.BoxyTagPayloadDesc).empty;
@@ -6776,24 +6794,49 @@ const ProcBodyBuilder = struct {
 
                     for (target_descs) |target_payload_desc| {
                         var specialized_desc = target_payload_desc;
-                        if (target_payload_desc.payload_index < target_payloads.len) {
-                            const storage_layout = self.parent.tagVariantPayloadFieldLayout(
-                                target_variant.payload_layout,
-                                target_payload_desc.payload_index,
-                                target_payloads.len,
-                            );
-                            const storage_tag = self.parent.result.layouts.getLayout(storage_layout).tag;
-                            if (storage_tag == .box or storage_tag == .box_of_zst) {
-                                for (source_descs) |source_payload_desc| {
-                                    if (source_payload_desc.payload_index == target_payload_desc.payload_index) {
-                                        specialized_desc.desc = source_payload_desc.desc;
-                                        variant_specialized = true;
-                                        payload_desc_specialized = true;
-                                        break;
-                                    }
-                                }
+                        if (target_payload_desc.payload_index >= target_payloads.len) {
+                            boxyLowerInvariant("boxy tag adapter target payload descriptor index exceeded variant payloads");
+                        }
+                        const payload_index = target_payload_desc.payload_index;
+                        var source_payload_desc_info: ?ResultDescriptorRef = null;
+                        for (source_descs) |source_payload_desc| {
+                            if (source_payload_desc.payload_index == payload_index) {
+                                source_payload_desc_info = .{ .desc = source_payload_desc.desc };
+                                break;
                             }
                         }
+                        const exact_source_desc_info = source_payload_desc_info orelse
+                            try self.adapterDescriptorForKnownRep(source_payloads[payload_index].rep);
+                        try self.appendResultDescriptorInitializers(prerequisites, exact_source_desc_info);
+
+                        const target_payload_layout = self.parent.tagVariantPayloadFieldLayout(
+                            target_variant.payload_layout,
+                            payload_index,
+                            target_payloads.len,
+                        );
+                        const source_payload_layout = self.parent.tagVariantPayloadFieldLayout(
+                            source_variant.?.payload_layout,
+                            payload_index,
+                            source_payloads.len,
+                        );
+                        const adapted_payload_desc_info = if (target_payload_layout == source_payload_layout or
+                            self.repIsBareDynamic(self.canonicalDescriptorRep(target_payloads[payload_index].rep)))
+                            exact_source_desc_info
+                        else
+                            try self.adapterDescriptorForCallBoundary(
+                                target_payloads[payload_index].rep,
+                                source_payloads[payload_index].rep,
+                                exact_source_desc_info,
+                                prerequisites,
+                            );
+                        try self.appendResultDescriptorInitializers(prerequisites, adapted_payload_desc_info);
+                        specialized_desc.desc = adapted_payload_desc_info.desc orelse
+                            boxyLowerInvariant("boxy tag adapter target payload had no descriptor");
+                        if (specialized_desc.desc.localOrNull()) |local| {
+                            try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
+                        }
+                        variant_specialized = true;
+                        payload_desc_specialized = true;
                         try specialized_descs.append(self.parent.allocator, specialized_desc);
                     }
 
@@ -6899,6 +6942,9 @@ const ProcBodyBuilder = struct {
         if (residual_desc) |desc| {
             if (desc.localOrNull()) |local| try appendUniqueLocal(self.parent.allocator, &captures, local);
         }
+        for (extra_captures.items) |local| {
+            try appendUniqueLocal(self.parent.allocator, &captures, local);
+        }
 
         const capture_span = if (captures.items.len == 0)
             LIR.LocalSpan.empty()
@@ -6964,65 +7010,397 @@ const ProcBodyBuilder = struct {
         var specialized = false;
         const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
         const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
+        const source_payload_layout = if (source_template) |template|
+            template.payload_layout
+        else
+            self.parent.descriptorPayloadLayoutForRep(source_record_rep);
         var target_field_index: u16 = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const storage_layout = self.parent.recordPayloadFieldLayout(target_template.payload_layout, target_field_index);
-                    if (self.parent.layoutIsBoxStorage(storage_layout)) {
-                        const target_nested_index = self.recordFieldNestedDescriptorIndex(target_record_rep, target_field_index) orelse
-                            boxyLowerInvariant("erased boxy record adapter field had no target nested descriptor");
-                        if (target_nested_index >= specialized_nested.items.len) {
-                            boxyLowerInvariant("boxy record adapter target nested descriptor index exceeded template");
-                        }
-                        const source_field = self.findRecordFieldByLabel(
-                            source_record_rep,
-                            source_view,
-                            target_view,
-                            target_label,
-                        ) orelse boxyLowerInvariant("boxy record adapter source was missing target field");
-
-                        const exact_source_desc: LIR.BoxyDescRef = if (self.recordFieldNestedDescriptorIndex(
-                            source_record_rep,
-                            source_field.index,
-                        )) |source_nested_index| source_nested: {
-                            if (source_template) |template| {
-                                if (source_nested_index >= template.nested_descs.len) {
-                                    boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template");
-                                }
-                                break :source_nested self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index];
-                            }
-
-                            const nested_local = try self.addFrameLocal(.opaque_ptr);
-                            try prerequisites.append(self.parent.allocator, .{
-                                .local = nested_local,
-                                .materialize = source_desc,
-                                .nested_index = source_nested_index,
-                            });
-                            break :source_nested .{ .local = nested_local };
-                        } else source_known: {
-                            const source_field_desc = try self.adapterDescriptorForKnownRep(source_field.rep);
-                            if (source_field_desc.prerequisite) |prerequisite| {
-                                try prerequisites.append(self.parent.allocator, prerequisite);
-                            }
-                            if (source_field_desc.materialize) |materialize| {
-                                try prerequisites.append(self.parent.allocator, materialize);
-                            }
-                            break :source_known source_field_desc.desc orelse
-                                boxyLowerInvariant("boxy record adapter source field had no exact descriptor");
-                        };
-
-                        specialized_nested.items[target_nested_index] = exact_source_desc;
-                        if (exact_source_desc.localOrNull()) |local| {
-                            try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
-                        }
-                        specialized = true;
+                    const target_nested_index = self.recordFieldNestedDescriptorIndex(target_record_rep, target_field_index) orelse {
+                        target_field_index += 1;
+                        continue;
+                    };
+                    if (target_nested_index >= specialized_nested.items.len) {
+                        boxyLowerInvariant("boxy record adapter target nested descriptor index exceeded template");
                     }
+                    const source_field = self.findRecordFieldByLabel(
+                        source_record_rep,
+                        source_view,
+                        target_view,
+                        target_label,
+                    ) orelse boxyLowerInvariant("boxy record adapter source was missing target field");
+
+                    const source_field_desc_info: ResultDescriptorRef = if (self.recordFieldNestedDescriptorIndex(
+                        source_record_rep,
+                        source_field.index,
+                    )) |source_nested_index| source_nested: {
+                        if (source_template) |template| {
+                            if (source_nested_index >= template.nested_descs.len) {
+                                boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template");
+                            }
+                            break :source_nested .{
+                                .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index],
+                            };
+                        }
+
+                        const nested_local = try self.addFrameLocal(.opaque_ptr);
+                        try prerequisites.append(self.parent.allocator, .{
+                            .local = nested_local,
+                            .materialize = source_desc,
+                            .nested_index = source_nested_index,
+                        });
+                        break :source_nested .{ .desc = .{ .local = nested_local } };
+                    } else try self.adapterDescriptorForKnownRep(source_field.rep);
+                    try self.appendResultDescriptorInitializers(prerequisites, source_field_desc_info);
+
+                    const target_field_layout = self.parent.recordPayloadFieldLayout(
+                        target_template.payload_layout,
+                        target_field_index,
+                    );
+                    const source_field_layout = self.parent.recordPayloadFieldLayout(
+                        source_payload_layout,
+                        source_field.index,
+                    );
+                    const adapted_field_desc_info = if (target_field_layout == source_field_layout or
+                        self.repIsBareDynamic(self.canonicalDescriptorRep(target_child.rep)))
+                        source_field_desc_info
+                    else
+                        try self.adapterDescriptorForCallBoundary(
+                            target_child.rep,
+                            source_field.rep,
+                            source_field_desc_info,
+                            prerequisites,
+                        );
+                    try self.appendResultDescriptorInitializers(prerequisites, adapted_field_desc_info);
+                    const adapted_field_desc = adapted_field_desc_info.desc orelse
+                        boxyLowerInvariant("boxy record adapter target field had no descriptor");
+
+                    specialized_nested.items[target_nested_index] = adapted_field_desc;
+                    if (adapted_field_desc.localOrNull()) |local| {
+                        try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
+                    }
+                    specialized = true;
                     target_field_index += 1;
                 },
                 .record_ext => self.requireEmptyRecordExtension(target_child.rep),
                 else => boxyLowerInvariant("boxy record adapter target had a non-record child role"),
             }
+        }
+        if (!specialized) return null;
+
+        const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
+        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, specialized_nested.items);
+        const specialized_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        var specialized_template = target_template;
+        specialized_template.nested_descs = .{ .start = nested_start, .len = @intCast(specialized_nested.items.len) };
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized_template);
+
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(self.parent.allocator);
+        const target_captures = self.parent.result.store.getLocalSpan(target_materialization.captures);
+        for (0..GuardedList.borrowLen(target_captures)) |index| {
+            try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(target_captures, index));
+        }
+        if (source_materialization) |materialization| {
+            const source_captures = self.parent.result.store.getLocalSpan(materialization.captures);
+            for (0..GuardedList.borrowLen(source_captures)) |index| {
+                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(source_captures, index));
+            }
+        }
+        for (extra_captures.items) |local| {
+            try appendUniqueLocal(self.parent.allocator, &captures, local);
+        }
+
+        const capture_span = if (captures.items.len == 0)
+            LIR.LocalSpan.empty()
+        else
+            try self.parent.result.store.addLocalSpan(captures.items);
+        return try self.adapterDescriptorFromMaterialization(.{
+            .desc = .{ .static = specialized_id },
+            .captures = capture_span,
+        });
+    }
+
+    fn adapterTupleDescriptorForCallBoundary(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_desc_info: ResultDescriptorRef,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorRef {
+        const target_tuple_rep = self.tupleRepForBoundary(target_rep) orelse return null;
+        const source_tuple_rep = self.tupleRepForBoundary(source_rep) orelse return null;
+        const target_tuple = self.parent.plan.representations.items[@intFromEnum(target_tuple_rep)];
+        const source_tuple = self.parent.plan.representations.items[@intFromEnum(source_tuple_rep)];
+
+        const target_materialization = try self.descriptorMaterializationForKnownRep(target_rep);
+        const target_template_id = switch (target_materialization.desc) {
+            .static => |desc_id| desc_id,
+            .local, .runtime => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
+        };
+        const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
+
+        const source_desc = source_desc_info.desc orelse
+            boxyLowerInvariant("boxy tuple adapter source had no descriptor");
+        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
+            .static => DescriptorMaterialization{ .desc = source_desc },
+            .local, .runtime => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
+                .desc = materialize.materialize orelse
+                    boxyLowerInvariant("boxy tuple adapter source descriptor materialization had no template"),
+                .captures = materialize.captures,
+            } else null,
+        };
+        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
+            const source_template_id = switch (materialization.desc) {
+                .static => |desc_id| desc_id,
+                .local, .runtime => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
+            };
+            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+        } else null;
+
+        const target_nested = self.parent.result.boxy_desc_refs.items[target_template.nested_descs.start..][0..target_template.nested_descs.len];
+        var specialized_nested = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer specialized_nested.deinit(self.parent.allocator);
+        try specialized_nested.appendSlice(self.parent.allocator, target_nested);
+
+        var extra_captures = std.ArrayList(LIR.LocalId).empty;
+        defer extra_captures.deinit(self.parent.allocator);
+        var specialized = false;
+        for (self.parent.plan.childSlice(target_tuple.children)) |target_child| {
+            const target_index = switch (target_child.role) {
+                .tuple_elem => |index| index,
+                else => boxyLowerInvariant("boxy tuple adapter target had a non-tuple child role"),
+            };
+            const storage_layout = self.parent.recordPayloadFieldLayout(target_template.payload_layout, target_index);
+            if (!self.parent.layoutIsBoxStorage(storage_layout)) continue;
+
+            const target_nested_index = self.tupleElemNestedDescriptorIndex(target_tuple_rep, target_index) orelse
+                boxyLowerInvariant("erased boxy tuple adapter element had no target nested descriptor");
+            if (target_nested_index >= specialized_nested.items.len) {
+                boxyLowerInvariant("boxy tuple adapter target nested descriptor index exceeded template");
+            }
+
+            var source_child: ?Plan.RepChild = null;
+            for (self.parent.plan.childSlice(source_tuple.children)) |candidate| {
+                const source_index = switch (candidate.role) {
+                    .tuple_elem => |index| index,
+                    else => boxyLowerInvariant("boxy tuple adapter source had a non-tuple child role"),
+                };
+                if (source_index != target_index) continue;
+                if (source_child != null) {
+                    boxyLowerInvariant("boxy tuple adapter source had duplicate element indexes");
+                }
+                source_child = candidate;
+            }
+            const matched_source_child = source_child orelse
+                boxyLowerInvariant("boxy tuple adapter source was missing target element");
+
+            const exact_source_desc: LIR.BoxyDescRef = if (self.tupleElemNestedDescriptorIndex(
+                source_tuple_rep,
+                target_index,
+            )) |source_nested_index| source_nested: {
+                if (source_template) |template| {
+                    if (source_nested_index >= template.nested_descs.len) {
+                        boxyLowerInvariant("boxy tuple adapter source nested descriptor index exceeded template");
+                    }
+                    break :source_nested self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index];
+                }
+
+                const nested_local = try self.addFrameLocal(.opaque_ptr);
+                try prerequisites.append(self.parent.allocator, .{
+                    .local = nested_local,
+                    .materialize = source_desc,
+                    .nested_index = source_nested_index,
+                });
+                break :source_nested .{ .local = nested_local };
+            } else source_known: {
+                const source_elem_desc = try self.adapterDescriptorForKnownRep(matched_source_child.rep);
+                if (source_elem_desc.prerequisite) |prerequisite| {
+                    try prerequisites.append(self.parent.allocator, prerequisite);
+                }
+                if (source_elem_desc.materialize) |materialize| {
+                    try prerequisites.append(self.parent.allocator, materialize);
+                }
+                break :source_known source_elem_desc.desc orelse
+                    boxyLowerInvariant("boxy tuple adapter source element had no exact descriptor");
+            };
+
+            specialized_nested.items[target_nested_index] = exact_source_desc;
+            if (exact_source_desc.localOrNull()) |local| {
+                try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
+            }
+            specialized = true;
+        }
+        if (!specialized) return null;
+
+        const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
+        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, specialized_nested.items);
+        const specialized_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        var specialized_template = target_template;
+        specialized_template.nested_descs = .{ .start = nested_start, .len = @intCast(specialized_nested.items.len) };
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized_template);
+
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(self.parent.allocator);
+        const target_captures = self.parent.result.store.getLocalSpan(target_materialization.captures);
+        for (0..GuardedList.borrowLen(target_captures)) |index| {
+            try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(target_captures, index));
+        }
+        if (source_materialization) |materialization| {
+            const source_captures = self.parent.result.store.getLocalSpan(materialization.captures);
+            for (0..GuardedList.borrowLen(source_captures)) |index| {
+                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(source_captures, index));
+            }
+        }
+        for (extra_captures.items) |local| {
+            try appendUniqueLocal(self.parent.allocator, &captures, local);
+        }
+
+        const capture_span = if (captures.items.len == 0)
+            LIR.LocalSpan.empty()
+        else
+            try self.parent.result.store.addLocalSpan(captures.items);
+        return try self.adapterDescriptorFromMaterialization(.{
+            .desc = .{ .static = specialized_id },
+            .captures = capture_span,
+        });
+    }
+
+    fn appendResultDescriptorInitializers(
+        self: *ProcBodyBuilder,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+        info: ResultDescriptorRef,
+    ) Allocator.Error!void {
+        const initializers = [_]?DescriptorArgLocal{ info.prerequisite, info.materialize };
+        for (initializers) |maybe_initializer| {
+            const initializer = maybe_initializer orelse continue;
+            var already_present = false;
+            for (prerequisites.items) |existing| {
+                if (existing.local == initializer.local) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (!already_present) try prerequisites.append(self.parent.allocator, initializer);
+        }
+    }
+
+    fn adapterDeclaredAggregateDescriptorForCallBoundary(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_desc_info: ResultDescriptorRef,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorRef {
+        const target_aggregate_rep = self.declaredAggregateRepForBoundary(target_rep) orelse return null;
+        const source_aggregate_rep = self.declaredAggregateRepForBoundary(source_rep) orelse return null;
+        const target_aggregate = self.parent.plan.representations.items[@intFromEnum(target_aggregate_rep)];
+
+        const target_materialization = try self.descriptorMaterializationForKnownRep(target_rep);
+        const target_template_id = switch (target_materialization.desc) {
+            .static => |desc_id| desc_id,
+            .local, .runtime => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
+        };
+        const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
+
+        const source_desc = source_desc_info.desc orelse
+            boxyLowerInvariant("boxy declared aggregate adapter source had no descriptor");
+        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
+            .static => DescriptorMaterialization{ .desc = source_desc },
+            .local, .runtime => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
+                .desc = materialize.materialize orelse
+                    boxyLowerInvariant("boxy declared aggregate adapter source descriptor materialization had no template"),
+                .captures = materialize.captures,
+            } else null,
+        };
+        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
+            const source_template_id = switch (materialization.desc) {
+                .static => |desc_id| desc_id,
+                .local, .runtime => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
+            };
+            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+        } else null;
+
+        const target_nested = self.parent.result.boxy_desc_refs.items[target_template.nested_descs.start..][0..target_template.nested_descs.len];
+        var specialized_nested = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer specialized_nested.deinit(self.parent.allocator);
+        try specialized_nested.appendSlice(self.parent.allocator, target_nested);
+
+        var extra_captures = std.ArrayList(LIR.LocalId).empty;
+        defer extra_captures.deinit(self.parent.allocator);
+        var specialized = false;
+        const target_fields = try self.parent.declaredFieldsInCanonicalOrder(
+            self.parent.plan.declaredFieldSlice(target_aggregate.declared_fields),
+        );
+        defer self.parent.allocator.free(target_fields);
+        const source_payload_layout = self.parent.descriptorPayloadLayoutForRep(source_aggregate_rep);
+        for (target_fields) |target_field| {
+            const target_nested_index = self.recordFieldNestedDescriptorIndex(
+                target_aggregate_rep,
+                target_field.index,
+            ) orelse continue;
+            if (target_nested_index >= specialized_nested.items.len) {
+                boxyLowerInvariant("boxy declared aggregate target nested descriptor index exceeded template");
+            }
+
+            const source_field_rep = try self.parent.matchingDeclaredFieldInstantiationSource(
+                source_aggregate_rep,
+                target_field,
+            ) orelse boxyLowerInvariant("boxy declared aggregate source was missing target field");
+            const source_nested_index = self.recordFieldNestedDescriptorIndex(
+                source_aggregate_rep,
+                target_field.index,
+            );
+            const source_field_desc_info: ResultDescriptorRef = if (source_nested_index) |nested_index| source_nested: {
+                if (source_template) |template| {
+                    if (nested_index >= template.nested_descs.len) {
+                        boxyLowerInvariant("boxy declared aggregate source nested descriptor index exceeded template");
+                    }
+                    break :source_nested .{
+                        .desc = self.parent.result.boxy_desc_refs.items[template.nested_descs.start + nested_index],
+                    };
+                }
+
+                const nested_local = try self.addFrameLocal(.opaque_ptr);
+                const initializer = DescriptorArgLocal{
+                    .local = nested_local,
+                    .materialize = source_desc,
+                    .nested_index = nested_index,
+                };
+                try prerequisites.append(self.parent.allocator, initializer);
+                break :source_nested .{ .desc = .{ .local = nested_local } };
+            } else try self.adapterDescriptorForKnownRep(source_field_rep);
+            try self.appendResultDescriptorInitializers(prerequisites, source_field_desc_info);
+
+            const target_field_layout = self.parent.recordPayloadFieldLayout(
+                target_template.payload_layout,
+                target_field.index,
+            );
+            const source_field_layout = self.parent.recordPayloadFieldLayout(
+                source_payload_layout,
+                target_field.index,
+            );
+            const adapted_field_desc_info = if (target_field_layout == source_field_layout or
+                self.repIsBareDynamic(self.canonicalDescriptorRep(target_field.rep)))
+                source_field_desc_info
+            else
+                try self.adapterDescriptorForCallBoundary(
+                    target_field.rep,
+                    source_field_rep,
+                    source_field_desc_info,
+                    prerequisites,
+                );
+            try self.appendResultDescriptorInitializers(prerequisites, adapted_field_desc_info);
+            const adapted_field_desc = adapted_field_desc_info.desc orelse
+                boxyLowerInvariant("boxy declared aggregate target field had no descriptor");
+
+            specialized_nested.items[target_nested_index] = adapted_field_desc;
+            if (adapted_field_desc.localOrNull()) |local| {
+                try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
+            }
+            specialized = true;
         }
         if (!specialized) return null;
 
@@ -7068,8 +7446,21 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!ResultDescriptorRef {
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("planned call adapter source descriptor was unavailable");
-        if (try self.adapterTagDescriptorForCallBoundary(target_rep, source_rep, source_desc_info)) |tag_desc| {
+        if (try self.adapterTagDescriptorForCallBoundary(
+            target_rep,
+            source_rep,
+            source_desc_info,
+            prerequisites,
+        )) |tag_desc| {
             return tag_desc;
+        }
+        if (try self.adapterDeclaredAggregateDescriptorForCallBoundary(
+            target_rep,
+            source_rep,
+            source_desc_info,
+            prerequisites,
+        )) |aggregate_desc| {
+            return aggregate_desc;
         }
         if (try self.adapterRecordDescriptorForCallBoundary(
             target_rep,
@@ -7078,6 +7469,14 @@ const ProcBodyBuilder = struct {
             prerequisites,
         )) |record_desc| {
             return record_desc;
+        }
+        if (try self.adapterTupleDescriptorForCallBoundary(
+            target_rep,
+            source_rep,
+            source_desc_info,
+            prerequisites,
+        )) |tuple_desc| {
+            return tuple_desc;
         }
         const known = try self.adapterDescriptorForKnownRep(target_rep);
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
@@ -7101,42 +7500,76 @@ const ProcBodyBuilder = struct {
         };
         const known_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(known_desc_id)];
 
+        const target_list_rep = self.listRepForBoundary(target_rep) orelse
+            boxyLowerInvariant("planned list adapter target representation was not list-shaped");
         const source_list_rep = self.listRepForBoundary(source_rep) orelse
             boxyLowerInvariant("planned list adapter source representation was not list-shaped");
-        if (source_desc == .static) {
-            const source_desc_id = source_desc.static;
-            const source_type_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(source_desc_id)];
-            const elem_desc = if (source_type_desc.nested_descs.len == 0) blk: {
-                const source_elem_rep = self.requiredSingleChild(source_list_rep, .list_elem).rep;
-                const source_elem_desc = try self.adapterDescriptorForKnownRep(source_elem_rep);
-                if (source_elem_desc.materialize != null) {
-                    boxyLowerInvariant("known list adapter element descriptor required runtime captures");
-                }
-                break :blk source_elem_desc.desc orelse
-                    boxyLowerInvariant("known list adapter element representation had no descriptor");
-            } else blk: {
-                if (source_type_desc.nested_descs.len != 1) {
-                    boxyLowerInvariant("planned list adapter source descriptor did not have exactly one element descriptor");
-                }
-                break :blk self.parent.result.boxy_desc_refs.items[source_type_desc.nested_descs.start];
-            };
-            if (elem_desc.localOrNull() == null) {
-                const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
-                try self.parent.result.boxy_desc_refs.append(self.parent.allocator, elem_desc);
+        const target_elem_rep = self.requiredSingleChild(target_list_rep, .list_elem).rep;
+        const source_elem_rep = self.requiredSingleChild(source_list_rep, .list_elem).rep;
 
-                const target_desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-                var target_desc = known_desc;
-                target_desc.payload_layout = target_layout;
-                target_desc.nested_descs = .{ .start = nested_start, .len = 1 };
-                target_desc.contains_refcounted = true;
-                try self.parent.result.boxy_type_descs.append(self.parent.allocator, target_desc);
-                return .{ .desc = .{ .static = target_desc_id } };
+        const source_template_ref: ?LIR.BoxyDescRef = switch (source_desc) {
+            .static => source_desc,
+            .local, .runtime => if (source_desc_info.materialize) |materialize|
+                materialize.materialize orelse
+                    boxyLowerInvariant("planned list adapter source descriptor materialization had no template")
+            else
+                null,
+        };
+        const source_elem_desc_info: ResultDescriptorRef = if (source_template_ref) |template_ref| template_elem: {
+            const source_desc_id = switch (template_ref) {
+                .static => |desc_id| desc_id,
+                .local, .runtime => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
+            };
+            const source_type_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(source_desc_id)];
+            if (source_type_desc.nested_descs.len == 0) {
+                break :template_elem try self.adapterDescriptorForKnownRep(source_elem_rep);
+            }
+            if (source_type_desc.nested_descs.len != 1) {
+                boxyLowerInvariant("planned list adapter source descriptor did not have exactly one element descriptor");
+            }
+            break :template_elem .{
+                .desc = self.parent.result.boxy_desc_refs.items[source_type_desc.nested_descs.start],
+            };
+        } else runtime_elem: {
+            const nested_local = try self.addFrameLocal(.opaque_ptr);
+            try prerequisites.append(self.parent.allocator, .{
+                .local = nested_local,
+                .materialize = source_desc,
+                .nested_index = 0,
+            });
+            break :runtime_elem .{ .desc = .{ .local = nested_local } };
+        };
+        if (source_elem_desc_info.prerequisite) |prerequisite| {
+            try prerequisites.append(self.parent.allocator, prerequisite);
+        }
+        if (source_elem_desc_info.materialize) |materialize| {
+            try prerequisites.append(self.parent.allocator, materialize);
+        }
+
+        const target_elem_desc_info = if (self.repIsBareDynamic(self.canonicalDescriptorRep(target_elem_rep)))
+            source_elem_desc_info
+        else
+            try self.adapterDescriptorForCallBoundary(
+                target_elem_rep,
+                source_elem_rep,
+                source_elem_desc_info,
+                prerequisites,
+            );
+        const source_elem_desc = source_elem_desc_info.desc orelse
+            boxyLowerInvariant("planned list adapter source element had no descriptor");
+        const target_elem_desc = target_elem_desc_info.desc orelse
+            boxyLowerInvariant("planned list adapter target element had no descriptor");
+        if (!std.meta.eql(source_elem_desc, target_elem_desc)) {
+            if (target_elem_desc_info.prerequisite) |prerequisite| {
+                try prerequisites.append(self.parent.allocator, prerequisite);
+            }
+            if (target_elem_desc_info.materialize) |materialize| {
+                try prerequisites.append(self.parent.allocator, materialize);
             }
         }
 
-        const nested_local = try self.addFrameLocal(.opaque_ptr);
         const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
-        try self.parent.result.boxy_desc_refs.append(self.parent.allocator, .{ .local = nested_local });
+        try self.parent.result.boxy_desc_refs.append(self.parent.allocator, target_elem_desc);
 
         const target_desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
         var target_desc = known_desc;
@@ -7145,22 +7578,25 @@ const ProcBodyBuilder = struct {
         target_desc.contains_refcounted = true;
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, target_desc);
 
-        const target_desc_local = try self.addFrameLocal(.opaque_ptr);
-        const captures = [_]LIR.LocalId{nested_local};
-
-        return .{
-            .desc = .{ .local = target_desc_local },
-            .prerequisite = .{
-                .local = nested_local,
-                .materialize = source_desc,
-                .nested_index = 0,
-            },
-            .materialize = .{
-                .local = target_desc_local,
-                .materialize = .{ .static = target_desc_id },
-                .captures = try self.parent.result.store.addLocalSpan(&captures),
-            },
-        };
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(self.parent.allocator);
+        if (known.materialize) |materialize| {
+            const known_captures = self.parent.result.store.getLocalSpan(materialize.captures);
+            for (0..GuardedList.borrowLen(known_captures)) |index| {
+                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(known_captures, index));
+            }
+        }
+        if (target_elem_desc.localOrNull()) |local| {
+            try appendUniqueLocal(self.parent.allocator, &captures, local);
+        }
+        const capture_span = if (captures.items.len == 0)
+            LIR.LocalSpan.empty()
+        else
+            try self.parent.result.store.addLocalSpan(captures.items);
+        return try self.adapterDescriptorFromMaterialization(.{
+            .desc = .{ .static = target_desc_id },
+            .captures = capture_span,
+        });
     }
 
     fn internMoveAdapter(
@@ -9438,9 +9874,13 @@ const ProcBodyBuilder = struct {
         payload_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        const writable_target_desc = if (target_desc) |desc_local|
+            if (self.localIsReadOnlyDescriptorInput(desc_local)) null else desc_local
+        else
+            null;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
             .target = target,
-            .target_desc = target_desc,
+            .target_desc = writable_target_desc,
             .source = source,
             .source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_rep),
             .tag_name = tag_name,
@@ -18739,9 +19179,13 @@ const ProcBodyBuilder = struct {
             }
         }
         if (tag_rep.descriptor != null) {
+            const writable_target_desc = if (target_desc) |desc_local|
+                if (self.localIsReadOnlyDescriptorInput(desc_local)) null else desc_local
+            else
+                null;
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
                 .target = target,
-                .target_desc = target_desc,
+                .target_desc = writable_target_desc,
                 .source = source,
                 .source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_tag_rep),
                 .tag_name = try self.lirTagNameForRep(source_tag_rep, tag_name),
@@ -20025,6 +20469,56 @@ const ProcBodyBuilder = struct {
         }
     }
 
+    fn tupleRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLowerInvariant("tuple representation wrapper chain exceeded boxy lowerer limit");
+            depth += 1;
+
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .opaque_nominal => return null,
+                },
+                .tuple => return current,
+                .dynamic => {
+                    var has_element = false;
+                    for (self.parent.plan.childSlice(rep.children)) |child| {
+                        switch (child.role) {
+                            .tuple_elem => has_element = true,
+                            else => return null,
+                        }
+                    }
+                    return if (has_element) current else null;
+                },
+                else => return null,
+            }
+        }
+    }
+
+    fn declaredAggregateRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLowerInvariant("declared aggregate wrapper chain exceeded boxy lowerer limit");
+            depth += 1;
+
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            if (rep.declared_fields.len != 0) return current;
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent, .builtin_other => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .opaque_nominal => return null,
+                },
+                else => return null,
+            }
+        }
+    }
+
     fn functionReturnRepForType(self: *const ProcBodyBuilder, ty: checked.CheckedTypeId) Plan.TypeRepId {
         return self.functionReturnRepForRep(self.repForType(ty));
     }
@@ -20896,15 +21390,16 @@ const ProcBodyBuilder = struct {
         const payload_layout = self.parent.descriptorPayloadLayoutForRep(record_rep_id);
         var desc_index: u32 = 0;
         if (rep.declared_fields.len != 0) {
+            var matched_has_desc: ?bool = null;
             for (self.parent.plan.declaredFieldSlice(rep.declared_fields)) |field| {
                 const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, field.index);
                 const force_field = self.parent.layoutIsBoxStorage(field_layout);
                 const has_desc = self.parent.layoutNeedsNestedBoxyDesc(field_layout) and
                     self.parent.tagPayloadStorageDescRepForLayout(field.rep, field_layout, force_field) != null;
-                if (field.index == field_idx) return if (has_desc) desc_index else null;
-                if (has_desc) desc_index += 1;
+                if (field.index == field_idx) matched_has_desc = has_desc;
+                if (has_desc and field.index < field_idx) desc_index += 1;
             }
-            boxyLowerInvariant("record field descriptor lookup referenced a field outside declared field order");
+            return if (matched_has_desc) |has_desc| if (has_desc) desc_index else null else boxyLowerInvariant("record field descriptor lookup referenced a field outside declared field order");
         }
 
         var index: u16 = 0;
@@ -20924,6 +21419,29 @@ const ProcBodyBuilder = struct {
             }
         }
         boxyLowerInvariant("record field descriptor lookup referenced a field outside its representation");
+    }
+
+    fn tupleElemNestedDescriptorIndex(
+        self: *const ProcBodyBuilder,
+        tuple_rep_id: Plan.TypeRepId,
+        elem_index: u32,
+    ) ?u32 {
+        const rep = self.parent.plan.representations.items[@intFromEnum(tuple_rep_id)];
+        const payload_layout = self.parent.descriptorPayloadLayoutForRep(tuple_rep_id);
+        var desc_index: u32 = 0;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            const index = switch (child.role) {
+                .tuple_elem => |index| index,
+                else => boxyLowerInvariant("tuple descriptor lookup representation had a non-tuple child role"),
+            };
+            const field_layout = self.parent.recordPayloadFieldLayout(payload_layout, index);
+            const force_field = self.parent.layoutIsBoxStorage(field_layout);
+            const has_desc = self.parent.layoutNeedsNestedBoxyDesc(field_layout) and
+                self.parent.tagPayloadStorageDescRepForLayout(child.rep, field_layout, force_field) != null;
+            if (index == elem_index) return if (has_desc) desc_index else null;
+            if (has_desc) desc_index += 1;
+        }
+        boxyLowerInvariant("tuple descriptor lookup referenced an element outside its representation");
     }
 
     fn repHasRecordFieldChildren(

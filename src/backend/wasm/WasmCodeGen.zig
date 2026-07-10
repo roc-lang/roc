@@ -436,6 +436,7 @@ list_drop_at_import: ?u32 = null,
 list_reserve_import: ?u32 = null,
 list_reverse_import: ?u32 = null,
 list_replace_import: ?u32 = null,
+list_set_import: ?u32 = null,
 list_swap_import: ?u32 = null,
 /// Wasm function indices for the imported hasher host functions.
 dict_pseudo_seed_import: ?u32 = null,
@@ -1604,6 +1605,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     // roc_list_replace(list_ptr, elem_width, alignment, index, element_ptr, out_element_ptr, result_ptr)
     const list_replace_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i32, .i32, .i32 }, &.{});
     self.list_replace_import = try self.module.addImport("env", "roc_list_replace", list_replace_type);
+
+    // roc_list_set(list_ptr, elem_width, alignment, index, element_ptr, result_ptr)
+    const list_set_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i32, .i32 }, &.{});
+    self.list_set_import = try self.module.addImport("env", "roc_list_set", list_set_type);
 
     // roc_list_swap(list_ptr, elem_width, alignment, index_1, index_2, result_ptr)
     const list_swap_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i64, .i64, .i32 }, &.{});
@@ -16738,10 +16743,50 @@ fn emitListReplaceCall(
     }
 }
 
-/// Generate list_set: replace the element at `index`, mutating in place when the
-/// list is statically unique and copy-on-writing otherwise. Routes through the
-/// shared `roc_builtins_list_replace`, so refcounted elements and allocation
-/// ownership are handled identically to the other backends.
+fn emitListSetCall(
+    self: *Self,
+    list_abi: BuiltinListAbi,
+    list_ptr: u32,
+    index_local: u32,
+    elem_ptr: u32,
+    out_list_offset: u32,
+    unique_args: u64,
+) Allocator.Error!void {
+    const elem_size = list_abi.elem_size;
+    const elem_align = list_abi.elem_align;
+    switch (self.external_calls) {
+        .host_imports => {
+            const import_idx = self.list_set_import orelse unreachable;
+            try self.emitLocalGet(list_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(index_local);
+            try self.emitLocalGet(elem_ptr);
+            try self.emitFpOffset(out_list_offset);
+            try self.emitCall(import_idx);
+        },
+        .builtin_relocs => {
+            const fields = try self.loadRocListFields(list_ptr);
+            const callbacks = try self.listElementCallbacks(list_abi);
+            try self.emitFpOffset(out_list_offset);
+            try self.emitRocListFields(fields);
+            try self.emitI32Const(@intCast(elem_align));
+            try self.emitLocalGet(index_local);
+            try self.emitLocalGet(elem_ptr);
+            try self.emitI32Const(@intCast(elem_size));
+            try self.emitI32Const(@intCast(callbacks.elements_refcounted));
+            try self.emitI32Const(@intCast(callbacks.incref_table_idx));
+            try self.emitI32Const(@intCast(callbacks.decref_table_idx));
+            try self.emitI32Const(updateModeImmForArg(unique_args, 0));
+            try self.emitLocalGet(self.roc_ops_local);
+            try self.emitBuiltinCall(.list_set, null);
+        },
+        .unconfigured => wasmInvariantFmt("WASM/codegen invariant violated: external calls not configured before list_set", .{}),
+    }
+}
+
+/// Generate list_set: replace the element at `index` and release the displaced
+/// element through the list's explicit RC callback.
 fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListSet.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
@@ -16767,10 +16812,8 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, unique_
     const elem_layout_idx = list_abi.elem_layout_idx orelse unreachable;
     const index_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const elem_ptr = try self.materializeElementPtr(GuardedList.at(args, 2), elem_layout_idx, elem_size, elem_align);
-    // list_set discards the displaced element; the builtin still needs a slot.
-    const out_element_offset = try self.allocStackMemory(elem_size, elem_align);
 
-    try self.emitListReplaceCall(list_abi, list_ptr, index_local, elem_ptr, out_element_offset, result_offset, unique_args);
+    try self.emitListSetCall(list_abi, list_ptr, index_local, elem_ptr, result_offset, unique_args);
     try self.emitFpOffset(result_offset);
 }
 

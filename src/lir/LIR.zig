@@ -897,6 +897,12 @@ pub const LirProcSpec = struct {
     tail_transform: TailTransform = .none,
     /// Explicit native-stack probing requirement for this proc.
     stack_probe: StackProbe = .default,
+    /// Final ARC ownership signature persisted for indirect runtime dispatch.
+    /// Ordinary direct calls have this information in their rewritten call
+    /// sites; dictionary thunks register it with the Boxy runtime explicitly.
+    rc_borrowed_params: u64 = 0,
+    rc_ret_borrowed: bool = false,
+    rc_ret_lenders: u64 = 0,
 };
 
 /// Identifier of a stored LirPattern.

@@ -253,6 +253,7 @@ pub const BuiltinFn = enum {
     list_incref_single_thread,
     list_drop_at,
     list_replace,
+    list_set,
     list_swap,
     list_map_can_reuse,
     list_reserve,
@@ -406,6 +407,7 @@ pub const BuiltinFn = enum {
             .list_incref_single_thread => "roc_builtins_list_incref_single_thread",
             .list_drop_at => "roc_builtins_list_drop_at",
             .list_replace => "roc_builtins_list_replace",
+            .list_set => "roc_builtins_list_set",
             .list_swap => "roc_builtins_list_swap",
             .list_map_can_reuse => "roc_builtins_list_map_can_reuse",
             .list_reserve => "roc_builtins_list_reserve",
@@ -541,6 +543,7 @@ pub const BoxyBuiltinFn = enum {
     list_sublist,
     list_drop_at,
     list_replace,
+    list_set,
     list_swap,
     list_reverse,
     list_reserve,
@@ -578,6 +581,7 @@ pub const BoxyBuiltinFn = enum {
             .list_sublist => "roc_boxy_list_sublist",
             .list_drop_at => "roc_boxy_list_drop_at",
             .list_replace => "roc_boxy_list_replace",
+            .list_set => "roc_boxy_list_set",
             .list_swap => "roc_boxy_list_swap",
             .list_reverse => "roc_boxy_list_reverse",
             .list_reserve => "roc_boxy_list_reserve",
@@ -3759,8 +3763,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const index_off = try self.ensureOnStack(index_loc, 8);
                     const elem_off = try self.ensureOnStack(elem_loc, list_abi.elem_size_align.size);
-                    // We need a scratch slot for the old element (out_element param)
-                    const old_elem_slot = self.codegen.allocStackSlot(@intCast(list_abi.elem_size_align.size));
                     if (try self.boxyListElementDescForLocals(list_abi, &.{list_local}, ll.target)) |boxy_elem| {
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -3773,21 +3775,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, index_off);
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addLeaArg(base_reg, old_elem_slot);
                         try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                         try builder.addRegArg(roc_ops_reg);
 
-                        try self.callBoxyBuiltin(&builder, .list_replace);
+                        try self.callBoxyBuiltin(&builder, .list_set);
                     } else {
-                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_replace);
+                        const fn_addr: usize = @intFromPtr(&dev_wrappers.roc_builtins_list_set);
                         const elem_incref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null;
                         defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
                         const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
                         defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
 
-                        // wrapListReplace(out, list_bytes, list_len, list_cap, alignment, index, element, element_width, out_element, elements_refcounted, element_incref, element_decref, update_mode, roc_ops)
                         const base_reg = frame_ptr;
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -3799,14 +3799,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, index_off);
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addLeaArg(base_reg, old_elem_slot);
                         try builder.addImmArg(if (list_abi.elements_refcounted) @as(usize, 1) else 0);
                         if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                         try builder.addRegArg(roc_ops_reg);
 
-                        try self.callBuiltin(&builder, fn_addr, .list_replace);
+                        try self.callBuiltin(&builder, fn_addr, .list_set);
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -19288,7 +19287,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             while (it.next()) |entry| {
                 const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(entry.key_ptr.*);
                 const thunk_offset = entry.value_ptr.*;
-                const ret_layout = self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout);
+                const proc = self.store.getProcSpec(proc_id);
+                const ret_layout = self.runtimeRepresentationLayoutIdx(proc.ret_layout);
 
                 const addr_reg = try self.allocTempGeneral();
                 try self.emitInternalCodeAddress(thunk_offset, addr_reg);
@@ -19296,6 +19296,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(entry.key_ptr.*));
                 try builder.addRegArg(addr_reg);
                 try builder.addImmArg(@intFromEnum(ret_layout));
+                try builder.addImmArg(@bitCast(proc.rc_borrowed_params));
+                try builder.addImmArg(if (proc.rc_ret_borrowed) 1 else 0);
+                try builder.addImmArg(@bitCast(proc.rc_ret_lenders));
                 try self.callBoxyBuiltin(&builder, .register_proc);
                 self.codegen.freeGeneral(addr_reg);
             }

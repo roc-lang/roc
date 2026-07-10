@@ -503,7 +503,7 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
         .method_slots = &method_slots,
     });
 
-    boxy_abi.roc_boxy_register_proc(3, &sumTwoU64s, @intFromEnum(layout_mod.Idx.u64));
+    boxy_abi.roc_boxy_register_proc(3, &sumTwoU64s, @intFromEnum(layout_mod.Idx.u64), 0, false, 0);
 
     var lhs: u64 = 30;
     var rhs: u64 = 12;

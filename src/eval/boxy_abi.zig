@@ -65,6 +65,9 @@ pub const RocBoxyCallArg = extern struct {
 const RegisteredProc = struct {
     callee: BoxyProcFn,
     ret_layout: layout_mod.Idx,
+    borrowed_params: u64,
+    ret_borrowed: bool,
+    ret_lenders: u64,
 };
 
 /// The process-global boxy runtime state behind the C-ABI wrappers.
@@ -374,9 +377,22 @@ fn boxyListElementContext(
 /// `callee`. An entrypoint registers every worker at startup; a program that
 /// never installs the runtime (no descriptors or dictionaries) also never
 /// dispatches a dictionary call, so registration is a no-op there.
-pub fn roc_boxy_register_proc(proc_id: u32, callee: BoxyProcFn, ret_layout: u32) callconv(.c) void {
+pub fn roc_boxy_register_proc(
+    proc_id: u32,
+    callee: BoxyProcFn,
+    ret_layout: u32,
+    borrowed_params: u64,
+    ret_borrowed: bool,
+    ret_lenders: u64,
+) callconv(.c) void {
     const g = global orelse return;
-    g.procs.put(g.gpa, proc_id, .{ .callee = callee, .ret_layout = layoutIdx(ret_layout) }) catch abiCrash(g, "proc registration");
+    g.procs.put(g.gpa, proc_id, .{
+        .callee = callee,
+        .ret_layout = layoutIdx(ret_layout),
+        .borrowed_params = borrowed_params,
+        .ret_borrowed = ret_borrowed,
+        .ret_lenders = ret_lenders,
+    }) catch abiCrash(g, "proc registration");
 }
 
 /// Record the return layout of one Roc-created erased-callable proc under its
@@ -844,6 +860,41 @@ pub fn roc_boxy_list_replace(
     );
 }
 
+pub fn roc_boxy_list_set(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    index: u64,
+    element: ?[*]u8,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listSet(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        index,
+        element,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        &builtins.list.copy_fallback,
+        roc_ops,
+    );
+}
+
 pub fn roc_boxy_list_swap(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -1216,6 +1267,17 @@ pub fn roc_boxy_call_dict(
             const out_ptr = out orelse abiCrash(g, "result write without an out pointer");
             out_ptr[0] = if (equal) 1 else 0;
             out_desc.* = null;
+            for (call_args) |arg| {
+                g.runtime.performBoxyLayoutDrop(
+                    hooks(g),
+                    arg.value,
+                    arg.layout,
+                    arg.source_desc,
+                    .decref,
+                    1,
+                    .atomic,
+                ) catch abiCrash(g, "structural dictionary argument release");
+            }
         },
         .call => |call| {
             const registered = g.procs.get(@intFromEnum(call.proc)) orelse
@@ -1233,16 +1295,40 @@ pub fn roc_boxy_call_dict(
                 if (ret_size == 0) null else @ptrCast(ret_value.ptr),
                 &ret_desc,
             );
+            const resolved_ret_desc: ?*const BoxyTypeDesc = @ptrCast(@alignCast(ret_desc));
+            if (registered.ret_borrowed) {
+                g.runtime.performBoxyLayoutDrop(
+                    hooks(g),
+                    ret_value,
+                    registered.ret_layout,
+                    resolved_ret_desc,
+                    .incref,
+                    1,
+                    .atomic,
+                ) catch abiCrash(g, "borrowed dictionary result retain");
+            }
+            for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
+                if (arg_index >= 64 or ((registered.borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
+                g.runtime.performBoxyLayoutDrop(
+                    hooks(g),
+                    arg_value,
+                    arg_layout,
+                    arg_desc,
+                    .decref,
+                    1,
+                    .atomic,
+                ) catch abiCrash(g, "borrowed dictionary argument release");
+            }
             const materialized = g.runtime.materializeCallResult(
                 hooks(g),
                 ret_value,
                 registered.ret_layout,
-                @ptrCast(@alignCast(ret_desc)),
+                resolved_ret_desc,
                 result_desc,
                 layoutIdx(out_layout),
             ) catch abiCrash(g, "dictionary call result materialization");
             writeResult(g, out, materialized, layoutIdx(out_layout));
-            out_desc.* = result_desc orelse @ptrCast(@alignCast(ret_desc));
+            out_desc.* = result_desc orelse resolved_ret_desc;
         },
     }
 }

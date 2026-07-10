@@ -139,6 +139,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             break;
         }
 
+        const emit_proc_spec = store.getProcSpecPtr(emit_proc);
+        emit_proc_spec.rc_borrowed_params = emit_sig.borrowed_params;
+        emit_proc_spec.rc_ret_borrowed = emit_sig.ret_mode == .borrowed;
+        emit_proc_spec.rc_ret_lenders = emit_sig.ret_lenders;
+
         const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
         const emit_args = store.getProcSpec(emit_proc).args;
         inserter.current_proc = emit_proc;

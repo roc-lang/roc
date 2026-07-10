@@ -183,6 +183,7 @@ comptime {
         "roc_boxy_list_sublist",
         "roc_boxy_list_drop_at",
         "roc_boxy_list_replace",
+        "roc_boxy_list_set",
         "roc_boxy_list_swap",
         "roc_boxy_list_reverse",
         "roc_boxy_list_reserve",

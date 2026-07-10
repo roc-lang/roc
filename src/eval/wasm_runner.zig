@@ -264,6 +264,7 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_list_reserve", &[_]bytebox.ValType{ .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReserve, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_replace", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReplace, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_list_set", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostListSet, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_swap", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListSwap, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
@@ -1925,6 +1926,37 @@ fn hostListReplace(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         @memcpy(buffer[out_element_ptr..][0..elem_width], buffer[slot..][0..elem_width]);
     }
     @memcpy(buffer[slot..][0..elem_width], buffer[element_ptr..][0..elem_width]);
+
+    writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+    writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(len));
+}
+
+fn hostListSet(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const list_ptr: usize = @intCast(params[0].I32);
+    const elem_width: usize = @intCast(params[1].I32);
+    const alignment: u32 = @bitCast(params[2].I32);
+    const index: usize = @intCast(params[3].I64);
+    const element_ptr: usize = @intCast(params[4].I32);
+    const result_ptr: usize = @intCast(params[5].I32);
+
+    const data_ptr: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
+    const len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
+    const encoded_cap: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 8));
+
+    if (elem_width == 0) {
+        writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+        writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+        writeIntLittle(u32, buffer, result_ptr + 8, @intCast(encoded_cap));
+        return;
+    }
+
+    const new_data = allocWasmData(buffer, alignment, len * elem_width);
+    if (len != 0 and data_ptr != 0) {
+        @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
+    }
+    @memcpy(buffer[new_data + index * elem_width ..][0..elem_width], buffer[element_ptr..][0..elem_width]);
 
     writeIntLittle(u32, buffer, result_ptr, @intCast(new_data));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));

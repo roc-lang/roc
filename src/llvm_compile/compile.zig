@@ -219,6 +219,7 @@ const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
     .{ "roc_builtins_list_prepend", {} },
     .{ "roc_builtins_list_release_excess_capacity", {} },
     .{ "roc_builtins_list_replace", {} },
+    .{ "roc_builtins_list_set", {} },
     .{ "roc_builtins_list_reserve", {} },
     .{ "roc_builtins_list_reverse", {} },
     .{ "roc_builtins_list_str_eq", {} },

@@ -1578,6 +1578,46 @@ pub fn listReplace(
     );
 }
 
+/// Replace an element and release the displaced value.
+///
+/// `listReplace` transfers the displaced element to its caller. `listSet`
+/// instead implements the ownership contract for `List.set`, whose result does
+/// not contain the old element.
+pub fn listSet(
+    list: RocList,
+    alignment: u32,
+    index: u64,
+    element: Opaque,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    dec_context: ?*anyopaque,
+    dec: Dec,
+    update_mode: UpdateMode,
+    copy: CopyFallbackFn,
+    roc_ops: *RocOps,
+) callconv(.c) RocList {
+    const output = if (update_mode == .InPlace)
+        list
+    else
+        list.makeUnique(
+            alignment,
+            element_width,
+            elements_refcounted,
+            inc_context,
+            inc,
+            dec_context,
+            dec,
+            roc_ops,
+        );
+
+    const element_at_index = (output.bytes orelse unreachable) + (@as(usize, @intCast(index)) * element_width);
+    if (elements_refcounted) dec(dec_context, element_at_index);
+    copy(element_at_index, element orelse unreachable, element_width);
+    return output;
+}
+
 inline fn listReplaceInPlaceHelp(
     list: RocList,
     index: usize,
@@ -3121,6 +3161,55 @@ test "listReplace basic functionality" {
     try std.testing.expectEqual(@as(u8, 20), elements[1]);
     try std.testing.expectEqual(@as(u8, 99), elements[2]); // replaced value
     try std.testing.expectEqual(@as(u8, 40), elements[3]);
+}
+
+test "listSet releases displaced refcounted element after copy-on-write" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const Counters = struct {
+        increments: usize = 0,
+        decrements: usize = 0,
+
+        fn incref(context: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable));
+            self.increments += 1;
+        }
+
+        fn decref(context: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable));
+            self.decrements += 1;
+        }
+    };
+
+    var counters = Counters{};
+    const data = [_]usize{ 10, 20, 30 };
+    const list = RocList.fromSlice(usize, data[0..], true, test_env.getOps());
+    list.incref(1, true, test_env.getOps());
+
+    const replacement: usize = 99;
+    const result = listSet(
+        list,
+        @alignOf(usize),
+        1,
+        @ptrCast(@constCast(&replacement)),
+        @sizeOf(usize),
+        true,
+        @ptrCast(&counters),
+        &Counters.incref,
+        @ptrCast(&counters),
+        &Counters.decref,
+        .Immutable,
+        &copy_fallback,
+        test_env.getOps(),
+    );
+    defer list.decref(@alignOf(usize), @sizeOf(usize), true, @ptrCast(&counters), &Counters.decref, test_env.getOps());
+    defer result.decref(@alignOf(usize), @sizeOf(usize), true, @ptrCast(&counters), &Counters.decref, test_env.getOps());
+
+    try std.testing.expect(result.bytes != list.bytes);
+    try std.testing.expectEqual(@as(usize, data.len), counters.increments);
+    try std.testing.expectEqual(@as(usize, 1), counters.decrements);
+    try std.testing.expectEqual(replacement, result.elements(usize).?[1]);
 }
 
 test "listReplace first element" {
