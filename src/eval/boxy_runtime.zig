@@ -2944,6 +2944,18 @@ pub const BoxyRuntime = struct {
             return;
         }
 
+        if (source_layout_val.tag == .tag_union and target_layout_val.tag == .tag_union) {
+            return try self.retainBorrowedTagMaterialization(
+                hooks,
+                source,
+                source_layout,
+                source_desc,
+                target,
+                target_layout,
+                target_desc,
+            );
+        }
+
         if (source_layout_val.tag == .struct_ and target_layout_val.tag == .struct_) {
             const source_struct_idx = source_layout_val.getStruct().idx;
             const target_struct_idx = target_layout_val.getStruct().idx;
@@ -2995,6 +3007,180 @@ pub const BoxyRuntime = struct {
         }
 
         try self.performBoxyLayoutDrop(hooks, target, target_layout, target_desc, .incref, 1, .atomic);
+    }
+
+    fn retainBorrowedTagMaterialization(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        source: Value,
+        source_layout: layout_mod.Idx,
+        source_desc: ?*const LirProgram.BoxyTypeDesc,
+        target: Value,
+        target_layout: layout_mod.Idx,
+        target_desc: ?*const LirProgram.BoxyTypeDesc,
+    ) Error!void {
+        const source_base = if (source_desc) |desc|
+            self.resolveBoxyTagBaseValue(source, source_layout, desc)
+        else
+            self.resolveTagUnionBaseValue(source, source_layout);
+        const target_base = if (target_desc) |desc|
+            self.resolveBoxyTagBaseValue(target, target_layout, desc)
+        else
+            self.resolveTagUnionBaseValue(target, target_layout);
+        const source_discriminant: u16 = if (self.helper.sizeOf(source_base.layout) == 0)
+            0
+        else
+            @intCast(self.helper.readTagDiscriminant(source_base.value, source_base.layout));
+        const target_discriminant: u16 = if (self.helper.sizeOf(target_base.layout) == 0)
+            0
+        else
+            @intCast(self.helper.readTagDiscriminant(target_base.value, target_base.layout));
+
+        if (source_desc) |desc| {
+            if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
+                if (source_discriminant == ext_discriminant) {
+                    const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
+                    const ext_layout = self.requireBoxyTagPayloadLayout(source_base.layout, source_discriminant);
+                    return try self.retainBorrowedMaterializedValue(
+                        hooks,
+                        source_base.value,
+                        ext_layout,
+                        ext_desc,
+                        target,
+                        target_layout,
+                        target_desc,
+                    );
+                }
+            }
+        }
+        if (target_desc) |desc| {
+            if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
+                if (target_discriminant == ext_discriminant) {
+                    const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
+                    const ext_layout = self.requireBoxyTagPayloadLayout(target_base.layout, target_discriminant);
+                    return try self.retainBorrowedMaterializedValue(
+                        hooks,
+                        source,
+                        source_layout,
+                        source_desc,
+                        target_base.value,
+                        ext_layout,
+                        ext_desc,
+                    );
+                }
+            }
+        }
+
+        const source_variant = if (source_desc) |desc|
+            self.requireBoxyTagVariantByDiscriminant(desc, source_discriminant)
+        else
+            null;
+        const target_variant = if (target_desc) |desc|
+            self.requireBoxyTagVariantByDiscriminant(desc, target_discriminant)
+        else
+            null;
+        if (source_variant) |source_info| {
+            if (target_variant) |target_info| {
+                if (source_info.name != target_info.name) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: borrowed tag materialization changed variant from {s} to {s}",
+                        .{ self.store.getString(source_info.name), self.store.getString(target_info.name) },
+                    );
+                }
+            }
+        } else if (target_variant == null and source_discriminant != target_discriminant) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: descriptor-free borrowed tag materialization changed discriminant from {d} to {d}",
+                .{ source_discriminant, target_discriminant },
+            );
+        }
+
+        const source_payload_layout = self.requireBoxyTagPayloadLayout(source_base.layout, source_discriminant);
+        const target_payload_layout = self.requireBoxyTagPayloadLayout(target_base.layout, target_discriminant);
+        if (self.helper.sizeOf(target_payload_layout) == 0) return;
+
+        const source_payload_desc = try self.wholeTagPayloadDesc(hooks, source_variant, source_payload_layout);
+        const target_payload_desc = try self.wholeTagPayloadDesc(hooks, target_variant, target_payload_layout);
+        if (source_payload_desc != null or target_payload_desc != null) {
+            return try self.retainBorrowedMaterializedValue(
+                hooks,
+                source_base.value,
+                source_payload_layout,
+                source_payload_desc,
+                target_base.value,
+                target_payload_layout,
+                target_payload_desc,
+            );
+        }
+
+        const source_payload = self.layout_store.getLayout(source_payload_layout);
+        const target_payload = self.layout_store.getLayout(target_payload_layout);
+        if (source_payload.tag == .struct_ and target_payload.tag == .struct_ and
+            (source_variant != null or target_variant != null))
+        {
+            const source_struct = source_payload.getStruct().idx;
+            const target_struct = target_payload.getStruct().idx;
+            const source_fields = self.layout_store.getStructData(source_struct).fields.count;
+            const target_fields = self.layout_store.getStructData(target_struct).fields.count;
+            if (source_fields != target_fields) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: borrowed tag materialization changed payload arity from {d} to {d}",
+                    .{ source_fields, target_fields },
+                );
+            }
+            var field_index: u32 = 0;
+            while (field_index < source_fields) : (field_index += 1) {
+                const source_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(source_struct, field_index);
+                const target_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(target_struct, field_index);
+                if (self.helper.sizeOf(target_field_layout) == 0) continue;
+                const source_field_desc = try self.tagPayloadFieldDesc(hooks, source_variant, field_index);
+                const target_field_desc = try self.tagPayloadFieldDesc(hooks, target_variant, field_index);
+                try self.retainBorrowedMaterializedValue(
+                    hooks,
+                    source_base.value.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(source_struct, field_index)),
+                    source_field_layout,
+                    source_field_desc,
+                    target_base.value.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(target_struct, field_index)),
+                    target_field_layout,
+                    target_field_desc,
+                );
+            }
+            return;
+        }
+
+        try self.retainBorrowedMaterializedValue(
+            hooks,
+            source_base.value,
+            source_payload_layout,
+            null,
+            target_base.value,
+            target_payload_layout,
+            null,
+        );
+    }
+
+    fn wholeTagPayloadDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        variant: ?*const LirProgram.BoxyTagVariant,
+        payload_layout: layout_mod.Idx,
+    ) Error!?*const LirProgram.BoxyTypeDesc {
+        const info = variant orelse return null;
+        const desc_ref = self.findBoxyPayloadDesc(info, 0) orelse return null;
+        const desc = try hooks.resolveDescRef(desc_ref);
+        if (self.layout_store.getLayout(payload_layout).tag != .struct_) return desc;
+        return if (desc.payload_layout == payload_layout) desc else null;
+    }
+
+    fn tagPayloadFieldDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        variant: ?*const LirProgram.BoxyTagVariant,
+        field_index: u32,
+    ) Error!?*const LirProgram.BoxyTypeDesc {
+        const info = variant orelse return null;
+        const desc_ref = self.findBoxyPayloadDesc(info, field_index) orelse return null;
+        return try hooks.resolveDescRef(desc_ref);
     }
 
     fn materializeMovedBoxyListPayloadToLayoutWithTargetDesc(
@@ -5707,25 +5893,16 @@ pub const BoxyRuntime = struct {
                     target_desc,
                     expected_layout,
                 );
-                try self.decrefMovedBoxySourceIfReboxed(
+                try self.retainBorrowedMaterializedValue(
                     hooks,
                     value,
                     actual_layout,
                     returned_desc,
                     materialized,
                     expected_layout,
+                    target_desc,
                 );
-                if (!actual_is_box) {
-                    try self.releaseMovedPayloadBoxesReboxedIntoResult(
-                        hooks,
-                        value,
-                        actual_layout,
-                        returned_desc,
-                        materialized,
-                        expected_layout,
-                        target_desc,
-                    );
-                }
+                try self.performBoxyLayoutDrop(hooks, value, actual_layout, returned_desc, .decref, 1, .atomic);
                 const assigned_desc = if (actual_layout == expected_layout and !try self.descriptorContainsUnspecifiedBox(hooks, target_desc))
                     target_desc
                 else if (actual_layout == expected_layout)
@@ -5754,25 +5931,16 @@ pub const BoxyRuntime = struct {
                 returned_desc,
                 expected_layout,
             );
-            try self.decrefMovedBoxySourceIfReboxed(
+            try self.retainBorrowedMaterializedValue(
                 hooks,
                 value,
                 actual_layout,
                 returned_desc,
                 materialized,
                 expected_layout,
+                returned_desc,
             );
-            if (!actual_is_box) {
-                try self.releaseMovedPayloadBoxesReboxedIntoResult(
-                    hooks,
-                    value,
-                    actual_layout,
-                    returned_desc,
-                    materialized,
-                    expected_layout,
-                    null,
-                );
-            }
+            try self.performBoxyLayoutDrop(hooks, value, actual_layout, returned_desc, .decref, 1, .atomic);
             return .{ .value = materialized, .desc = returned_desc };
         }
 
@@ -5798,6 +5966,16 @@ pub const BoxyRuntime = struct {
                 target_desc,
                 expected_layout,
             );
+            try self.retainBorrowedMaterializedValue(
+                hooks,
+                value,
+                actual_layout,
+                null,
+                materialized,
+                expected_layout,
+                target_desc,
+            );
+            try self.performBoxyLayoutDrop(hooks, value, actual_layout, null, .decref, 1, .atomic);
             return .{ .value = materialized, .desc = target_desc };
         }
 

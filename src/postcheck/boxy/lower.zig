@@ -104,6 +104,7 @@ const ResolvedWorker = struct {
     template_ref: names.ProcedureTemplateRef,
     template: checked.CheckedProcedureTemplate,
     body: ResolvedWorkerBody,
+    stored_fn: ?Plan.StoredFnSource = null,
 };
 
 const ResolvedWorkerBody = union(enum) {
@@ -144,7 +145,7 @@ const ResolvedWorkers = struct {
 };
 
 fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPlan) ResolvedWorker {
-    return switch (worker.source) {
+    var resolved = switch (worker.source) {
         .procedure_template => |template| resolveProcedureTemplate(modules, worker.id, template),
         .procedure_binding => |binding| resolveProcedureBinding(
             modules,
@@ -155,6 +156,8 @@ fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPla
         .procedure_use => |use| resolveProcedureUse(modules, worker.id, use),
         .nested_expr => |expr_ref| resolveNestedExprWorker(modules, worker.id, expr_ref),
     };
+    resolved.stored_fn = worker.stored_fn;
+    return resolved;
 }
 
 fn resolveProcedureUse(
@@ -366,9 +369,6 @@ fn resolveConstFnValue(
         boxyLowerInvariant("callable eval function value referenced a missing ConstStore function");
     }
     const fn_value = store_module.const_store.getFn(fn_id);
-    if (fn_value.captures.len != 0) {
-        boxyLowerInvariant("capturing stored function reached runtime boxy worker resolution before const capture lowering");
-    }
     return switch (fn_value.fn_def) {
         .local_template,
         .imported_template,
@@ -458,6 +458,18 @@ fn checkedLambdaExprForNestedFn(
         };
     }
     boxyLowerInvariant("stored nested function referenced a missing checked nested site");
+}
+
+fn checkedBinderType(module: ProcedureModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
+    const raw = @intFromEnum(binder);
+    if (raw >= module.checked_bodies.patternBinderCount()) {
+        boxyLowerInvariant("stored function capture binder was outside the checked body store");
+    }
+    const pattern = module.checked_bodies.patternBinder(@enumFromInt(raw)).pattern;
+    if (@intFromEnum(pattern) >= module.checked_bodies.patternCount()) {
+        boxyLowerInvariant("stored function capture pattern was outside the checked body store");
+    }
+    return module.checked_bodies.pattern(pattern).ty;
 }
 
 fn hostedProcForTemplate(module: ProcedureModuleView, template_ref: names.ProcedureTemplateRef) checked.HostedProc {
@@ -3188,6 +3200,7 @@ const ProcedureBuilder = struct {
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
+        body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
@@ -3236,6 +3249,7 @@ const ProcedureBuilder = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
         body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
+        body_stmt = try proc.prependStoredCaptureInitializers(body_stmt);
         body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
@@ -3326,6 +3340,7 @@ const ProcedureBuilder = struct {
         resolved: ResolvedWorker,
         proc: *ProcBodyBuilder,
     ) Allocator.Error!WorkerBodySource {
+        try proc.bindStoredFnCaptures(resolved.stored_fn);
         return switch (resolved.body) {
             .checked_expr => |body| blk: {
                 const root_expr = resolved.module.checked_bodies.expr(body.root_expr);
@@ -3662,6 +3677,7 @@ const ProcBodyBuilder = struct {
     erased_capture_arg: ?LIR.LocalId,
     erased_capture_locals: std.ArrayList(LIR.LocalId),
     erased_capture_value_desc_initializers: std.ArrayList(DescriptorArgLocal),
+    stored_capture_initializers: std.ArrayList(StoredCaptureInitializer),
     next_join_point: u32,
     current_lambda: ?checked.CheckedExprId,
 
@@ -3738,6 +3754,13 @@ const ProcBodyBuilder = struct {
     const DescriptorMaterialization = struct {
         desc: LIR.BoxyDescRef,
         captures: LIR.LocalSpan = .{ .start = 0, .len = 0 },
+    };
+
+    const StoredCaptureInitializer = struct {
+        local: LIR.LocalId,
+        node: checked.ConstNodeId,
+        ty: checked.CheckedTypeId,
+        store_module: checked.ModuleId,
     };
 
     const AdapterDescriptorKey = struct {
@@ -3872,6 +3895,7 @@ const ProcBodyBuilder = struct {
             .erased_capture_arg = null,
             .erased_capture_locals = .empty,
             .erased_capture_value_desc_initializers = .empty,
+            .stored_capture_initializers = .empty,
             .next_join_point = 0,
             .current_lambda = null,
         };
@@ -3884,6 +3908,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn deinit(self: *ProcBodyBuilder) void {
+        self.stored_capture_initializers.deinit(self.parent.allocator);
         self.erased_capture_value_desc_initializers.deinit(self.parent.allocator);
         self.erased_capture_locals.deinit(self.parent.allocator);
         self.parent.allocator.free(self.dictionary_slots);
@@ -3953,6 +3978,53 @@ const ProcBodyBuilder = struct {
 
         self.lambda_arg_binding_locals = binding_locals;
         self.lambda_arg_worker_reps = worker_reps;
+    }
+
+    fn bindStoredFnCaptures(self: *ProcBodyBuilder, stored_fn: ?Plan.StoredFnSource) Allocator.Error!void {
+        const source = stored_fn orelse return;
+        const store_module = procedureModuleById(self.parent.modules, source.module);
+        const raw = @intFromEnum(source.fn_id);
+        if (raw >= store_module.const_store.fns.items.len) {
+            boxyLowerInvariant("stored function capture plan referenced a missing ConstStore function");
+        }
+        const fn_value = store_module.const_store.getFn(source.fn_id);
+        try self.ensureBinderLocals();
+
+        for (fn_value.captures) |capture| {
+            if (!capture.id.isCanonical()) continue;
+            const binder = capture.id.binder();
+            const ty = checkedBinderType(self.module, binder);
+            const local = try self.addFrameLocalForType(ty);
+            self.bindLocal(binder, local);
+            try self.stored_capture_initializers.append(self.parent.allocator, .{
+                .local = local,
+                .node = capture.value,
+                .ty = ty,
+                .store_module = source.module,
+            });
+        }
+    }
+
+    fn prependStoredCaptureInitializers(
+        self: *ProcBodyBuilder,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        var continuation = next;
+        var index = self.stored_capture_initializers.items.len;
+        while (index > 0) {
+            index -= 1;
+            const capture = self.stored_capture_initializers.items[index];
+            const store_module = procedureModuleById(self.parent.modules, capture.store_module);
+            continuation = try self.restoreConstNodeInto(
+                capture.local,
+                store_module,
+                self.module,
+                capture.node,
+                capture.ty,
+                continuation,
+            );
+        }
+        return continuation;
     }
 
     fn prependLambdaArgPatternBindings(self: *ProcBodyBuilder, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
@@ -9258,8 +9330,11 @@ const ProcBodyBuilder = struct {
             .record_destructure => |destructs| try self.bindRecordPattern(pattern.ty, destructs, source, next),
             .nominal => |nominal| try self.bindNominalPattern(pattern.ty, nominal.backing_pattern, source, next),
             .list => |list| try self.bindIrrefutableListPattern(list, source, next),
+            .applied_tag => |tag| blk: {
+                try self.requireIrrefutableTagPattern(pattern.ty, tag.name, tag.args);
+                break :blk try self.lowerAppliedTagPatternThen(pattern.ty, tag.name, tag.args, source, next, null, &.{});
+            },
             .underscore => next,
-            .applied_tag,
             .num_literal,
             .small_dec_literal,
             .dec_literal,
@@ -20224,6 +20299,10 @@ const ProcBodyBuilder = struct {
                 }
             },
             .nominal => |nominal| try self.reservePatternBindings(nominal.backing_pattern),
+            .applied_tag => |tag| {
+                try self.requireIrrefutableTagPattern(pattern.ty, tag.name, tag.args);
+                for (tag.args) |arg| try self.reservePatternBindings(arg);
+            },
             .list => |list| {
                 if (list.patterns.len != 0) {
                     boxyLowerInvariant("refutable list pattern reached boxy irrefutable binder reservation");
@@ -20241,10 +20320,40 @@ const ProcBodyBuilder = struct {
             .str_literal,
             .str_interpolation,
             => {},
-            .applied_tag,
             .runtime_error,
             .pending,
             => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable binder reservation"),
+        }
+    }
+
+    fn requireIrrefutableTagPattern(
+        self: *ProcBodyBuilder,
+        ty: checked.CheckedTypeId,
+        name: names.TagNameId,
+        args: []const checked.CheckedPatternId,
+    ) Allocator.Error!void {
+        var current = self.repForType(ty);
+        while (true) {
+            const rep = self.parent.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.requiredSingleChild(current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent => current = self.requiredSingleChild(current, .nominal_backing).rep,
+                    .opaque_nominal, .builtin_other => boxyLowerInvariant("irrefutable tag pattern had an opaque nominal representation"),
+                },
+                .tag_union => {
+                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                    if (variants.len != 1) {
+                        boxyLowerInvariant("refutable tag pattern reached boxy irrefutable binder lowering");
+                    }
+                    const variant = self.tagVariant(rep, name);
+                    if (variant.index != 0) {
+                        boxyLowerInvariant("single-variant tag pattern had a nonzero variant index");
+                    }
+                    return try self.validateTagPatternPayloads(name, variant.payloads, args);
+                },
+                else => boxyLowerInvariant("irrefutable tag pattern did not have a tag-union representation"),
+            }
         }
     }
 

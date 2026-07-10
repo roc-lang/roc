@@ -2376,6 +2376,17 @@ appears only in a local aggregate, temporary receiver, nested expression, or
 destructuring pattern is therefore still present in the explicit representation
 table consumed by lowering.
 
+A finalized stored function may carry `ConstStore` captures. The worker plan
+records the exact module-qualified `ConstFnId` that owns those captures, and
+representation planning analyzes the checked type of every canonical captured
+binder in the nested function's checked module. Worker lowering reserves one
+frame local for each such binder, binds the original checked `PatternBinderId`,
+and restores the capture's explicit `ConstNodeId` from the owning `ConstStore`
+before entering the checked function body. Capture values are not recovered
+from the use site, reconstructed from closure shape, or turned into synthetic
+worker arguments. Their source module, value node, binder identity, and checked
+type are all explicit checked-stage data.
+
 Entry wrapper procedure templates name an `EntryWrapperTable` entry. Boxy
 planning and lowering use the wrapper's checked `body_expr` as the worker body
 for that procedure template. The wrapper table is checked artifact data; the
@@ -4054,12 +4065,26 @@ id that worker emission must lower. Lifted, synthetic, intrinsic, pending
 callable-eval roots, and generated runtime functions are not compatibility
 fallbacks for this path.
 
+Stored-function capture initialization precedes ordinary body execution but is
+part of the ownership-neutral worker LIR seen by ARC. Static descriptors needed
+to restore capture constants are materialized first; capture constants are then
+restored into their bound frame locals; erased-callable argument captures and
+the checked body follow. ARC therefore owns capture lifetimes exactly like
+ordinary checked declaration locals. The lowerer does not append backend-only
+cleanup or hide capture allocations from ARC.
+
 The worker body builder consumes checked expression and pattern ids directly and
 emits statement LIR. Lambda worker arguments become LIR proc arguments, binder
 patterns map to those argument locals, and expression lowering writes into an
 explicit target local before continuing to the next statement. Literal workers
 use the ordinary `assign_literal` statements with layouts selected from the
 boxy layout plan; zst values use ordinary empty-struct assignment.
+
+An applied-tag worker argument pattern is irrefutable only when its planned
+checked representation contains exactly one tag variant with that checked tag
+identity. Lowering validates that fact, reserves the payload binders, and uses
+the explicit variant payload plan. It never assumes a tag pattern is
+irrefutable merely because its observed discriminant is zero.
 
 Checked string segment literals lower to ordinary LIR string-view literals. The
 lowerer copies the checked literal bytes into the LIR string store and emits
@@ -4395,6 +4420,18 @@ target storage, runtime release follows the nested adapter mapping first, then
 releases the obsolete outer box allocation without dropping payload ownership
 that moved into the target. This rule applies equally to direct tag variants,
 residual rows, records, lists, and nested boxes.
+
+Call-result materialization consumes the worker's returned value. When source
+and target descriptors differ, the runtime first materializes target bytes,
+then retains only target ownership edges that explicitly alias source edges,
+and finally decrefs the complete moved source through its source descriptor.
+Alias pairing follows box payload descriptors, list allocation identity,
+record fields, and the observed tag variant or row extension on both sides.
+Tag arguments use their explicit variant payload descriptors; numeric
+discriminant equality is not a tag-identity proof. Fresh target allocations are
+already owned and are not retained again. This retain-then-drop transfer is the
+single call-result ownership protocol; the runtime does not reconstruct a
+partial source-release set after conversion.
 
 ### Boxy LIR Data
 

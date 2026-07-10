@@ -261,8 +261,111 @@ test "boxy abi list materialization preserves reserved capacity" {
     try std.testing.expectEqual(reserved_capacity, materialized.getCapacity());
     try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[3]), materialized_desc);
 
-    boxy_abi.roc_boxy_drop(@ptrCast(&source), @intFromEnum(list_layout), &descs[2], 1, 1, 0);
     boxy_abi.roc_boxy_drop(@ptrCast(&materialized), @intFromEnum(list_layout), &descs[3], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi call result transfers nested tag list ownership" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const branch_name = try setup.store.insertString("Branch");
+    const list_str_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.str));
+    const node_layout = try setup.layouts.putTagUnion(&.{list_str_layout});
+    const list_node_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(node_layout));
+    const desc_refs = [_]LIR.BoxyDescRef{
+        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(1) },
+        .{ .static = @enumFromInt(2) },
+        .{ .static = @enumFromInt(3) },
+        .{ .static = @enumFromInt(4) },
+        .{ .static = @enumFromInt(5) },
+    };
+    const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{
+        .{ .payload_index = 0, .desc = .{ .static = @enumFromInt(2) } },
+        .{ .payload_index = 0, .desc = .{ .static = @enumFromInt(3) } },
+    };
+    const variants = [_]LirProgram.BoxyTagVariant{
+        .{
+            .name = branch_name,
+            .discriminant = 0,
+            .payload_layout = list_str_layout,
+            .payload_descs = .{ .start = 0, .len = 1 },
+        },
+        .{
+            .name = branch_name,
+            .discriminant = 0,
+            .payload_layout = list_str_layout,
+            .payload_descs = .{ .start = 1, .len = 1 },
+        },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = node_layout, .contains_refcounted = true, .tag_variants = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = node_layout, .contains_refcounted = true, .tag_variants = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = list_node_layout, .contains_refcounted = true, .nested_descs = .{ .start = 4, .len = 1 } },
+        .{ .payload_layout = list_node_layout, .contains_refcounted = true, .nested_descs = .{ .start = 5, .len = 1 } },
+    };
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+        .tag_variants = &variants,
+        .tag_payload_descs = &payload_descs,
+    });
+
+    var source_children = builtins.list.listWithCapacity(
+        1,
+        @alignOf(builtins.str.RocStr),
+        @sizeOf(builtins.str.RocStr),
+        true,
+        null,
+        &builtins.utils.rcNone,
+        setup.env.get_ops(),
+    );
+    source_children.length = 1;
+    const child_strings: [*]builtins.str.RocStr = @ptrCast(@alignCast(source_children.bytes.?));
+    child_strings[0] = builtins.str.RocStr.fromSlice(
+        "a heap string nested below a tag and two list ownership boundaries",
+        setup.env.get_ops(),
+    );
+
+    const node_sa = setup.layouts.layoutSizeAlign(setup.layouts.getLayout(node_layout));
+    var source_node: [128]u8 align(16) = @splat(0);
+    @memcpy(source_node[0..@sizeOf(builtins.list.RocList)], std.mem.asBytes(&source_children));
+    const node_info = setup.layouts.getTagUnionInfo(setup.layouts.getLayout(node_layout));
+    node_info.data.writeDiscriminant(&source_node, 0, setup.layouts.targetUsize());
+
+    var source = builtins.list.listWithCapacity(
+        1,
+        @intCast(node_sa.alignment.toByteUnits()),
+        node_sa.size,
+        true,
+        null,
+        &builtins.utils.rcNone,
+        setup.env.get_ops(),
+    );
+    source.length = 1;
+    @memcpy(source.bytes.?[0..node_sa.size], source_node[0..node_sa.size]);
+
+    var materialized: builtins.list.RocList = undefined;
+    var materialized_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_materialize_call_result(
+        @ptrCast(&materialized),
+        &materialized_desc,
+        @ptrCast(&source),
+        @intFromEnum(list_node_layout),
+        &descs[6],
+        &descs[7],
+        @intFromEnum(list_node_layout),
+    );
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[7]), materialized_desc);
+    try std.testing.expectEqual(@as(usize, 1), materialized.len());
+
+    boxy_abi.roc_boxy_drop(@ptrCast(&materialized), @intFromEnum(list_node_layout), &descs[7], 1, 1, 0);
     try setup.env.checkForLeaks();
 }
 

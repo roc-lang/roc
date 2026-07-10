@@ -243,12 +243,18 @@ pub const WorkerSource = union(enum) {
     nested_expr: ExprRef,
 };
 
+pub const StoredFnSource = struct {
+    module: checked.ModuleId,
+    fn_id: checked.ConstFnId,
+};
+
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
     root_request: ?checked.RootRequest = null,
     source: WorkerSource,
     checked_type: TypeRef,
     rep: TypeRepId,
+    stored_fn: ?StoredFnSource = null,
     hidden_descs: Span = .{},
     hidden_dicts: Span = .{},
     erased_captures: Span = .{},
@@ -689,16 +695,21 @@ const Builder = struct {
         }
 
         const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
+        const body = if (self.root_module != null) self.rootWorkerBody(source) else null;
         try self.plan.workers.append(self.allocator, .{
             .id = worker_id,
             .root_request = root_request,
             .source = source,
             .checked_type = worker_type,
             .rep = rep,
+            .stored_fn = if (body) |resolved_body| switch (resolved_body) {
+                .checked_expr => |checked_body| checked_body.stored_fn,
+                .intrinsic_wrapper, .hosted_proc => null,
+            } else null,
         });
 
-        if (self.root_module != null) {
-            try self.analyzeWorkerBodyTypes(source);
+        if (body) |resolved_body| {
+            try self.analyzeWorkerBodyTypes(resolved_body);
         }
 
         return worker_id;
@@ -2791,10 +2802,12 @@ const Builder = struct {
         return false;
     }
 
-    fn analyzeWorkerBodyTypes(self: *Builder, source: WorkerSource) Allocator.Error!void {
-        const body = self.rootWorkerBody(source);
+    fn analyzeWorkerBodyTypes(self: *Builder, body: WorkerBody) Allocator.Error!void {
         switch (body) {
-            .checked_expr => |checked_body| try self.analyzeWorkerRootExprTypes(checked_body.view, checked_body.root_expr),
+            .checked_expr => |checked_body| {
+                if (checked_body.stored_fn) |stored_fn| try self.analyzeStoredFnCaptureTypes(stored_fn);
+                try self.analyzeWorkerRootExprTypes(checked_body.view, checked_body.root_expr);
+            },
             .intrinsic_wrapper => |intrinsic| try self.analyzeIntrinsicWrapperTypes(intrinsic.view, intrinsic.wrapper),
             .hosted_proc => |hosted| try self.analyzeHostedProcTypes(hosted.view, hosted.proc),
         }
@@ -2819,6 +2832,7 @@ const Builder = struct {
         checked_expr: struct {
             view: ModuleView,
             root_expr: checked.CheckedExprId,
+            stored_fn: ?StoredFnSource = null,
         },
         intrinsic_wrapper: struct {
             view: ModuleView,
@@ -2985,10 +2999,7 @@ const Builder = struct {
             boxyPlanInvariant("callable eval function value referenced a missing ConstStore function");
         }
         const fn_value = store.getFn(fn_id);
-        if (fn_value.captures.len != 0) {
-            boxyPlanInvariant("capturing stored function reached runtime boxy body type planning before const capture lowering");
-        }
-        return switch (fn_value.fn_def) {
+        var body = switch (fn_value.fn_def) {
             .local_template,
             .imported_template,
             .checked_generated,
@@ -3001,6 +3012,33 @@ const Builder = struct {
             .encoder_for_runtime,
             => boxyPlanInvariant("generated parser/encoder stored function reached runtime boxy body type planning before generated runtime support"),
         };
+        if (fn_value.captures.len != 0) {
+            switch (body) {
+                .checked_expr => |*checked_body| checked_body.stored_fn = .{
+                    .module = store_view.key,
+                    .fn_id = fn_id,
+                },
+                .intrinsic_wrapper,
+                .hosted_proc,
+                => boxyPlanInvariant("capturing stored function did not resolve to a checked function body"),
+            }
+        }
+        return body;
+    }
+
+    fn analyzeStoredFnCaptureTypes(self: *Builder, stored_fn: StoredFnSource) Allocator.Error!void {
+        const store_view = self.moduleForId(stored_fn.module);
+        const store = store_view.const_store orelse
+            boxyPlanInvariant("stored function capture plan had no checked ConstStore");
+        const fn_value = store.getFn(stored_fn.fn_id);
+        const fn_view = switch (fn_value.fn_def) {
+            .nested => |nested| self.moduleForId(.{ .bytes = canonical.procTemplateModuleDigest(nested.owner).bytes }),
+            else => boxyPlanInvariant("capturing stored function did not reference a checked nested function"),
+        };
+        for (fn_value.captures) |capture| {
+            if (!capture.id.isCanonical()) continue;
+            _ = try self.analyzeType(fn_view, self.checkedBinderType(fn_view, capture.id.binder()));
+        }
     }
 
     fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
@@ -3072,6 +3110,18 @@ const Builder = struct {
             };
         }
         boxyPlanInvariant("stored nested function referenced a missing checked nested site");
+    }
+
+    fn checkedBinderType(_: *Builder, view: ModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
+        const raw = @intFromEnum(binder);
+        if (raw >= view.checked_bodies.patternBinderCount()) {
+            boxyPlanInvariant("stored function capture binder was outside the checked body store");
+        }
+        const pattern = view.checked_bodies.patternBinder(@enumFromInt(raw)).pattern;
+        if (@intFromEnum(pattern) >= view.checked_bodies.patternCount()) {
+            boxyPlanInvariant("stored function capture pattern was outside the checked body store");
+        }
+        return view.checked_bodies.pattern(pattern).ty;
     }
 
     fn callableEvalTemplate(
@@ -4274,7 +4324,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     const gpa = std.testing.allocator;
 
     const root_key = moduleKey(1);
-    const template_ref = dummyProcedureTemplate();
+    const template_ref = procedureTemplateRef(root_key, 0);
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .empty_record = {} },
         .{ .function = .{
@@ -4283,6 +4333,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .ret = @enumFromInt(0),
             .needs_instantiation = false,
         } },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
     };
     const exprs = [_]checked.StoredCheckedExpr{
         .{
@@ -4308,8 +4359,25 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .checked_fn_root = @enumFromInt(1),
         },
     };
+    const patterns = [_]checked.StoredCheckedPattern{.{
+        .id = @enumFromInt(0),
+        .ty = @enumFromInt(2),
+        .source_region = .zero(),
+        .data = .{ .assign = @enumFromInt(0) },
+    }};
+    const pattern_binders = [_]checked.CheckedPatternBinder{.{
+        .id = @enumFromInt(0),
+        .pattern = @enumFromInt(0),
+        .reassignable = false,
+    }};
     var const_store = check.ConstStore.ConstStore.init(gpa);
     defer const_store.deinit();
+    const capture_value = try const_store.append(.{ .scalar = .{ .u64 = 42 } });
+    const captures = [_]check.ConstStore.ConstCapture{.{
+        .id = checked.CaptureId.fromBinder(@enumFromInt(0)),
+        .ty = @enumFromInt(0),
+        .value = capture_value,
+    }};
     const fn_id = try const_store.appendFn(.{
         .fn_def = .{ .nested = .{
             .owner = template_ref,
@@ -4318,6 +4386,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
         } },
         .source_fn_ty = @enumFromInt(1),
         .source_fn_key = typeKey(1),
+        .captures = &captures,
     });
     var compile_time_roots = [_]checked.CompileTimeRoot{
         .{
@@ -4363,18 +4432,35 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .procedure_binding = @enumFromInt(0),
         },
     };
+    const root_view = ModuleView{
+        .key = root_key,
+        .checked_types = .{ .stored_payloads = &payloads },
+        .checked_bodies = .{
+            .stored_exprs = &exprs,
+            .stored_patterns = &patterns,
+            .pattern_binders = &pattern_binders,
+        },
+        .compile_time_roots = &compile_time_root_table,
+        .nested_proc_sites = &nested_proc_site_table,
+        .top_level_procedure_bindings = &binding_table,
+        .callable_eval_templates = .{ .templates = &callable_templates },
+        .const_store = &const_store,
+    };
+
+    var body_builder = Builder.init(gpa, .{ .root_view = root_view });
+    defer body_builder.deinit();
+    const body = body_builder.callableEvalTemplateBody(root_view, @enumFromInt(0));
+    const stored_fn = switch (body) {
+        .checked_expr => |checked_body| checked_body.stored_fn orelse return error.TestUnexpectedResult,
+        .intrinsic_wrapper, .hosted_proc => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(root_key, stored_fn.module);
+    try std.testing.expectEqual(fn_id, stored_fn.fn_id);
+    try body_builder.analyzeWorkerBodyTypes(body);
+    try std.testing.expect(body_builder.plan.repForSourceType(.{ .module = root_key, .ty = @enumFromInt(2) }) != null);
 
     var plan = try analyzeProgram(gpa, .{
-        .root_view = .{
-            .key = root_key,
-            .checked_types = .{ .stored_payloads = &payloads },
-            .checked_bodies = .{ .stored_exprs = &exprs },
-            .compile_time_roots = &compile_time_root_table,
-            .nested_proc_sites = &nested_proc_site_table,
-            .top_level_procedure_bindings = &binding_table,
-            .callable_eval_templates = .{ .templates = &callable_templates },
-            .const_store = &const_store,
-        },
+        .root_view = root_view,
         .roots = &roots,
     }, .{});
     defer plan.deinit();
