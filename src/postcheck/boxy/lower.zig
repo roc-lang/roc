@@ -6608,10 +6608,17 @@ const ProcBodyBuilder = struct {
         const source_desc_info = try self.adapterDescriptorForSource(source, source_rep);
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("planned boxy call adapter had no source descriptor");
+        var target_desc_prerequisites = std.ArrayList(DescriptorArgLocal).empty;
+        defer target_desc_prerequisites.deinit(self.parent.allocator);
         const planned_target_desc_info = if (self.repIsBareDynamic(self.canonicalDescriptorRep(target_rep)))
             ResultDescriptorRef{ .desc = source_desc }
         else
-            try self.adapterDescriptorForCallBoundary(target_rep, source_rep, source_desc_info);
+            try self.adapterDescriptorForCallBoundary(
+                target_rep,
+                source_rep,
+                source_desc_info,
+                &target_desc_prerequisites,
+            );
         const target_desc_info = self.resultDescriptorForCallTarget(target, planned_target_desc_info);
         const target_desc = target_desc_info.desc orelse
             boxyLowerInvariant("planned boxy call adapter had no target descriptor");
@@ -6638,6 +6645,7 @@ const ProcBodyBuilder = struct {
             .next = next,
         } });
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(target_desc_prerequisites.items, continuation);
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.prerequisite, continuation);
         return try self.prependOptionalDescriptorMaterialization(source_desc_info.materialize, continuation);
     }
@@ -6904,16 +6912,172 @@ const ProcBodyBuilder = struct {
         return result;
     }
 
+    fn adapterRecordDescriptorForCallBoundary(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_desc_info: ResultDescriptorRef,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!?ResultDescriptorRef {
+        const target_record_rep = self.recordRepForBoundary(target_rep) orelse return null;
+        const source_record_rep = self.recordRepForBoundary(source_rep) orelse return null;
+        const target_record = self.parent.plan.representations.items[@intFromEnum(target_record_rep)];
+        const source_record = self.parent.plan.representations.items[@intFromEnum(source_record_rep)];
+        if (!self.repHasRecordFieldChildrenForBoundary(target_record) or
+            !self.repHasRecordFieldChildrenForBoundary(source_record))
+        {
+            return null;
+        }
+
+        const target_materialization = try self.descriptorMaterializationForKnownRep(target_rep);
+        const target_template_id = switch (target_materialization.desc) {
+            .static => |desc_id| desc_id,
+            .local, .runtime => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
+        };
+        const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
+
+        const source_desc = source_desc_info.desc orelse
+            boxyLowerInvariant("boxy record adapter source had no descriptor");
+        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
+            .static => DescriptorMaterialization{ .desc = source_desc },
+            .local, .runtime => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
+                .desc = materialize.materialize orelse
+                    boxyLowerInvariant("boxy record adapter source descriptor materialization had no template"),
+                .captures = materialize.captures,
+            } else null,
+        };
+        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
+            const source_template_id = switch (materialization.desc) {
+                .static => |desc_id| desc_id,
+                .local, .runtime => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
+            };
+            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+        } else null;
+
+        const target_nested = self.parent.result.boxy_desc_refs.items[target_template.nested_descs.start..][0..target_template.nested_descs.len];
+        var specialized_nested = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer specialized_nested.deinit(self.parent.allocator);
+        try specialized_nested.appendSlice(self.parent.allocator, target_nested);
+
+        var extra_captures = std.ArrayList(LIR.LocalId).empty;
+        defer extra_captures.deinit(self.parent.allocator);
+        var specialized = false;
+        const source_view = procedureModuleById(self.parent.modules, source_record.source_type.module);
+        const target_view = procedureModuleById(self.parent.modules, target_record.source_type.module);
+        var target_field_index: u16 = 0;
+        for (self.parent.plan.childSlice(target_record.children)) |target_child| {
+            switch (target_child.role) {
+                .record_field => |target_label| {
+                    const storage_layout = self.parent.recordPayloadFieldLayout(target_template.payload_layout, target_field_index);
+                    if (self.parent.layoutIsBoxStorage(storage_layout)) {
+                        const target_nested_index = self.recordFieldNestedDescriptorIndex(target_record_rep, target_field_index) orelse
+                            boxyLowerInvariant("erased boxy record adapter field had no target nested descriptor");
+                        if (target_nested_index >= specialized_nested.items.len) {
+                            boxyLowerInvariant("boxy record adapter target nested descriptor index exceeded template");
+                        }
+                        const source_field = self.findRecordFieldByLabel(
+                            source_record_rep,
+                            source_view,
+                            target_view,
+                            target_label,
+                        ) orelse boxyLowerInvariant("boxy record adapter source was missing target field");
+
+                        const exact_source_desc: LIR.BoxyDescRef = if (self.recordFieldNestedDescriptorIndex(
+                            source_record_rep,
+                            source_field.index,
+                        )) |source_nested_index| source_nested: {
+                            if (source_template) |template| {
+                                if (source_nested_index >= template.nested_descs.len) {
+                                    boxyLowerInvariant("boxy record adapter source nested descriptor index exceeded template");
+                                }
+                                break :source_nested self.parent.result.boxy_desc_refs.items[template.nested_descs.start + source_nested_index];
+                            }
+
+                            const nested_local = try self.addFrameLocal(.opaque_ptr);
+                            try prerequisites.append(self.parent.allocator, .{
+                                .local = nested_local,
+                                .materialize = source_desc,
+                                .nested_index = source_nested_index,
+                            });
+                            break :source_nested .{ .local = nested_local };
+                        } else source_known: {
+                            const source_field_desc = try self.adapterDescriptorForKnownRep(source_field.rep);
+                            if (source_field_desc.prerequisite) |prerequisite| {
+                                try prerequisites.append(self.parent.allocator, prerequisite);
+                            }
+                            if (source_field_desc.materialize) |materialize| {
+                                try prerequisites.append(self.parent.allocator, materialize);
+                            }
+                            break :source_known source_field_desc.desc orelse
+                                boxyLowerInvariant("boxy record adapter source field had no exact descriptor");
+                        };
+
+                        specialized_nested.items[target_nested_index] = exact_source_desc;
+                        if (exact_source_desc.localOrNull()) |local| {
+                            try appendUniqueLocal(self.parent.allocator, &extra_captures, local);
+                        }
+                        specialized = true;
+                    }
+                    target_field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
+                else => boxyLowerInvariant("boxy record adapter target had a non-record child role"),
+            }
+        }
+        if (!specialized) return null;
+
+        const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
+        try self.parent.result.boxy_desc_refs.appendSlice(self.parent.allocator, specialized_nested.items);
+        const specialized_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+        var specialized_template = target_template;
+        specialized_template.nested_descs = .{ .start = nested_start, .len = @intCast(specialized_nested.items.len) };
+        try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized_template);
+
+        var captures = std.ArrayList(LIR.LocalId).empty;
+        defer captures.deinit(self.parent.allocator);
+        const target_captures = self.parent.result.store.getLocalSpan(target_materialization.captures);
+        for (0..GuardedList.borrowLen(target_captures)) |index| {
+            try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(target_captures, index));
+        }
+        if (source_materialization) |materialization| {
+            const source_captures = self.parent.result.store.getLocalSpan(materialization.captures);
+            for (0..GuardedList.borrowLen(source_captures)) |index| {
+                try appendUniqueLocal(self.parent.allocator, &captures, GuardedList.at(source_captures, index));
+            }
+        }
+        for (extra_captures.items) |local| {
+            try appendUniqueLocal(self.parent.allocator, &captures, local);
+        }
+
+        const capture_span = if (captures.items.len == 0)
+            LIR.LocalSpan.empty()
+        else
+            try self.parent.result.store.addLocalSpan(captures.items);
+        return try self.adapterDescriptorFromMaterialization(.{
+            .desc = .{ .static = specialized_id },
+            .captures = capture_span,
+        });
+    }
+
     fn adapterDescriptorForCallBoundary(
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
         source_desc_info: ResultDescriptorRef,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
     ) Allocator.Error!ResultDescriptorRef {
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("planned call adapter source descriptor was unavailable");
         if (try self.adapterTagDescriptorForCallBoundary(target_rep, source_rep, source_desc_info)) |tag_desc| {
             return tag_desc;
+        }
+        if (try self.adapterRecordDescriptorForCallBoundary(
+            target_rep,
+            source_rep,
+            source_desc_info,
+            prerequisites,
+        )) |record_desc| {
+            return record_desc;
         }
         const known = try self.adapterDescriptorForKnownRep(target_rep);
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
