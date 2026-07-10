@@ -6503,7 +6503,19 @@ const ProcBodyBuilder = struct {
 
         var continuation = next;
         const direct_result_desc = try self.directCallResultDescriptorRef(worker_ret_rep, hidden_desc_args, hidden_desc_locals);
-        const call_target = if (target_layout == ret_layout.layoutIdx() and self.canonicalDescriptorRep(target_rep) == self.canonicalDescriptorRep(worker_ret_rep)) blk: {
+        const target_desc = self.parent.result.store.getLocal(target).boxy_desc;
+        const checked_return_types_match = if (ret_substitution) |substitution|
+            planTypeRefEql(substitution.operand_type, substitution.call_type)
+        else
+            true;
+        // A descriptor-bearing target can receive a direct result only when
+        // the call can supply that descriptor without changing checked shape.
+        const descriptor_boundary_is_direct = (target_desc == null and direct_result_desc.desc == null) or
+            (checked_return_types_match and (target_desc == null or direct_result_desc.desc != null));
+        const call_target = if (target_layout == ret_layout.layoutIdx() and
+            self.canonicalDescriptorRep(target_rep) == self.canonicalDescriptorRep(worker_ret_rep) and
+            descriptor_boundary_is_direct)
+        blk: {
             try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
             break :blk target;
         } else blk: {
@@ -7694,6 +7706,14 @@ const ProcBodyBuilder = struct {
         const cond_expr = self.module.checked_bodies.expr(cond);
         const cond_rep = self.repForType(cond_expr.ty);
         const cond_local = try self.addFrameBoundaryTargetLocalForRep(cond_rep);
+        // Matching an otherwise-direct concrete tag result needs a slot that
+        // carries the exact descriptor through the planned call adapter.
+        if (self.parent.result.store.getLocal(cond_local).boxy_desc == null and
+            self.matchConditionNeedsExactResultDescriptor(cond, cond_rep))
+        {
+            const desc_local = try self.addFrameLocal(.opaque_ptr);
+            self.parent.result.store.setLocalBoxyDesc(cond_local, .{ .local = desc_local });
+        }
         const outer_descriptors = try self.snapshotDescriptorBindings();
         defer outer_descriptors.deinit(self.parent.allocator);
         const done = self.freshJoinPointId();
@@ -7716,6 +7736,34 @@ const ProcBodyBuilder = struct {
         } });
         self.restoreDescriptorBindings(outer_descriptors);
         return match_stmt;
+    }
+
+    fn matchConditionNeedsExactResultDescriptor(
+        self: *ProcBodyBuilder,
+        cond: checked.CheckedExprId,
+        cond_rep: Plan.TypeRepId,
+    ) bool {
+        if (self.tagVariantRepForBoundary(cond_rep) == null) return false;
+        const call = switch (self.module.checked_bodies.expr(cond).data) {
+            .call => |call| call,
+            else => return false,
+        };
+        if (call.direct_target == null) return false;
+        const direct_plan = self.parent.plan.directCallPlanForCall(.{ .module = self.module.key, .expr = cond }) orelse return false;
+        const substitution = direct_plan.ret_substitution orelse return false;
+        const worker_plan = self.parent.plan.workers.items[@intFromEnum(direct_plan.worker)];
+        const worker_function = self.functionChildrenForRep(worker_plan.rep) orelse return false;
+        if (worker_function.ret != substitution.worker_rep) {
+            boxyLowerInvariant("boxy match call result representation disagreed with its worker plan");
+        }
+
+        const worker_layout = self.parent.layout_plan.workerLayoutFor(direct_plan.worker);
+        const worker_ret_layout = if (worker_layout.ret) |ret| ret else worker_layout.value;
+        if (self.workerRuntimeLayoutForRep(cond_rep).layoutIdx() != worker_ret_layout.layoutIdx()) return false;
+        if (self.canonicalDescriptorRep(cond_rep) != self.canonicalDescriptorRep(worker_function.ret)) return false;
+
+        const canonical_worker_ret = self.canonicalDescriptorRep(worker_function.ret);
+        return self.parent.plan.representations.items[@intFromEnum(canonical_worker_ret)].descriptor == null;
     }
 
     fn reserveMatchBranchRepresentativeBindings(
@@ -12472,7 +12520,7 @@ const ProcBodyBuilder = struct {
 
         var result = info;
         result.desc = target_desc;
-        const target_desc_local = target_desc.localOrNull() orelse return info;
+        const target_desc_local = target_desc.localOrNull() orelse return result;
         if (self.localIsReadOnlyDescriptorInput(target_desc_local)) {
             result.materialize = null;
             return result;

@@ -4313,8 +4313,19 @@ as evidence about bytes returned by a compiler worker.
 
 For every checked direct call to a known procedure, the lowerer
 emits a direct LIR call to the corresponding private boxy worker and supplies
-the hidden descriptors and dictionaries required by that worker. For every
-checked static-dispatch call, it emits either:
+the hidden descriptors and dictionaries required by that worker. A direct call
+may write into the requested result local only when its committed layout and
+canonical representation agree with the worker result and the descriptor
+boundary is an identity. A descriptor-bearing result target requires a
+descriptor supplied by the call, and differing checked return types require the
+planned result adapter even when their layouts happen to be equal. When a match
+immediately consumes a descriptor-less worker result whose tag representation
+otherwise satisfies the direct-call checks, the match result binding receives a
+fresh descriptor local and the planned adapter materializes the worker's exact
+tag descriptor into it. Pattern lowering consumes that descriptor; it never
+interprets the bytes using only the match's contextual open-row descriptor.
+
+For every checked static-dispatch call, it emits either:
 
 - a concrete direct structural operation when the checked dispatch plan and the
   current type representation make the operation statically concrete, or
