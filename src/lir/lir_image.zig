@@ -741,6 +741,7 @@ test "LIR image views empty and populated boxy tables" {
         .nested_descs = .{ .start = 0, .len = 1 },
         .tag_variants = .{ .start = 0, .len = 1 },
         .copy_plan = .{ .start = 0, .len = 1 },
+        .inspect_method = @enumFromInt(0),
     });
     try lowered.boxy_dicts.append(allocator, .{
         .method_slots = .{ .start = 0, .len = 1 },
@@ -776,6 +777,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_arg_layouts.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_hidden_desc_sources.len);
     try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_type_descs[0].inspect_method.?));
     try std.testing.expectEqual(@as(u16, 0), populated_view.boxy_tag_variants[0].discriminant);
     try std.testing.expectEqualStrings("Ok", populated_view.store.getString(populated_view.boxy_tag_variants[0].name));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_payload_descs[0].payload_index);

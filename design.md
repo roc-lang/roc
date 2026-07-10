@@ -2463,8 +2463,8 @@ dictionary data; it is not recovered from field names during lowering.
 
 ### Boxy `TypeDesc`
 
-A boxy `TypeDesc` is runtime data for representation, not method dispatch. It
-describes the operations needed for a value representation:
+A boxy `TypeDesc` is primarily runtime data for representation. It describes
+the operations needed for a value representation:
 
 - size and alignment of the payload representation when the payload is stored
   inside a box or copied between stack/heap slots
@@ -2472,9 +2472,10 @@ describes the operations needed for a value representation:
 - the explicit nested drop/incref/free/copy plan for payload bytes
 - the concrete LIR layout for known concrete payloads
 - descriptor references for nested dynamic payload positions
-- optional structural operation entries such as equality, hashing, or
-  inspection only when those operations are representation operations rather
-  than user methods
+- optional structural operation entries such as equality and hashing
+- an optional planned `to_inspect` method slot for a nominal identity that can
+  reach the generic `Str.inspect` intrinsic; this narrow method entry preserves
+  nominal inspection after the value has been erased
 
 The exact field order and encoding of `TypeDesc` is LIR-owned static data.
 Every descriptor has an explicit id in the lowered program. Backends and the
@@ -2493,7 +2494,10 @@ introduced explicitly.
 ### Boxy Dictionaries And Vtables
 
 A boxy dictionary is runtime data for polymorphic behavior and static dispatch.
-It is distinct from `TypeDesc`. A dictionary may contain:
+It is distinct from `TypeDesc`. The descriptor-carried `to_inspect` slot is the
+single exception: generic `Str.inspect` receives a value descriptor but no
+method dictionary, so the checked inspect demand attaches that one planned
+method adapter to the nominal descriptor. A dictionary may contain:
 
 - method function pointers
 - hidden `TypeDesc` references required by those methods
@@ -4311,6 +4315,21 @@ call site's expected descriptor. ARC and every consumer use the descriptor
 output attached to the returned value; they do not treat the expected descriptor
 as evidence about bytes returned by a compiler worker.
 
+Checked direct and function-value uses of the generic `Str.inspect` intrinsic
+produce inspect-method demands in the Boxy plan. Each demanded nominal
+representation records its exact `to_inspect` worker. Descriptor construction
+turns that plan into a method slot carrying the worker procedure, concrete
+argument layout and descriptor, hidden descriptor sources, and nested
+dictionaries. Transparent nominals may share their backing layout, but they
+retain a distinct descriptor identity when they carry an inspect method.
+Runtime recursive inspection checks this slot before opaque or structural
+rendering, adapts the borrowed value into the worker argument representation,
+and invokes the worker through the registered-procedure ABI. The prepared call
+marks each adapted argument as borrowed or owned so the runtime preserves a
+borrowed source, releases an owned temporary when the worker borrows it, and
+releases an owned returned `Str` after appending its bytes. Backends do not
+resolve method names or select this behavior.
+
 For every checked direct call to a known procedure, the lowerer
 emits a direct LIR call to the corresponding private boxy worker and supplies
 the hidden descriptors and dictionaries required by that worker. A direct call
@@ -4464,10 +4483,10 @@ The boxy statement surface is:
 - `assign_boxy_adapt`: applies a named adapter plan to a source local with
   explicit source and target descriptor refs and an explicit transfer mode; the
   descriptor refs are local reads and are not stored in the global adapter
-- `assign_boxy_inspect`: produces a `Str` by invoking the structural inspect
-  operation named by an explicit `TypeDesc`; the statement reads the source
-  local, the descriptor ref, and the transfer mode, and it never reconstructs
-  inspect behavior from the source value's pointer-shaped layout
+- `assign_boxy_inspect`: produces a `Str` by invoking the planned custom inspect
+  method when the explicit `TypeDesc` carries one, otherwise by structural
+  inspection; the statement reads the source local, descriptor ref, and
+  transfer mode, and never reconstructs behavior from a pointer-shaped layout
 - `assign_call_dict`: performs a dictionary/vtable indirect call through a
   method slot with ordinary and hidden argument spans
 

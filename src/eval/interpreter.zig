@@ -902,6 +902,67 @@ pub const Interpreter = struct {
             return self.interp.resolveBoxyDictRef(frame, dict_ref);
         }
 
+        pub fn callInspectMethod(
+            self: BoxyFrameHooks,
+            method: LirProgram.BoxyMethodSlotId,
+            value: Value,
+            value_layout: layout_mod.Idx,
+            desc: *const LirProgram.BoxyTypeDesc,
+        ) Error!boxy_runtime.InspectCallResult {
+            const prepared = try self.interp.boxy_runtime.prepareInspectCall(
+                self,
+                self.interp.arena.allocator(),
+                method,
+                .{ .value = value, .layout = value_layout, .source_desc = desc },
+            );
+            const proc = self.interp.store.getProcSpec(prepared.proc);
+            if (prepared.arg_values.len == 0) {
+                return self.interp.invariantFailedError(
+                    "LIR/interpreter invariant violated: to_inspect worker call had no explicit argument",
+                    .{},
+                );
+            }
+            const argument_is_borrowed = (prepared.borrowed_args & 1) != 0;
+            const worker_borrows_argument = (proc.rc_borrowed_params & 1) != 0;
+            if (argument_is_borrowed and !worker_borrows_argument) {
+                const frame = self.frame orelse return self.interp.invariantFailedError(
+                    "LIR/interpreter invariant violated: to_inspect worker called without an active frame",
+                    .{},
+                );
+                try self.interp.performBoxyLayoutDrop(
+                    frame,
+                    prepared.arg_values[0],
+                    prepared.arg_layouts[0],
+                    prepared.arg_descs[0],
+                    .incref,
+                    1,
+                    .atomic,
+                );
+            }
+            const result = try self.interp.evalProcById(prepared.proc, prepared.arg_values, prepared.arg_layouts);
+            if (!argument_is_borrowed and worker_borrows_argument) {
+                const frame = self.frame orelse return self.interp.invariantFailedError(
+                    "LIR/interpreter invariant violated: to_inspect worker called without an active frame",
+                    .{},
+                );
+                try self.interp.performBoxyLayoutDrop(
+                    frame,
+                    prepared.arg_values[0],
+                    prepared.arg_layouts[0],
+                    prepared.arg_descs[0],
+                    .decref,
+                    1,
+                    .atomic,
+                );
+            }
+            return .{
+                .value = result.value,
+                .layout = result.layout,
+                .desc = result.desc,
+                .borrowed = proc.rc_ret_borrowed,
+            };
+        }
+
         pub fn layoutContainsRc(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) bool {
             return self.interp.layout_store.layoutContainsRcErasedBox(self.interp.layout_store.getLayout(layout_idx));
         }
@@ -2263,6 +2324,7 @@ pub const Interpreter = struct {
                         required_method,
                         call_args,
                         hidden_values,
+                        .move,
                     );
                     switch (prepared) {
                         .structural_eq => |operand_desc| {

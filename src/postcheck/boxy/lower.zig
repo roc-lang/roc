@@ -1010,6 +1010,41 @@ const ProcedureBuilder = struct {
         return dict_id;
     }
 
+    fn staticInspectMethodForRep(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+    ) Allocator.Error!?LirProgram.BoxyMethodSlotId {
+        const inspect = self.plan.inspectMethodForRep(rep_id) orelse return null;
+        const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
+        const source_rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const source_view = procedureModuleById(self.modules, source_rep.source_type.module);
+        const method = source_view.canonical_names.lookupMethodName("to_inspect") orelse
+            boxyLowerInvariant("planned boxy inspect method source had no to_inspect name");
+
+        var descriptor_sources = StaticDescriptorSourceMap{};
+        defer descriptor_sources.deinit(self.allocator);
+        try self.collectStaticDictionaryDescriptorSources(inspect.worker, rep_id, worker.checked_type, &descriptor_sources);
+        var desc_context = StaticDescInstantiationContext{};
+        defer desc_context.deinit(self.allocator);
+        var hidden_desc_refs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer hidden_desc_refs.deinit(self.allocator);
+        var nested_dict_refs = std.ArrayList(LIR.BoxyDictRef).empty;
+        defer nested_dict_refs.deinit(self.allocator);
+        try self.collectStaticHiddenDescRefsForWorker(inspect.worker, &descriptor_sources, &desc_context, &hidden_desc_refs);
+        try self.collectStaticHiddenDictRefsForWorker(inspect.worker, &nested_dict_refs);
+
+        const slot = LirProgram.BoxyMethodSlot{
+            .method = method,
+            .proc = try self.emitWorker(inspect.worker),
+            .hidden_descs = try self.appendStaticHiddenDescRefs(hidden_desc_refs.items),
+            .nested_dicts = try self.appendStaticHiddenDictRefs(nested_dict_refs.items),
+            .adapter = try self.staticMethodAdapterForWorker(inspect.worker, worker.checked_type, &descriptor_sources, &desc_context),
+        };
+        const slot_id: LirProgram.BoxyMethodSlotId = @enumFromInt(@as(u32, @intCast(self.result.boxy_method_slots.items.len)));
+        try self.result.boxy_method_slots.append(self.allocator, slot);
+        return slot_id;
+    }
+
     fn collectStaticHiddenDescRefsForWorker(
         self: *ProcedureBuilder,
         worker_id: Plan.WorkerPlanId,
@@ -1619,7 +1654,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.BoxyTypeDescId {
         const canonical_worker = self.canonicalDescriptorRep(worker_rep_id);
         const effective_source = self.effectiveStaticDescriptorSource(canonical_worker, source_rep_id, descriptor_sources);
-        const canonical_source = if (effective_source) |source| self.canonicalDescriptorArgRep(source) else null;
+        const canonical_source = if (effective_source) |source| self.descriptorIdentityRep(source) else null;
 
         const worker_rep = self.plan.representations.items[@intFromEnum(canonical_worker)];
         if (worker_rep.kind == .dynamic and worker_rep.children.len == 0 and worker_rep.tag_variants.len == 0) {
@@ -1667,6 +1702,7 @@ const ProcedureBuilder = struct {
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.staticFieldNamesForRep(canonical_worker),
             .inspect_opaque = self.repInspectsOpaque(canonical_worker),
+            .inspect_method = try self.staticInspectMethodForRep(canonical_source orelse canonical_worker),
             .debug_checked_type = worker_rep.source_type.ty,
         };
         return desc_id;
@@ -2229,6 +2265,7 @@ const ProcedureBuilder = struct {
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.repInspectsOpaque(rep_id),
+            .inspect_method = try self.staticInspectMethodForRep(rep_id),
             .debug_checked_type = rep.source_type.ty,
         };
         return desc_id;
@@ -2432,7 +2469,7 @@ const ProcedureBuilder = struct {
     }
 
     fn tagPayloadStorageDescRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.descriptorIdentityRep(rep_id);
         const rep = self.plan.representations.items[@intFromEnum(canonical_rep)];
         if (rep.kind == .box) {
             const payload_rep = self.singleChildRepForDesc(canonical_rep, .box_payload) orelse
@@ -2491,7 +2528,7 @@ const ProcedureBuilder = struct {
         if (self.layoutIsBoxStorage(storage_layout)) return initial;
         if (self.descriptorPayloadLayoutForRep(initial) == storage_layout) return initial;
 
-        const canonical = self.canonicalDescriptorRep(rep_id);
+        const canonical = self.descriptorIdentityRep(rep_id);
         if ((force or self.repNeedsTagPayloadDesc(canonical)) and
             self.descriptorPayloadLayoutForRep(canonical) == storage_layout)
         {
@@ -2589,6 +2626,37 @@ const ProcedureBuilder = struct {
                 .box => {
                     const child = self.singleChildRepForDesc(current, .box_payload) orelse
                         boxyLowerInvariant("box descriptor representation had no payload child");
+                    if (self.layout_plan.rep_layouts[@intFromEnum(current)].worker.layoutIdx() != self.layout_plan.rep_layouts[@intFromEnum(child)].worker.layoutIdx()) return current;
+                    current = child;
+                },
+                else => return current,
+            }
+        }
+    }
+
+    fn descriptorIdentityRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        var current = rep_id;
+        var depth: u16 = 0;
+        while (true) {
+            if (depth == 1024) boxyLowerInvariant("descriptor identity wrapper chain exceeded boxy procedure builder limit");
+            depth += 1;
+            if (self.plan.inspectMethodForRep(current) != null) return current;
+
+            const rep = self.plan.representations.items[@intFromEnum(current)];
+            switch (rep.kind) {
+                .alias => current = self.singleChildRepForDesc(current, .alias_backing) orelse
+                    boxyLowerInvariant("alias descriptor identity had no backing child"),
+                .nominal => |kind| switch (kind) {
+                    .transparent => {
+                        if (rep.declared_fields.len != 0) return current;
+                        current = self.singleChildRepForDesc(current, .nominal_backing) orelse
+                            boxyLowerInvariant("transparent nominal descriptor identity had no backing child");
+                    },
+                    .opaque_nominal, .builtin_other => return current,
+                },
+                .box => {
+                    const child = self.singleChildRepForDesc(current, .box_payload) orelse
+                        boxyLowerInvariant("box descriptor identity had no payload child");
                     if (self.layout_plan.rep_layouts[@intFromEnum(current)].worker.layoutIdx() != self.layout_plan.rep_layouts[@intFromEnum(child)].worker.layoutIdx()) return current;
                     current = child;
                 },
@@ -12672,7 +12740,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!DescriptorMaterialization {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
         if (rep.descriptor) |desc| {
             if (self.descriptorLocalForRequirementAndRepOrNull(desc, canonical_rep)) |local| {
@@ -12860,7 +12928,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!LIR.BoxyDescRef {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
         if (rep.descriptor) |desc| {
             if (self.descriptorBindingIsBoundForRep(canonical_rep)) {
@@ -12883,7 +12951,7 @@ const ProcBodyBuilder = struct {
         // for representations that carry no descriptor requirement of their
         // own (fully known at this site).
         if (self.parent.result.store.getLocal(source).boxy_desc) |source_desc| return source_desc;
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const source_desc = try self.descriptorRefForKnownRep(canonical_rep);
         self.parent.result.store.replaceLocalBoxyDesc(source, source_desc);
         return source_desc;
@@ -12957,7 +13025,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!LIR.BoxyDescRef {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         return self.parent.result.store.getLocal(source).boxy_desc orelse
             try self.descriptorRefForKnownRep(canonical_rep);
     }
@@ -13146,7 +13214,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!DescriptorMaterialization {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         if (!try self.descriptorTemplateNeedsCapturesForKnownRep(canonical_rep)) {
             return .{
                 .desc = try self.parent.staticDescRefForRep(canonical_rep),
@@ -13188,7 +13256,7 @@ const ProcBodyBuilder = struct {
         parent_desc: ?Plan.DescriptorRequirementId,
         visited: []bool,
     ) bool {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
         if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
@@ -13203,7 +13271,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
         visited: []bool,
     ) bool {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep_index = @intFromEnum(canonical_rep);
         if (visited[rep_index]) return false;
         visited[rep_index] = true;
@@ -13285,7 +13353,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!DescriptorMaterialization {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
         if (rep.descriptor != null) {
             if (!self.descriptorBindingIsBoundForRep(canonical_rep)) {
@@ -13334,7 +13402,7 @@ const ProcBodyBuilder = struct {
         captures: *std.ArrayList(LIR.LocalId),
         context: *DescriptorTemplateContext,
     ) Allocator.Error!LIR.BoxyDescRef {
-        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        const canonical_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep = self.parent.plan.representations.items[@intFromEnum(canonical_rep)];
         if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
@@ -13381,6 +13449,7 @@ const ProcBodyBuilder = struct {
             .tag_ext_desc = tag_ext_desc,
             .field_names = try self.parent.staticFieldNamesForRep(rep_id),
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
+            .inspect_method = try self.parent.staticInspectMethodForRep(rep_id),
             .debug_checked_type = rep.source_type.ty,
         };
         return desc_id;

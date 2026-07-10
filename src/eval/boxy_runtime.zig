@@ -124,6 +124,14 @@ pub const DictCallArg = struct {
 };
 
 /// The execution plan for one dictionary method call.
+pub const PreparedWorkerCall = struct {
+    proc: LIR.LirProcSpecId,
+    arg_values: []Value,
+    arg_layouts: []layout_mod.Idx,
+    arg_descs: []?*const LirProgram.BoxyTypeDesc,
+    borrowed_args: u64 = 0,
+};
+
 pub const PreparedDictCall = union(enum) {
     /// The slot dispatches to descriptor-guided structural equality of the
     /// two explicit arguments; no worker runs.
@@ -131,13 +139,17 @@ pub const PreparedDictCall = union(enum) {
     /// The slot dispatches to a worker proc with the fully adapted argument
     /// list (explicit args first, then hidden descriptors, then nested
     /// dictionaries).
-    call: struct {
-        proc: LIR.LirProcSpecId,
-        arg_values: []Value,
-        arg_layouts: []layout_mod.Idx,
-        arg_descs: []?*const LirProgram.BoxyTypeDesc,
-    },
+    call: PreparedWorkerCall,
 };
+
+pub const InspectCallResult = struct {
+    value: Value,
+    layout: layout_mod.Idx,
+    desc: ?*const LirProgram.BoxyTypeDesc,
+    borrowed: bool,
+};
+
+pub const CallArgumentMode = enum { move, borrow };
 
 pub fn valueToRocStr(val: Value) RocStr {
     var rs: RocStr = undefined;
@@ -1043,7 +1055,7 @@ pub const BoxyRuntime = struct {
         target.drop_plan = try self.copyBoxyPayloadStepSpanToRuntime(hooks, source.drop_plan, copied, allow_global_reuse);
         target.structural_eq = source.structural_eq;
         target.structural_hash = source.structural_hash;
-        target.structural_inspect = source.structural_inspect;
+        target.inspect_method = source.inspect_method;
         // Field names are immutable static-pool data; runtime copies keep the
         // static span.
         target.field_names = source.field_names;
@@ -4127,6 +4139,7 @@ pub const BoxyRuntime = struct {
         value_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!void {
+        if (try self.appendInspectMethodIfPresent(hooks, out, value, value_layout, desc)) return;
         if (desc.inspect_opaque) {
             try out.appendSlice(self.eval_arena, "<opaque>");
             return;
@@ -4152,6 +4165,37 @@ pub const BoxyRuntime = struct {
         return try self.appendLayoutInspect(hooks, out, value, value_layout, desc);
     }
 
+    fn appendInspectMethodIfPresent(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        value: Value,
+        value_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!bool {
+        const method = desc.inspect_method orelse return false;
+        const result = try hooks.callInspectMethod(method, value, value_layout, desc);
+        if (result.layout != .str) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: to_inspect worker returned layout {d} instead of Str",
+                .{@intFromEnum(result.layout)},
+            );
+        }
+        try out.appendSlice(self.eval_arena, readRocStr(result.value));
+        if (!result.borrowed) {
+            try self.performBoxyLayoutDrop(
+                hooks,
+                result.value,
+                result.layout,
+                result.desc,
+                .decref,
+                1,
+                .atomic,
+            );
+        }
+        return true;
+    }
+
     fn appendLayoutInspect(
         self: *const BoxyRuntime,
         hooks: anytype,
@@ -4161,6 +4205,7 @@ pub const BoxyRuntime = struct {
         desc: ?*const LirProgram.BoxyTypeDesc,
     ) Error!void {
         if (desc) |opaque_desc| {
+            if (try self.appendInspectMethodIfPresent(hooks, out, value, layout_idx, opaque_desc)) return;
             if (opaque_desc.inspect_opaque) {
                 try out.appendSlice(self.eval_arena, "<opaque>");
                 return;
@@ -4491,6 +4536,20 @@ pub const BoxyRuntime = struct {
             );
         }
         return self.boxy_tables.method_slots[start..end];
+    }
+
+    pub fn requireBoxyMethodSlot(
+        self: *const BoxyRuntime,
+        slot_id: LirProgram.BoxyMethodSlotId,
+    ) *const LirProgram.BoxyMethodSlot {
+        const index = @intFromEnum(slot_id);
+        if (index >= self.boxy_tables.method_slots.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy method slot id {d} exceeded method slot table length {d}",
+                .{ index, self.boxy_tables.method_slots.len },
+            );
+        }
+        return &self.boxy_tables.method_slots[index];
     }
 
     pub fn requireBoxyDictRefs(self: *const BoxyRuntime, span: LIR.BoxySpan) []const LIR.BoxyDictRef {
@@ -5716,6 +5775,110 @@ pub const BoxyRuntime = struct {
         return false;
     }
 
+    const PreparedCallArgument = struct {
+        assigned: BoxyAssignedValue,
+        borrowed: bool,
+    };
+
+    fn prepareBorrowedCallArgument(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        source: DictCallArg,
+        target_desc: ?*const LirProgram.BoxyTypeDesc,
+        target_layout: layout_mod.Idx,
+    ) Error!PreparedCallArgument {
+        if (source.layout == target_layout) {
+            return .{
+                .assigned = .{ .value = source.value, .desc = target_desc orelse source.source_desc },
+                .borrowed = true,
+            };
+        }
+
+        const source_layout = self.layout_store.getLayout(source.layout);
+        const target_layout_value = self.layout_store.getLayout(target_layout);
+        const source_is_box = source_layout.tag == .box or source_layout.tag == .box_of_zst;
+        const target_is_box = target_layout_value.tag == .box or target_layout_value.tag == .box_of_zst;
+        if (source_is_box) {
+            const source_desc = source.source_desc orelse target_desc orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: borrowed boxy call argument had no descriptor",
+                    .{},
+                );
+            };
+            const assigned = try self.boxyUnboxValue(
+                hooks,
+                source.value,
+                source.layout,
+                source_desc,
+                target_desc,
+                target_layout,
+                .borrow,
+            );
+            const shares_box = target_is_box and
+                self.readBoxedDataPointer(source.value) == self.readBoxedDataPointer(assigned.value);
+            if (target_is_box and !shares_box) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: borrowed inspect argument adapter allocated a distinct target box",
+                    .{},
+                );
+            }
+            return .{
+                .assigned = assigned,
+                .borrowed = true,
+            };
+        }
+
+        return self.invariantFailedError(
+            "LIR/interpreter invariant violated: borrowed inspect argument had incompatible concrete layouts {d} and {d}",
+            .{ @intFromEnum(source.layout), @intFromEnum(target_layout) },
+        );
+    }
+
+    pub fn prepareInspectCall(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        alloc: Allocator,
+        slot_id: LirProgram.BoxyMethodSlotId,
+        source: DictCallArg,
+    ) Error!PreparedWorkerCall {
+        const slot = self.requireBoxyMethodSlot(slot_id);
+        if (slot.structural_eq) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: inspect descriptor referenced a structural equality slot",
+                .{},
+            );
+        }
+        const arg_layouts = self.requireBoxyMethodArgLayouts(slot.adapter.arg_layouts);
+        if (arg_layouts.len != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: inspect method adapter had {d} explicit argument layouts",
+                .{arg_layouts.len},
+            );
+        }
+
+        const dict = LirProgram.BoxyDict{ .method_slots = .{
+            .start = @intFromEnum(slot_id),
+            .len = 1,
+        } };
+        const prepared = try self.prepareDictCall(
+            hooks,
+            alloc,
+            &dict,
+            0,
+            @intFromEnum(slot.method),
+            &.{source},
+            &.{},
+            .borrow,
+        );
+        return switch (prepared) {
+            .call => |call| call,
+            .structural_eq => self.invariantFailedError(
+                "LIR/interpreter invariant violated: inspect method prepared as structural equality",
+                .{},
+            ),
+        };
+    }
+
     /// Resolve one dictionary method call into either the structural-equality
     /// plan or a worker call with fully adapted arguments: explicit args
     /// (materialized per the slot's adapter), then hidden descriptors, then
@@ -5729,6 +5892,7 @@ pub const BoxyRuntime = struct {
         required_method: u32,
         args: []const DictCallArg,
         hidden_args: []const Value,
+        argument_mode: CallArgumentMode,
     ) Error!PreparedDictCall {
         const method_slots = self.requireBoxyMethodSlots(dict.method_slots);
         const method_slot = blk: {
@@ -5804,6 +5968,7 @@ pub const BoxyRuntime = struct {
         const arg_values = try alloc.alloc(Value, call_arg_count);
         const arg_layouts = try alloc.alloc(layout_mod.Idx, call_arg_count);
         const arg_descs = try alloc.alloc(?*const LirProgram.BoxyTypeDesc, call_arg_count);
+        var borrowed_args: u64 = 0;
         var call_arg_index: usize = 0;
         for (args, 0..) |arg, explicit_index| {
             if (adapter_arg_layouts.len != 0) {
@@ -5812,21 +5977,33 @@ pub const BoxyRuntime = struct {
                     try hooks.resolveDescRef(adapter_arg_descs[explicit_index])
                 else
                     null;
-                const assigned = try self.materializeCallResult(
-                    hooks,
-                    arg.value,
-                    arg.layout,
-                    arg.source_desc,
-                    target_desc,
-                    target_layout,
-                );
-                arg_values[call_arg_index] = assigned.value;
+                const prepared_arg = switch (argument_mode) {
+                    .move => PreparedCallArgument{
+                        .assigned = try self.materializeCallResult(
+                            hooks,
+                            arg.value,
+                            arg.layout,
+                            arg.source_desc,
+                            target_desc,
+                            target_layout,
+                        ),
+                        .borrowed = false,
+                    },
+                    .borrow => try self.prepareBorrowedCallArgument(hooks, arg, target_desc, target_layout),
+                };
+                arg_values[call_arg_index] = prepared_arg.assigned.value;
                 arg_layouts[call_arg_index] = target_layout;
-                arg_descs[call_arg_index] = assigned.desc;
+                arg_descs[call_arg_index] = prepared_arg.assigned.desc;
+                if (prepared_arg.borrowed and call_arg_index < 64) {
+                    borrowed_args |= @as(u64, 1) << @as(u6, @intCast(call_arg_index));
+                }
             } else {
                 arg_values[call_arg_index] = arg.value;
                 arg_layouts[call_arg_index] = arg.layout;
                 arg_descs[call_arg_index] = arg.source_desc;
+                if (argument_mode == .borrow and call_arg_index < 64) {
+                    borrowed_args |= @as(u64, 1) << @as(u6, @intCast(call_arg_index));
+                }
             }
             call_arg_index += 1;
         }
@@ -5876,6 +6053,7 @@ pub const BoxyRuntime = struct {
             .arg_values = arg_values,
             .arg_layouts = arg_layouts,
             .arg_descs = arg_descs,
+            .borrowed_args = borrowed_args,
         } };
     }
 };

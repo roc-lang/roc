@@ -45,6 +45,18 @@ const TestSetup = struct {
     }
 };
 
+fn customInspectProc(
+    ops: *builtins.host_abi.RocOps,
+    _: [*]const ?*const anyopaque,
+    ret: ?*anyopaque,
+    ret_desc: *?*const anyopaque,
+) callconv(.c) void {
+    const rendered = builtins.str.RocStr.fromSlice("custom inspect result stored outside the small-string representation", ops);
+    const out: *align(1) builtins.str.RocStr = @ptrCast(ret.?);
+    out.* = rendered;
+    ret_desc.* = null;
+}
+
 test "boxy abi structural equality compares scalars through a descriptor" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
@@ -96,6 +108,47 @@ test "boxy abi inspect renders a scalar through its descriptor" {
         &descs[0],
     );
     try std.testing.expectEqualStrings("42", rendered.asSlice());
+    rendered.decref(setup.env.get_ops());
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi inspect dispatches descriptor method and releases its owned result" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const descs = [_]BoxyTypeDesc{.{
+        .payload_layout = .u64,
+        .contains_refcounted = false,
+        .inspect_method = @enumFromInt(0),
+    }};
+    const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(0) }};
+    const method_slots = [_]LirProgram.BoxyMethodSlot{.{
+        .method = @enumFromInt(0),
+        .proc = @enumFromInt(0),
+        .adapter = .{
+            .arg_layouts = .{ .start = 0, .len = 1 },
+            .arg_descs = .{ .start = 0, .len = 1 },
+        },
+    }};
+    const method_arg_layouts = [_]layout_mod.Idx{.u64};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+        .method_slots = &method_slots,
+        .method_arg_layouts = &method_arg_layouts,
+    });
+    boxy_abi.roc_boxy_register_proc(0, &customInspectProc, @intFromEnum(layout_mod.Idx.str), 1, false, 0);
+
+    var value: u64 = 42;
+    var rendered: builtins.str.RocStr = undefined;
+    boxy_abi.roc_boxy_inspect(
+        @ptrCast(&rendered),
+        @ptrCast(&value),
+        @intFromEnum(layout_mod.Idx.u64),
+        &descs[0],
+    );
+    try std.testing.expectEqualStrings("custom inspect result stored outside the small-string representation", rendered.asSlice());
     rendered.decref(setup.env.get_ops());
     try setup.env.checkForLeaks();
 }

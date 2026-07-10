@@ -88,6 +88,7 @@ pub const ConstPlanId = enum(u32) { _ };
 pub const BoxyTypeDescId = LIR.BoxyTypeDescId;
 pub const BoxyDictId = LIR.BoxyDictId;
 pub const BoxyAdapterId = LIR.BoxyAdapterId;
+pub const BoxyMethodSlotId = enum(u32) { _ };
 pub const BoxyDescRef = LIR.BoxyDescRef;
 pub const BoxyDictRef = LIR.BoxyDictRef;
 pub const BoxySpan = LIR.BoxySpan;
@@ -156,7 +157,7 @@ pub const BoxyTypeDesc = struct {
     drop_plan: BoxySpan = .{},
     structural_eq: ?LIR.LirProcSpecId = null,
     structural_hash: ?LIR.LirProcSpecId = null,
-    structural_inspect: ?LIR.LirProcSpecId = null,
+    inspect_method: ?BoxyMethodSlotId = null,
     debug_checked_type: ?checked.CheckedTypeId = null,
 };
 

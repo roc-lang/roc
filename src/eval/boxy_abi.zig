@@ -242,6 +242,68 @@ const AbiHooks = struct {
         };
     }
 
+    pub fn callInspectMethod(
+        self: AbiHooks,
+        method: LirProgram.BoxyMethodSlotId,
+        value: Value,
+        value_layout: layout_mod.Idx,
+        desc: *const BoxyTypeDesc,
+    ) Error!boxy_runtime.InspectCallResult {
+        const scratch = self.g.value_scratch.allocator();
+        const prepared = try self.g.runtime.prepareInspectCall(
+            self,
+            scratch,
+            method,
+            .{ .value = value, .layout = value_layout, .source_desc = desc },
+        );
+        const registered = self.g.procs.get(@intFromEnum(prepared.proc)) orelse return error.RuntimeError;
+        if (prepared.arg_values.len == 0) return error.RuntimeError;
+        const argument_is_borrowed = (prepared.borrowed_args & 1) != 0;
+        const worker_borrows_argument = (registered.borrowed_params & 1) != 0;
+        if (argument_is_borrowed and !worker_borrows_argument) {
+            try self.g.runtime.performBoxyLayoutDrop(
+                self,
+                prepared.arg_values[0],
+                prepared.arg_layouts[0],
+                prepared.arg_descs[0],
+                .incref,
+                1,
+                .atomic,
+            );
+        }
+
+        const arg_ptrs = try scratch.alloc(?*const anyopaque, prepared.arg_values.len);
+        for (prepared.arg_values, prepared.arg_layouts, 0..) |arg_value, arg_layout, i| {
+            arg_ptrs[i] = if (self.g.runtime.helper.sizeOf(arg_layout) == 0) null else @ptrCast(arg_value.ptr);
+        }
+        const ret_value = try self.allocValue(registered.ret_layout);
+        const ret_size = self.g.runtime.helper.sizeOf(registered.ret_layout);
+        var ret_desc: ?*const anyopaque = null;
+        registered.callee(
+            self.g.runtime.roc_ops,
+            arg_ptrs.ptr,
+            if (ret_size == 0) null else @ptrCast(ret_value.ptr),
+            &ret_desc,
+        );
+        if (!argument_is_borrowed and worker_borrows_argument) {
+            try self.g.runtime.performBoxyLayoutDrop(
+                self,
+                prepared.arg_values[0],
+                prepared.arg_layouts[0],
+                prepared.arg_descs[0],
+                .decref,
+                1,
+                .atomic,
+            );
+        }
+        return .{
+            .value = ret_value,
+            .layout = registered.ret_layout,
+            .desc = @ptrCast(@alignCast(ret_desc)),
+            .borrowed = registered.ret_borrowed,
+        };
+    }
+
     pub fn allocValue(self: AbiHooks, layout_idx: layout_mod.Idx) Error!Value {
         const sa = self.g.runtime.helper.sizeAlignOf(layout_idx);
         if (sa.size == 0) return Value.zst;
@@ -1274,6 +1336,7 @@ pub fn roc_boxy_call_dict(
         method,
         call_args,
         hidden_values,
+        .move,
     ) catch abiCrash(g, "dictionary call preparation");
 
     switch (prepared) {

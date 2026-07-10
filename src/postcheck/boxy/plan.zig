@@ -269,6 +269,11 @@ pub const NestedCallableUsePlan = struct {
     callable_ty: TypeRef,
 };
 
+pub const InspectMethodPlan = struct {
+    source_rep: TypeRepId,
+    worker: WorkerPlanId,
+};
+
 pub const IteratorCallKind = enum {
     iter,
     next,
@@ -311,6 +316,7 @@ pub const ProgramPlan = struct {
     workers: std.ArrayList(WorkerPlan),
     direct_calls: std.ArrayList(DirectCallPlan),
     nested_callable_uses: std.ArrayList(NestedCallableUsePlan),
+    inspect_methods: std.ArrayList(InspectMethodPlan),
     const_eval_calls: std.ArrayList(ConstEvalCallPlan),
     iterator_calls: std.ArrayList(IteratorCallPlan),
     root_reps: std.ArrayList(TypeRepId),
@@ -335,6 +341,7 @@ pub const ProgramPlan = struct {
             .workers = .empty,
             .direct_calls = .empty,
             .nested_callable_uses = .empty,
+            .inspect_methods = .empty,
             .const_eval_calls = .empty,
             .iterator_calls = .empty,
             .root_reps = .empty,
@@ -371,6 +378,7 @@ pub const ProgramPlan = struct {
         self.root_reps.deinit(self.allocator);
         self.iterator_calls.deinit(self.allocator);
         self.const_eval_calls.deinit(self.allocator);
+        self.inspect_methods.deinit(self.allocator);
         self.nested_callable_uses.deinit(self.allocator);
         self.direct_calls.deinit(self.allocator);
         self.workers.deinit(self.allocator);
@@ -440,6 +448,13 @@ pub const ProgramPlan = struct {
             found = use.callable_ty;
         }
         return found;
+    }
+
+    pub fn inspectMethodForRep(self: *const ProgramPlan, source_rep: TypeRepId) ?InspectMethodPlan {
+        for (self.inspect_methods.items) |method| {
+            if (method.source_rep == source_rep) return method;
+        }
+        return null;
     }
 
     pub fn constEvalCallFor(self: *const ProgramPlan, worker: WorkerPlanId, ret_type: TypeRef) ?ConstEvalCallPlan {
@@ -1761,7 +1776,13 @@ const Builder = struct {
             const direct_call_count = self.plan.direct_calls.items.len;
             const representation_count = self.plan.representations.items.len;
             const dictionary_count = self.plan.dictionaries.items.len;
+            const inspect_method_count = self.plan.inspect_methods.items.len;
 
+            try self.materializeDirectCallTypeSubstitutions();
+            try self.materializeInspectMethodPlans();
+            // Inspect worker discovery analyzes method bodies and can append
+            // direct calls; materialize those substitutions before any hidden
+            // argument phase consumes them in this fixed-point iteration.
             try self.materializeDirectCallTypeSubstitutions();
             try self.materializeWorkerHiddenDictionaryParams();
             try self.materializeDirectCallHiddenDictionaryArgs();
@@ -1772,10 +1793,85 @@ const Builder = struct {
             if (worker_count == self.plan.workers.items.len and
                 direct_call_count == self.plan.direct_calls.items.len and
                 representation_count == self.plan.representations.items.len and
-                dictionary_count == self.plan.dictionaries.items.len)
+                dictionary_count == self.plan.dictionaries.items.len and
+                inspect_method_count == self.plan.inspect_methods.items.len)
             {
                 return;
             }
+        }
+    }
+
+    fn materializeInspectMethodPlans(self: *Builder) Allocator.Error!void {
+        var direct_index: usize = 0;
+        while (direct_index < self.plan.direct_calls.items.len) : (direct_index += 1) {
+            const direct = self.plan.direct_calls.items[direct_index];
+            if (!self.workerIsStrInspectIntrinsic(direct.worker)) continue;
+            const substitutions = self.plan.callTypeSubstitutionSlice(direct.arg_substitutions);
+            if (substitutions.len != 1) {
+                boxyPlanInvariant("Str.inspect direct call plan had unexpected substitution arity");
+            }
+            var seen = std.AutoHashMap(TypeRepId, void).init(self.allocator);
+            defer seen.deinit();
+            try self.materializeInspectMethodsForRep(substitutions[0].operand_rep, &seen);
+        }
+
+        for (self.plan.nested_callable_uses.items) |use| {
+            if (!self.workerIsStrInspectIntrinsic(use.worker)) continue;
+            const callable_rep = self.plan.repForSourceType(use.callable_ty) orelse
+                boxyPlanInvariant("Str.inspect function-value use type was not analyzed");
+            const function = (try self.functionChildren(callable_rep)) orelse
+                boxyPlanInvariant("Str.inspect function-value use was not callable");
+            if (function.arg_count != 1) {
+                boxyPlanInvariant("Str.inspect function-value use had unexpected arity");
+            }
+            const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
+            const arg_rep = children[function.args_start].rep;
+            var seen = std.AutoHashMap(TypeRepId, void).init(self.allocator);
+            defer seen.deinit();
+            try self.materializeInspectMethodsForRep(arg_rep, &seen);
+        }
+    }
+
+    fn workerIsStrInspectIntrinsic(self: *Builder, worker_id: WorkerPlanId) bool {
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        return switch (self.rootWorkerBody(worker.source)) {
+            .intrinsic_wrapper => |intrinsic| intrinsic.wrapper.intrinsic == .str_inspect,
+            .checked_expr, .hosted_proc => false,
+        };
+    }
+
+    fn materializeInspectMethodsForRep(
+        self: *Builder,
+        rep_id: TypeRepId,
+        seen: *std.AutoHashMap(TypeRepId, void),
+    ) Allocator.Error!void {
+        const entry = try seen.getOrPut(rep_id);
+        if (entry.found_existing) return;
+
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        const view = self.moduleForId(rep.source_type.module);
+        if (methodOwnerForModuleType(view, rep.source_type.ty)) |owner| {
+            if (view.canonical_names) |names| {
+                if (names.lookupMethodName("to_inspect")) |method_name| {
+                    if (self.lookupMethodTarget(view, owner, view, method_name)) |lookup| {
+                        if (self.plan.inspectMethodForRep(rep_id) == null) {
+                            const source = self.workerSourceForMethodTarget(lookup);
+                            const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+                            _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
+                            const worker = try self.ensureWorker(source, source_fn_type, null);
+                            try self.plan.inspect_methods.append(self.allocator, .{
+                                .source_rep = rep_id,
+                                .worker = worker,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        for (0..rep.children.len) |child_index| {
+            const child = self.plan.children.items[@as(usize, rep.children.start) + child_index];
+            try self.materializeInspectMethodsForRep(child.rep, seen);
         }
     }
 
@@ -2929,25 +3025,9 @@ const Builder = struct {
                 }
                 _ = try self.analyzeType(view, function.args[0]);
                 _ = try self.analyzeType(view, function.ret);
-                try self.ensureToInspectWorkerIfPresent(view, function.args[0]);
             },
             .structural_eq => boxyPlanInvariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
         };
-    }
-
-    fn ensureToInspectWorkerIfPresent(
-        self: *Builder,
-        view: ModuleView,
-        inspected_ty: checked.CheckedTypeId,
-    ) Allocator.Error!void {
-        const owner = methodOwnerForModuleType(view, inspected_ty) orelse return;
-        const names = view.canonical_names orelse return;
-        const method = names.lookupMethodName("to_inspect") orelse return;
-        const lookup = self.lookupMethodTarget(view, owner, view, method) orelse return;
-        const source = self.workerSourceForMethodTarget(lookup);
-        const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
-        _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
-        _ = try self.ensureWorker(source, source_fn_type, null);
     }
 
     fn analyzeHostedProcTypes(
