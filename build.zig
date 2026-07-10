@@ -2272,6 +2272,7 @@ pub fn build(b: *std.Build) void {
     const build_ci_step = b.step("build-ci", "Build all binaries used by MiniCI");
     const build_roc_step = b.step("roc", "Build the roc compiler without running it");
     const run_roc_step = b.step("run-roc", "Build and run the roc cli");
+    const build_compiler_artifacts_step = b.step("build-compiler-artifacts", "Build generated compiler artifacts used by fast dev builds");
     const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
     const run_check_zig_format_step = b.step("run-check-zig-format", "Check formatting of all zig code");
     const run_check_zig_lints_step = b.step("run-check-zig-lints", "Run Zig lints");
@@ -2336,6 +2337,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip_flag = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
+    const prebuilt_artifacts = no_bin or
+        (b.option(bool, "prebuilt-artifacts", "Use generated compiler artifacts already present in zig-out/ and src/cli/ instead of rebuilding them") orelse false);
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse false;
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
@@ -2490,9 +2493,10 @@ pub fn build(b: *std.Build) void {
 
     // Build-time compiler for builtin .roc modules
     //
-    // Always rebuild builtins when building roc to ensure they match the compiler.
-    // The builtin_compiler is cached by zig, so this only adds overhead when
-    // compiler sources actually change.
+    // Normal compiler builds regenerate builtins so release/CI artifacts are
+    // self-consistent. `-Dprebuilt-artifacts` uses the last explicit
+    // `build-compiler-artifacts` output so watch/incremental compiler edits do
+    // not rerun the builtin compiler.
     const builtin_roc_path = "src/build/roc/Builtin.roc";
 
     const write_compiled_builtins = b.addWriteFiles();
@@ -2503,7 +2507,7 @@ pub fn build(b: *std.Build) void {
         builtin_artifact_bin: std.Build.LazyPath,
     };
 
-    const builtin_outputs: BuiltinOutputs = if (no_bin) .{
+    const builtin_outputs: BuiltinOutputs = if (prebuilt_artifacts) .{
         .builtin_bin = b.path("zig-out/builtins/Builtin.bin"),
         .builtin_indices_zig = b.path("zig-out/builtins/builtin_indices.zig"),
         .builtin_artifact_bin = b.path("zig-out/builtins/Builtin.artifact.bin"),
@@ -2518,6 +2522,9 @@ pub fn build(b: *std.Build) void {
         b.getInstallStep().dependOn(&install_builtin_bin.step);
         b.getInstallStep().dependOn(&install_builtin_indices.step);
         b.getInstallStep().dependOn(&install_builtin_artifact.step);
+        build_compiler_artifacts_step.dependOn(&install_builtin_bin.step);
+        build_compiler_artifacts_step.dependOn(&install_builtin_indices.step);
+        build_compiler_artifacts_step.dependOn(&install_builtin_artifact.step);
         build_roc_step.dependOn(&install_builtin_bin.step);
         build_roc_step.dependOn(&install_builtin_indices.step);
         build_roc_step.dependOn(&install_builtin_artifact.step);
@@ -2678,7 +2685,7 @@ pub fn build(b: *std.Build) void {
 
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
-    const wasm32_eval_builtins_file: std.Build.LazyPath = if (no_bin) b.path("zig-out/builtins/roc_builtins_wasm32_eval.o") else blk: {
+    const wasm32_eval_builtins_file: std.Build.LazyPath = if (prebuilt_artifacts) b.path("zig-out/builtins/roc_builtins_wasm32_eval.o") else blk: {
         const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
         const wasm32_builtins_obj = b.addObject(.{
             .name = "roc_builtins_wasm32_eval",
@@ -2724,6 +2731,7 @@ pub fn build(b: *std.Build) void {
 
         const install_wasm32_eval_builtins = b.addInstallFileWithDir(merged_wasm32_builtins, .prefix, "builtins/roc_builtins_wasm32_eval.o");
         b.getInstallStep().dependOn(&install_wasm32_eval_builtins.step);
+        build_compiler_artifacts_step.dependOn(&install_wasm32_eval_builtins.step);
         build_roc_step.dependOn(&install_wasm32_eval_builtins.step);
 
         break :blk merged_wasm32_builtins;
@@ -2765,14 +2773,16 @@ pub fn build(b: *std.Build) void {
     llvm_codegen_module.addImport("roc_target", roc_modules.roc_target);
     llvm_codegen_module.addImport("vendor_llvm_ir", roc_modules.vendor_llvm_ir);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, dynamic_llvm, external_lld, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true, valgrind_support, no_bin) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, dynamic_llvm, external_lld, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, true, valgrind_support, prebuilt_artifacts, no_bin, build_compiler_artifacts_step) orelse return;
     roc_modules.addAll(roc_exe);
     _ = install_and_run(b, no_bin, roc_exe, build_roc_step, run_roc_step, run_args);
 
     // Clear the Roc cache when building the compiler to ensure stale cached artifacts aren't used
     const clear_cache_step = createClearCacheStep(b);
-    build_roc_step.dependOn(clear_cache_step);
-    b.getInstallStep().dependOn(clear_cache_step);
+    if (!prebuilt_artifacts) {
+        build_roc_step.dependOn(clear_cache_step);
+        b.getInstallStep().dependOn(clear_cache_step);
+    }
 
     const run_builtin_format = b.addRunArtifact(roc_exe);
     run_builtin_format.addArgs(&.{ "fmt", "--check", "src/build/roc/Builtin.roc" });
@@ -2808,7 +2818,9 @@ pub fn build(b: *std.Build) void {
             null, // No tracy
             false,
             valgrind_support,
+            prebuilt_artifacts,
             false,
+            build_compiler_artifacts_step,
         );
         if (release_exe) |exe| {
             roc_modules.addAll(exe);
@@ -2939,7 +2951,7 @@ pub fn build(b: *std.Build) void {
         eval_compiler_rt_libcalls_obj: std.Build.LazyPath,
     };
 
-    const llvm_embedded_inputs: LlvmEmbeddedInputs = if (no_bin) .{
+    const llvm_embedded_inputs: LlvmEmbeddedInputs = if (prebuilt_artifacts) .{
         .builtins32_bc = b.path("zig-out/builtins/builtins32.bc"),
         .builtins64_bc = b.path("zig-out/builtins/builtins64.bc"),
         .builtins32_core_bc = b.path("zig-out/builtins/builtins32_core.bc"),
@@ -3205,6 +3217,7 @@ pub fn build(b: *std.Build) void {
             &install_eval_compiler_rt_libcalls.step,
         }) |install_step| {
             b.getInstallStep().dependOn(install_step);
+            build_compiler_artifacts_step.dependOn(install_step);
             build_roc_step.dependOn(install_step);
         }
 
@@ -4639,7 +4652,8 @@ pub fn build(b: *std.Build) void {
     // targets still keep the run-coverage-parser step, but it reports unsupported
     // instead of invoking a kcov binary that cannot trace reliably on that host.
     const is_linux_arm64 = target.result.os.tag == .linux and target.result.cpu.arch == .aarch64;
-    const is_coverage_supported = is_linux_arm64;
+    const kcov_build_api_supported = comptime @hasField(std.Build, "args");
+    const is_coverage_supported = is_linux_arm64 and kcov_build_api_supported;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
@@ -5457,7 +5471,9 @@ fn addMainExe(
     flag_enable_tracy: ?[]const u8,
     add_machine_code_shim_test: bool,
     valgrind_support: ?bool,
+    prebuilt_artifacts: bool,
     no_bin: bool,
+    build_compiler_artifacts_step: ?*Step,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -5500,8 +5516,11 @@ fn addMainExe(
             strip,
             omit_frame_pointer,
         );
-        if (!no_bin) {
+        if (!prebuilt_artifacts) {
             b.getInstallStep().dependOn(copy_step);
+            if (build_compiler_artifacts_step) |artifacts_step| {
+                artifacts_step.dependOn(copy_step);
+            }
         }
     }
 
@@ -5520,8 +5539,11 @@ fn addMainExe(
                 strip,
                 omit_frame_pointer,
             );
-            if (!no_bin) {
+            if (!prebuilt_artifacts) {
                 b.getInstallStep().dependOn(copy_step);
+                if (build_compiler_artifacts_step) |artifacts_step| {
+                    artifacts_step.dependOn(copy_step);
+                }
             }
         }
     }
@@ -5625,10 +5647,13 @@ fn addMainExe(
     interpreter_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
     interpreter_shim_lib.step.dependOn(&write_compiled_builtins.step);
     interpreter_shim_lib.bundle_compiler_rt = true;
-    if (!no_bin) {
+    if (!prebuilt_artifacts) {
         // Install shim library to the output directory
         const install_interpreter_shim = b.addInstallArtifact(interpreter_shim_lib, .{});
         b.getInstallStep().dependOn(&install_interpreter_shim.step);
+        if (build_compiler_artifacts_step) |artifacts_step| {
+            artifacts_step.dependOn(&install_interpreter_shim.step);
+        }
         // Copy the shim library to the src/ directory for embedding as binary data
         // This is because @embedFile happens at compile time and needs the file to exist already
         // and zig doesn't permit embedding files from directories outside the source tree.
@@ -5636,6 +5661,9 @@ fn addMainExe(
         const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
         copy_interpreter_shim.addCopyFileToSource(interpreter_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
         exe.step.dependOn(&copy_interpreter_shim.step);
+        if (build_compiler_artifacts_step) |artifacts_step| {
+            artifacts_step.dependOn(&copy_interpreter_shim.step);
+        }
     }
 
     // Create machine-code shim static library for dev backend run images.
@@ -5707,14 +5735,20 @@ fn addMainExe(
         run_machine_code_shim_test_step.dependOn(&run_machine_code_shim_test.step);
     }
 
-    if (!no_bin) {
+    if (!prebuilt_artifacts) {
         const install_machine_code_shim = b.addInstallArtifact(machine_code_shim_lib, .{});
         b.getInstallStep().dependOn(&install_machine_code_shim.step);
+        if (build_compiler_artifacts_step) |artifacts_step| {
+            artifacts_step.dependOn(&install_machine_code_shim.step);
+        }
 
         const copy_machine_code_shim = b.addUpdateSourceFiles();
         const machine_code_shim_filename = if (target.result.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
         copy_machine_code_shim.addCopyFileToSource(machine_code_shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", machine_code_shim_filename }));
         exe.step.dependOn(&copy_machine_code_shim.step);
+        if (build_compiler_artifacts_step) |artifacts_step| {
+            artifacts_step.dependOn(&copy_machine_code_shim.step);
+        }
 
         // Copy builtins object for the host target for embedding into CLI
         // This is used by `roc build --opt=dev` to link the app object with builtins
@@ -5722,11 +5756,17 @@ fn addMainExe(
         const host_builtins_filename = if (target.result.os.tag == .windows) "roc_builtins.obj" else "roc_builtins.o";
         copy_builtins.addCopyFileToSource(builtins_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_filename }));
         exe.step.dependOn(&copy_builtins.step);
+        if (build_compiler_artifacts_step) |artifacts_step| {
+            artifacts_step.dependOn(&copy_builtins.step);
+        }
 
         const copy_builtins_extern = b.addUpdateSourceFiles();
         const host_builtins_extern_filename = if (target.result.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
         copy_builtins_extern.addCopyFileToSource(builtins_extern_obj.getEmittedBin(), b.pathJoin(&.{ "src/cli", host_builtins_extern_filename }));
         exe.step.dependOn(&copy_builtins_extern.step);
+        if (build_compiler_artifacts_step) |artifacts_step| {
+            artifacts_step.dependOn(&copy_builtins_extern.step);
+        }
     }
 
     // Add tracy support (required by parse/can/check modules)
@@ -5817,8 +5857,11 @@ fn addMainExe(
             cross_builtins_bin,
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_ext }),
         );
-        if (!no_bin) {
+        if (!prebuilt_artifacts) {
             exe.step.dependOn(&copy_cross_builtins.step);
+            if (build_compiler_artifacts_step) |artifacts_step| {
+                artifacts_step.dependOn(&copy_cross_builtins.step);
+            }
         }
 
         // Extern-symbol-mode builtins object for this target (the symbol ABI).
@@ -5850,8 +5893,11 @@ fn addMainExe(
             cross_builtins_extern_obj.getEmittedBin(),
             b.pathJoin(&.{ "src/cli/targets", cross_target.name, builtins_extern_ext }),
         );
-        if (!no_bin) {
+        if (!prebuilt_artifacts) {
             exe.step.dependOn(&copy_cross_builtins_extern.step);
+            if (build_compiler_artifacts_step) |artifacts_step| {
+                artifacts_step.dependOn(&copy_cross_builtins_extern.step);
+            }
         }
 
         if (!cross_is_wasm) {
@@ -5881,8 +5927,11 @@ fn addMainExe(
                 default_platform_runtime_obj.getEmittedBin(),
                 b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_platform_ext }),
             );
-            if (!no_bin) {
+            if (!prebuilt_artifacts) {
                 exe.step.dependOn(&copy_default_platform_runtime.step);
+                if (build_compiler_artifacts_step) |artifacts_step| {
+                    artifacts_step.dependOn(&copy_default_platform_runtime.step);
+                }
             }
         }
     }
@@ -5934,6 +5983,8 @@ fn install_and_run(
         run.step.dependOn(&install.step);
         if (run_args.len != 0) {
             run.addArgs(run_args);
+        } else if (comptime !@hasField(std.Build, "args")) {
+            run.addPassthruArgs();
         }
         run_step.dependOn(&run.step);
         return install;
