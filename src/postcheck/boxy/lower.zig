@@ -3652,6 +3652,7 @@ const ProcBodyBuilder = struct {
     descriptor_slots: []?LIR.LocalId,
     descriptor_slot_reps: []?Plan.TypeRepId,
     descriptor_rep_bindings: std.ArrayList(DescriptorRepBinding),
+    adapter_descriptor_entries: std.ArrayList(AdapterDescriptorEntry),
     runtime_initialized_descriptor_locals: std.ArrayList(LIR.LocalId),
     local_descriptor_environments: std.ArrayList(LocalDescriptorEnvironment),
     read_only_descriptor_inputs: std.ArrayList(LIR.LocalId),
@@ -3737,6 +3738,17 @@ const ProcBodyBuilder = struct {
     const DescriptorMaterialization = struct {
         desc: LIR.BoxyDescRef,
         captures: LIR.LocalSpan = .{ .start = 0, .len = 0 },
+    };
+
+    const AdapterDescriptorKey = struct {
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_desc: LIR.BoxyDescRef,
+    };
+
+    const AdapterDescriptorEntry = struct {
+        key: AdapterDescriptorKey,
+        recursive_desc: ?LIR.BoxyTypeDescId = null,
     };
 
     const DescriptorRepBinding = struct {
@@ -3850,6 +3862,7 @@ const ProcBodyBuilder = struct {
             .descriptor_slots = &.{},
             .descriptor_slot_reps = &.{},
             .descriptor_rep_bindings = .empty,
+            .adapter_descriptor_entries = .empty,
             .runtime_initialized_descriptor_locals = .empty,
             .local_descriptor_environments = .empty,
             .read_only_descriptor_inputs = .empty,
@@ -3887,6 +3900,7 @@ const ProcBodyBuilder = struct {
         }
         self.local_descriptor_environments.deinit(self.parent.allocator);
         self.runtime_initialized_descriptor_locals.deinit(self.parent.allocator);
+        self.adapter_descriptor_entries.deinit(self.parent.allocator);
         self.descriptor_rep_bindings.deinit(self.parent.allocator);
         self.parent.allocator.free(self.binder_locals);
         self.loop_stack.deinit(self.parent.allocator);
@@ -7531,6 +7545,63 @@ const ProcBodyBuilder = struct {
     }
 
     fn adapterDescriptorForCallBoundary(
+        self: *ProcBodyBuilder,
+        target_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        source_desc_info: ResultDescriptorRef,
+        prerequisites: *std.ArrayList(DescriptorArgLocal),
+    ) Allocator.Error!ResultDescriptorRef {
+        const source_desc = source_desc_info.desc orelse
+            boxyLowerInvariant("planned call adapter source descriptor was unavailable");
+        const key = AdapterDescriptorKey{
+            .target_rep = target_rep,
+            .source_rep = source_rep,
+            .source_desc = source_desc,
+        };
+        for (self.adapter_descriptor_entries.items, 0..) |entry, index| {
+            if (!std.meta.eql(entry.key, key)) continue;
+            const recursive_desc = entry.recursive_desc orelse reserve: {
+                const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
+                try self.parent.result.boxy_type_descs.append(self.parent.allocator, .{
+                    .payload_layout = .zst,
+                    .contains_refcounted = false,
+                });
+                self.adapter_descriptor_entries.items[index].recursive_desc = desc_id;
+                break :reserve desc_id;
+            };
+            return .{ .desc = .{ .static = recursive_desc } };
+        }
+
+        const entry_index = self.adapter_descriptor_entries.items.len;
+        try self.adapter_descriptor_entries.append(self.parent.allocator, .{ .key = key });
+        defer _ = self.adapter_descriptor_entries.pop();
+
+        const result = try self.adapterDescriptorForCallBoundaryBody(
+            target_rep,
+            source_rep,
+            source_desc_info,
+            prerequisites,
+        );
+        if (self.adapter_descriptor_entries.items[entry_index].recursive_desc) |recursive_desc| {
+            const template_ref = if (result.materialize) |materialize|
+                materialize.materialize orelse
+                    boxyLowerInvariant("recursive boxy adapter descriptor materialization had no static template")
+            else
+                result.desc orelse boxyLowerInvariant("recursive boxy adapter descriptor had no result");
+            const template_id = switch (template_ref) {
+                .static => |desc_id| desc_id,
+                .local, .runtime => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
+            };
+            if (template_id == recursive_desc) {
+                boxyLowerInvariant("recursive boxy adapter descriptor resolved only to its unfinished reservation");
+            }
+            self.parent.result.boxy_type_descs.items[@intFromEnum(recursive_desc)] =
+                self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
+        }
+        return result;
+    }
+
+    fn adapterDescriptorForCallBoundaryBody(
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,

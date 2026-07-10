@@ -4254,7 +4254,7 @@ to reconstruct these sources.
 Every non-identity representation boundary also has a planned adapter request.
 After layouts are committed, the adapter builder resolves each request to an
 interned `BoxyAdapter`. The adapter records source and target layouts, source and
-target descriptor roles, transfer mode, concrete byte segments, semantic field
+target descriptor roles, transfer mode, concrete byte segments, checked field
 and tag mappings, and any nested adapters. The interned adapter never contains a
 procedure-local id. Each `assign_boxy_adapt` names the concrete source and target
 descriptor refs for that invocation; those refs are ordinary statement operands
@@ -4262,6 +4262,15 @@ resolved in the current frame before a machine-code backend enters the shared
 runtime. Identity is established by the plan from checked identity and committed
 representation data; equal pointer width or equal aggregate byte size is not an
 identity proof.
+
+Descriptor specialization for an adapter is a graph construction. Recursive
+records, tags, boxes, and lists can revisit the same target representation,
+source representation, and source descriptor identity before the enclosing
+target descriptor is complete. The builder reserves a target descriptor id at
+that revisit, emits the recursive child reference to the reservation, and fills
+the reservation when the enclosing descriptor is complete. It does not unroll
+the representation graph, impose a recursion-depth limit, or replace the child
+with a less precise descriptor.
 
 Lowering consumes the planned boundary. It may emit a primitive box, unbox, tag,
 or local-flow statement when the adapter is exactly that primitive operation.
