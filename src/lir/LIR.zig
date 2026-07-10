@@ -16,6 +16,7 @@ const layout = @import("layout");
 const hosted = @import("hosted.zig");
 
 const StringLiteral = base.StringLiteral;
+const names = check.CheckedNames;
 
 /// Global identifier (opaque 64-bit id).
 pub const Symbol = packed struct(u64) {
@@ -513,6 +514,10 @@ pub const SetLocalWriteMode = enum {
 pub const ErasedCallableOnDrop = union(enum) {
     none,
     rc_helper: layout.RcHelperKey,
+    boxy_capture: struct {
+        capture_layout: layout.Idx,
+        desc_field_offset: u32,
+    },
     interpreter_context_drop,
 };
 
@@ -594,6 +599,8 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         desc: BoxyDescRef,
         nested_index: ?u32 = null,
+        tag_ext: bool = false,
+        tag_residual_for: ?BoxyDescRef = null,
         captures: LocalSpan = .{ .start = 0, .len = 0 },
         next: CFStmtId,
     },
@@ -630,6 +637,8 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         source: LocalId,
         adapter: BoxyAdapterId,
+        source_desc: ?BoxyDescRef,
+        target_desc: ?BoxyDescRef,
         source_mode: BoxyTransferMode,
         next: CFStmtId,
     },
@@ -678,6 +687,7 @@ pub const CFStmt = union(enum) {
     assign_call_dict: struct {
         target: LocalId,
         dict: BoxyDictRef,
+        method: names.MethodNameId,
         method_slot: u32,
         args: LocalSpan,
         hidden_args: LocalSpan = .empty(),

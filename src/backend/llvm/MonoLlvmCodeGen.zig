@@ -2485,6 +2485,7 @@ pub const MonoLlvmCodeGen = struct {
                     builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
                 try self.storePointer(on_drop_ptr, helper_value);
             },
+            .boxy_capture => return error.CompilationFailed,
             .interpreter_context_drop => return error.CompilationFailed,
         }
         if (capture) |capture_local| {

@@ -122,13 +122,18 @@ pub const BoxyAdapterKind = enum {
     method_ret,
 };
 
+/// Runtime operation selected when an adapter is built after layout planning.
+pub const BoxyAdapterOperation = enum {
+    relabel,
+    materialize,
+};
+
 /// Explicit representation adaptation plan used by boxy LIR statements.
 pub const BoxyAdapter = struct {
     kind: BoxyAdapterKind,
+    operation: BoxyAdapterOperation = .materialize,
     source_layout: layout.Idx,
     target_layout: layout.Idx,
-    source_desc: ?BoxyDescRef = null,
-    target_desc: ?BoxyDescRef = null,
     steps: BoxySpan = .{},
     consumes_source: bool,
     produces_owned_result: bool,
@@ -496,8 +501,6 @@ test "boxy side tables initialize empty and use flat pools" {
         .kind = .boxy_to_host,
         .source_layout = .str,
         .target_layout = .str,
-        .source_desc = .{ .static = @enumFromInt(0) },
-        .target_desc = .{ .static = @enumFromInt(0) },
         .steps = adapt_steps,
         .consumes_source = false,
         .produces_owned_result = true,

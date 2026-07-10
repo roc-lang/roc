@@ -41,6 +41,7 @@ const BoxyTables = boxy_runtime.BoxyTables;
 const Error = boxy_runtime.Error;
 const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 const BoxyDict = LirProgram.BoxyDict;
+const RocList = builtins.list.RocList;
 
 /// Native callee for one dictionary worker proc. `ops` threads the active
 /// `RocOps`; `args` points at one pointer per explicit argument, each
@@ -319,6 +320,55 @@ fn writeResult(g: *GlobalBoxyRuntime, out: ?[*]u8, result: Value, result_layout:
     @memcpy(out_ptr[0..size], result.readBytes(size));
 }
 
+const BoxyListElementContext = struct {
+    g: *GlobalBoxyRuntime,
+    elem_layout: layout_mod.Idx,
+    elem_desc: *const BoxyTypeDesc,
+};
+
+fn boxyListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    const ctx: *const BoxyListElementContext = @ptrCast(@alignCast(context orelse return));
+    const value = if (element) |ptr| Value{ .ptr = ptr } else Value.zst;
+    ctx.g.runtime.performBoxyLayoutDrop(
+        hooks(ctx.g),
+        value,
+        ctx.elem_layout,
+        ctx.elem_desc,
+        .incref,
+        1,
+        .atomic,
+    ) catch abiCrash(ctx.g, "list element incref");
+}
+
+fn boxyListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
+    const ctx: *const BoxyListElementContext = @ptrCast(@alignCast(context orelse return));
+    const value = if (element) |ptr| Value{ .ptr = ptr } else Value.zst;
+    ctx.g.runtime.performBoxyLayoutDrop(
+        hooks(ctx.g),
+        value,
+        ctx.elem_layout,
+        ctx.elem_desc,
+        .decref,
+        1,
+        .atomic,
+    ) catch abiCrash(ctx.g, "list element decref");
+}
+
+fn boxyListElementContext(
+    g: *GlobalBoxyRuntime,
+    list_desc: *const BoxyTypeDesc,
+    elem_layout: u32,
+) BoxyListElementContext {
+    const resolved_elem_layout = layoutIdx(elem_layout);
+    const elem_desc = (g.runtime.firstNestedBoxyDesc(hooks(g), list_desc) catch abiCrash(g, "list element descriptor")) orelse
+        abiCrash(g, "missing list element descriptor");
+    return .{
+        .g = g,
+        .elem_layout = resolved_elem_layout,
+        .elem_desc = elem_desc,
+    };
+}
+
 /// Register the native callee and return layout for one dictionary worker
 /// proc. `roc_boxy_call_dict` dispatches slots that reference `proc_id` to
 /// `callee`. An entrypoint registers every worker at startup; a program that
@@ -446,6 +496,33 @@ pub fn roc_boxy_unbox(
     out_desc.* = unboxed.desc;
 }
 
+/// Execute one explicit representation adapter from the program side table.
+pub fn roc_boxy_adapt(
+    out: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
+    source: ?[*]const u8,
+    source_desc: ?*const BoxyTypeDesc,
+    target_desc: ?*const BoxyTypeDesc,
+    adapter_id: u32,
+    source_mode: u8,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const adapter: LIR.BoxyAdapterId = @enumFromInt(adapter_id);
+    const planned = g.runtime.requireBoxyAdapter(adapter);
+    const adapted = g.runtime.boxyAdaptValue(
+        hooks(g),
+        valueAt(source),
+        source_desc,
+        target_desc,
+        adapter,
+        @enumFromInt(source_mode),
+    ) catch abiCrash(g, "adapt");
+    writeResult(g, out, adapted.value, planned.target_layout);
+    out_desc.* = adapted.desc;
+}
+
 /// Construct a tag value guided by the target descriptor, encoding through
 /// the row extension when the tag is not local to the descriptor.
 pub fn roc_boxy_tag(
@@ -455,6 +532,7 @@ pub fn roc_boxy_tag(
     payload: ?[*]const u8,
     payload_layout: u32,
     payload_desc: ?*const BoxyTypeDesc,
+    payload_mode: u8,
     target_layout: u32,
 ) callconv(.c) void {
     const g = requireGlobal();
@@ -467,6 +545,7 @@ pub fn roc_boxy_tag(
         if (payload) |p| Value{ .ptr = @constCast(p) } else null,
         layoutIdx(payload_layout),
         payload_desc,
+        @enumFromInt(payload_mode),
         layoutIdx(target_layout),
     ) catch abiCrash(g, "tag construction");
     writeResult(g, out, constructed, layoutIdx(target_layout));
@@ -572,18 +651,325 @@ pub fn roc_boxy_drop(
     const rc_op: layout_mod.RcOp = @enumFromInt(op);
     const rc_atomicity: builtins.utils.RcAtomicity = @enumFromInt(atomicity);
     const val: Value = if (value) |p| .{ .ptr = p } else Value.zst;
+    const layout_idx = layoutIdx(value_layout);
     switch (rc_op) {
-        .incref => g.runtime.performConcreteRc(hooks(g), .incref, layoutIdx(value_layout), val, count, rc_atomicity),
+        .incref => {
+            g.runtime.performConcreteRc(hooks(g), .incref, layout_idx, val, count, rc_atomicity);
+        },
         .decref, .free => g.runtime.performBoxyLayoutDrop(
             hooks(g),
             val,
-            layoutIdx(value_layout),
+            layout_idx,
             desc,
             rc_op,
             count,
             rc_atomicity,
         ) catch abiCrash(g, "drop"),
     }
+}
+
+pub fn roc_boxy_list_concat(
+    out: *RocList,
+    a_bytes: ?[*]u8,
+    a_len: usize,
+    a_cap: usize,
+    b_bytes: ?[*]u8,
+    b_len: usize,
+    b_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_modes: u64,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    const update_mode_a: builtins.utils.UpdateMode = if (update_modes & 1 != 0) .InPlace else .Immutable;
+    const update_mode_b: builtins.utils.UpdateMode = if (update_modes & 2 != 0) .InPlace else .Immutable;
+    out.* = builtins.list.listConcat(
+        .{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap },
+        .{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap },
+        alignment,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode_a,
+        update_mode_b,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_prepend(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element: ?[*]u8,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listPrepend(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        element,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        &builtins.list.copy_fallback,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_sublist(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    start: u64,
+    len: u64,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listSublist(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        element_width,
+        true,
+        start,
+        len,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_drop_at(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    index: u64,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listDropAt(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        element_width,
+        true,
+        index,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_replace(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    index: u64,
+    element: ?[*]u8,
+    element_width: usize,
+    out_element: ?[*]u8,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const input = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
+    if (update_mode == .InPlace) {
+        out.* = builtins.list.listReplaceInPlace(input, index, element, element_width, out_element, &builtins.list.copy_fallback);
+        return;
+    }
+
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listReplace(
+        input,
+        alignment,
+        index,
+        element,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        out_element,
+        &builtins.list.copy_fallback,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_swap(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    index_1: u64,
+    index_2: u64,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listSwap(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        element_width,
+        index_1,
+        index_2,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        &builtins.list.copy_fallback,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_reverse(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listReverse(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        &builtins.list.copy_fallback,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_reserve(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    spare: u64,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listReserve(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        spare,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        roc_ops,
+    );
+}
+
+pub fn roc_boxy_list_release_excess_capacity(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    alignment: u32,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    var ctx = boxyListElementContext(g, list_desc, elem_layout);
+    out.* = builtins.list.listReleaseExcessCapacity(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        alignment,
+        element_width,
+        true,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
+        roc_ops,
+    );
 }
 
 /// Descriptor-guided tag test, following row extensions.
@@ -605,13 +991,12 @@ pub fn roc_boxy_tag_match(
     ) catch abiCrash(g, "tag match");
 }
 
-/// Materialize a static descriptor template (id `desc_id`, optionally the
-/// nested descriptor at `nested_index`; pass 0xFFFF_FFFF for none) into the
-/// runtime descriptor tables. `capture_ids`/`capture_descs` bind the
-/// template's local descriptor references. Returns the resolved descriptor.
+/// Materialize a static descriptor template into the runtime descriptor
+/// tables. `capture_ids`/`capture_descs` bind the template's local descriptor
+/// references. Descriptor projection uses the separate explicit projection
+/// entry points below.
 pub fn roc_boxy_desc_copy(
     desc_id: u32,
-    nested_index: u32,
     capture_ids: ?[*]const u32,
     capture_descs: ?[*]const ?*const BoxyTypeDesc,
     capture_count: usize,
@@ -627,11 +1012,7 @@ pub fn roc_boxy_desc_copy(
     }
     const desc_ref = LIR.BoxyDescRef{ .static = @enumFromInt(desc_id) };
     const captures = LIR.LocalSpan{ .start = 0, .len = @intCast(capture_count) };
-    const desc = if (nested_index == std.math.maxInt(u32))
-        g.runtime.materializeBoxyDescRefValueWithCaptures(hooks(g), desc_ref, captures) catch abiCrash(g, "descriptor materialization")
-    else
-        g.runtime.materializeNestedBoxyDescRefValue(hooks(g), desc_ref, nested_index, captures) catch abiCrash(g, "nested descriptor materialization");
-    return desc;
+    return g.runtime.materializeBoxyDescRefValueWithCaptures(hooks(g), desc_ref, captures) catch abiCrash(g, "descriptor materialization");
 }
 
 /// Resolve a static descriptor id to its descriptor pointer in the global
@@ -688,6 +1069,19 @@ pub fn roc_boxy_nested_desc(desc: *const BoxyTypeDesc, nested_index: u32) callco
     const nested = g.runtime.requireBoxyDescRefs(desc.nested_descs);
     if (nested_index >= nested.len) abiCrash(g, "nested descriptor navigation");
     return hooks(g).resolveDescRef(nested[nested_index]) catch abiCrash(g, "nested descriptor resolution");
+}
+
+pub fn roc_boxy_tag_ext_desc(desc: *const BoxyTypeDesc) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    return g.runtime.resolveBoxyTagExtDesc(hooks(g), desc) catch abiCrash(g, "tag-extension descriptor navigation");
+}
+
+pub fn roc_boxy_tag_residual_desc(
+    source_desc: *const BoxyTypeDesc,
+    target_desc: *const BoxyTypeDesc,
+) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    return g.runtime.materializeTagResidualBoxyDescValues(source_desc, target_desc) catch abiCrash(g, "residual tag descriptor materialization");
 }
 
 /// Encode a numeric literal per the descriptor's payload layout and box it
@@ -770,6 +1164,7 @@ pub fn roc_boxy_call_dict(
     out_desc: *?*const BoxyTypeDesc,
     dict: *const BoxyDict,
     method_slot: u32,
+    method: u32,
     args: ?[*]const RocBoxyCallArg,
     args_len: usize,
     hidden_args: ?[*]const usize,
@@ -804,6 +1199,7 @@ pub fn roc_boxy_call_dict(
         scratch,
         dict,
         method_slot,
+        method,
         call_args,
         hidden_values,
     ) catch abiCrash(g, "dictionary call preparation");

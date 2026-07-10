@@ -184,12 +184,27 @@ pub const DirectCallHiddenDescriptorArg = struct {
     source_type: TypeRef,
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
+    source_value_rep: ?TypeRepId = null,
 };
 
 pub const DirectCallHiddenDictionaryArg = struct {
     worker_dictionaries: Span,
     source_type: TypeRef,
     rep: TypeRepId,
+};
+
+/// One checked call-site instantiation of a worker type position.
+///
+/// `operand_type` is the argument expression's checked type. `call_type` is
+/// the contextual type from the checker's instantiated function type for the
+/// call. The corresponding reps make both checked relations explicit before
+/// the final boundary into `worker_rep`.
+pub const CallTypeSubstitution = struct {
+    operand_type: TypeRef,
+    operand_rep: TypeRepId,
+    call_type: TypeRef,
+    call_rep: TypeRepId,
+    worker_rep: TypeRepId,
 };
 
 pub const ErasedCaptureKind = enum {
@@ -243,6 +258,8 @@ pub const DirectCallPlan = struct {
     call: ExprRef,
     worker: WorkerPlanId,
     source_fn_type: TypeRef,
+    arg_substitutions: Span = .{},
+    ret_substitution: ?CallTypeSubstitution = null,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
@@ -263,8 +280,9 @@ pub const IteratorCallPlan = struct {
     kind: IteratorCallKind,
     worker: WorkerPlanId,
     source_fn_type: TypeRef,
-    arg_types: Span = .{},
+    arg_substitutions: Span = .{},
     ret_type: TypeRef,
+    ret_substitution: CallTypeSubstitution,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
@@ -272,6 +290,7 @@ pub const IteratorCallPlan = struct {
 pub const ConstEvalCallPlan = struct {
     worker: WorkerPlanId,
     ret_type: TypeRef,
+    ret_substitution: CallTypeSubstitution,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
@@ -294,7 +313,6 @@ pub const ProgramPlan = struct {
     nested_callable_uses: std.ArrayList(NestedCallableUsePlan),
     const_eval_calls: std.ArrayList(ConstEvalCallPlan),
     iterator_calls: std.ArrayList(IteratorCallPlan),
-    iterator_call_arg_types: std.ArrayList(TypeRef),
     root_reps: std.ArrayList(TypeRepId),
     type_reps: std.ArrayList(TypeRepBinding),
     representations: std.ArrayList(TypeRepresentation),
@@ -306,6 +324,7 @@ pub const ProgramPlan = struct {
     hidden_dictionary_params: std.ArrayList(HiddenDictionaryParam),
     direct_call_hidden_desc_args: std.ArrayList(DirectCallHiddenDescriptorArg),
     direct_call_hidden_dict_args: std.ArrayList(DirectCallHiddenDictionaryArg),
+    call_type_substitutions: std.ArrayList(CallTypeSubstitution),
     erased_captures: std.ArrayList(ErasedCapture),
     dictionaries: std.ArrayList(DictionaryRequirement),
 
@@ -318,7 +337,6 @@ pub const ProgramPlan = struct {
             .nested_callable_uses = .empty,
             .const_eval_calls = .empty,
             .iterator_calls = .empty,
-            .iterator_call_arg_types = .empty,
             .root_reps = .empty,
             .type_reps = .empty,
             .representations = .empty,
@@ -330,6 +348,7 @@ pub const ProgramPlan = struct {
             .hidden_dictionary_params = .empty,
             .direct_call_hidden_desc_args = .empty,
             .direct_call_hidden_dict_args = .empty,
+            .call_type_substitutions = .empty,
             .erased_captures = .empty,
             .dictionaries = .empty,
         };
@@ -338,6 +357,7 @@ pub const ProgramPlan = struct {
     pub fn deinit(self: *ProgramPlan) void {
         self.dictionaries.deinit(self.allocator);
         self.erased_captures.deinit(self.allocator);
+        self.call_type_substitutions.deinit(self.allocator);
         self.direct_call_hidden_dict_args.deinit(self.allocator);
         self.direct_call_hidden_desc_args.deinit(self.allocator);
         self.hidden_dictionary_params.deinit(self.allocator);
@@ -349,7 +369,6 @@ pub const ProgramPlan = struct {
         self.representations.deinit(self.allocator);
         self.type_reps.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
-        self.iterator_call_arg_types.deinit(self.allocator);
         self.iterator_calls.deinit(self.allocator);
         self.const_eval_calls.deinit(self.allocator);
         self.nested_callable_uses.deinit(self.allocator);
@@ -391,8 +410,8 @@ pub const ProgramPlan = struct {
         return self.direct_call_hidden_dict_args.items[span.start .. span.start + span.len];
     }
 
-    pub fn iteratorCallArgTypeSlice(self: *const ProgramPlan, span: Span) []const TypeRef {
-        return self.iterator_call_arg_types.items[span.start .. span.start + span.len];
+    pub fn callTypeSubstitutionSlice(self: *const ProgramPlan, span: Span) []const CallTypeSubstitution {
+        return self.call_type_substitutions.items[span.start .. span.start + span.len];
     }
 
     pub fn erasedCaptureSlice(self: *const ProgramPlan, span: Span) []const ErasedCapture {
@@ -511,10 +530,7 @@ pub fn analyzeProgram(
     }
 
     builder.propagateDynamicRequirements();
-    try builder.materializeWorkerHiddenDictionaryParams();
-    try builder.materializeDirectCallHiddenDictionaryArgs();
-    try builder.materializeIteratorCallHiddenDictionaryArgs();
-    try builder.planNestedCallableUseDictionaries();
+    try builder.materializeDictionaryCallPlans();
     // The dictionary phases above analyze new types (static dictionary
     // workers), so representations created there need the dynamic-content
     // propagation re-run before descriptor requirements are derived from it.
@@ -524,11 +540,8 @@ pub fn analyzeProgram(
     try builder.materializeWorkerHiddenDictionaryParams();
     try builder.materializeWorkerErasedCaptures();
     try builder.materializeDirectCallHiddenDescriptorArgs();
-    try builder.materializeDirectCallHiddenDictionaryArgs();
     try builder.materializeConstEvalCallHiddenDescriptorArgs();
-    try builder.materializeConstEvalCallHiddenDictionaryArgs();
     try builder.materializeIteratorCallHiddenDescriptorArgs();
-    try builder.materializeIteratorCallHiddenDictionaryArgs();
     // Matching hidden call arguments against concrete use-site types can
     // analyze new dynamic representations; give any that were created a
     // descriptor requirement so their worker-mode layout is well defined.
@@ -1445,6 +1458,7 @@ const Builder = struct {
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
         for (constraints, 0..) |constraint, index| {
+            if (constraint.origin.literalKind() != null) continue;
             try self.plan.dictionaries.append(self.allocator, .{
                 .source_type = source_type,
                 .constraint_index = @intCast(index),
@@ -1459,7 +1473,10 @@ const Builder = struct {
         for (constraints) |constraint| {
             _ = try self.analyzeType(view, constraint.fn_ty);
         }
-        return .{ .start = start, .len = @intCast(constraints.len) };
+        return .{
+            .start = start,
+            .len = @intCast(self.plan.dictionaries.items.len - start),
+        };
     }
 
     fn appendPendingChild(
@@ -1666,6 +1683,102 @@ const Builder = struct {
         };
     }
 
+    fn materializeDirectCallTypeSubstitutions(self: *Builder) Allocator.Error!void {
+        var direct_index: usize = 0;
+        while (direct_index < self.plan.direct_calls.items.len) : (direct_index += 1) {
+            const direct = self.plan.direct_calls.items[direct_index];
+            if (direct.ret_substitution != null) continue;
+            const call_view = self.moduleForId(direct.call.module);
+            const call_expr = call_view.checked_bodies.expr(direct.call.expr);
+            var owned_call_args: []checked.CheckedExprId = &.{};
+            defer if (owned_call_args.len != 0) self.allocator.free(owned_call_args);
+            const call_args = switch (call_expr.data) {
+                .call => |call| call.args,
+                .dispatch_call => |maybe_plan| blk: {
+                    owned_call_args = try self.checkedArgsForDispatchCall(call_view, maybe_plan);
+                    break :blk owned_call_args;
+                },
+                .type_dispatch_call => |maybe_plan| blk: {
+                    owned_call_args = try self.checkedArgsForDispatchCall(call_view, maybe_plan);
+                    break :blk owned_call_args;
+                },
+                .method_eq => |maybe_plan| blk: {
+                    owned_call_args = try self.checkedArgsForDispatchCall(call_view, maybe_plan);
+                    break :blk owned_call_args;
+                },
+                else => boxyPlanInvariant("boxy direct call substitution referenced a checked expression that is not lowered as a worker call"),
+            };
+
+            const source_view = self.moduleForId(direct.source_fn_type.module);
+            const source_function = checkedFunctionPayload(source_view, direct.source_fn_type.ty);
+            if (source_function.args.len != call_args.len) {
+                boxyPlanInvariant("boxy direct call instantiated function type arity disagreed with call args");
+            }
+
+            const worker = self.plan.workers.items[@intFromEnum(direct.worker)];
+            const worker_function = (try self.functionChildren(worker.rep)) orelse
+                boxyPlanInvariant("boxy direct call worker substitution target was not a function");
+            if (worker_function.arg_count != source_function.args.len) {
+                boxyPlanInvariant("boxy direct call worker arity disagreed with its instantiated function type");
+            }
+            const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+            const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
+
+            const start: u32 = @intCast(self.plan.call_type_substitutions.items.len);
+            for (source_function.args, worker_args, call_args) |call_arg_ty, worker_arg, call_arg| {
+                const call_type = TypeRef{ .module = direct.source_fn_type.module, .ty = call_arg_ty };
+                const call_rep = try self.analyzeType(source_view, call_arg_ty);
+                const actual_expr = call_view.checked_bodies.expr(call_arg);
+                const actual_rep = try self.analyzeType(call_view, actual_expr.ty);
+                try self.plan.call_type_substitutions.append(self.allocator, .{
+                    .operand_type = typeRef(call_view, actual_expr.ty),
+                    .operand_rep = actual_rep,
+                    .call_type = call_type,
+                    .call_rep = call_rep,
+                    .worker_rep = worker_arg.rep,
+                });
+            }
+
+            const call_ret_type = typeRef(call_view, call_expr.ty);
+            const call_ret_rep = try self.analyzeType(call_view, call_expr.ty);
+            self.plan.direct_calls.items[direct_index].arg_substitutions = .{
+                .start = start,
+                .len = @intCast(source_function.args.len),
+            };
+            self.plan.direct_calls.items[direct_index].ret_substitution = .{
+                .operand_type = self.plan.representations.items[@intFromEnum(worker_function.ret)].source_type,
+                .operand_rep = worker_function.ret,
+                .call_type = call_ret_type,
+                .call_rep = call_ret_rep,
+                .worker_rep = worker_function.ret,
+            };
+        }
+    }
+
+    fn materializeDictionaryCallPlans(self: *Builder) Allocator.Error!void {
+        while (true) {
+            const worker_count = self.plan.workers.items.len;
+            const direct_call_count = self.plan.direct_calls.items.len;
+            const representation_count = self.plan.representations.items.len;
+            const dictionary_count = self.plan.dictionaries.items.len;
+
+            try self.materializeDirectCallTypeSubstitutions();
+            try self.materializeWorkerHiddenDictionaryParams();
+            try self.materializeDirectCallHiddenDictionaryArgs();
+            try self.materializeConstEvalCallHiddenDictionaryArgs();
+            try self.materializeIteratorCallHiddenDictionaryArgs();
+            try self.planNestedCallableUseDictionaries();
+
+            if (worker_count == self.plan.workers.items.len and
+                direct_call_count == self.plan.direct_calls.items.len and
+                representation_count == self.plan.representations.items.len and
+                dictionary_count == self.plan.dictionaries.items.len)
+            {
+                return;
+            }
+        }
+    }
+
     fn materializeDirectCallHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
         var direct_index: usize = 0;
         while (direct_index < self.plan.direct_calls.items.len) : (direct_index += 1) {
@@ -1691,12 +1804,12 @@ const Builder = struct {
                 else => boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call"),
             };
 
-            const arg_types = try self.allocator.alloc(TypeRef, call_args.len);
-            defer self.allocator.free(arg_types);
-            for (call_args, arg_types) |arg_expr_id, *arg_type| {
-                const arg_expr = call_view.checked_bodies.expr(arg_expr_id);
-                arg_type.* = typeRef(call_view, arg_expr.ty);
+            const substitutions = self.plan.callTypeSubstitutionSlice(direct.arg_substitutions);
+            if (substitutions.len != call_args.len) {
+                boxyPlanInvariant("boxy direct call descriptor substitution arity disagreed with call args");
             }
+            const arg_types = try self.callSubstitutionTypes(direct.arg_substitutions, .operand);
+            defer self.allocator.free(arg_types);
             const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
             self.plan.direct_calls.items[direct_index].hidden_desc_args = hidden_desc_args;
         }
@@ -1722,14 +1835,17 @@ const Builder = struct {
 
     fn materializeIteratorCallHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.iterator_calls.items, 0..) |call, call_index| {
+            const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
+            defer self.allocator.free(arg_types);
             self.plan.iterator_calls.items[call_index].hidden_desc_args =
-                try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, self.plan.iteratorCallArgTypeSlice(call.arg_types), call.ret_type);
+                try self.materializeWorkerCallHiddenDescriptorArgs(call.worker, arg_types, call.ret_type);
         }
     }
 
     fn materializeDirectCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
+        const call_count = self.plan.direct_calls.items.len;
         var direct_index: usize = 0;
-        while (direct_index < self.plan.direct_calls.items.len) : (direct_index += 1) {
+        while (direct_index < call_count) : (direct_index += 1) {
             const direct = self.plan.direct_calls.items[direct_index];
             const call_view = self.moduleForId(direct.call.module);
             const call_expr = call_view.checked_bodies.expr(direct.call.expr);
@@ -1752,12 +1868,12 @@ const Builder = struct {
                 else => boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call"),
             };
 
-            const arg_types = try self.allocator.alloc(TypeRef, call_args.len);
-            defer self.allocator.free(arg_types);
-            for (call_args, arg_types) |arg_expr_id, *arg_type| {
-                const arg_expr = call_view.checked_bodies.expr(arg_expr_id);
-                arg_type.* = typeRef(call_view, arg_expr.ty);
+            const substitutions = self.plan.callTypeSubstitutionSlice(direct.arg_substitutions);
+            if (substitutions.len != call_args.len) {
+                boxyPlanInvariant("boxy direct call dictionary substitution arity disagreed with call args");
             }
+            const arg_types = try self.callSubstitutionTypes(direct.arg_substitutions, .operand);
+            defer self.allocator.free(arg_types);
             const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(direct.worker, arg_types, typeRef(call_view, call_expr.ty));
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
         }
@@ -1765,9 +1881,30 @@ const Builder = struct {
 
     fn materializeIteratorCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.iterator_calls.items, 0..) |call, call_index| {
+            const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
+            defer self.allocator.free(arg_types);
             self.plan.iterator_calls.items[call_index].hidden_dict_args =
-                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, self.plan.iteratorCallArgTypeSlice(call.arg_types), call.ret_type);
+                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, arg_types, call.ret_type);
         }
+    }
+
+    const SubstitutionTypeKind = enum { operand, call };
+
+    fn callSubstitutionTypes(
+        self: *Builder,
+        span: Span,
+        kind: SubstitutionTypeKind,
+    ) Allocator.Error![]TypeRef {
+        const substitutions = self.plan.callTypeSubstitutionSlice(span);
+        const types = try self.allocator.alloc(TypeRef, substitutions.len);
+        errdefer self.allocator.free(types);
+        for (substitutions, types) |substitution, *ty| {
+            ty.* = switch (kind) {
+                .operand => substitution.operand_type,
+                .call => substitution.call_type,
+            };
+        }
+        return types;
     }
 
     fn materializeWorkerCallHiddenDescriptorArgs(
@@ -1796,11 +1933,11 @@ const Builder = struct {
         for (worker_children[worker_function.args_start..][0..worker_function.arg_count], arg_types, 0..) |worker_child, arg_type, arg_index| {
             const arg_rep = self.plan.repForSourceType(arg_type) orelse
                 boxyPlanInvariant("boxy worker call argument type was not analyzed");
-            try self.collectCallHiddenDescriptorArgs(worker_child.rep, arg_rep, @intCast(arg_index), params, &next_param, &pending, &seen_reps);
+            try self.collectCallHiddenDescriptorArgs(worker_child.rep, arg_rep, arg_rep, @intCast(arg_index), params, &next_param, &pending, &seen_reps);
         }
         const ret_rep = self.plan.repForSourceType(ret_type) orelse
             boxyPlanInvariant("boxy worker call result type was not analyzed");
-        try self.collectCallHiddenDescriptorArgs(worker_function.ret, ret_rep, null, params, &next_param, &pending, &seen_reps);
+        try self.collectCallHiddenDescriptorArgs(worker_function.ret, ret_rep, ret_rep, null, params, &next_param, &pending, &seen_reps);
 
         if (next_param != params.len or pending.items.len != params.len) {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping did not cover every worker descriptor param");
@@ -1945,6 +2082,7 @@ const Builder = struct {
         self: *Builder,
         worker_rep_id: TypeRepId,
         call_rep_id: TypeRepId,
+        source_value_rep: TypeRepId,
         source_arg_index: ?u32,
         params: []const HiddenDescriptorParam,
         next_param: *usize,
@@ -1970,6 +2108,7 @@ const Builder = struct {
                 .source_type = desc_arg_rep.source_type,
                 .rep = desc_arg_rep_id,
                 .source_arg_index = source_arg_index,
+                .source_value_rep = source_value_rep,
             });
         }
 
@@ -1983,7 +2122,7 @@ const Builder = struct {
             while (child_index < worker_rep.children.len) : (child_index += 1) {
                 const worker_child = self.plan.children.items[worker_rep.children.start + child_index];
                 if (!try self.repSubtreeHasDescriptor(worker_child.rep)) continue;
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_arg_index, params, next_param, pending, seen_reps);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
             }
             return;
         }
@@ -1999,30 +2138,30 @@ const Builder = struct {
             // mirror the worker param collection's per-rep dedup.
             if (seen_reps.contains(worker_child.rep)) continue;
             if (self.findMatchingChildByRole(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_arg_index, params, next_param, pending, seen_reps);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
                 continue;
             }
             if (self.structuralWrapperBackingRep(call_rep_id)) |call_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(call_backing)].children);
                 if (self.findMatchingChildByRole(backing_children, worker_child)) |call_child| {
-                    try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_arg_index, params, next_param, pending, seen_reps);
+                    try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
                     continue;
                 }
             }
             if (try self.findMatchingTagPayloadInRowExtension(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_arg_index, params, next_param, pending, seen_reps);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
                 continue;
             }
             if (try self.findMatchingChildBySourceType(call_children, worker_child)) |call_child| {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_arg_index, params, next_param, pending, seen_reps);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_child.rep, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
                 continue;
             }
             if (try self.workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_arg_index, params, next_param, pending, seen_reps);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
                 continue;
             }
             if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) {
-                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_arg_index, params, next_param, pending, seen_reps);
+                try self.collectCallHiddenDescriptorArgs(worker_child.rep, call_rep_id, source_value_rep, source_arg_index, params, next_param, pending, seen_reps);
                 continue;
             }
             boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
@@ -2790,9 +2929,25 @@ const Builder = struct {
                 }
                 _ = try self.analyzeType(view, function.args[0]);
                 _ = try self.analyzeType(view, function.ret);
+                try self.ensureToInspectWorkerIfPresent(view, function.args[0]);
             },
             .structural_eq => boxyPlanInvariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
         };
+    }
+
+    fn ensureToInspectWorkerIfPresent(
+        self: *Builder,
+        view: ModuleView,
+        inspected_ty: checked.CheckedTypeId,
+    ) Allocator.Error!void {
+        const owner = methodOwnerForModuleType(view, inspected_ty) orelse return;
+        const names = view.canonical_names orelse return;
+        const method = names.lookupMethodName("to_inspect") orelse return;
+        const lookup = self.lookupMethodTarget(view, owner, view, method) orelse return;
+        const source = self.workerSourceForMethodTarget(lookup);
+        const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+        _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
+        _ = try self.ensureWorker(source, source_fn_type, null);
     }
 
     fn analyzeHostedProcTypes(
@@ -3064,9 +3219,23 @@ const Builder = struct {
                     if (const_use.requested_source_ty_payload) |requested_ty| {
                         const ret_type = typeRef(view, requested_ty);
                         if (self.plan.constEvalCallFor(worker, ret_type) == null) {
+                            const worker_plan = self.plan.workers.items[@intFromEnum(worker)];
+                            const worker_function = (try self.functionChildren(worker_plan.rep)) orelse
+                                boxyPlanInvariant("boxy const-eval worker was not a function");
+                            if (worker_function.arg_count != 0) {
+                                boxyPlanInvariant("boxy const-eval worker had explicit arguments");
+                            }
+                            const call_rep = try self.analyzeType(view, requested_ty);
                             try self.plan.const_eval_calls.append(self.allocator, .{
                                 .worker = worker,
                                 .ret_type = ret_type,
+                                .ret_substitution = .{
+                                    .operand_type = self.plan.representations.items[@intFromEnum(worker_function.ret)].source_type,
+                                    .operand_rep = worker_function.ret,
+                                    .call_type = ret_type,
+                                    .call_rep = call_rep,
+                                    .worker_rep = worker_function.ret,
+                                },
                             });
                         }
                     }
@@ -3184,8 +3353,8 @@ const Builder = struct {
         const dispatch = view.static_dispatch_plans.plans[raw];
         const target = directDispatchTarget(view.static_dispatch_plans, dispatch.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
-        const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = target.callable_ty };
-        const worker = try self.ensureWorker(lookup.source, source_fn_type, null);
+        const source_fn_type = TypeRef{ .module = view.key, .ty = dispatch.callable_ty };
+        const worker = try self.ensureWorker(lookup.source, self.workerCheckedTypeForSource(lookup.source, source_fn_type), null);
         const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
         if (self.plan.directWorkerForCall(call_ref)) |existing| {
             if (existing != worker) {
@@ -3241,9 +3410,8 @@ const Builder = struct {
 
         const target = directDispatchTarget(view.static_dispatch_plans, call.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
-        const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = target.callable_ty };
-        _ = try self.analyzeType(lookup.view, target.callable_ty);
-        const worker = try self.ensureWorker(lookup.source, source_fn_type, null);
+        const source_fn_type = TypeRef{ .module = view.key, .ty = call.callable_ty };
+        const worker = try self.ensureWorker(lookup.source, self.workerCheckedTypeForSource(lookup.source, source_fn_type), null);
 
         if (self.plan.iteratorCallPlanFor(view.key, plan_id, kind)) |existing| {
             if (existing.worker != worker or !typeRefEql(existing.source_fn_type, source_fn_type)) {
@@ -3252,25 +3420,55 @@ const Builder = struct {
             return;
         }
 
-        const arg_start: u32 = @intCast(self.plan.iterator_call_arg_types.items.len);
-        for (call.argsSlice(view.static_dispatch_plans)) |operand| {
-            const arg_type = switch (operand) {
+        const source_fn = checkedFunctionPayload(view, call.callable_ty);
+        const operands = call.argsSlice(view.static_dispatch_plans);
+        if (source_fn.args.len != operands.len) {
+            boxyPlanInvariant("boxy iterator dispatch source function type arity disagreed with operands");
+        }
+        const worker_plan = self.plan.workers.items[@intFromEnum(worker)];
+        const worker_function = (try self.functionChildren(worker_plan.rep)) orelse
+            boxyPlanInvariant("boxy iterator dispatch worker was not a function");
+        if (worker_function.arg_count != operands.len) {
+            boxyPlanInvariant("boxy iterator dispatch worker arity disagreed with operands");
+        }
+        const worker_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_function.rep)].children);
+        const worker_args = worker_children[worker_function.args_start..][0..worker_function.arg_count];
+
+        const arg_start: u32 = @intCast(self.plan.call_type_substitutions.items.len);
+        for (operands, source_fn.args, worker_args) |operand, source_arg_ty, worker_arg| {
+            const operand_type = switch (operand) {
                 .checked_expr => |expr_id| typeRef(view, view.checked_bodies.expr(expr_id).ty),
                 .loop_iterator_state => typeRef(view, plan.iterator_ty),
             };
-            try self.plan.iterator_call_arg_types.append(self.allocator, arg_type);
+            const call_type = typeRef(view, source_arg_ty);
+            try self.plan.call_type_substitutions.append(self.allocator, .{
+                .operand_type = operand_type,
+                .operand_rep = try self.analyzeType(self.moduleForId(operand_type.module), operand_type.ty),
+                .call_type = call_type,
+                .call_rep = try self.analyzeType(view, source_arg_ty),
+                .worker_rep = worker_arg.rep,
+            });
         }
+        const call_ret_rep = self.plan.repForSourceType(ret_type) orelse
+            boxyPlanInvariant("boxy iterator dispatch return type was not analyzed");
         try self.plan.iterator_calls.append(self.allocator, .{
             .module = view.key,
             .for_plan = plan_id,
             .kind = kind,
             .worker = worker,
             .source_fn_type = source_fn_type,
-            .arg_types = .{
+            .arg_substitutions = .{
                 .start = arg_start,
                 .len = @intCast(call.argsSlice(view.static_dispatch_plans).len),
             },
             .ret_type = ret_type,
+            .ret_substitution = .{
+                .operand_type = self.plan.representations.items[@intFromEnum(worker_function.ret)].source_type,
+                .operand_rep = worker_function.ret,
+                .call_type = ret_type,
+                .call_rep = call_ret_rep,
+                .worker_rep = worker_function.ret,
+            },
         });
     }
 
@@ -4340,6 +4538,16 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     try std.testing.expectEqual(WorkerSource{ .procedure_use = imported_use }, callee_worker.source);
     try std.testing.expectEqual(@as(usize, 0), plan.hiddenDescriptorParamSlice(callee_worker.hidden_descs).len);
     try std.testing.expectEqual(@as(usize, 0), plan.directCallHiddenDescriptorArgSlice(direct.hidden_desc_args).len);
+    const substitutions = plan.callTypeSubstitutionSlice(direct.arg_substitutions);
+    try std.testing.expectEqual(@as(usize, 1), substitutions.len);
+    try expectTypeRef(root_artifact.key, @enumFromInt(0), substitutions[0].operand_type);
+    try std.testing.expectEqual(plan.repForSourceType(substitutions[0].operand_type).?, substitutions[0].operand_rep);
+    try expectTypeRef(root_artifact.key, @enumFromInt(0), substitutions[0].call_type);
+    try std.testing.expectEqual(plan.repForSourceType(substitutions[0].call_type).?, substitutions[0].call_rep);
+    try expectTypeRef(import_artifact.key, @enumFromInt(0), plan.representations.items[@intFromEnum(substitutions[0].worker_rep)].source_type);
+    const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
+    try expectTypeRef(root_artifact.key, @enumFromInt(0), ret_substitution.call_type);
+    try expectTypeRef(import_artifact.key, @enumFromInt(0), plan.representations.items[@intFromEnum(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records relation-owned source type for platform-required direct calls" {
@@ -4547,6 +4755,11 @@ test "boxy planner records relation-owned source type for platform-required dire
     }) orelse return error.TestUnexpectedResult;
     try expectTypeRef(platform_artifact.key, @enumFromInt(2), direct.source_fn_type);
     try std.testing.expect(plan.repForSourceType(.{ .module = platform_artifact.key, .ty = @enumFromInt(2) }) != null);
+    try std.testing.expectEqual(@as(usize, 0), plan.callTypeSubstitutionSlice(direct.arg_substitutions).len);
+    const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
+    try expectTypeRef(platform_artifact.key, @enumFromInt(0), ret_substitution.call_type);
+    try std.testing.expectEqual(plan.repForSourceType(ret_substitution.call_type).?, ret_substitution.call_rep);
+    try expectTypeRef(app_artifact.key, @enumFromInt(0), plan.representations.items[@intFromEnum(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records explicit source type representation bindings" {

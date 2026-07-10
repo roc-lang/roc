@@ -665,6 +665,7 @@ const Pass = struct {
                 },
                 .assign_boxy_desc_ref => |assign| {
                     try self.noteDescUse(assign.desc);
+                    if (assign.tag_residual_for) |desc| try self.noteDescUse(desc);
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
                     try self.noteWrite(assign.target);
@@ -696,6 +697,8 @@ const Pass = struct {
                 },
                 .assign_boxy_adapt => |assign| {
                     try self.noteUse(assign.source);
+                    if (assign.source_desc) |desc| try self.noteDescUse(desc);
+                    if (assign.target_desc) |desc| try self.noteDescUse(desc);
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },

@@ -236,6 +236,7 @@ const DefKind = union(enum) {
     none,
     multi,
     fresh,
+    borrow_implicit,
     borrow_capable: u32,
 };
 
@@ -573,6 +574,7 @@ fn resolveBindings(solver: *Solver, local_count: usize) SolveError!BindingResult
             if (paramIsBorrowed(solver, cursor)) break cursor;
             if (resolved.isSet(cursor)) break leader[cursor];
             if (on_chain.isSet(cursor)) break cursor;
+            if (solver.defs[cursor] == .borrow_implicit) break cursor;
             if (!borrowQualifies(solver, cursor)) break cursor;
             on_chain.set(cursor);
             try chain.append(allocator, cursor);
@@ -580,11 +582,18 @@ fn resolveBindings(solver: *Solver, local_count: usize) SolveError!BindingResult
         };
 
         const leader_once_bound = paramIsBorrowed(solver, chain_leader) or switch (solver.defs[chain_leader]) {
-            .fresh, .borrow_capable => true,
+            .fresh, .borrow_capable, .borrow_implicit => true,
             .none, .multi => false,
         };
+        const leader_is_implicit_borrow = solver.defs[chain_leader] == .borrow_implicit and
+            !solver.demand[chain_leader];
+        if (leader_is_implicit_borrow) {
+            borrowed.set(chain_leader);
+        }
         const leader_is_anchor = solver.rc_local[chain_leader] and leader_once_bound and
-            (!borrowed.isSet(chain_leader) or paramIsBorrowed(solver, chain_leader));
+            (!borrowed.isSet(chain_leader) or
+                paramIsBorrowed(solver, chain_leader) or
+                leader_is_implicit_borrow);
 
         for (chain.items) |link| {
             on_chain.unset(link);
@@ -615,7 +624,7 @@ fn borrowQualifies(solver: *const Solver, index: u32) bool {
     if (solver.demand[index]) return false;
     return switch (solver.defs[index]) {
         .borrow_capable => true,
-        .none, .multi, .fresh => false,
+        .none, .multi, .fresh, .borrow_implicit => false,
     };
 }
 
@@ -846,7 +855,7 @@ fn noteDef(defs: []DefKind, local: LIR.LocalId, kind: DefKind) void {
     const index = @intFromEnum(local);
     defs[index] = switch (defs[index]) {
         .none => kind,
-        .multi, .fresh, .borrow_capable => .multi,
+        .multi, .fresh, .borrow_implicit, .borrow_capable => .multi,
     };
 }
 
@@ -955,6 +964,7 @@ fn collectStmt(
         .assign_boxy_desc_ref => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             if (assign.desc.localOrNull()) |local| noteDemand(solver, local);
+            if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| noteDemand(solver, local);
             const captures = store.getLocalSpan(assign.captures);
             for (0..GuardedList.borrowLen(captures)) |index| {
                 const local = GuardedList.at(captures, index);
@@ -985,6 +995,8 @@ fn collectStmt(
         .assign_boxy_adapt => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             noteTransferDemand(solver, assign.source, assign.source_mode);
+            if (assign.source_desc) |desc| if (desc.localOrNull()) |local| noteDemand(solver, local);
+            if (assign.target_desc) |desc| if (desc.localOrNull()) |local| noteDemand(solver, local);
             try solver.stack.append(allocator, assign.next);
         },
         .assign_boxy_inspect => |assign| {
@@ -1034,7 +1046,9 @@ fn collectStmt(
         .assign_low_level => |assign| {
             const args = store.getLocalSpan(assign.args);
             const borrow_source = lowLevelBorrowSource(solver.rc_local, assign.rc_effect, args);
-            if (assign.rc_effect.retain_result and borrow_source != no_local) {
+            if (assign.op == .erased_capture_load) {
+                noteDef(solver.defs, assign.target, .borrow_implicit);
+            } else if (assign.rc_effect.retain_result and borrow_source != no_local) {
                 noteDef(solver.defs, assign.target, .{ .borrow_capable = borrow_source });
             } else {
                 noteDef(solver.defs, assign.target, .fresh);
@@ -1888,6 +1902,7 @@ pub fn computeUniqueness(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 if (assign.desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
                 const captures = store.getLocalSpan(assign.captures);
                 for (0..GuardedList.borrowLen(captures)) |index| {
                     const local = GuardedList.at(captures, index);
@@ -1922,6 +1937,8 @@ pub fn computeUniqueness(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 marks.transfer(&consumed_once, &destroyed, &borrow_used, assign.source, assign.source_mode);
+                if (assign.source_desc) |desc| if (desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
+                if (assign.target_desc) |desc| if (desc.localOrNull()) |local| marks.noteUse(&borrow_used, local);
             },
             .assign_boxy_inspect => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);

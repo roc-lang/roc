@@ -151,6 +151,188 @@ test "boxy abi box and unbox round-trip a string payload with balanced refcounts
     try setup.env.checkForLeaks();
 }
 
+test "boxy abi list materialization preserves reserved capacity" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
+    const desc_refs = [_]LIR.BoxyDescRef{
+        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(1) },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{
+            .payload_layout = list_layout,
+            .contains_refcounted = true,
+            .nested_descs = .{ .start = 0, .len = 1 },
+        },
+        .{
+            .payload_layout = list_layout,
+            .contains_refcounted = true,
+            .nested_descs = .{ .start = 1, .len = 1 },
+        },
+    };
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+    });
+
+    var source = builtins.list.listWithCapacity(
+        1,
+        8,
+        @sizeOf(u64),
+        false,
+        null,
+        &builtins.utils.rcNone,
+        setup.env.get_ops(),
+    );
+    try std.testing.expectEqual(@as(usize, 0), source.len());
+    const reserved_capacity = source.getCapacity();
+    try std.testing.expect(reserved_capacity > 0);
+
+    var materialized: builtins.list.RocList = undefined;
+    var materialized_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_materialize_call_result(
+        @ptrCast(&materialized),
+        &materialized_desc,
+        @ptrCast(&source),
+        @intFromEnum(list_layout),
+        &descs[2],
+        &descs[3],
+        @intFromEnum(list_layout),
+    );
+    try std.testing.expectEqual(@as(usize, 0), materialized.len());
+    try std.testing.expectEqual(reserved_capacity, materialized.getCapacity());
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[3]), materialized_desc);
+
+    boxy_abi.roc_boxy_drop(@ptrCast(&source), @intFromEnum(list_layout), &descs[2], 1, 1, 0);
+    boxy_abi.roc_boxy_drop(@ptrCast(&materialized), @intFromEnum(list_layout), &descs[3], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi relabel adapter transfers a list allocation unchanged" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
+    const desc_refs = [_]LIR.BoxyDescRef{
+        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(1) },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
+    };
+    const adapters = [_]LirProgram.BoxyAdapter{.{
+        .kind = .boxy_to_boxy,
+        .operation = .relabel,
+        .source_layout = list_layout,
+        .target_layout = list_layout,
+        .consumes_source = true,
+        .produces_owned_result = true,
+    }};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+        .adapters = &adapters,
+    });
+
+    var source = builtins.list.listWithCapacity(1, 8, @sizeOf(u64), false, null, &builtins.utils.rcNone, setup.env.get_ops());
+    source.length = 1;
+    const source_elems: [*]u64 = @ptrCast(@alignCast(source.bytes.?));
+    source_elems[0] = 42;
+    const source_allocation = source.getAllocationDataPtr(setup.env.get_ops());
+    const source_capacity = source.getCapacity();
+
+    var adapted: builtins.list.RocList = undefined;
+    var adapted_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_adapt(@ptrCast(&adapted), &adapted_desc, @ptrCast(&source), &descs[2], &descs[3], 0, 2);
+    try std.testing.expectEqual(source_allocation, adapted.getAllocationDataPtr(setup.env.get_ops()));
+    try std.testing.expectEqual(source_capacity, adapted.getCapacity());
+    try std.testing.expectEqual(@as(u64, 42), adapted.elements(u64).?[0]);
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[3]), adapted_desc);
+
+    boxy_abi.roc_boxy_drop(@ptrCast(&adapted), @intFromEnum(list_layout), &descs[3], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi move adapter transfers unique boxed list elements" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const source_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(box_layout));
+    const target_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
+    const desc_refs = [_]LIR.BoxyDescRef{
+        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(0) },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = source_list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = target_list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
+    };
+    const adapters = [_]LirProgram.BoxyAdapter{.{
+        .kind = .boxy_to_boxy,
+        .operation = .materialize,
+        .source_layout = source_list_layout,
+        .target_layout = target_list_layout,
+        .consumes_source = true,
+        .produces_owned_result = true,
+    }};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+        .adapters = &adapters,
+    });
+
+    var payload: u64 = 99;
+    var boxed: usize = 0;
+    var boxed_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&boxed),
+        &boxed_desc,
+        @ptrCast(&payload),
+        @intFromEnum(layout_mod.Idx.u64),
+        null,
+        &descs[0],
+        2,
+        @intFromEnum(box_layout),
+    );
+
+    var source = builtins.list.listWithCapacity(
+        @alignOf(usize),
+        8,
+        @sizeOf(usize),
+        true,
+        null,
+        &builtins.utils.rcNone,
+        setup.env.get_ops(),
+    );
+    source.length = 1;
+    const source_elems: [*]usize = @ptrCast(@alignCast(source.bytes.?));
+    source_elems[0] = boxed;
+    const source_capacity = source.getCapacity();
+
+    var adapted: builtins.list.RocList = undefined;
+    var adapted_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_adapt(@ptrCast(&adapted), &adapted_desc, @ptrCast(&source), &descs[1], &descs[2], 0, 2);
+    try std.testing.expectEqual(@as(usize, 1), adapted.len());
+    try std.testing.expectEqual(source_capacity, adapted.getCapacity());
+    try std.testing.expectEqual(@as(u64, 99), adapted.elements(u64).?[0]);
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[2]), adapted_desc);
+
+    boxy_abi.roc_boxy_drop(@ptrCast(&adapted), @intFromEnum(target_list_layout), &descs[2], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
 test "boxy abi dynamic numeric literal encodes through the descriptor payload layout" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
@@ -219,6 +401,7 @@ test "boxy abi tag construction, matching, and payload reads" {
         @ptrCast(&payload),
         @intFromEnum(layout_mod.Idx.u64),
         null,
+        @intFromEnum(LIR.BoxyTransferMode.copy),
         box_layout,
     );
     try std.testing.expect(tagged != 0);
@@ -273,7 +456,6 @@ test "boxy abi descriptor copy materializes a template with local captures" {
     const capture_descs = [_]?*const BoxyTypeDesc{&descs[0]};
     const copied = boxy_abi.roc_boxy_desc_copy(
         1,
-        std.math.maxInt(u32),
         &capture_ids,
         &capture_descs,
         1,
@@ -284,13 +466,7 @@ test "boxy abi descriptor copy materializes a template with local captures" {
 
     // The nested slot resolves to the captured descriptor's shape through
     // the runtime tables.
-    const nested = boxy_abi.roc_boxy_desc_copy(
-        1,
-        0,
-        &capture_ids,
-        &capture_descs,
-        1,
-    );
+    const nested = boxy_abi.roc_boxy_nested_desc(copied, 0);
     try std.testing.expectEqual(layout_mod.Idx.u64, nested.payload_layout);
 }
 
@@ -341,6 +517,7 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
         @ptrCast(&out),
         &out_desc,
         &dicts[0],
+        0,
         0,
         &args,
         args.len,
@@ -395,6 +572,7 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
         &out_desc,
         &dicts[0],
         0,
+        0,
         &args,
         args.len,
         null,
@@ -409,6 +587,7 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
         @ptrCast(&out),
         &out_desc,
         &dicts[0],
+        0,
         0,
         &args,
         args.len,

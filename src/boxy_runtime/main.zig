@@ -158,9 +158,12 @@ comptime {
         "roc_boxy_static_desc",
         "roc_boxy_static_dict",
         "roc_boxy_nested_desc",
+        "roc_boxy_tag_ext_desc",
+        "roc_boxy_tag_residual_desc",
         "roc_boxy_inspect",
         "roc_boxy_box",
         "roc_boxy_unbox",
+        "roc_boxy_adapt",
         "roc_boxy_tag",
         "roc_boxy_tag_payload",
         "roc_boxy_eq",
@@ -175,6 +178,15 @@ comptime {
         "roc_boxy_register_proc",
         "roc_boxy_register_erased_proc",
         "roc_boxy_call_erased",
+        "roc_boxy_list_concat",
+        "roc_boxy_list_prepend",
+        "roc_boxy_list_sublist",
+        "roc_boxy_list_drop_at",
+        "roc_boxy_list_replace",
+        "roc_boxy_list_swap",
+        "roc_boxy_list_reverse",
+        "roc_boxy_list_reserve",
+        "roc_boxy_list_release_excess_capacity",
     };
     for (names) |name| {
         @export(&@field(boxy_abi, name), .{ .name = name });

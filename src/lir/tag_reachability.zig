@@ -466,6 +466,7 @@ const Pass = struct {
             .assign_packed_erased_fn => |s| if (s.capture) |capture| self.noteUse(capture),
             .assign_boxy_desc_ref => |s| {
                 if (s.desc.localOrNull()) |local| self.noteUse(local);
+                if (s.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
                 const captures = self.store.getLocalSpan(s.captures);
                 for (0..captures.len) |index| self.noteUse(GuardedList.at(captures, index));
             },
@@ -485,7 +486,11 @@ const Pass = struct {
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);
                 if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
             },
-            .assign_boxy_adapt => |s| self.noteUse(s.source),
+            .assign_boxy_adapt => |s| {
+                self.noteUse(s.source);
+                if (s.source_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
+            },
             .assign_boxy_inspect => |s| {
                 self.noteUse(s.source);
                 if (s.source_desc.localOrNull()) |local| self.noteUse(local);

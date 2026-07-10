@@ -4220,6 +4220,67 @@ If checking resolved the source operator to a static-dispatch call instead, the
 boxy lowerer consumes the checked dispatch plan for that call rather than
 reinterpreting the original source operator.
 
+### Boxy Call-Site Substitution And Boundaries
+
+Every Boxy call boundary has an explicit planner-owned substitution. The
+substitution maps each type position in the callee worker representation to its
+checked call-site instantiation. Direct calls, erased calls, dictionary calls,
+iterator calls, constant-evaluation calls, and host wrappers all use the same
+mapping model. The producer derives it from checked callable types and checked
+dispatch evidence. It does not inspect the expression variant to decide whether
+the expression type or parameter type is authoritative.
+
+The substitution is consumed to produce one exact source for every hidden
+descriptor, hidden dictionary, and erased-callable metadata capture. A source is
+one of static metadata, an argument descriptor, a nested projection from an
+argument descriptor, a result descriptor, or another explicitly named planned
+value. The lowerer does not recursively compare worker and call representation
+trees, match children by source type or display name, or search row extensions
+to reconstruct these sources.
+
+Every non-identity representation boundary also has a planned adapter request.
+After layouts are committed, the adapter builder resolves each request to an
+interned `BoxyAdapter`. The adapter records source and target layouts, source and
+target descriptor roles, transfer mode, concrete byte segments, semantic field
+and tag mappings, and any nested adapters. The interned adapter never contains a
+procedure-local id. Each `assign_boxy_adapt` names the concrete source and target
+descriptor refs for that invocation; those refs are ordinary statement operands
+resolved in the current frame before a machine-code backend enters the shared
+runtime. Identity is established by the plan from checked identity and committed
+representation data; equal pointer width or equal aggregate byte size is not an
+identity proof.
+
+Lowering consumes the planned boundary. It may emit a primitive box, unbox, tag,
+or local-flow statement when the adapter is exactly that primitive operation.
+All other boundaries emit `assign_boxy_adapt`. Lowering does not select a
+conversion by trying a sequence of record, list, tag, nominal, and callable
+shape matchers. Container loops, callable adapter bodies, dictionary method
+adapters, and host wrappers all consume the same interned plans.
+
+Runtime descriptor values are immutable identities. `assign_boxy_desc_ref`
+initializes a fresh local with one descriptor value. A descriptor local is not
+rebound while any value refers to it; materializing a different descriptor uses
+a different local. Consequently the descriptor attached to a value is stable
+for the value's entire LIR lifetime, and ARC never scans for descriptor updates
+or releases values in anticipation of descriptor rebinding.
+
+A value's descriptor and an operation's boundary descriptor are distinct when
+the operation consumes a different representation. The value keeps the source
+descriptor that describes its bytes. The adapter, call, or match receives a
+separately materialized target descriptor describing the bytes it will produce
+or consume. Argument binding, match-condition binding, result binding, and
+container element extraction copy descriptor identities into fresh locals; they
+never repurpose the source value's descriptor local as operation scratch space.
+
+Tag-row projections are explicit descriptor operations. Nested payload
+projection, row-extension projection, and residual-row subtraction are separate
+LIR choices with separate operands. Residual-row subtraction names both the
+source row descriptor and the target descriptor whose direct variants are
+removed. The result preserves the source row's runtime discriminants, payload
+layouts, nested descriptors, and extension chain. Neither lowering nor a
+backend may infer one of these operations from an integer sentinel or from the
+shape of the descriptor it receives.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
@@ -4325,6 +4386,9 @@ from one descriptor to another. `nested_adapter` delegates a subrange to another
 adapter plan. Adapters are reusable LIR side-table entries so host wrappers,
 container element conversions, method arguments, and method returns can all name
 the exact same conversion plan when they need the same representation change.
+The interpreter executes adapters through the shared Boxy runtime. Dev, LLVM,
+and wasm invoke those same semantics through their backend-specific runtime ABI;
+reaching `assign_boxy_adapt` is never treated as unsupported.
 
 Dynamic RC in boxy LIR is explicit. A local whose boxy runtime layout is a
 dynamic value has a pointer-sized committed storage layout, but its nested
@@ -4364,8 +4428,9 @@ The boxy statement surface is:
   already in the compiler-internal boxy type-variable representation
 - `assign_boxy_unbox`: extracts or projects a concrete target layout from a boxy
   value using the statement's descriptor and source transfer mode
-- `assign_boxy_adapt`: applies a named adapter plan to a source local with an
-  explicit transfer mode
+- `assign_boxy_adapt`: applies a named adapter plan to a source local with
+  explicit source and target descriptor refs and an explicit transfer mode; the
+  descriptor refs are local reads and are not stored in the global adapter
 - `assign_boxy_inspect`: produces a `Str` by invoking the structural inspect
   operation named by an explicit `TypeDesc`; the statement reads the source
   local, the descriptor ref, and the transfer mode, and it never reconstructs
@@ -4437,9 +4502,10 @@ The `.lss` builder components are:
 
 The `.boxy` builder components are:
 
-- the boxy representation planner consumes checked types and checked root
-  metadata, then emits internal boxy layouts, private-worker plans, host
-  adapter plans, and hidden descriptor/dictionary requirements. Each root plan
+- the boxy representation planner consumes checked types, checked call evidence,
+  and checked root metadata, then emits internal boxy layouts, private-worker
+  plans, call-site substitutions, exact hidden descriptor/dictionary sources,
+  and boundary adapter requests. Each root plan
   points at a worker plan whose source is exactly one checked procedure
   authority: a procedure template, top-level procedure binding, or procedure
   use template. A root without such a source is rejected during planning.
@@ -4447,8 +4513,9 @@ The `.boxy` builder components are:
   nested descriptor references, then emits LIR-owned `TypeDesc` entries
 - the dictionary builder consumes checked dispatch plans and checked method
   registry entries, then emits LIR-owned dictionary/vtable entries
-- the adapter builder consumes checked host ABI roots and committed host
-  layouts, then emits host-shaped root procs and private boxy worker calls
+- the adapter builder consumes planned boundary requests and committed layouts,
+  then interns `BoxyAdapter` plans used by calls, callable captures, containers,
+  dictionary methods, and host-shaped wrappers
 - the procedure builder consumes worker plans, checked procedure templates,
   boxy hidden parameter plans, and committed layouts, then emits private LIR
   procedure ids

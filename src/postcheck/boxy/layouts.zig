@@ -422,7 +422,11 @@ const Builder = struct {
             .box => try self.immediateBoxLayout(mode, rep_id),
             .nominal => |kind| switch (kind) {
                 .opaque_nominal => .{ .concrete = try self.dynamicStorageLayout() },
-                .transparent, .builtin_other => null,
+                .builtin_other => if (self.singleChild(rep_id, .nominal_backing)) |child|
+                    try self.runtimeLayoutForRep(mode, child.rep)
+                else
+                    null,
+                .transparent => null,
             },
             .alias,
             .record,
@@ -477,7 +481,10 @@ const Builder = struct {
                 .transparent => if (rep.declared_fields.len == 0) {
                     return try self.backingDescriptorPayloadLayout(self.requiredSingleChild(rep_id, .nominal_backing).rep);
                 },
-                .opaque_nominal, .builtin_other => {},
+                .builtin_other => if (self.singleChild(rep_id, .nominal_backing)) |child| {
+                    return try self.backingDescriptorPayloadLayout(child.rep);
+                },
+                .opaque_nominal => {},
             },
             else => {},
         }
@@ -549,7 +556,7 @@ const Builder = struct {
         return idx;
     }
 
-    fn requiredSingleChild(self: *Builder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
+    fn singleChild(self: *Builder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) ?Plan.RepChild {
         var found: ?Plan.RepChild = null;
         const rep = self.program.representations.items[@intFromEnum(rep_id)];
         for (self.program.childSlice(rep.children)) |child| {
@@ -558,7 +565,12 @@ const Builder = struct {
                 found = child;
             }
         }
-        return found orelse boxyLayoutInvariant("representation was missing required child role");
+        return found;
+    }
+
+    fn requiredSingleChild(self: *Builder, rep_id: Plan.TypeRepId, role: Plan.ChildRole) Plan.RepChild {
+        return self.singleChild(rep_id, role) orelse
+            boxyLayoutInvariant("representation was missing required child role");
     }
 };
 

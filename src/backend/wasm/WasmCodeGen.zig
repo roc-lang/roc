@@ -3399,6 +3399,7 @@ fn collectProcLocals(
             .assign_boxy_desc_ref => |assign| {
                 try recordProcLocal(locals, assign.target);
                 if (assign.desc.localOrNull()) |local| try recordProcLocal(locals, local);
+                if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try recordProcLocal(locals, local);
                 const captures = self.store.getLocalSpan(assign.captures);
                 for (0..captures.len) |i| try recordProcLocal(locals, GuardedList.at(captures, i));
                 try work.append(wa, assign.next);
@@ -9322,6 +9323,15 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
             const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
             try self.rc_helper_table_indices.put(cache_key, table_idx);
             break :blk table_idx;
+        },
+        .boxy_capture => {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "WasmCodeGen invariant violated: boxy_capture reached wasm backend",
+                    .{},
+                );
+            }
+            unreachable;
         },
         .interpreter_context_drop => {
             if (builtin.mode == .Debug) {

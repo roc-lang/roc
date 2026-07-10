@@ -309,6 +309,40 @@ fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
                         changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
                     }
                 },
+                .assign_low_level => |assign| {
+                    const args = store.getLocalSpan(assign.args);
+                    switch (assign.op) {
+                        .list_append_unsafe,
+                        .list_prepend,
+                        .list_sublist,
+                        .list_drop_at,
+                        .list_drop_first,
+                        .list_drop_last,
+                        .list_take_first,
+                        .list_take_last,
+                        .list_reverse,
+                        .list_reserve,
+                        .list_release_excess_capacity,
+                        .list_swap,
+                        .list_set,
+                        .list_replace_unsafe,
+                        => {
+                            if (GuardedList.borrowLen(args) > 0) {
+                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, GuardedList.at(args, 0), stmt) or changed;
+                            }
+                        },
+                        .list_concat => {
+                            if (GuardedList.borrowLen(args) > 0) {
+                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, GuardedList.at(args, 0), stmt) or changed;
+                            }
+                            if (GuardedList.borrowLen(args) > 1) {
+                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, GuardedList.at(args, 1), stmt) or changed;
+                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, GuardedList.at(args, 0), GuardedList.at(args, 1), stmt) or changed;
+                            }
+                        },
+                        else => {},
+                    }
+                },
                 .assign_ref => |assign| switch (assign.op) {
                     .local => |source| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, source, stmt) or changed,
                     .list_reinterpret => |op| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, op.backing_ref, stmt) or changed,
@@ -525,6 +559,10 @@ fn setBoxyRcDesc(
         return true;
     };
     if (!std.meta.eql(existing, desc)) {
+        // Lowering assigns immutable ownership descriptors directly to locals.
+        // Statement descriptors may additionally describe call or boundary
+        // materialization, but they do not replace that local identity.
+        if (origins[index] == null) return false;
         if (@import("builtin").mode == .Debug) {
             std.debug.panic(
                 "boxy dynamic local {d} was assigned values with different descriptors: existing={any} existing_origin={any} new={any} new_origin={any}",
@@ -1138,12 +1176,19 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_boxy_desc_ref => |assign| {
+                    current_start = try self.releaseValuesInvalidatedByDescriptorUpdate(
+                        assign.target,
+                        &path.owned,
+                        assign.next,
+                        current_start,
+                    );
                     current_start = try self.releaseOldTargetIfNeeded(assign.target, &path.owned, current_start);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
                     const desc_local = assign.desc.localOrNull() orelse assign.target;
-                    const singles = [_]LIR.LocalId{ desc_local, assign.target };
+                    const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
+                    const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, assign.captures, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
@@ -1688,6 +1733,8 @@ const Inserter = struct {
                     .target = assign.target,
                     .desc = assign.desc,
                     .nested_index = assign.nested_index,
+                    .tag_ext = assign.tag_ext,
+                    .tag_residual_for = assign.tag_residual_for,
                     .captures = assign.captures,
                     .next = next,
                 } });
@@ -1748,6 +1795,8 @@ const Inserter = struct {
                     .target = assign.target,
                     .source = assign.source,
                     .adapter = assign.adapter,
+                    .source_desc = assign.source_desc,
+                    .target_desc = assign.target_desc,
                     .source_mode = assign.source_mode,
                     .next = next,
                 } });
@@ -1819,6 +1868,7 @@ const Inserter = struct {
                 cloned = try self.store.addCFStmt(.{ .assign_call_dict = .{
                     .target = assign.target,
                     .dict = assign.dict,
+                    .method = assign.method,
                     .method_slot = assign.method_slot,
                     .args = assign.args,
                     .hidden_args = assign.hidden_args,
@@ -2671,9 +2721,11 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_boxy_desc_ref => |assign| {
+                    try self.takeValuesInvalidatedByDescriptorUpdate(assign.target, &path.owned, assign.next);
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const desc_local = assign.desc.localOrNull() orelse assign.target;
-                    const singles = [_]LIR.LocalId{ desc_local, assign.target };
+                    const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
+                    const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
                     try self.postStmtDeaths(&path.owned, &singles, assign.captures, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
@@ -3324,7 +3376,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         loop_keep: ?*const OwnedSet,
     ) ResourceError!AliasBindTransfer {
-        const move_value = try self.canMoveSetLocalValue(owned, source, next, loop_keep);
+        const move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
         const release_old_target = self.takeRebindTarget(owned, target);
         if (move_value) _ = self.takeUnit(owned, source);
         self.placeUnit(owned, target);
@@ -3359,7 +3411,7 @@ const Inserter = struct {
         loop_keep: ?*const OwnedSet,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
-        const move_value = try self.canMoveSetLocalValue(owned, value, next, loop_keep);
+        const move_value = try self.canMoveAliasBindValue(owned, value, target, next, loop_keep);
         const release_old_target = switch (mode) {
             .replace_existing, .initialize_join_param => self.takeRebindTarget(owned, target),
             .initialize_join_result => false,
@@ -3497,11 +3549,13 @@ const Inserter = struct {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
-        const preserve_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
+        const live_consumed_args = try self.preserveConsumedArgMask(args, rc_effect.consume_args, next, target, loop_keep);
         const unique_args = if (want_unique)
-            self.uniqueArgsMask(args, rc_effect, target, preserve_consumed_args, owned)
+            self.uniqueArgsMask(args, rc_effect, target, live_consumed_args, owned)
         else
             0;
+        const runtime_checked_consumed_args = rc_effect.may_runtime_uniqueness_check_args & rc_effect.consume_args;
+        const preserve_consumed_args = live_consumed_args | (runtime_checked_consumed_args & ~unique_args);
         const target_consumed = self.maskedArgsContainLocal(args, rc_effect.consume_args, target);
         var release_old_target = false;
         if (target_consumed) {
@@ -3546,6 +3600,234 @@ const Inserter = struct {
     fn releaseOldTargetIfNeeded(self: *Inserter, target: LIR.LocalId, owned: *OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (!self.takeRebindTarget(owned, target)) return next;
         return try self.emitRebindRelease(target, next);
+    }
+
+    fn releaseValuesInvalidatedByDescriptorUpdate(
+        self: *Inserter,
+        desc_local: LIR.LocalId,
+        owned: *OwnedSet,
+        start: LIR.CFStmtId,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
+        var current = next;
+        var local_index: usize = 0;
+        while (local_index < owned.len()) : (local_index += 1) {
+            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+            if (!owned.contains(local)) continue;
+            if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
+            if (!try self.localReboundBeforeUseInLinearPath(start, local)) continue;
+            _ = self.takeRebindTarget(owned, local);
+            current = try self.emitRebindRelease(local, current);
+        }
+        return current;
+    }
+
+    fn takeValuesInvalidatedByDescriptorUpdate(
+        self: *Inserter,
+        desc_local: LIR.LocalId,
+        owned: *OwnedSet,
+        start: LIR.CFStmtId,
+    ) ResourceError!void {
+        var local_index: usize = 0;
+        while (local_index < owned.len()) : (local_index += 1) {
+            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+            if (!owned.contains(local)) continue;
+            if (!self.localUsesDescriptorLocal(local, desc_local)) continue;
+            if (!try self.localReboundBeforeUseInLinearPath(start, local)) continue;
+            _ = self.takeRebindTarget(owned, local);
+        }
+    }
+
+    fn localUsesDescriptorLocal(self: *const Inserter, local: LIR.LocalId, desc_local: LIR.LocalId) bool {
+        const desc = boxyDescForLocal(self.boxy_rc_descs, local) orelse return false;
+        return if (desc.localOrNull()) |local_desc| local_desc == desc_local else false;
+    }
+
+    fn localReboundBeforeUseInLinearPath(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        local: LIR.LocalId,
+    ) ResourceError!bool {
+        var cursor = start;
+        var remaining = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const stmt = self.store.getCFStmt(cursor);
+            switch (stmt) {
+                .set_local => |assign| {
+                    if (assign.value == local) return false;
+                    if (assign.target == local) {
+                        return switch (assign.mode) {
+                            .replace_existing, .initialize_join_param => true,
+                            .initialize_join_result => false,
+                        };
+                    }
+                    cursor = assign.next;
+                },
+                .assign_ref => |assign| {
+                    if (refOpUsesLocal(assign.op, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_literal => |assign| {
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .init_uninitialized => |uninit| {
+                    if (uninit.target == local) return false;
+                    cursor = uninit.next;
+                },
+                .assign_call => |assign| {
+                    if (self.spanUsesLocal(assign.args, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_call_erased => |assign| {
+                    if (assign.closure == local or self.spanUsesLocal(assign.args, local)) return false;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_packed_erased_fn => |assign| {
+                    if (assign.capture != null and assign.capture.? == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (self.spanUsesLocal(assign.captures, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_dict_ref => |assign| {
+                    if (assign.dict.localOrNull()) |dict_local| if (dict_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_box => |assign| {
+                    if (assign.payload == local) return false;
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_reuse_box => |assign| {
+                    if (assign.source == local) return false;
+                    if (assign.desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_unbox => |assign| {
+                    if (assign.source == local) return false;
+                    if (assign.source_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_adapt => |assign| {
+                    if (assign.source == local) return false;
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_inspect => |assign| {
+                    if (assign.source == local) return false;
+                    if (assign.source_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_eq => |assign| {
+                    if (assign.lhs == local or assign.rhs == local) return false;
+                    if (assign.source_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_tag => |assign| {
+                    if (assign.target_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.payload != null and assign.payload.? == local) return false;
+                    if (assign.payload_desc) |desc| if (desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_boxy_tag_payload => |assign| {
+                    if (assign.source == local) return false;
+                    if (assign.source_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_call_dict => |assign| {
+                    if (assign.dict.localOrNull()) |dict_local| if (dict_local == local) return false;
+                    if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    if (self.spanUsesLocal(assign.args, local) or self.spanUsesLocal(assign.hidden_args, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_low_level => |assign| {
+                    if (self.spanUsesLocal(assign.args, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_list => |assign| {
+                    if (self.spanUsesLocal(assign.elems, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_struct => |assign| {
+                    if (self.spanUsesLocal(assign.fields, local)) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .assign_tag => |assign| {
+                    if (assign.target_desc) |target_desc| {
+                        if (target_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
+                    }
+                    if (assign.payload != null and assign.payload.? == local) return false;
+                    if (assign.target == local) return false;
+                    cursor = assign.next;
+                },
+                .debug => |debug_stmt| {
+                    if (debug_stmt.message == local) return false;
+                    cursor = debug_stmt.next;
+                },
+                .expect => |expect_stmt| {
+                    if (expect_stmt.condition == local) return false;
+                    cursor = expect_stmt.next;
+                },
+                .comptime_branch_taken => |marker| cursor = marker.next,
+                .incref => |rc| {
+                    if (rc.value == local) return false;
+                    cursor = rc.next;
+                },
+                .decref => |rc| {
+                    if (rc.value == local) return false;
+                    cursor = rc.next;
+                },
+                .decref_if_initialized => |rc| {
+                    if (rc.cond == local or rc.value == local) return false;
+                    cursor = rc.next;
+                },
+                .free => |rc| {
+                    if (rc.value == local) return false;
+                    cursor = rc.next;
+                },
+                .ret,
+                .jump,
+                .crash,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .boxy_tag_match,
+                .loop_continue,
+                .loop_break,
+                .join,
+                => return false,
+            }
+        }
+        return false;
     }
 
     fn cachedJoinBodyOwnedSet(
@@ -3819,11 +4101,18 @@ const Inserter = struct {
         // A borrowed operand's lifetime event belongs to its owning leader:
         // the leader dies when no group member has a later use.
         const owner = self.solution.leaderOf(local);
-        if (!owned.contains(owner)) return;
+        if (!owned.contains(owner)) {
+            return;
+        }
         // Join parameters carry their unit into the join body, whose release
         // statements are not visible to use scans.
-        if (self.solution.isJoinParam(owner) or self.solution.isJoinParam(local)) return;
-        if (try self.groupUsedInPath(next, owner, loop_keep)) return;
+        if (self.solution.isJoinParam(owner) or self.solution.isJoinParam(local)) {
+            return;
+        }
+        const used = try self.groupUsedInPath(next, owner, loop_keep);
+        if (used) {
+            return;
+        }
         owned.unset(owner);
         if (collected) |list| {
             try list.append(self.store.allocator, owner);
@@ -3878,6 +4167,19 @@ const Inserter = struct {
         if (!self.ownsUnit(owned, value)) return false;
         if (!self.localContainsRefcounted(value)) return false;
         return !(try self.groupUsedInPath(next, value, loop_keep));
+    }
+
+    fn canMoveAliasBindValue(
+        self: *Inserter,
+        owned: *const OwnedSet,
+        value: LIR.LocalId,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
+        if (!self.ownsUnit(owned, value)) return false;
+        if (!self.localContainsRefcounted(value)) return false;
+        return !(try self.groupUsedInPathExcept(next, value, target, loop_keep));
     }
 
     fn retainMaskedArgs(self: *Inserter, span: LIR.LocalSpan, mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -4728,6 +5030,8 @@ const Inserter = struct {
                 },
                 .assign_boxy_adapt => |assign| {
                     noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, assign.source);
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -5057,6 +5361,8 @@ const Inserter = struct {
                 },
                 .assign_boxy_adapt => |assign| {
                     if (assign.source == needle) return true;
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| if (local == needle) return true;
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| if (local == needle) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -5266,6 +5572,33 @@ const Inserter = struct {
         return self.anyNeedleUsedInPath(start, loop_keep);
     }
 
+    fn groupUsedInPathExcept(
+        self: *Inserter,
+        start: LIR.CFStmtId,
+        local: LIR.LocalId,
+        except: LIR.LocalId,
+        loop_keep: ?*const OwnedSet,
+    ) ResourceError!bool {
+        const members = self.solution.groupMembers(self.solution.leaderOf(local));
+        if (members.len <= 1) return self.groupUsedInPath(start, local, loop_keep);
+
+        var needle_count: usize = 0;
+        for (members) |member| {
+            const member_local: LIR.LocalId = @enumFromInt(member);
+            if (member_local == except) continue;
+            self.scan_needles.set(member_local);
+            needle_count += 1;
+        }
+        defer for (members) |member| {
+            const member_local: LIR.LocalId = @enumFromInt(member);
+            if (member_local == except) continue;
+            self.scan_needles.unset(member_local);
+        };
+
+        if (needle_count == 0) return false;
+        return self.anyNeedleUsedInPath(start, loop_keep);
+    }
+
     /// Multi-needle variant of `localValueUsedInPath` over the scratch
     /// needle set. Group members are bound exactly once (the solver excludes
     /// multi-bound locals from borrow groups), so rebinding never invalidates
@@ -5339,6 +5672,8 @@ const Inserter = struct {
                 },
                 .assign_boxy_adapt => |assign| {
                     if (needles.contains(assign.source)) return true;
+                    if (assign.source_desc) |desc| if (desc.localOrNull()) |local| if (needles.contains(local)) return true;
+                    if (assign.target_desc) |desc| if (desc.localOrNull()) |local| if (needles.contains(local)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_boxy_inspect => |assign| {
@@ -6372,6 +6707,59 @@ const ArcTest = struct {
                 .comptime_branch_taken => |marker| cursor = marker.next,
                 .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => return error.ExpectedConditionalDecref,
                 .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join => return error.NonLinearPath,
+            }
+        }
+        return error.CyclicPath;
+    }
+
+    fn expectReachableDecrefBeforeDescRebind(
+        self: *const ArcTest,
+        start: LIR.CFStmtId,
+        value: LIR.LocalId,
+        desc_target: LIR.LocalId,
+    ) error{ ExpectedDecref, DescRebindBeforeDecref, NonLinearPath, CyclicPath }!void {
+        var cursor = start;
+        var remaining = self.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const stmt = self.store.getCFStmt(cursor);
+            switch (stmt) {
+                .decref => |rc| {
+                    if (rc.value == value) return;
+                    cursor = rc.next;
+                },
+                .assign_boxy_desc_ref => |assign| {
+                    if (assign.target == desc_target) return error.DescRebindBeforeDecref;
+                    cursor = assign.next;
+                },
+                .incref => |rc| cursor = rc.next,
+                .decref_if_initialized => |rc| cursor = rc.next,
+                .free => |rc| cursor = rc.next,
+                .assign_ref => |assign| cursor = assign.next,
+                .assign_literal => |assign| cursor = assign.next,
+                .init_uninitialized => |uninit| cursor = uninit.next,
+                .assign_call => |assign| cursor = assign.next,
+                .assign_call_erased => |assign| cursor = assign.next,
+                .assign_packed_erased_fn => |assign| cursor = assign.next,
+                .assign_boxy_dict_ref => |assign| cursor = assign.next,
+                .assign_boxy_box => |assign| cursor = assign.next,
+                .assign_boxy_reuse_box => |assign| cursor = assign.next,
+                .assign_boxy_unbox => |assign| cursor = assign.next,
+                .assign_boxy_adapt => |assign| cursor = assign.next,
+                .assign_boxy_inspect => |assign| cursor = assign.next,
+                .assign_boxy_eq => |assign| cursor = assign.next,
+                .assign_boxy_tag => |assign| cursor = assign.next,
+                .assign_boxy_tag_payload => |assign| cursor = assign.next,
+                .assign_call_dict => |assign| cursor = assign.next,
+                .assign_low_level => |assign| cursor = assign.next,
+                .assign_list => |assign| cursor = assign.next,
+                .assign_struct => |assign| cursor = assign.next,
+                .assign_tag => |assign| cursor = assign.next,
+                .set_local => |assign| cursor = assign.next,
+                .debug => |debug_stmt| cursor = debug_stmt.next,
+                .expect => |expect_stmt| cursor = expect_stmt.next,
+                .comptime_branch_taken => |marker| cursor = marker.next,
+                .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return error.ExpectedDecref,
+                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -7568,6 +7956,7 @@ test "uniqueness: parameter consumed by a checked op keeps its check" {
 
     try f.run();
     try testing.expectEqual(@as(u64, 0), f.uniqueArgsFor(appended));
+    try f.expectRc(param, 1, 1, 0);
 }
 
 test "uniqueness: append result consumed by a checked op elides the check" {
@@ -8552,6 +8941,35 @@ test "RC alias into set_local moves the leader unit" {
     _ = try f.addProc(&.{}, body, .str);
     try f.run();
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC releases descriptor-backed old set_local value before descriptor rebind" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const desc = try f.local(.opaque_ptr);
+    const current = try f.local(.str);
+    const replacement = try f.local(.str);
+    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+
+    const ret = try f.ret(current);
+    const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
+    const rebind_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(1) },
+        .next = set_current,
+    } });
+    const assign_replacement = try f.assignStr(replacement, "new", rebind_desc);
+    const assign_current = try f.assignStr(current, "old", assign_replacement);
+    const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        .target = desc,
+        .desc = .{ .static = @enumFromInt(0) },
+        .next = assign_current,
+    } });
+    _ = try f.addProc(&.{}, init_desc, .str);
+
+    try f.run();
+    try f.expectReachableDecrefBeforeDescRebind(f.procBody(), current, desc);
 }
 
 test "RC alias passed as a dying call argument moves the leader unit" {
