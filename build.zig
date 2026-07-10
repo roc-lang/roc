@@ -2121,6 +2121,15 @@ fn setupTestPlatforms(
             );
             clear_cache_step.dependOn(copy_step);
         }
+
+        if (platform_filter == null or
+            std.mem.eql(u8, platform_filter.?, "str") or
+            std.mem.eql(u8, platform_filter.?, "int"))
+        {
+            if (generateGlibcStub(b, cross_resolved_target, cross_target.name)) |stub| {
+                clear_cache_step.dependOn(&stub.step);
+            }
+        }
     }
 
     // Cross-compile for Windows targets
@@ -5513,16 +5522,6 @@ fn addMainExe(
             );
             if (!no_bin) {
                 b.getInstallStep().dependOn(copy_step);
-            }
-        }
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                if (!no_bin) {
-                    b.getInstallStep().dependOn(&stub.step);
-                }
             }
         }
     }
