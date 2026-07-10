@@ -4367,7 +4367,25 @@ calls selected by the lowerer:
   bytes according to the explicit descriptor or concrete layout
 - adapting a container copies, moves, or aliases according to explicit
   descriptor and layout data; it never assumes that equal pointer size implies
-  equal semantic representation
+  equal runtime encoding
+
+A move adapter transfers one ownership edge for each planned source segment.
+Materialization and source release consume the same field, tag, and row-extension
+mapping. Tag variants are paired by the adapter's checked tag identity, not by
+numeric discriminant equality, because two committed tag layouts may assign the
+same tag different discriminants. A target row-extension slot is an ordinary
+planned target segment: when it stores the moved source box unchanged, that box
+allocation is now owned by the target and must not be released as discarded
+source storage.
+
+Allocation identity may be compared only for the source segment and its exact
+planned target segment. It must not be searched for elsewhere in the completed
+target value, because two distinct source ownership edges may alias the same
+allocation. When materialization replaces a dynamic source box with different
+target storage, runtime release follows the nested adapter mapping first, then
+releases the obsolete outer box allocation without dropping payload ownership
+that moved into the target. This rule applies equally to direct tag variants,
+residual rows, records, lists, and nested boxes.
 
 ### Boxy LIR Data
 

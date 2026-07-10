@@ -8578,7 +8578,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const backing = self.module.checked_bodies.expr(backing_id);
         const backing_local = try self.addFrameLocalForType(backing.ty);
-        const assign = try self.assignRepresentationBoundary(target, backing_local, self.repForType(nominal_ty), self.repForType(backing.ty), next);
+        const assign = try self.assignRepresentationBoundaryConsumingSource(target, backing_local, self.repForType(nominal_ty), self.repForType(backing.ty), next);
         return try self.lowerExprInto(backing_local, backing_id, assign);
     }
 

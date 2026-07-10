@@ -1790,6 +1790,44 @@ pub const BoxyRuntime = struct {
         );
     }
 
+    fn releaseMovedSourceBoxIntoTargetTagExtension(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        source: Value,
+        source_layout: layout_mod.Idx,
+        source_desc: *const LirProgram.BoxyTypeDesc,
+        result: Value,
+        result_layout: layout_mod.Idx,
+        result_desc: ?*const LirProgram.BoxyTypeDesc,
+    ) Error!bool {
+        const target_desc = result_desc orelse return false;
+        const ext_discriminant = self.boxyTagExtDiscriminant(target_desc) orelse return false;
+        switch (self.layout_store.getLayout(result_layout).tag) {
+            .tag_union, .box, .box_of_zst => {},
+            else => return false,
+        }
+
+        const result_base = self.resolveBoxyTagBaseValue(result, result_layout, target_desc);
+        const result_discriminant: u16 = if (self.helper.sizeOf(result_base.layout) == 0)
+            0
+        else
+            @intCast(self.helper.readTagDiscriminant(result_base.value, result_base.layout));
+        if (result_discriminant != ext_discriminant) return false;
+
+        const ext_desc = try self.resolveBoxyTagExtDesc(hooks, target_desc);
+        const ext_layout = self.requireBoxyTagPayloadLayout(result_base.layout, result_discriminant);
+        try self.releaseMovedPayloadBoxesReboxedIntoResult(
+            hooks,
+            source,
+            source_layout,
+            source_desc,
+            result_base.value,
+            ext_layout,
+            ext_desc,
+        );
+        return true;
+    }
+
     fn releaseMovedPayloadBoxesReboxedIntoResult(
         self: *const BoxyRuntime,
         hooks: anytype,
@@ -1805,6 +1843,15 @@ pub const BoxyRuntime = struct {
 
         switch (source_layout_val.tag) {
             .box, .box_of_zst => {
+                if (try self.releaseMovedSourceBoxIntoTargetTagExtension(
+                    hooks,
+                    source,
+                    source_layout,
+                    source_desc,
+                    result,
+                    result_layout,
+                    result_desc,
+                )) return;
                 if (result_layout_val.tag != .box and result_layout_val.tag != .box_of_zst) {
                     try self.releaseMovedBoxyDynamicPayload(hooks, source, source_layout, source_desc);
                     return;
@@ -1905,39 +1952,70 @@ pub const BoxyRuntime = struct {
                 const result_base = self.resolveTagUnionBaseValue(result, result_layout);
                 const source_disc: u16 = @intCast(self.helper.readTagDiscriminant(source_base.value, source_base.layout));
                 const result_disc: u16 = @intCast(self.helper.readTagDiscriminant(result_base.value, result_base.layout));
-                if (source_disc != result_disc) return;
 
                 if (self.boxyTagExtDiscriminant(source_desc)) |source_ext_discriminant| {
                     if (source_disc == source_ext_discriminant) {
                         const source_ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
                         const source_payload_layout = self.requireBoxyTagPayloadLayout(source_base.layout, source_disc);
-                        const result_payload_layout = self.requireBoxyTagPayloadLayout(result_base.layout, result_disc);
                         if (self.helper.sizeOf(source_payload_layout) == 0) return;
-
-                        const result_payload_desc = if (result_desc) |resolved| blk: {
-                            const result_ext_discriminant = self.boxyTagExtDiscriminant(resolved) orelse break :blk null;
-                            if (result_disc != result_ext_discriminant) break :blk null;
-                            break :blk try self.resolveBoxyTagExtDesc(hooks, resolved);
-                        } else null;
-
                         try self.releaseMovedPayloadBoxesReboxedIntoResult(
                             hooks,
                             source_base.value,
                             source_payload_layout,
                             source_ext_desc,
-                            result_base.value,
-                            result_payload_layout,
-                            result_payload_desc,
+                            result,
+                            result_layout,
+                            result_desc,
                         );
                         return;
                     }
                 }
 
                 const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_disc);
-                const result_variant = if (result_desc) |resolved|
-                    self.findBoxyTagVariantByDiscriminant(resolved, result_disc)
-                else
-                    null;
+                const result_variant = if (result_desc) |resolved| result_variant: {
+                    if (self.findLocalBoxyTagVariant(resolved, source_variant.name)) |variant| {
+                        if (result_disc != variant.discriminant) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: moved target tag {s} expected discriminant {d} but observed {d}",
+                                .{ self.store.getString(source_variant.name), variant.discriminant, result_disc },
+                            );
+                        }
+                        break :result_variant variant;
+                    }
+
+                    const result_ext_discriminant = self.boxyTagExtDiscriminant(resolved) orelse {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: moved target descriptor had no tag named {s}",
+                            .{self.store.getString(source_variant.name)},
+                        );
+                    };
+                    if (result_disc != result_ext_discriminant) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: moved target extension for tag {s} expected discriminant {d} but observed {d}",
+                            .{ self.store.getString(source_variant.name), result_ext_discriminant, result_disc },
+                        );
+                    }
+                    const result_ext_desc = try self.resolveBoxyTagExtDesc(hooks, resolved);
+                    const result_payload_layout = self.requireBoxyTagPayloadLayout(result_base.layout, result_disc);
+                    try self.releaseMovedPayloadBoxesReboxedIntoResult(
+                        hooks,
+                        source,
+                        source_layout,
+                        source_desc,
+                        result_base.value,
+                        result_payload_layout,
+                        result_ext_desc,
+                    );
+                    return;
+                } else result_variant: {
+                    if (source_disc != result_disc) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: moved tag layouts changed discriminant without a target descriptor",
+                            .{},
+                        );
+                    }
+                    break :result_variant null;
+                };
                 const source_payload_layout = self.requireBoxyTagPayloadLayout(source_base.layout, source_disc);
                 const result_payload_layout = self.requireBoxyTagPayloadLayout(result_base.layout, result_disc);
                 if (self.helper.sizeOf(source_payload_layout) == 0) return;

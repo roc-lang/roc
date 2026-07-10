@@ -386,6 +386,204 @@ test "boxy abi move adapter transfers unique boxed list elements" {
     try setup.env.checkForLeaks();
 }
 
+test "boxy abi move adapter releases tag payloads across differing discriminants" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const name_a = try setup.store.insertString("A");
+    const name_b = try setup.store.insertString("B");
+    const name_c = try setup.store.insertString("C");
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const source_union_layout = try setup.layouts.putTagUnion(&.{ .u64, box_layout });
+    const target_union_layout = try setup.layouts.putTagUnion(&.{ .u64, .u64 });
+    const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
+        .payload_index = 0,
+        .desc = .{ .static = @enumFromInt(0) },
+    }};
+    const variants = [_]LirProgram.BoxyTagVariant{
+        .{ .name = name_a, .discriminant = 0, .payload_layout = .u64 },
+        .{ .name = name_b, .discriminant = 1, .payload_layout = box_layout, .payload_descs = .{ .start = 0, .len = 1 } },
+        .{ .name = name_b, .discriminant = 0, .payload_layout = .u64 },
+        .{ .name = name_c, .discriminant = 1, .payload_layout = .u64 },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{
+            .payload_layout = source_union_layout,
+            .contains_refcounted = true,
+            .tag_variants = .{ .start = 0, .len = 2 },
+        },
+        .{
+            .payload_layout = target_union_layout,
+            .contains_refcounted = false,
+            .tag_variants = .{ .start = 2, .len = 2 },
+        },
+    };
+    const adapters = [_]LirProgram.BoxyAdapter{.{
+        .kind = .boxy_to_boxy,
+        .operation = .materialize,
+        .source_layout = source_union_layout,
+        .target_layout = target_union_layout,
+        .consumes_source = true,
+        .produces_owned_result = true,
+    }};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .adapters = &adapters,
+        .tag_variants = &variants,
+        .tag_payload_descs = &payload_descs,
+    });
+
+    var payload: u64 = 99;
+    var boxed: usize = 0;
+    var boxed_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&boxed),
+        &boxed_desc,
+        @ptrCast(&payload),
+        @intFromEnum(layout_mod.Idx.u64),
+        null,
+        &descs[0],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(box_layout),
+    );
+
+    var source: [64]u8 align(16) = @splat(0);
+    @memcpy(source[0..@sizeOf(usize)], std.mem.asBytes(&boxed));
+    const source_info = setup.layouts.getTagUnionInfo(setup.layouts.getLayout(source_union_layout));
+    source_info.data.writeDiscriminant(&source, 1, setup.layouts.targetUsize());
+    try std.testing.expect(boxy_abi.roc_boxy_tag_match(&source, @intFromEnum(source_union_layout), &descs[1], @intFromEnum(name_b)));
+
+    var target: [64]u8 align(16) = @splat(0);
+    var target_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_adapt(
+        &target,
+        &target_desc,
+        &source,
+        &descs[1],
+        &descs[2],
+        0,
+        @intFromEnum(LIR.BoxyTransferMode.move),
+    );
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[2]), target_desc);
+    try std.testing.expect(boxy_abi.roc_boxy_tag_match(&target, @intFromEnum(target_union_layout), &descs[2], @intFromEnum(name_b)));
+
+    var adapted_payload: u64 = 0;
+    var adapted_payload_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_tag_payload(
+        @ptrCast(&adapted_payload),
+        &adapted_payload_desc,
+        &target,
+        @intFromEnum(target_union_layout),
+        &descs[2],
+        @intFromEnum(name_b),
+        0,
+        @intFromEnum(layout_mod.Idx.u64),
+    );
+    try std.testing.expectEqual(@as(u64, 99), adapted_payload);
+
+    boxy_abi.roc_boxy_drop(&target, @intFromEnum(target_union_layout), &descs[2], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi move adapter transfers a dynamic box into a target tag extension" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const name_ok = try setup.store.insertString("Ok");
+    const name_err = try setup.store.insertString("Err");
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const source_union_layout = try setup.layouts.putTagUnion(&.{.str});
+    const target_union_layout = try setup.layouts.putTagUnion(&.{ .zst, box_layout });
+    const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
+        .payload_index = 0,
+        .desc = .{ .static = @enumFromInt(0) },
+    }};
+    const variants = [_]LirProgram.BoxyTagVariant{
+        .{
+            .name = name_ok,
+            .discriminant = 0,
+            .payload_layout = .str,
+            .payload_descs = .{ .start = 0, .len = 1 },
+        },
+        .{ .name = name_err, .discriminant = 0, .payload_layout = .zst },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{
+            .payload_layout = source_union_layout,
+            .contains_refcounted = true,
+            .tag_variants = .{ .start = 0, .len = 1 },
+        },
+        .{
+            .payload_layout = target_union_layout,
+            .contains_refcounted = true,
+            .tag_variants = .{ .start = 1, .len = 1 },
+            .tag_ext_desc = .{ .static = @enumFromInt(1) },
+        },
+    };
+    const adapters = [_]LirProgram.BoxyAdapter{.{
+        .kind = .boxy_to_boxy,
+        .operation = .materialize,
+        .source_layout = box_layout,
+        .target_layout = target_union_layout,
+        .consumes_source = true,
+        .produces_owned_result = true,
+    }};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .adapters = &adapters,
+        .tag_variants = &variants,
+        .tag_payload_descs = &payload_descs,
+    });
+
+    var source: [64]u8 align(16) = @splat(0);
+    const source_str = builtins.str.RocStr.fromSlice(
+        "a heap string long enough to exercise row-extension ownership",
+        setup.env.get_ops(),
+    );
+    @memcpy(source[0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&source_str));
+    const source_info = setup.layouts.getTagUnionInfo(setup.layouts.getLayout(source_union_layout));
+    source_info.data.writeDiscriminant(&source, 0, setup.layouts.targetUsize());
+
+    var boxed: usize = 0;
+    var boxed_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&boxed),
+        &boxed_desc,
+        &source,
+        @intFromEnum(source_union_layout),
+        &descs[1],
+        &descs[1],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(box_layout),
+    );
+
+    var target: [64]u8 align(16) = @splat(0);
+    var target_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_adapt(
+        &target,
+        &target_desc,
+        @ptrCast(&boxed),
+        boxed_desc,
+        &descs[2],
+        0,
+        @intFromEnum(LIR.BoxyTransferMode.move),
+    );
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[2]), target_desc);
+    try std.testing.expect(boxy_abi.roc_boxy_tag_match(
+        &target,
+        @intFromEnum(target_union_layout),
+        &descs[2],
+        @intFromEnum(name_ok),
+    ));
+
+    boxy_abi.roc_boxy_drop(&target, @intFromEnum(target_union_layout), &descs[2], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
 test "boxy abi dynamic numeric literal encodes through the descriptor payload layout" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
