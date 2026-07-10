@@ -13534,6 +13534,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        fn bindBoxyOutDescriptor(self: *Self, target_local: LocalId, out_desc_slot: i32) Allocator.Error!void {
+            const desc_ref = self.store.getLocal(target_local).boxy_desc orelse return;
+            const desc_local = desc_ref.localOrNull() orelse return;
+            try self.bindAssignedLocal(
+                desc_local,
+                self.stackLocationForLayout(self.localLayout(desc_local), out_desc_slot),
+            );
+        }
+
         const BoxyListElementDesc = struct {
             elem_layout: layout.Idx,
             desc_slot: i32,
@@ -13782,6 +13791,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intFromEnum(assign.payload_mode));
             try builder.addImmArg(@intFromEnum(target_layout));
             try self.callBoxyBuiltin(&builder, .box);
+            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
@@ -13804,6 +13814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intFromEnum(target_layout));
             try builder.addImmArg(@intFromEnum(assign.source_mode));
             try self.callBoxyBuiltin(&builder, .unbox);
+            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
@@ -13824,6 +13835,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intFromEnum(assign.adapter));
             try builder.addImmArg(@intFromEnum(assign.source_mode));
             try self.callBoxyBuiltin(&builder, .adapt);
+            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
@@ -14000,6 +14012,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             try builder.addImmArg(@intFromEnum(target_layout));
             try self.callBoxyBuiltin(&builder, .call_dict);
+            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 

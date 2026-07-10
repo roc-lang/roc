@@ -3167,8 +3167,8 @@ const ProcedureBuilder = struct {
 
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         var body_stmt = try self.lowerWorkerBodyInto(resolved, &proc, body_source, ret_local, ret_stmt);
-        body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
         body_stmt = try proc.prependErasedCaptureBindings(body_stmt);
+        body_stmt = try proc.prependStaticDescriptorMaterializationsForSlots(body_stmt);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.frame_locals = frame_span;
@@ -3584,6 +3584,7 @@ const ProcBodyBuilder = struct {
     descriptor_slots: []?LIR.LocalId,
     descriptor_slot_reps: []?Plan.TypeRepId,
     descriptor_rep_bindings: std.ArrayList(DescriptorRepBinding),
+    runtime_initialized_descriptor_locals: std.ArrayList(LIR.LocalId),
     local_descriptor_environments: std.ArrayList(LocalDescriptorEnvironment),
     read_only_descriptor_inputs: std.ArrayList(LIR.LocalId),
     dictionary_locals: []?LIR.LocalId,
@@ -3781,6 +3782,7 @@ const ProcBodyBuilder = struct {
             .descriptor_slots = &.{},
             .descriptor_slot_reps = &.{},
             .descriptor_rep_bindings = .empty,
+            .runtime_initialized_descriptor_locals = .empty,
             .local_descriptor_environments = .empty,
             .read_only_descriptor_inputs = .empty,
             .dictionary_locals = &.{},
@@ -3816,6 +3818,7 @@ const ProcBodyBuilder = struct {
             self.parent.allocator.free(env.bindings);
         }
         self.local_descriptor_environments.deinit(self.parent.allocator);
+        self.runtime_initialized_descriptor_locals.deinit(self.parent.allocator);
         self.descriptor_rep_bindings.deinit(self.parent.allocator);
         self.parent.allocator.free(self.binder_locals);
         self.loop_stack.deinit(self.parent.allocator);
@@ -6402,7 +6405,7 @@ const ProcBodyBuilder = struct {
             &pre_arg_descriptor_initializers,
             next,
         );
-        continuation = try self.prependLoweredExprsExpected(args, operand_types, lowered, continuation);
+        continuation = try self.prependLoweredExprsExpected(args, call_types, lowered, continuation);
         continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
         return continuation;
     }
@@ -6491,7 +6494,7 @@ const ProcBodyBuilder = struct {
             try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
             break :blk target;
         } else blk: {
-            const raw_ret = try self.addFrameLocalForRep(worker_ret_rep);
+            const raw_ret = try self.addFrameLocal(self.workerRuntimeLayoutForRep(worker_ret_rep).layoutIdx());
             try self.recordDirectCallResultDescriptorEnvironment(raw_ret, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
             const raw_result_desc = self.resultDescriptorForCallTarget(raw_ret, direct_result_desc);
             if (self.parent.result.store.getLocal(raw_ret).boxy_desc == null) {
@@ -6705,7 +6708,6 @@ const ProcBodyBuilder = struct {
             .local, .runtime => boxyLowerInvariant("boxy adapter descriptor template was not static"),
         };
         const template = self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
-        if (template.tag_ext_desc == null) return null;
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy call adapter tag source had no descriptor");
@@ -6718,18 +6720,99 @@ const ProcBodyBuilder = struct {
             } else null,
         };
 
-        var prerequisite: ?DescriptorArgLocal = null;
-        const residual_desc: ?LIR.BoxyDescRef = if (source_materialization) |source_materialize| static_residual: {
+        const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |source_materialize| blk: {
             const source_template_id = switch (source_materialize.desc) {
                 .static => |desc_id| desc_id,
                 .local, .runtime => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
             };
-            const source_template = self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+            break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
+        } else null;
 
+        var specialized_tag_variants: ?LIR.BoxySpan = null;
+        var payload_desc_specialized = false;
+        if (source_template) |source_template_value| {
+            const target_plan_rep = self.parent.tagVariantRepForDesc(target_rep);
+            const target_plan_variants = self.parent.plan.tagVariantSlice(
+                self.parent.plan.representations.items[@intFromEnum(target_plan_rep)].tag_variants,
+            );
+            const target_template_variants = self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len];
+            const source_template_variants = self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len];
+            var specialized_variants = std.ArrayList(LirProgram.BoxyTagVariant).empty;
+            defer specialized_variants.deinit(self.parent.allocator);
+
+            for (target_template_variants) |target_variant| {
+                var specialized_variant = target_variant;
+                const target_name = self.parent.result.store.getString(target_variant.name);
+                var target_plan_variant: ?Plan.TagVariant = null;
+                for (target_plan_variants) |plan_variant| {
+                    if (std.mem.eql(u8, target_name, self.tagVariantNameText(plan_variant))) {
+                        target_plan_variant = plan_variant;
+                        break;
+                    }
+                }
+                var source_variant: ?LirProgram.BoxyTagVariant = null;
+                for (source_template_variants) |candidate| {
+                    if (std.mem.eql(u8, target_name, self.parent.result.store.getString(candidate.name))) {
+                        source_variant = candidate;
+                        break;
+                    }
+                }
+
+                if (target_plan_variant != null and source_variant != null and target_variant.payload_descs.len != 0) {
+                    const target_payloads = self.parent.plan.childSlice(target_plan_variant.?.payloads);
+                    const target_descs = self.parent.result.boxy_tag_payload_descs.items[target_variant.payload_descs.start..][0..target_variant.payload_descs.len];
+                    const source_descs = self.parent.result.boxy_tag_payload_descs.items[source_variant.?.payload_descs.start..][0..source_variant.?.payload_descs.len];
+                    var specialized_descs = std.ArrayList(LirProgram.BoxyTagPayloadDesc).empty;
+                    defer specialized_descs.deinit(self.parent.allocator);
+                    var variant_specialized = false;
+
+                    for (target_descs) |target_payload_desc| {
+                        var specialized_desc = target_payload_desc;
+                        if (target_payload_desc.payload_index < target_payloads.len) {
+                            const storage_layout = self.parent.tagVariantPayloadFieldLayout(
+                                target_variant.payload_layout,
+                                target_payload_desc.payload_index,
+                                target_payloads.len,
+                            );
+                            const storage_tag = self.parent.result.layouts.getLayout(storage_layout).tag;
+                            if (storage_tag == .box or storage_tag == .box_of_zst) {
+                                for (source_descs) |source_payload_desc| {
+                                    if (source_payload_desc.payload_index == target_payload_desc.payload_index) {
+                                        specialized_desc.desc = source_payload_desc.desc;
+                                        variant_specialized = true;
+                                        payload_desc_specialized = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        try specialized_descs.append(self.parent.allocator, specialized_desc);
+                    }
+
+                    if (variant_specialized) {
+                        const payload_start: u32 = @intCast(self.parent.result.boxy_tag_payload_descs.items.len);
+                        try self.parent.result.boxy_tag_payload_descs.appendSlice(self.parent.allocator, specialized_descs.items);
+                        specialized_variant.payload_descs = .{ .start = payload_start, .len = @intCast(specialized_descs.items.len) };
+                    }
+                }
+                try specialized_variants.append(self.parent.allocator, specialized_variant);
+            }
+
+            if (payload_desc_specialized) {
+                const variants_start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
+                try self.parent.result.boxy_tag_variants.appendSlice(self.parent.allocator, specialized_variants.items);
+                specialized_tag_variants = .{ .start = variants_start, .len = @intCast(specialized_variants.items.len) };
+            }
+        }
+
+        if (!payload_desc_specialized and template.tag_ext_desc == null) return null;
+
+        var prerequisite: ?DescriptorArgLocal = null;
+        const residual_desc: ?LIR.BoxyDescRef = if (template.tag_ext_desc == null) null else if (source_template) |source_template_value| static_residual: {
             var residual_variants = std.ArrayList(LirProgram.BoxyTagVariant).empty;
             defer residual_variants.deinit(self.parent.allocator);
             const target_variants = self.parent.result.boxy_tag_variants.items[template.tag_variants.start..][0..template.tag_variants.len];
-            const source_variants = self.parent.result.boxy_tag_variants.items[source_template.tag_variants.start..][0..source_template.tag_variants.len];
+            const source_variants = self.parent.result.boxy_tag_variants.items[source_template_value.tag_variants.start..][0..source_template_value.tag_variants.len];
             for (source_variants) |source_variant| {
                 const source_name = self.parent.result.store.getString(source_variant.name);
                 var belongs_to_target = false;
@@ -6742,11 +6825,11 @@ const ProcBodyBuilder = struct {
                 if (!belongs_to_target) try residual_variants.append(self.parent.allocator, source_variant);
             }
 
-            if (residual_variants.items.len == 0 and source_template.tag_ext_desc == null) break :static_residual null;
+            if (residual_variants.items.len == 0 and source_template_value.tag_ext_desc == null) break :static_residual null;
             const residual_start: u32 = @intCast(self.parent.result.boxy_tag_variants.items.len);
             try self.parent.result.boxy_tag_variants.appendSlice(self.parent.allocator, residual_variants.items);
             const residual_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
-            var residual = source_template;
+            var residual = source_template_value;
             residual.tag_variants = .{ .start = residual_start, .len = @intCast(residual_variants.items.len) };
             try self.parent.result.boxy_type_descs.append(self.parent.allocator, residual);
             break :static_residual LIR.BoxyDescRef{ .static = residual_id };
@@ -6789,7 +6872,8 @@ const ProcBodyBuilder = struct {
 
         const desc_id: LIR.BoxyTypeDescId = @enumFromInt(@as(u32, @intCast(self.parent.result.boxy_type_descs.items.len)));
         var specialized = template;
-        specialized.tag_ext_desc = residual_desc;
+        if (specialized_tag_variants) |variants| specialized.tag_variants = variants;
+        if (template.tag_ext_desc != null) specialized.tag_ext_desc = residual_desc;
         try self.parent.result.boxy_type_descs.append(self.parent.allocator, specialized);
 
         var captures = std.ArrayList(LIR.LocalId).empty;
@@ -6832,7 +6916,6 @@ const ProcBodyBuilder = struct {
             return tag_desc;
         }
         const known = try self.adapterDescriptorForKnownRep(target_rep);
-        if (known.materialize != null) return known;
         const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_tag = self.parent.result.layouts.getLayout(target_layout).tag;
@@ -6843,27 +6926,37 @@ const ProcBodyBuilder = struct {
             return known;
         }
 
-        const known_desc_ref = known.desc orelse return known;
-        const known_desc_id = switch (known_desc_ref) {
+        const known_template_ref = if (known.materialize) |materialize|
+            materialize.materialize orelse
+                boxyLowerInvariant("planned list adapter target descriptor materialization had no template")
+        else
+            known.desc orelse return known;
+        const known_desc_id = switch (known_template_ref) {
             .static => |desc_id| desc_id,
-            .local, .runtime => return known,
+            .local, .runtime => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
         };
         const known_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(known_desc_id)];
-        if (known_desc.nested_descs.len != 0) return known;
 
         const source_list_rep = self.listRepForBoundary(source_rep) orelse
             boxyLowerInvariant("planned list adapter source representation was not list-shaped");
         if (source_desc == .static) {
             const source_desc_id = source_desc.static;
             const source_type_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(source_desc_id)];
-            if (source_type_desc.nested_descs.len == 0) {
+            const elem_desc = if (source_type_desc.nested_descs.len == 0) blk: {
                 const source_elem_rep = self.requiredSingleChild(source_list_rep, .list_elem).rep;
                 const source_elem_desc = try self.adapterDescriptorForKnownRep(source_elem_rep);
                 if (source_elem_desc.materialize != null) {
                     boxyLowerInvariant("known list adapter element descriptor required runtime captures");
                 }
-                const elem_desc = source_elem_desc.desc orelse
+                break :blk source_elem_desc.desc orelse
                     boxyLowerInvariant("known list adapter element representation had no descriptor");
+            } else blk: {
+                if (source_type_desc.nested_descs.len != 1) {
+                    boxyLowerInvariant("planned list adapter source descriptor did not have exactly one element descriptor");
+                }
+                break :blk self.parent.result.boxy_desc_refs.items[source_type_desc.nested_descs.start];
+            };
+            if (elem_desc.localOrNull() == null) {
                 const nested_start: u32 = @intCast(self.parent.result.boxy_desc_refs.items.len);
                 try self.parent.result.boxy_desc_refs.append(self.parent.allocator, elem_desc);
 
@@ -10073,8 +10166,9 @@ const ProcBodyBuilder = struct {
             => Plan.TypeRef{ .module = self.module.key, .ty = plan.step_ty },
         };
         _ = try self.reserveRuntimeDescriptorLocalForRep(self.repForTypeRef(iterator_type));
-        const iterator_param = try self.addFrameLocalForTypeRef(iterator_type);
-        const initial_iterator = try self.addFrameLocalForTypeRef(iterator_type);
+        const iterator_rep = self.repForTypeRef(iterator_type);
+        const iterator_param = try self.addFrameLocalForRepWithFreshDescriptor(iterator_rep);
+        const initial_iterator = try self.addFrameLocalForRepWithFreshDescriptor(iterator_rep);
         const join_id = self.freshJoinPointId();
 
         try self.loop_stack.append(self.parent.allocator, .{
@@ -10091,7 +10185,7 @@ const ProcBodyBuilder = struct {
 
         return try self.parent.result.store.addCFStmt(.{ .join = .{
             .id = join_id,
-            .params = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{iterator_param}),
+            .params = try self.joinParamSpan(&[_]LIR.LocalId{iterator_param}),
             .body = body,
             .remainder = initial_jump,
         } });
@@ -10109,7 +10203,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const step = try self.iteratorStepShapeForTypeRef(step_ty);
-        const step_local = try self.addFrameLocalForTypeRef(step_ty);
+        const step_local = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(step_ty));
         const done_variant = self.tagVariantForTypeRef(step.step_ty, step.done_tag);
         const one_variant = self.tagVariantForTypeRef(step.step_ty, step.one_tag);
         const skip_variant = self.tagVariantForTypeRef(step.step_ty, step.skip_tag);
@@ -10148,10 +10242,10 @@ const ProcBodyBuilder = struct {
         join_id: LIR.JoinPointId,
     ) Allocator.Error!LIR.CFStmtId {
         const payload_rep = self.repForTypeRef(step.one_payload_ty);
-        const payload = try self.addFrameLocalForRep(payload_rep);
+        const payload = try self.addFrameLocalForRepWithFreshDescriptor(payload_rep);
         const payload_desc = try self.ensureTagPayloadTargetDescriptorLocal(payload, payload_rep);
-        const item = try self.addFrameLocalForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_item.ty });
-        const rest = try self.addFrameLocalForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty });
+        const item = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_item.ty }));
+        const rest = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty }));
         const body_expr = self.module.checked_bodies.expr(for_.body);
         const body_result = try self.addFrameLocalForType(body_expr.ty);
 
@@ -10187,9 +10281,9 @@ const ProcBodyBuilder = struct {
         join_id: LIR.JoinPointId,
     ) Allocator.Error!LIR.CFStmtId {
         const payload_rep = self.repForTypeRef(step.skip_payload_ty);
-        const payload = try self.addFrameLocalForRep(payload_rep);
+        const payload = try self.addFrameLocalForRepWithFreshDescriptor(payload_rep);
         const payload_desc = try self.ensureTagPayloadTargetDescriptorLocal(payload, payload_rep);
-        const rest = try self.addFrameLocalForTypeRef(.{ .module = step.skip_payload_ty.module, .ty = step.skip_rest.ty });
+        const rest = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(.{ .module = step.skip_payload_ty.module, .ty = step.skip_rest.ty }));
 
         var continuation = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
         continuation = try self.setLocalInitializeJoinParam(iterator_param, rest, continuation);
@@ -12900,6 +12994,7 @@ const ProcBodyBuilder = struct {
         while (index > 0) {
             index -= 1;
             const hidden = hidden_args[order.items[index]];
+            if (std.mem.indexOfScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, hidden.local) != null) continue;
             const desc = hidden.materialize orelse
                 boxyLowerInvariant("boxy hidden descriptor materialization order included a descriptor with no materialization");
             if (self.localIsReadOnlyDescriptorInput(hidden.local)) {
@@ -15422,7 +15517,7 @@ const ProcBodyBuilder = struct {
             .op = .{ .local = source },
             .next = next,
         } });
-        return try self.prependSetLocalDescriptorRebind(target, source, assign);
+        return try self.prependSetLocalDescriptorTransfer(target, source, .replace_existing, assign);
     }
 
     fn assignToFixedDescriptorBoundary(
@@ -17292,8 +17387,8 @@ const ProcBodyBuilder = struct {
         const capacity = try self.addFrameLocal(.u64);
         const index = try self.addFrameLocal(.u64);
         const zero = try self.addFrameLocal(.u64);
-        const initial_list = try self.addFrameLocalForRep(target_rep);
-        const acc = try self.addFrameLocalForRep(target_rep);
+        const initial_list = try self.addFrameLocal(target_layout);
+        const acc = try self.addFrameLocal(target_layout);
         const source_elem_desc_info: ?ResultDescriptorRef = if (target_elem_desc_local != null)
             try self.descriptorForSourceListElement(source, source_list_rep, source_elem.rep)
         else
@@ -17394,7 +17489,7 @@ const ProcBodyBuilder = struct {
         acc: LIR.LocalId,
         join_id: LIR.JoinPointId,
     ) Allocator.Error!LIR.CFStmtId {
-        const source_elem = try self.addFrameLocalForRep(source_elem_rep);
+        const source_elem = try self.addFrameLocal(self.workerRuntimeLayoutForRep(source_elem_rep).layoutIdx());
         // Dynamic-box element descriptors are carried by the list descriptor.
         // When storage is identical, move the retained list_get result directly
         // into the destination list instead of creating a same-value alias.
@@ -18532,7 +18627,7 @@ const ProcBodyBuilder = struct {
             .mode = .replace_existing,
             .next = next,
         } });
-        return try self.prependSetLocalDescriptorRebind(target, source, write_value);
+        return try self.prependSetLocalDescriptorTransfer(target, source, .replace_existing, write_value);
     }
 
     fn setLocalInitializeJoinParam(
@@ -18550,13 +18645,14 @@ const ProcBodyBuilder = struct {
             .mode = .initialize_join_param,
             .next = next,
         } });
-        return try self.prependSetLocalDescriptorRebind(target, source, write_value);
+        return try self.prependSetLocalDescriptorTransfer(target, source, .initialize_join_param, write_value);
     }
 
-    fn prependSetLocalDescriptorRebind(
+    fn prependSetLocalDescriptorTransfer(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
+        mode: LIR.SetLocalWriteMode,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const maybe_source_desc = self.parent.result.store.getLocal(source).boxy_desc;
@@ -18569,11 +18665,59 @@ const ProcBodyBuilder = struct {
         const source_desc = maybe_source_desc orelse return next;
         if (std.meta.eql(target_desc, source_desc)) return next;
         if (self.localIsReadOnlyDescriptorInput(target_desc_local)) return next;
-        return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+        try self.markDescriptorLocalBound(target_desc_local);
+        const source_desc_local = source_desc.localOrNull() orelse {
+            const local = try self.addFrameLocal(.opaque_ptr);
+            const transfer = try self.parent.result.store.addCFStmt(.{ .set_local = .{
+                .target = target_desc_local,
+                .value = local,
+                .mode = mode,
+                .next = next,
+            } });
+            return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                .target = local,
+                .desc = source_desc,
+                .next = transfer,
+            } });
+        };
+        return try self.parent.result.store.addCFStmt(.{ .set_local = .{
             .target = target_desc_local,
-            .desc = source_desc,
+            .value = source_desc_local,
+            .mode = mode,
             .next = next,
         } });
+    }
+
+    fn markDescriptorLocalBound(self: *ProcBodyBuilder, local: LIR.LocalId) Allocator.Error!void {
+        if (std.mem.indexOfScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) == null) {
+            try self.runtime_initialized_descriptor_locals.append(self.parent.allocator, local);
+        }
+        for (self.descriptor_locals, 0..) |maybe_local, index| {
+            if (maybe_local == local) self.descriptor_bound[index] = true;
+        }
+        for (self.descriptor_slots, 0..) |maybe_local, index| {
+            if (maybe_local == local) self.descriptor_bound[index] = true;
+        }
+        for (self.descriptor_rep_bindings.items) |*binding| {
+            if (binding.local == local) binding.bound = true;
+        }
+    }
+
+    fn joinParamSpan(
+        self: *ProcBodyBuilder,
+        values: []const LIR.LocalId,
+    ) Allocator.Error!LIR.LocalSpan {
+        var params = std.ArrayList(LIR.LocalId).empty;
+        defer params.deinit(self.parent.allocator);
+        for (values) |value| {
+            try params.append(self.parent.allocator, value);
+            const desc = self.parent.result.store.getLocal(value).boxy_desc orelse continue;
+            const desc_local = desc.localOrNull() orelse continue;
+            if (std.mem.indexOfScalar(LIR.LocalId, params.items, desc_local) == null) {
+                try params.append(self.parent.allocator, desc_local);
+            }
+        }
+        return try self.parent.result.store.addLocalSpan(params.items);
     }
 
     fn addArgLocal(self: *ProcBodyBuilder, layout_idx: @import("layout").Idx) Allocator.Error!LIR.LocalId {
@@ -18617,6 +18761,18 @@ const ProcBodyBuilder = struct {
         const desc = try self.frameDescriptorRefForRep(rep_id);
         const local = try self.addFrameLocal(layout_idx);
         if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        return local;
+    }
+
+    fn addFrameLocalForRepWithFreshDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
+        const local = try self.addFrameLocal(self.workerRuntimeLayoutForRep(rep_id).layoutIdx());
+        const canonical_rep = self.canonicalDescriptorRep(rep_id);
+        if (self.parent.plan.representations.items[@intFromEnum(canonical_rep)].descriptor != null) {
+            const desc_local = try self.addFrameLocal(.opaque_ptr);
+            self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+        } else if (try self.descriptorRefForRepIfNeeded(rep_id)) |desc| {
+            self.parent.result.store.setLocalBoxyDesc(local, desc);
+        }
         return local;
     }
 
@@ -18687,6 +18843,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn markLocalDescriptorForRep(self: *ProcBodyBuilder, local: LIR.LocalId, rep_id: Plan.TypeRepId) Allocator.Error!void {
+        if (self.parent.result.store.getLocal(local).boxy_desc != null) return;
         const desc_ref = try self.descriptorRefForRepIfNeeded(rep_id);
         if (desc_ref) |desc| {
             self.parent.result.store.replaceLocalBoxyDesc(local, desc);
@@ -19028,6 +19185,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const reservation = (try self.reserveDescriptorLocalForRepWithFresh(rep_id)) orelse return next;
         if (self.localIsReadOnlyDescriptorInput(reservation.local)) return next;
+        if (std.mem.indexOfScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, reservation.local) != null) return next;
         if (self.descriptorBindingIsBoundForRep(rep_id)) return next;
         const rep = self.parent.plan.representations.items[@intFromEnum(rep_id)];
         if (rep.descriptor) |desc| {
@@ -19051,6 +19209,7 @@ const ProcBodyBuilder = struct {
         if (self.descriptorBindingIsBoundForRep(rep_id)) return next;
         const local = self.descriptorLocalForRequirementAndRepOrNull(desc, rep_id) orelse return next;
         if (self.localIsReadOnlyDescriptorInput(local)) return next;
+        if (std.mem.indexOfScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) return next;
         const static_desc = try self.parent.staticDescRefForRep(rep_id);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = local,
@@ -19069,8 +19228,10 @@ const ProcBodyBuilder = struct {
         if (self.workerHasHiddenDescriptor(desc)) return next;
         const local = self.descriptorLocalForRequirementAndRepOrNull(desc, rep_id) orelse return next;
         if (self.localIsReadOnlyDescriptorInput(local)) return next;
+        if (std.mem.indexOfScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) return next;
         if (self.descriptorBindingIsBoundForRep(rep_id)) return next;
         const materialization = try self.descriptorMaterializationForKnownRep(rep_id);
+        if (materialization.captures.len == 0) return next;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = local,
             .desc = materialization.desc,
@@ -19093,6 +19254,7 @@ const ProcBodyBuilder = struct {
             const desc: Plan.DescriptorRequirementId = @enumFromInt(@as(u32, @intCast(index)));
             const slot_rep = self.descriptor_slot_reps[index] orelse
                 boxyLowerInvariant("boxy descriptor slot materialization had no representation binding");
+            if (std.mem.indexOfScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) continue;
             if (self.descriptorBindingIsBoundForRep(slot_rep)) continue;
             if (self.localIsReadOnlyDescriptorInput(local)) continue;
             if (self.workerHasHiddenDescriptor(desc)) continue;
