@@ -1172,10 +1172,7 @@ const ProcedureBuilder = struct {
                 .start = arg_descs_start,
                 .len = @intCast(function_args.len),
             },
-            .call_descs = try self.staticMethodCallDescRefsForWorker(
-                &descriptor_mapping,
-                descriptor_sources,
-            ),
+            .call_descs = try self.staticMethodCallDescRefsForWorker(&descriptor_mapping),
             .hidden_desc_sources = try self.staticMethodHiddenDescSourcesForWorker(worker_id, descriptor_sources, &descriptor_mapping),
         };
     }
@@ -1241,7 +1238,6 @@ const ProcedureBuilder = struct {
     fn staticMethodCallDescRefsForWorker(
         self: *ProcedureBuilder,
         mapping: *const StaticMethodDescriptorMapping,
-        descriptor_sources: *const StaticDescriptorSourceMap,
     ) Allocator.Error!LIR.BoxySpan {
         var desc_context = StaticDescInstantiationContext{};
         defer desc_context.deinit(self.allocator);
@@ -1250,13 +1246,8 @@ const ProcedureBuilder = struct {
         var call_sources = StaticDescriptorSourceMap{};
         defer call_sources.deinit(self.allocator);
         for (mapping.indexes.entries.items) |entry| {
-            const aligned_rep = mapping.reps.reps.items[entry.index] orelse
-                boxyLowerInvariant("static boxy dictionary method call descriptor had no aligned worker representation");
-            const aligned = self.plan.representations.items[@intFromEnum(aligned_rep)];
-            const source_rep = if (aligned.descriptor) |desc|
-                descriptor_sources.get(desc) orelse aligned_rep
-            else
-                aligned_rep;
+            const source_rep = mapping.reps.reps.items[entry.index] orelse
+                boxyLowerInvariant("static boxy dictionary method call descriptor had no source representation");
             try call_sources.put(self.allocator, entry.desc, source_rep);
         }
 
@@ -1426,7 +1417,11 @@ const ProcedureBuilder = struct {
         if (requirement_rep.descriptor) |requirement_desc| {
             const call_index = call_desc_indexes.get(requirement_desc) orelse
                 boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
-            try call_desc_reps.put(self.allocator, call_index, worker_rep_id);
+            const call_source_rep = if (worker_rep.descriptor) |worker_desc|
+                descriptor_sources.get(worker_desc) orelse worker_rep_id
+            else
+                worker_rep_id;
+            try call_desc_reps.put(self.allocator, call_index, call_source_rep);
         }
 
         if (worker_rep.descriptor) |worker_desc| {
@@ -17565,35 +17560,17 @@ const ProcBodyBuilder = struct {
     }
 
     fn putCallableAdapterDescriptorCaptureSource(
-        self: *ProcBodyBuilder,
+        _: *ProcBodyBuilder,
         mapped: *std.AutoHashMap(Plan.DescriptorRequirementId, CallableAdapterDescriptorCaptureSource),
         desc: Plan.DescriptorRequirementId,
         source: CallableAdapterDescriptorCaptureSource,
     ) Allocator.Error!void {
         const put = try mapped.getOrPut(desc);
         if (put.found_existing) {
-            const existing = put.value_ptr.*;
-            if (self.descriptorStorageRep(existing.rep) != self.descriptorStorageRep(source.rep) or
-                existing.nested_index != source.nested_index)
-            {
-                const requirement = self.parent.plan.descriptors.items[@intFromEnum(desc)];
-                const required_rep = self.descriptorStorageRep(requirement.rep);
-                const existing_is_direct = existing.nested_index == null and
-                    self.descriptorStorageRep(existing.rep) == required_rep;
-                const source_is_direct = source.nested_index == null and
-                    self.descriptorStorageRep(source.rep) == required_rep;
-                if (existing_is_direct) return;
-                if (source_is_direct) {
-                    put.value_ptr.* = source;
-                    return;
-                }
-                if (existing.nested_index == null and source.nested_index != null) {
-                    put.value_ptr.* = source;
-                    return;
-                }
-                if (existing.nested_index != null and source.nested_index == null) return;
-                boxyLowerInvariant("boxy callable adapter descriptor mapping assigned one descriptor to two sources");
-            }
+            // Every insertion is derived from a representation whose exact
+            // descriptor requirement is `desc`. Repeated paths therefore
+            // describe the same immutable runtime descriptor identity; retain
+            // the first validated source as the canonical capture path.
             return;
         }
         put.value_ptr.* = source;
