@@ -290,10 +290,10 @@ fn computeLocalContainsRefcounted(
                 .assign_boxy_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
                 .assign_boxy_reuse_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
                 .assign_boxy_tag => |assign| changed = markLocalRc(contains, assign.target) or changed,
-                .assign_call_dict => |assign| if (assign.result_desc != null) {
+                .assign_call_dict => |assign| if (assign.result_desc != null and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
                     changed = markLocalRc(contains, assign.target) or changed;
                 },
-                .assign_call_erased => |assign| if (assign.result_desc != null or assign.out_desc != null) {
+                .assign_call_erased => |assign| if ((assign.result_desc != null or assign.out_desc != null) and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
                     changed = markLocalRc(contains, assign.target) or changed;
                 },
                 else => {},

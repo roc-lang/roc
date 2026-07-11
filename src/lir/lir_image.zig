@@ -34,7 +34,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v14: LocalSpan lengths are u32 for large proc frame-local spans.
 /// v15: SafeMultiList layout tables use portable typed column arrays.
 /// v16: procedure specs carry explicit Boxy return descriptor sources.
-pub const FORMAT_VERSION: u32 = 16;
+/// v17: dictionary method adapters carry exact call descriptor spans.
+pub const FORMAT_VERSION: u32 = 17;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -807,6 +808,7 @@ test "LIR image views empty and populated boxy tables" {
         .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },
+            .call_descs = .{ .start = 0, .len = 1 },
             .nested_dicts = .{ .start = 0, .len = 1 },
             .hidden_desc_sources = .{ .start = 0, .len = 1 },
         },
@@ -883,6 +885,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.boxy_adapt_steps[0].copy_bytes.layout_idx);
     try std.testing.expectEqual(Program.BoxyPayloadOp.copy, populated_view.boxy_payload_steps[0].dynamic.op);
     try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
+    try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_method_hidden_desc_sources[0].slot);
     try std.testing.expectEqual(@as(u16, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));

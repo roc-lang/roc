@@ -2975,17 +2975,20 @@ pub const MonoLlvmCodeGen = struct {
         const ptr_ty = try self.ptrType();
         const literal_ptr = wip.alloca(.normal, .i128, .@"1", LlvmBuilder.Alignment.fromByteUnits(16), .default, "boxy_literal") catch return error.OutOfMemory;
         try self.storeI128Literal(literal_ptr, .i128, value);
+        const out_desc = try self.boxyOutDescPtr("boxy_literal_desc");
         try self.callBoxyVoid(
             if (fractional) "roc_boxy_dynamic_frac_literal_ref" else "roc_boxy_dynamic_num_literal_ref",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, .i32 },
+            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, .i32 },
             &.{
                 try self.boxyValuePtr(target),
+                out_desc,
                 literal_ptr,
                 try self.resolveBoxyDesc(desc),
                 try self.boxyInt(.i32, @intFromEnum(default_layout)),
                 try self.boxyInt(.i32, @intFromEnum(self.localLayout(target))),
             },
         );
+        try self.storeBoxyOutDesc(target, out_desc);
     }
 
     fn emitDirectCall(self: *MonoLlvmCodeGen, target: LocalId, proc_id: LirProcSpecId, args: LocalSpan, is_cold: bool) Error!void {
@@ -5527,11 +5530,9 @@ pub const MonoLlvmCodeGen = struct {
             try self.copyBytes(ret_ptr, self.slot(value).ptr, size, self.alignmentForLayout(self.current_ret_layout));
         }
         if (self.erased_ret_desc_ptr_arg) |out_desc| {
-            const desc = if (self.store.getLocal(value).boxy_desc) |desc_ref|
-                try self.resolveBoxyDesc(desc_ref)
-            else
-                try self.boxyNullPtr();
-            try self.storePointer(out_desc, desc);
+            if (self.store.getLocal(value).boxy_desc) |desc_ref| {
+                try self.storePointer(out_desc, try self.resolveBoxyDesc(desc_ref));
+            }
         }
         const wip = self.wip orelse return error.CompilationFailed;
         _ = wip.retVoid() catch return error.OutOfMemory;

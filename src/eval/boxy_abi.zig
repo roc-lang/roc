@@ -1297,11 +1297,13 @@ pub fn roc_boxy_dynamic_num_literal(
     writeResult(g, out, literal, layoutIdx(target_layout));
 }
 
-/// Encode a numeric literal per `desc`'s payload layout, falling back to
-/// `default_layout` when the descriptor carries no concrete scalar payload
-/// (the binding is erased), and box the result into dynamic storage.
+/// Encode a numeric literal per `desc`'s payload layout. When an erased
+/// binding has no concrete scalar payload, `default_layout` explicitly
+/// selects the encoding. The selected descriptor is written through
+/// `out_desc` alongside the dynamic value.
 pub fn roc_boxy_dynamic_num_literal_ref(
     out: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
     value: *align(1) const i128,
     desc: *const BoxyTypeDesc,
     default_layout: u32,
@@ -1310,10 +1312,10 @@ pub fn roc_boxy_dynamic_num_literal_ref(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    const effective = if (g.runtime.boxyDescHasConcreteScalarPayload(desc))
-        desc
-    else
-        g.runtime.makeRuntimeScalarDesc(layoutIdx(default_layout)) catch abiCrash(g, "dynamic numeric literal descriptor");
+    const effective = g.runtime.effectiveBoxyScalarLiteralDesc(
+        desc,
+        layoutIdx(default_layout),
+    ) catch abiCrash(g, "dynamic numeric literal descriptor");
     const literal = g.runtime.boxyDynamicNumLiteral(
         hooks(g),
         value.*,
@@ -1321,11 +1323,14 @@ pub fn roc_boxy_dynamic_num_literal_ref(
         layoutIdx(target_layout),
     ) catch abiCrash(g, "dynamic numeric literal");
     writeResult(g, out, literal, layoutIdx(target_layout));
+    out_desc.* = effective;
 }
 
-/// Encode a fractional literal using a descriptor-selected or default layout.
+/// Encode a fractional literal using a descriptor-selected or explicit
+/// default layout, and publish the selected descriptor through `out_desc`.
 pub fn roc_boxy_dynamic_frac_literal_ref(
     out: ?[*]u8,
+    out_desc: *?*const BoxyTypeDesc,
     dec_bits: *align(1) const i128,
     desc: *const BoxyTypeDesc,
     default_layout: u32,
@@ -1334,10 +1339,10 @@ pub fn roc_boxy_dynamic_frac_literal_ref(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    const effective = if (g.runtime.boxyDescHasConcreteScalarPayload(desc))
-        desc
-    else
-        g.runtime.makeRuntimeScalarDesc(layoutIdx(default_layout)) catch abiCrash(g, "dynamic fractional literal descriptor");
+    const effective = g.runtime.effectiveBoxyScalarLiteralDesc(
+        desc,
+        layoutIdx(default_layout),
+    ) catch abiCrash(g, "dynamic fractional literal descriptor");
     const literal = g.runtime.boxyDynamicFracLiteral(
         hooks(g),
         dec_bits.*,
@@ -1345,6 +1350,7 @@ pub fn roc_boxy_dynamic_frac_literal_ref(
         layoutIdx(target_layout),
     ) catch abiCrash(g, "dynamic fractional literal");
     writeResult(g, out, literal, layoutIdx(target_layout));
+    out_desc.* = effective;
 }
 
 /// Dispatch one dictionary method call: adapt the explicit arguments per the

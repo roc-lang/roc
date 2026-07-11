@@ -957,6 +957,47 @@ test "boxy abi dynamic numeric literal encodes through the descriptor payload la
     try setup.env.checkForLeaks();
 }
 
+test "boxy abi dynamic numeric literal publishes its default scalar descriptor" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = box_layout, .contains_refcounted = true },
+    };
+    try setup.startRuntime(allocator, .{ .type_descs = &descs });
+
+    const literal: i128 = 42;
+    var boxed: usize = 0;
+    var literal_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_dynamic_num_literal_ref(
+        @ptrCast(&boxed),
+        &literal_desc,
+        &literal,
+        &descs[0],
+        @intFromEnum(layout_mod.Idx.i64),
+        @intFromEnum(box_layout),
+    );
+
+    try std.testing.expectEqual(layout_mod.Idx.i64, literal_desc.?.payload_layout);
+    var out: i64 = 0;
+    var out_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_unbox(
+        @ptrCast(&out),
+        &out_desc,
+        @ptrCast(&boxed),
+        @intFromEnum(box_layout),
+        literal_desc.?,
+        null,
+        @intFromEnum(layout_mod.Idx.i64),
+        0,
+    );
+    try std.testing.expectEqual(@as(i64, 42), out);
+    boxy_abi.roc_boxy_drop(@ptrCast(&boxed), @intFromEnum(box_layout), literal_desc, 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
 test "boxy abi tag construction, matching, and payload reads" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);

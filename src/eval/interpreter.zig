@@ -2124,13 +2124,7 @@ pub const Interpreter = struct {
                         const lit = assign.value.boxy_dynamic_num_literal;
                         var desc = try self.resolveBoxyDescRef(frame, lit.desc);
                         const target_layout = self.store.getLocal(assign.target).layout_idx;
-                        if (!self.boxyDescHasConcreteScalarPayload(desc)) {
-                            // The binding is erased; the value encodes with
-                            // the literal kind's default layout, matching how
-                            // the values it meets were encoded, and carries a
-                            // descriptor that records that choice.
-                            desc = try self.makeRuntimeScalarDesc(lit.default_layout);
-                        }
+                        desc = try self.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
                         const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, target_layout);
                         self.setLocalChecked(frame, current, assign.target, boxed);
                         frame.setLocalDesc(assign.target, desc);
@@ -2141,9 +2135,7 @@ pub const Interpreter = struct {
                         const lit = assign.value.boxy_dynamic_frac_literal;
                         var desc = try self.resolveBoxyDescRef(frame, lit.desc);
                         const target_layout = self.store.getLocal(assign.target).layout_idx;
-                        if (!self.boxyDescHasConcreteScalarPayload(desc)) {
-                            desc = try self.makeRuntimeScalarDesc(lit.default_layout);
-                        }
+                        desc = try self.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
                         const boxed = try self.evalBoxyDynamicFracLiteral(lit.dec_bits, desc, target_layout);
                         self.setLocalChecked(frame, current, assign.target, boxed);
                         frame.setLocalDesc(assign.target, desc);
@@ -3445,12 +3437,12 @@ pub const Interpreter = struct {
         };
     }
 
-    fn boxyDescHasConcreteScalarPayload(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) bool {
-        return self.boxy_runtime.boxyDescHasConcreteScalarPayload(desc);
-    }
-
-    fn makeRuntimeScalarDesc(self: *LirInterpreter, payload_layout: layout_mod.Idx) Error!*const LirProgram.BoxyTypeDesc {
-        return self.boxy_runtime.makeRuntimeScalarDesc(payload_layout);
+    fn effectiveBoxyScalarLiteralDesc(
+        self: *LirInterpreter,
+        desc: *const LirProgram.BoxyTypeDesc,
+        default_layout: layout_mod.Idx,
+    ) Error!*const LirProgram.BoxyTypeDesc {
+        return self.boxy_runtime.effectiveBoxyScalarLiteralDesc(desc, default_layout);
     }
 
     fn evalBoxyDynamicNumLiteral(

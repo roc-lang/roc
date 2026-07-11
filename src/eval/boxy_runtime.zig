@@ -1044,8 +1044,9 @@ pub const BoxyRuntime = struct {
     ) Error!*const LirProgram.BoxyTypeDesc {
         var merged = std.AutoHashMap(AdapterDescMergeKey, u32).init(self.scratch);
         defer merged.deinit();
-        const id = try self.mergeAdapterTargetDesc(hooks, source, target, &merged);
-        return self.runtime_boxy_type_descs.items[id];
+        var changed = false;
+        const id = try self.mergeAdapterTargetDesc(hooks, source, target, &merged, &changed);
+        return if (changed) self.runtime_boxy_type_descs.items[id] else target;
     }
 
     fn mergeAdapterTargetDesc(
@@ -1054,6 +1055,7 @@ pub const BoxyRuntime = struct {
         source: *const LirProgram.BoxyTypeDesc,
         target: *const LirProgram.BoxyTypeDesc,
         merged: *std.AutoHashMap(AdapterDescMergeKey, u32),
+        changed: *bool,
     ) Error!u32 {
         const key = AdapterDescMergeKey{ .source = @intFromPtr(source), .target = @intFromPtr(target) };
         if (merged.get(key)) |existing| return existing;
@@ -1077,7 +1079,7 @@ pub const BoxyRuntime = struct {
                     try hooks.resolveDescRef(source_nested[index])
                 else
                     target_child;
-                const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged);
+                const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged, changed);
                 self.runtime_boxy_desc_refs.items[start + index] = .{ .runtime = child_id };
             }
             result.nested_descs = makeRuntimeBoxySpan(start, target_nested.len);
@@ -1117,8 +1119,9 @@ pub const BoxyRuntime = struct {
                             target_child.nested_descs.len == 0 and target_child.tag_variants.len == 0)
                         {
                             target_child = source_child;
+                            changed.* = true;
                         }
-                        const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged);
+                        const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged, changed);
                         self.runtime_boxy_tag_payload_descs.items[payload_start + payload_index] = .{
                             .payload_index = target_payload.payload_index,
                             .desc = .{ .runtime = child_id },
@@ -1137,7 +1140,7 @@ pub const BoxyRuntime = struct {
                 try hooks.resolveDescRef(source_ext_ref)
             else
                 target_ext;
-            result.tag_ext_desc = .{ .runtime = try self.mergeAdapterTargetDesc(hooks, source_ext, target_ext, merged) };
+            result.tag_ext_desc = .{ .runtime = try self.mergeAdapterTargetDesc(hooks, source_ext, target_ext, merged, changed) };
         }
         return id;
     }
@@ -1158,35 +1161,6 @@ pub const BoxyRuntime = struct {
         if (self.findLocalBoxyTagVariant(desc, name)) |variant| return variant.*;
         const ext_ref = desc.tag_ext_desc orelse return null;
         return try self.findAdapterSourceTagVariant(hooks, try hooks.resolveDescRef(ext_ref), name, depth + 1);
-    }
-
-    fn adapterTargetHasUnfinishedTagPlaceholder(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        for (self.requireBoxyTagVariants(desc.tag_variants)) |variant| {
-            const payload_descs = self.requireBoxyTagPayloadDescs(variant.payload_descs);
-            for (payload_descs) |payload_desc| {
-                const child = try hooks.resolveDescRef(payload_desc.desc);
-                const expected_layout = if (payload_descs.len == 1 and payload_desc.payload_index == 0)
-                    variant.payload_layout
-                else blk: {
-                    const payload_layout = self.layout_store.getLayout(variant.payload_layout);
-                    if (payload_layout.tag != .struct_) break :blk child.payload_layout;
-                    break :blk self.layout_store.getStructFieldLayoutByOriginalIndex(
-                        payload_layout.getStruct().idx,
-                        payload_desc.payload_index,
-                    );
-                };
-                if (expected_layout != .zst and child.payload_layout == .zst and
-                    child.nested_descs.len == 0 and child.tag_variants.len == 0 and child.tag_ext_desc == null)
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     fn copyBoxyDescRefToRuntime(
@@ -5760,6 +5734,17 @@ pub const BoxyRuntime = struct {
         return try self.allocBoxyDynamicPayload(hooks, payload, payload_layout, desc, target_layout);
     }
 
+    pub fn effectiveBoxyScalarLiteralDesc(
+        self: *BoxyRuntime,
+        desc: *const LirProgram.BoxyTypeDesc,
+        default_layout: layout_mod.Idx,
+    ) Error!*const LirProgram.BoxyTypeDesc {
+        return if (self.boxyDescHasConcreteScalarPayload(desc))
+            desc
+        else
+            try self.makeRuntimeScalarDesc(default_layout);
+    }
+
     pub fn boxyDynamicFracLiteral(
         self: *const BoxyRuntime,
         hooks: anytype,
@@ -5823,10 +5808,8 @@ pub const BoxyRuntime = struct {
                 .{@intFromEnum(adapter_id)},
             );
         }
-        const adapter_target_layout_tag = self.layout_store.getLayout(adapter.target_layout).tag;
         const specialized_target_desc = if (source_desc != null and target_desc != null and
-            adapter.operation == .materialize and adapter_target_layout_tag == .tag_union and
-            try self.adapterTargetHasUnfinishedTagPlaceholder(hooks, target_desc.?))
+            adapter.operation == .materialize)
             try self.specializeAdapterTargetDesc(hooks, source_desc.?, target_desc.?)
         else
             target_desc;

@@ -8015,8 +8015,8 @@ pub fn registerBoxySymbolTargets(self: *Self) Allocator.Error!void {
     try self.registerBoxySymbol("roc_boxy_tag_payload", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_tag_match", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_drop", &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_dynamic_num_literal_ref", &.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_dynamic_frac_literal_ref", &.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_dynamic_num_literal_ref", &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_dynamic_frac_literal_ref", &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_call_dict", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_proc", &.{ .i32, .i32, .i32, .i64, .i32, .i64 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32 }, &.{});
@@ -9082,8 +9082,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.emitProcLocal(r.value);
             try self.emitLocalSet(self.proc_return_local);
             if (self.erased_ret_desc_ptr_local) |out_desc| {
-                if (self.store.getLocal(r.value).boxy_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-                try self.emitStoreToMemSized(out_desc, 0, .i32, 4);
+                if (self.store.getLocal(r.value).boxy_desc) |desc| {
+                    try self.resolveBoxyDesc(desc);
+                    try self.emitStoreToMemSized(out_desc, 0, .i32, 4);
+                }
             }
             self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.cf_depth - 1) catch return error.OutOfMemory;
@@ -9431,13 +9433,16 @@ fn generateBoxyDynamicLiteral(
 ) Allocator.Error!void {
     const target_layout = self.procLocalLayoutIdx(target);
     const out_ptr = try self.allocBoxyOutPtr(target_layout);
+    const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGet(out_ptr);
+    try self.emitLocalGet(out_desc_ptr);
     try self.generateI128Literal(value);
     try self.resolveBoxyDesc(desc);
     try self.emitI32Const(@intCast(@intFromEnum(default_layout)));
     try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
     try self.emitBoxyCall(if (fractional) "roc_boxy_dynamic_frac_literal_ref" else "roc_boxy_dynamic_num_literal_ref");
     try self.emitBoxyOutValue(target_layout, out_ptr);
+    try self.bindBoxyOutDesc(target, out_desc_ptr);
 }
 
 fn generateIntLiteralForLayout(self: *Self, value: i128, layout_idx: layout.Idx) Allocator.Error!void {

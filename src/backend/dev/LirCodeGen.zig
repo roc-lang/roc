@@ -14101,14 +14101,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const desc_slot = try self.boxyDescRefToSlot(lit.desc);
             const value_slot = try self.boxyI128LiteralSlot(lit.value);
             const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
             try builder.addMemArg(frame_ptr, desc_slot);
             try builder.addImmArg(@intFromEnum(lit.default_layout));
             try builder.addImmArg(@intFromEnum(target_layout));
             try self.callBoxyBuiltin(&builder, .dynamic_num_literal_ref);
+            try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
@@ -14117,14 +14120,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const desc_slot = try self.boxyDescRefToSlot(lit.desc);
             const value_slot = try self.boxyI128LiteralSlot(lit.dec_bits);
             const out_slot = try self.allocBoxyOutSlot(target_layout);
+            const out_desc_slot = self.codegen.allocStackSlot(8);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, out_slot);
+            try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
             try builder.addMemArg(frame_ptr, desc_slot);
             try builder.addImmArg(@intFromEnum(lit.default_layout));
             try builder.addImmArg(@intFromEnum(target_layout));
             try self.callBoxyBuiltin(&builder, .dynamic_frac_literal_ref);
+            try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
@@ -17618,20 +17624,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.moveToReturnRegisterWithLayout(preserved_return_loc, ret_layout);
                             }
                             if (self.erased_ret_desc_ptr_slot) |desc_ptr_slot| {
-                                const desc_value_slot: ?i32 = if (self.store.getLocal(r.value).boxy_desc) |desc_ref|
-                                    try self.boxyDescRefToSlot(desc_ref)
-                                else
-                                    null;
-                                const desc_ptr_reg = try self.allocTempGeneral();
-                                try self.emitLoad(.w64, desc_ptr_reg, frame_ptr, desc_ptr_slot);
-                                const desc_value_reg = try self.allocTempGeneral();
-                                if (desc_value_slot) |slot|
-                                    try self.emitLoad(.w64, desc_value_reg, frame_ptr, slot)
-                                else
-                                    try self.codegen.emitLoadImm(desc_value_reg, 0);
-                                try self.emitStore(.w64, desc_ptr_reg, 0, desc_value_reg);
-                                self.codegen.freeGeneral(desc_value_reg);
-                                self.codegen.freeGeneral(desc_ptr_reg);
+                                if (self.store.getLocal(r.value).boxy_desc) |desc_ref| {
+                                    const desc_value_slot = try self.boxyDescRefToSlot(desc_ref);
+                                    const desc_ptr_reg = try self.allocTempGeneral();
+                                    try self.emitLoad(.w64, desc_ptr_reg, frame_ptr, desc_ptr_slot);
+                                    const desc_value_reg = try self.allocTempGeneral();
+                                    try self.emitLoad(.w64, desc_value_reg, frame_ptr, desc_value_slot);
+                                    try self.emitStore(.w64, desc_ptr_reg, 0, desc_value_reg);
+                                    self.codegen.freeGeneral(desc_value_reg);
+                                    self.codegen.freeGeneral(desc_ptr_reg);
+                                }
                             }
                             const patch = try self.codegen.emitJump();
                             try self.early_return_patches.append(self.allocator, patch);

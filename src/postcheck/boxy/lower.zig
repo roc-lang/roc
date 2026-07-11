@@ -1448,6 +1448,23 @@ const ProcedureBuilder = struct {
             }
         }
 
+        if (worker_rep.kind == .empty_tag_union and requirement_rep.children.len != 0) {
+            for (self.plan.childSlice(requirement_rep.children)) |requirement_child| {
+                if (!try self.repSubtreeHasDescriptor(requirement_child.rep)) continue;
+                try self.collectStaticMethodCallDescSourcesForRep(
+                    worker_rep_id,
+                    requirement_child.rep,
+                    params,
+                    descriptor_sources,
+                    call_desc_indexes,
+                    call_desc_reps,
+                    call_sources,
+                    seen,
+                );
+            }
+            return;
+        }
+
         if (worker_rep.children.len == 0) return;
 
         if (requirement_rep.kind == .empty_tag_union) {
@@ -1470,6 +1487,7 @@ const ProcedureBuilder = struct {
         const worker_children = self.plan.childSlice(worker_rep.children);
         const requirement_children = self.plan.childSlice(requirement_rep.children);
         for (worker_children) |worker_child| {
+            const has_call_supplied_desc = try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources);
             if (self.findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
@@ -1489,6 +1507,7 @@ const ProcedureBuilder = struct {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
+            if (!has_call_supplied_desc) continue;
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
                 try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
@@ -1499,6 +1518,71 @@ const ProcedureBuilder = struct {
             }
             boxyLowerInvariant("static dictionary method call descriptor mapping saw mismatched child roles");
         }
+
+        for (requirement_children) |requirement_child| {
+            if (!try self.repSubtreeHasUnmappedCallDesc(requirement_child.rep, call_desc_indexes, call_desc_reps)) continue;
+            if (self.findMatchingChildByRole(worker_children, requirement_child)) |worker_child| {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                continue;
+            }
+            if (self.structuralWrapperBackingRep(worker_rep_id)) |worker_backing| {
+                const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(worker_backing)].children);
+                if (self.findMatchingChildByRole(backing_children, requirement_child)) |worker_child| {
+                    try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                    continue;
+                }
+            }
+            if (try self.findMatchingTagPayloadInRowExtension(worker_children, requirement_child)) |worker_child| {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                continue;
+            }
+            if (try self.findMatchingChildBySourceType(worker_children, requirement_child)) |worker_child| {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                continue;
+            }
+            if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_rep_id, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                continue;
+            }
+            if (requirement_child.role == .tag_ext and worker_children.len == 0 and worker_rep.descriptor != null) {
+                try self.collectStaticMethodCallDescSourcesForRep(worker_rep_id, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
+                continue;
+            }
+            boxyLowerInvariant("static dictionary method call descriptor alignment saw mismatched child roles");
+        }
+    }
+
+    fn repSubtreeHasUnmappedCallDesc(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        indexes: *const StaticMethodCallDescIndexMap,
+        reps: *const StaticMethodCallDescRepMap,
+    ) Allocator.Error!bool {
+        var seen = std.AutoHashMap(Plan.TypeRepId, void).init(self.allocator);
+        defer seen.deinit();
+        return try self.repSubtreeHasUnmappedCallDescInner(rep_id, indexes, reps, &seen);
+    }
+
+    fn repSubtreeHasUnmappedCallDescInner(
+        self: *ProcedureBuilder,
+        rep_id: Plan.TypeRepId,
+        indexes: *const StaticMethodCallDescIndexMap,
+        reps: *const StaticMethodCallDescRepMap,
+        seen: *std.AutoHashMap(Plan.TypeRepId, void),
+    ) Allocator.Error!bool {
+        const entry = try seen.getOrPut(rep_id);
+        if (entry.found_existing) return false;
+
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        if (rep.descriptor) |desc| {
+            const index = indexes.get(desc) orelse
+                boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
+            if (reps.reps.items[index] == null) return true;
+        }
+        for (self.plan.childSlice(rep.children)) |child| {
+            if (try self.repSubtreeHasUnmappedCallDescInner(child.rep, indexes, reps, seen)) return true;
+        }
+        return false;
     }
 
     fn repSubtreeHasCallSuppliedDescriptor(
@@ -4321,7 +4405,9 @@ const ProcBodyBuilder = struct {
             const local = try self.addArgLocal(layout_idx);
             try self.markReadOnlyDescriptorInput(local);
             try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
-            try self.bindDescriptorIdentityLocalForRep(param.rep, local, true);
+            if (self.repOwnsDescriptor(param.rep, param.desc)) {
+                try self.bindDescriptorIdentityLocalForRep(param.rep, local, true);
+            }
         }
     }
 
@@ -6428,20 +6514,15 @@ const ProcBodyBuilder = struct {
 
         const out_desc = self.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| try self.markDescriptorLocalBound(local);
-        var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
-        defer result_desc_initializers.deinit(self.parent.allocator);
-        const result_desc = try self.exactCallResultDescriptorRef(callee_ret_rep);
-        try self.appendResultDescriptorInitializers(&result_desc_initializers, result_desc);
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .closure = callee_local,
             .args = try self.parent.result.store.addLocalSpan(call_args),
-            .result_desc = result_desc.desc,
+            .result_desc = null,
             .out_desc = out_desc,
             .next = continuation,
         } });
-        continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
         var index = args.len;
         while (index > 0) {
@@ -6923,7 +7004,8 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(hidden_desc_locals);
         const call_descriptor_snapshot = try self.snapshotDescriptorBindings();
         defer call_descriptor_snapshot.deinit(self.parent.allocator);
-        defer self.restoreDescriptorBindings(call_descriptor_snapshot);
+        var call_descriptor_bindings_restored = false;
+        defer if (!call_descriptor_bindings_restored) self.restoreDescriptorBindings(call_descriptor_snapshot);
         try self.bindDirectCallHiddenDescriptorLocals(hidden_desc_args, hidden_desc_locals);
         const hidden_dict_locals = try self.lowerDirectCallHiddenDictionaryArgs(hidden_dict_args);
         defer self.parent.allocator.free(hidden_dict_locals);
@@ -7000,6 +7082,8 @@ const ProcBodyBuilder = struct {
         }
         continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
         continuation = try self.prependHiddenDictionaryArgMaterialization(hidden_dict_locals, continuation);
+        self.restoreDescriptorBindings(call_descriptor_snapshot);
+        call_descriptor_bindings_restored = true;
         return try self.prependWorkerCallArgAdaptations(arg_types, source_args, adapted_args, worker_arg_children, arg_substitutions, continuation);
     }
 
@@ -12721,35 +12805,9 @@ const ProcBodyBuilder = struct {
         }
         if (self.parent.result.store.getLocal(source).boxy_desc) |existing| {
             if (existing.localOrNull()) |existing_local| {
-                if (!self.localIsReadOnlyDescriptorInput(existing_local)) {
-                    if (self.directCallHiddenDescriptorUsesCallShape(hidden_arg)) {
-                        if (try self.descriptorLocalForMatchingSourceArg(
-                            hidden_arg,
-                            arg_types,
-                            source_args,
-                            pre_arg_descriptor_initializers,
-                        )) |matching| {
-                            if (matching.local != existing_local) {
-                                if (matching.materialize != null) {
-                                    try pre_arg_descriptor_initializers.append(self.parent.allocator, matching);
-                                }
-                                const captures = [_]LIR.LocalId{matching.local};
-                                try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
-                                    .local = existing_local,
-                                    .materialize = .{ .local = matching.local },
-                                    .captures = try self.parent.result.store.addLocalSpan(&captures),
-                                });
-                                return .{ .local = existing_local, .from_source_value = true };
-                            }
-                        }
-                    }
-                    const materialization = try self.descriptorMaterializationForSourceRep(identity_source_rep);
-                    try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
-                        .local = existing_local,
-                        .materialize = materialization.desc,
-                        .captures = materialization.captures,
-                    });
-                }
+                // The producer that assigned `source` also assigned this
+                // descriptor local. It is the exact metadata for the live
+                // value and must cross the call boundary unchanged.
                 return .{ .local = existing_local, .from_source_value = true };
             }
 
@@ -12959,30 +13017,6 @@ const ProcBodyBuilder = struct {
                 .captures = materialization.captures,
             },
         };
-    }
-
-    fn packedCallableResultDescriptorRef(
-        self: *ProcBodyBuilder,
-        result_function: FunctionChildren,
-        call_function: FunctionChildren,
-        initializers: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!ResultDescriptorSource {
-        if (result_function.rep == call_function.rep) {
-            const result = try self.exactCallResultDescriptorRef(result_function.ret);
-            try self.appendResultDescriptorInitializers(initializers, result);
-            return result;
-        }
-
-        const call_desc = try self.exactCallResultDescriptorRef(call_function.ret);
-        try self.appendResultDescriptorInitializers(initializers, call_desc);
-        const result = try self.adapterDescriptorForCallBoundary(
-            result_function.ret,
-            call_function.ret,
-            call_desc,
-            initializers,
-        );
-        try self.appendResultDescriptorInitializers(initializers, result);
-        return result;
     }
 
     fn callResultOutputDescriptorLocal(
@@ -13293,10 +13327,14 @@ const ProcBodyBuilder = struct {
 
             const local_rep = self.directCallHiddenDescriptorLocalRep(arg, hidden);
             try self.bindDescriptorRequirementLocalForRep(arg.worker_desc, local_rep, hidden.local, false);
-            try self.bindDescriptorIdentityLocalForRep(local_rep, hidden.local, false);
+            if (self.repOwnsDescriptor(local_rep, arg.worker_desc)) {
+                try self.bindDescriptorIdentityLocalForRep(local_rep, hidden.local, false);
+            }
             if (self.directCallHiddenDescriptorUsesCallShape(arg) and self.descriptorStorageRep(arg.worker_rep) != self.descriptorStorageRep(local_rep)) {
                 try self.bindDescriptorRequirementLocalForRep(arg.worker_desc, arg.worker_rep, hidden.local, false);
-                try self.bindDescriptorIdentityLocalForRep(arg.worker_rep, hidden.local, false);
+                if (self.repOwnsDescriptor(arg.worker_rep, arg.worker_desc)) {
+                    try self.bindDescriptorIdentityLocalForRep(arg.worker_rep, hidden.local, false);
+                }
             }
         }
     }
@@ -13740,7 +13778,8 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@intFromEnum(identity_rep)];
         if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
-                if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
+                if (self.descriptorBindingIsBoundForRep(identity_rep) and
+                    self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return true;
             }
         }
         return self.descriptorTemplateBodyNeedsCaptures(identity_rep, visited);
@@ -13894,8 +13933,10 @@ const ProcBodyBuilder = struct {
         if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
-                    try appendUniqueLocal(self.parent.allocator, captures, local);
-                    return .{ .local = local };
+                    if (self.descriptorBindingIsBoundForRep(identity_rep)) {
+                        try appendUniqueLocal(self.parent.allocator, captures, local);
+                        return .{ .local = local };
+                    }
                 }
             }
         }
@@ -16989,19 +17030,13 @@ const ProcBodyBuilder = struct {
             });
         }
 
-        const result_desc = try self.packedCallableResultDescriptorRef(
-            target_function,
-            source_function,
-            &descriptor_materializations,
-        );
-
         const assign_callable = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = adapter.proc,
             .capture = capture_local,
             .capture_layout = adapter.capture_layout,
             .on_drop = self.erasedCallableOnDrop(adapter.capture_layout),
-            .result_desc = result_desc.desc,
+            .result_desc = null,
             .next = next,
         } });
 
@@ -17151,10 +17186,6 @@ const ProcBodyBuilder = struct {
 
         const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| try adapter_proc.markDescriptorLocalBound(local);
-        var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
-        defer result_desc_initializers.deinit(self.parent.allocator);
-        const result_desc = try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
-        try adapter_proc.appendResultDescriptorInitializers(&result_desc_initializers, result_desc);
 
         const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_function.arg_count);
         defer self.parent.allocator.free(call_args);
@@ -17169,11 +17200,10 @@ const ProcBodyBuilder = struct {
             .target = call_target,
             .closure = source_closure,
             .args = try self.parent.result.store.addLocalSpan(call_args),
-            .result_desc = result_desc.desc,
+            .result_desc = null,
             .out_desc = out_desc,
             .next = continuation,
         } });
-        continuation = try adapter_proc.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
         var arg_index = source_function.arg_count;
         while (arg_index > 0) {
@@ -31115,13 +31145,19 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     }
 
     cursor = from_arg.next;
+    var descriptor_transfer_found = false;
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .set_local => |assign| assign.next,
+            .set_local => |assign| blk: {
+                try std.testing.expectEqual(GuardedList.at(args, 1), assign.value);
+                descriptor_transfer_found = true;
+                break :blk assign.next;
+            },
             else => break,
         };
     }
+    try std.testing.expect(descriptor_transfer_found);
     const reused = out.lir_result.store.getCFStmt(cursor).assign_ref;
     switch (reused.op) {
         .local => |local| try std.testing.expectEqual(from_arg.target, local),
