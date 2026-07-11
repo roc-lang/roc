@@ -230,7 +230,7 @@ const AbiHooks = struct {
                 }
                 return error.RuntimeError;
             },
-            .dict_method_arg => return error.RuntimeError,
+            .dict_method_arg, .dict_method_hidden => return error.RuntimeError,
         };
     }
 
@@ -1227,6 +1227,27 @@ pub fn roc_boxy_dict_method_arg_desc(
         method,
         arg_index,
     ) catch abiCrash(g, "dictionary method argument descriptor resolution");
+}
+
+/// Resolve one hidden worker descriptor from a runtime dictionary method slot.
+pub fn roc_boxy_dict_method_hidden_desc(
+    dict: *const BoxyDict,
+    method_slot: u32,
+    method: u32,
+    hidden_index: u32,
+    shape: u32,
+) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    return g.runtime.resolveDictMethodHiddenDesc(
+        hooks(g),
+        dict,
+        method_slot,
+        method,
+        hidden_index,
+        @enumFromInt(shape),
+    ) catch abiCrash(g, "dictionary method hidden descriptor resolution");
 }
 
 /// Navigate to the nested descriptor at `nested_index` of an already-resolved

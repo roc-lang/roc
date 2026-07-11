@@ -1259,7 +1259,7 @@ pub const MonoLlvmCodeGen = struct {
                     }
                     return error.CompilationFailed;
                 },
-                .runtime, .dict_method_arg => return error.CompilationFailed,
+                .runtime, .dict_method_arg, .dict_method_hidden => return error.CompilationFailed,
             }
         else
             try self.boxyNullPtr();
@@ -2642,6 +2642,18 @@ pub const MonoLlvmCodeGen = struct {
                     try self.boxyInt(.i32, projection.arg_index),
                 },
             ),
+            .dict_method_hidden => |projection| try self.callBoxy(
+                "roc_boxy_dict_method_hidden_desc",
+                ptr_ty,
+                &.{ ptr_ty, .i32, .i32, .i32, .i32 },
+                &.{
+                    try self.resolveBoxyDict(.{ .local = projection.dict }),
+                    try self.boxyInt(.i32, projection.method_slot),
+                    try self.boxyInt(.i32, @intFromEnum(projection.method)),
+                    try self.boxyInt(.i32, projection.hidden_index),
+                    try self.boxyInt(.i32, @intFromEnum(projection.shape)),
+                },
+            ),
             .runtime => error.CompilationFailed,
         };
     }
@@ -2688,7 +2700,7 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             const desc_id = switch (assign.desc) {
                 .static => |id| id,
-                .local, .runtime, .dict_method_arg => return error.CompilationFailed,
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.CompilationFailed,
             };
             const wip = self.wip orelse return error.CompilationFailed;
             const ids = wip.alloca(.normal, .i32, try self.boxyInt(.i32, captures.len), LlvmBuilder.Alignment.fromByteUnits(4), .default, "boxy_capture_ids") catch return error.OutOfMemory;

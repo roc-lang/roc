@@ -177,6 +177,9 @@ pub const BoxyMethodAdapter = struct {
     arg_layouts: BoxySpan = .{},
     ret_layout: ?layout.Idx = null,
     arg_descs: BoxySpan = .{},
+    /// Exact descriptors for every descriptor-bearing position in the
+    /// checked method requirement, in requirement traversal order.
+    call_descs: BoxySpan = .{},
     ret_desc: ?BoxyDescRef = null,
     nested_dicts: BoxySpan = .{},
     hidden_desc_sources: BoxySpan = .{},

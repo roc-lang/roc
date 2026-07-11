@@ -3414,6 +3414,7 @@ fn recordBoxyDescRefLocal(locals: *std.AutoHashMap(u64, void), desc: ?LIR.BoxyDe
     if (desc) |ref| switch (ref) {
         .local => |local| try recordProcLocal(locals, local),
         .dict_method_arg => |projection| try recordProcLocal(locals, projection.dict),
+        .dict_method_hidden => |projection| try recordProcLocal(locals, projection.dict),
         .static, .runtime => {},
     };
 }
@@ -7618,7 +7619,7 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
                 }
                 break :blk;
             },
-            .runtime, .dict_method_arg => wasmInvariantFmt(
+            .runtime, .dict_method_arg, .dict_method_hidden => wasmInvariantFmt(
                 "WASM/codegen invariant violated: unresolved runtime return descriptor reached dictionary thunk",
                 .{},
             ),
@@ -8000,6 +8001,7 @@ pub fn registerBoxySymbolTargets(self: *Self) Allocator.Error!void {
     try self.registerBoxySymbol("roc_boxy_static_desc", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_static_dict", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_dict_method_arg_desc", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
+    try self.registerBoxySymbol("roc_boxy_dict_method_hidden_desc", &.{ .i32, .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_nested_desc", &.{ .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_tag_ext_desc", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_tag_residual_desc", &.{ .i32, .i32 }, &.{.i32});
@@ -8106,6 +8108,14 @@ fn resolveBoxyDesc(self: *Self, desc: LIR.BoxyDescRef) Allocator.Error!void {
             try self.emitI32Const(@intCast(projection.arg_index));
             try self.emitBoxyCall("roc_boxy_dict_method_arg_desc");
         },
+        .dict_method_hidden => |projection| {
+            try self.emitProcLocal(projection.dict);
+            try self.emitI32Const(@intCast(projection.method_slot));
+            try self.emitI32Const(@intCast(@intFromEnum(projection.method)));
+            try self.emitI32Const(@intCast(projection.hidden_index));
+            try self.emitI32Const(@intCast(@intFromEnum(projection.shape)));
+            try self.emitBoxyCall("roc_boxy_dict_method_hidden_desc");
+        },
         .runtime => wasmInvariantFmt(
             "WASM/codegen invariant violated: unresolved runtime Boxy descriptor reached backend",
             .{},
@@ -8164,7 +8174,7 @@ fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
     } else {
         const desc_id = switch (assign.desc) {
             .static => |id| id,
-            .local, .runtime, .dict_method_arg => wasmInvariantFmt(
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => wasmInvariantFmt(
                 "WASM/codegen invariant violated: captured descriptor copy did not name a static descriptor",
                 .{},
             ),

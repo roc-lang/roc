@@ -716,6 +716,27 @@ const StaticMethodCallDescIndexMap = struct {
     }
 };
 
+const StaticMethodCallDescRepMap = struct {
+    reps: std.ArrayList(?Plan.TypeRepId) = .empty,
+
+    fn deinit(self: *StaticMethodCallDescRepMap, allocator: Allocator) void {
+        self.reps.deinit(allocator);
+    }
+
+    fn ensureLen(self: *StaticMethodCallDescRepMap, allocator: Allocator, len: usize) Allocator.Error!void {
+        while (self.reps.items.len < len) try self.reps.append(allocator, null);
+    }
+
+    fn put(self: *StaticMethodCallDescRepMap, allocator: Allocator, index: u32, rep: Plan.TypeRepId) Allocator.Error!void {
+        try self.ensureLen(allocator, @as(usize, index) + 1);
+        if (self.reps.items[index]) |existing| {
+            if (existing != rep) boxyLowerInvariant("static dictionary method call descriptor aligned to two worker representations");
+            return;
+        }
+        self.reps.items[index] = rep;
+    }
+};
+
 const StaticMethodCallDescSourceEntry = struct {
     worker_desc: Plan.DescriptorRequirementId,
     source: LirProgram.BoxyMethodHiddenDescSource,
@@ -769,6 +790,18 @@ const StaticMethodCallDescSourceMap = struct {
             .worker_desc = desc,
             .source = source,
         });
+    }
+};
+
+const StaticMethodDescriptorMapping = struct {
+    indexes: StaticMethodCallDescIndexMap = .{},
+    reps: StaticMethodCallDescRepMap = .{},
+    hidden_sources: StaticMethodCallDescSourceMap = .{},
+
+    fn deinit(self: *StaticMethodDescriptorMapping, allocator: Allocator) void {
+        self.indexes.deinit(allocator);
+        self.reps.deinit(allocator);
+        self.hidden_sources.deinit(allocator);
     }
 };
 
@@ -1112,13 +1145,23 @@ const ProcedureBuilder = struct {
 
         const function_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
         const function_args = function_children[function.args_start..][0..function.arg_count];
-        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        var arg_descs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer arg_descs.deinit(self.allocator);
         for (function_args) |arg| {
-            try self.result.boxy_desc_refs.append(
+            try arg_descs.append(
                 self.allocator,
                 try self.staticDescRefForWorkerRepWithSourceMap(arg.rep, null, descriptor_sources, desc_context),
             );
         }
+        const arg_descs_start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, arg_descs.items);
+
+        var descriptor_mapping = try self.staticMethodDescriptorMappingForWorker(
+            worker_id,
+            requirement_fn_ty,
+            descriptor_sources,
+        );
+        defer descriptor_mapping.deinit(self.allocator);
 
         return .{
             .arg_layouts = .{
@@ -1129,22 +1172,23 @@ const ProcedureBuilder = struct {
                 .start = arg_descs_start,
                 .len = @intCast(function_args.len),
             },
-            .hidden_desc_sources = try self.staticMethodHiddenDescSourcesForWorker(worker_id, requirement_fn_ty, descriptor_sources),
+            .call_descs = try self.staticMethodCallDescRefsForWorker(
+                &descriptor_mapping,
+                descriptor_sources,
+            ),
+            .hidden_desc_sources = try self.staticMethodHiddenDescSourcesForWorker(worker_id, descriptor_sources, &descriptor_mapping),
         };
     }
 
-    fn staticMethodHiddenDescSourcesForWorker(
+    fn staticMethodDescriptorMappingForWorker(
         self: *ProcedureBuilder,
         worker_id: Plan.WorkerPlanId,
         requirement_fn_ty: Plan.CheckedTypeIdentity,
         descriptor_sources: *const StaticDescriptorSourceMap,
-    ) Allocator.Error!LIR.BoxySpan {
+    ) Allocator.Error!StaticMethodDescriptorMapping {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
-        const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
-        if (params.len == 0) return .{};
-
         const worker_function = self.staticMethodFunctionForRep(worker.rep) orelse
-            boxyLowerInvariant("static boxy dictionary method worker with hidden descriptors was not a function");
+            boxyLowerInvariant("static boxy dictionary method worker was not a function");
         const requirement_rep = self.plan.repForSourceType(requirement_fn_ty) orelse
             boxyLowerInvariant("static boxy dictionary method requirement type was not analyzed");
         const requirement_function = self.staticMethodFunctionForRep(requirement_rep) orelse
@@ -1153,25 +1197,36 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("static boxy dictionary method adapter saw mismatched worker and requirement arity");
         }
 
-        var call_desc_indexes = StaticMethodCallDescIndexMap{};
-        defer call_desc_indexes.deinit(self.allocator);
-        try self.collectStaticMethodCallDescIndexesForFunction(requirement_function, &call_desc_indexes);
-
-        var call_sources = StaticMethodCallDescSourceMap{};
-        defer call_sources.deinit(self.allocator);
+        var mapping = StaticMethodDescriptorMapping{};
+        errdefer mapping.deinit(self.allocator);
+        try self.collectStaticMethodCallDescIndexesForFunction(requirement_function, &mapping.indexes);
+        try mapping.reps.ensureLen(self.allocator, mapping.indexes.entries.items.len);
         try self.collectStaticMethodCallDescSourcesForFunction(
             worker_function,
             requirement_function,
-            params,
+            self.plan.hiddenDescriptorParamSlice(worker.hidden_descs),
             descriptor_sources,
-            &call_desc_indexes,
-            &call_sources,
+            &mapping.indexes,
+            &mapping.reps,
+            &mapping.hidden_sources,
         );
+        return mapping;
+    }
+
+    fn staticMethodHiddenDescSourcesForWorker(
+        self: *ProcedureBuilder,
+        worker_id: Plan.WorkerPlanId,
+        descriptor_sources: *const StaticDescriptorSourceMap,
+        mapping: *const StaticMethodDescriptorMapping,
+    ) Allocator.Error!LIR.BoxySpan {
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
+        if (params.len == 0) return .{};
 
         const start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
         for (params, 0..) |param, slot_index| {
             const static_source = descriptor_sources.get(param.desc);
-            const adapter_source = call_sources.get(param.desc);
+            const adapter_source = mapping.hidden_sources.get(param.desc);
             if (adapter_source) |source| {
                 try self.result.boxy_method_hidden_desc_sources.append(self.allocator, source);
             } else if (static_source != null) {
@@ -1181,6 +1236,45 @@ const ProcedureBuilder = struct {
             }
         }
         return .{ .start = start, .len = @intCast(params.len) };
+    }
+
+    fn staticMethodCallDescRefsForWorker(
+        self: *ProcedureBuilder,
+        mapping: *const StaticMethodDescriptorMapping,
+        descriptor_sources: *const StaticDescriptorSourceMap,
+    ) Allocator.Error!LIR.BoxySpan {
+        var desc_context = StaticDescInstantiationContext{};
+        defer desc_context.deinit(self.allocator);
+        if (mapping.indexes.entries.items.len == 0) return .{};
+
+        var call_sources = StaticDescriptorSourceMap{};
+        defer call_sources.deinit(self.allocator);
+        for (mapping.indexes.entries.items) |entry| {
+            const aligned_rep = mapping.reps.reps.items[entry.index] orelse
+                boxyLowerInvariant("static boxy dictionary method call descriptor had no aligned worker representation");
+            const aligned = self.plan.representations.items[@intFromEnum(aligned_rep)];
+            const source_rep = if (aligned.descriptor) |desc|
+                descriptor_sources.get(desc) orelse aligned_rep
+            else
+                aligned_rep;
+            try call_sources.put(self.allocator, entry.desc, source_rep);
+        }
+
+        var call_descs = std.ArrayList(LIR.BoxyDescRef).empty;
+        defer call_descs.deinit(self.allocator);
+        for (mapping.indexes.entries.items) |entry| {
+            const target_rep = self.plan.descriptors.items[@intFromEnum(entry.desc)].rep;
+            const desc_ref = try self.staticDescRefForWorkerRepWithSourceMap(
+                target_rep,
+                null,
+                &call_sources,
+                &desc_context,
+            );
+            try call_descs.append(self.allocator, desc_ref);
+        }
+        const start: u32 = @intCast(self.result.boxy_desc_refs.items.len);
+        try self.result.boxy_desc_refs.appendSlice(self.allocator, call_descs.items);
+        return .{ .start = start, .len = @intCast(mapping.indexes.entries.items.len) };
     }
 
     fn staticMethodFunctionForRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) ?StaticMethodFunction {
@@ -1273,6 +1367,7 @@ const ProcedureBuilder = struct {
         params: []const Plan.HiddenDescriptorParam,
         descriptor_sources: *const StaticDescriptorSourceMap,
         call_desc_indexes: *const StaticMethodCallDescIndexMap,
+        call_desc_reps: *StaticMethodCallDescRepMap,
         call_sources: *StaticMethodCallDescSourceMap,
     ) Allocator.Error!void {
         if (worker_function.arg_count != requirement_function.arg_count) {
@@ -1293,6 +1388,7 @@ const ProcedureBuilder = struct {
                 params,
                 descriptor_sources,
                 call_desc_indexes,
+                call_desc_reps,
                 call_sources,
                 &seen,
             );
@@ -1303,6 +1399,7 @@ const ProcedureBuilder = struct {
             params,
             descriptor_sources,
             call_desc_indexes,
+            call_desc_reps,
             call_sources,
             &seen,
         );
@@ -1315,6 +1412,7 @@ const ProcedureBuilder = struct {
         params: []const Plan.HiddenDescriptorParam,
         descriptor_sources: *const StaticDescriptorSourceMap,
         call_desc_indexes: *const StaticMethodCallDescIndexMap,
+        call_desc_reps: *StaticMethodCallDescRepMap,
         call_sources: *StaticMethodCallDescSourceMap,
         seen: *std.AutoHashMap(u64, void),
     ) Allocator.Error!void {
@@ -1324,6 +1422,12 @@ const ProcedureBuilder = struct {
 
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
         const requirement_rep = self.plan.representations.items[@intFromEnum(requirement_rep_id)];
+
+        if (requirement_rep.descriptor) |requirement_desc| {
+            const call_index = call_desc_indexes.get(requirement_desc) orelse
+                boxyLowerInvariant("static dictionary method call descriptor mapping referenced an unindexed generic descriptor");
+            try call_desc_reps.put(self.allocator, call_index, worker_rep_id);
+        }
 
         if (worker_rep.descriptor) |worker_desc| {
             const static_source = descriptor_sources.get(worker_desc);
@@ -1355,6 +1459,7 @@ const ProcedureBuilder = struct {
                     params,
                     descriptor_sources,
                     call_desc_indexes,
+                    call_desc_reps,
                     call_sources,
                     seen,
                 );
@@ -1365,32 +1470,31 @@ const ProcedureBuilder = struct {
         const worker_children = self.plan.childSlice(worker_rep.children);
         const requirement_children = self.plan.childSlice(requirement_rep.children);
         for (worker_children) |worker_child| {
-            if (!try self.repSubtreeHasCallSuppliedDescriptor(worker_child.rep, params, descriptor_sources)) continue;
             if (self.findMatchingChildByRole(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_sources, seen);
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
             if (self.structuralWrapperBackingRep(requirement_rep_id)) |requirement_backing| {
                 const backing_children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(requirement_backing)].children);
                 if (self.findMatchingChildByRole(backing_children, worker_child)) |requirement_child| {
-                    try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_sources, seen);
+                    try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                     continue;
                 }
             }
             if (try self.findMatchingTagPayloadInRowExtension(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_sources, seen);
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
             if (try self.findMatchingChildBySourceType(requirement_children, worker_child)) |requirement_child| {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_sources, seen);
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_child.rep, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
             if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_sources, seen);
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
             if (worker_child.role == .tag_ext and requirement_children.len == 0 and requirement_rep.descriptor != null) {
-                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_sources, seen);
+                try self.collectStaticMethodCallDescSourcesForRep(worker_child.rep, requirement_rep_id, params, descriptor_sources, call_desc_indexes, call_desc_reps, call_sources, seen);
                 continue;
             }
             boxyLowerInvariant("static dictionary method call descriptor mapping saw mismatched child roles");
@@ -1707,10 +1811,11 @@ const ProcedureBuilder = struct {
         source_rep_id: ?Plan.TypeRepId,
         descriptor_sources: *const StaticDescriptorSourceMap,
     ) ?Plan.TypeRepId {
-        if (source_rep_id) |source| return source;
         const worker_rep = self.plan.representations.items[@intFromEnum(worker_rep_id)];
-        if (worker_rep.descriptor) |desc| return descriptor_sources.get(desc);
-        return null;
+        if (worker_rep.descriptor) |desc| {
+            if (descriptor_sources.get(desc)) |source| return source;
+        }
+        return source_rep_id;
     }
 
     /// Declared fields ordered by their identity (alphabetical) index. Nested
@@ -3716,7 +3821,7 @@ const ProcedureBuilder = struct {
                     }
                     break :blk null;
                 },
-                .runtime, .dict_method_arg => null,
+                .runtime, .dict_method_arg, .dict_method_hidden => null,
             },
             .unseen, .none, .divergent => null,
         };
@@ -3824,6 +3929,7 @@ const ProcBodyBuilder = struct {
 
     const ResultDescriptorSource = struct {
         desc: ?LIR.BoxyDescRef = null,
+        template: ?DescriptorMaterialization = null,
         prerequisite: ?DescriptorArgLocal = null,
         materialize: ?DescriptorArgLocal = null,
         preserves_source_desc: bool = false,
@@ -4886,7 +4992,6 @@ const ProcBodyBuilder = struct {
         defer pre_arg_descriptor_initializers.deinit(self.parent.allocator);
         const hidden_desc_args = self.parent.plan.directCallHiddenDescriptorArgSlice(call_plan.hidden_desc_args);
         const hidden_dict_args = self.parent.plan.directCallHiddenDictionaryArgSlice(call_plan.hidden_dict_args);
-
         var continuation = try self.lowerWorkerCallLocalsInto(
             target,
             .{ .module = self.module.key, .ty = checked_ty },
@@ -6323,15 +6428,20 @@ const ProcBodyBuilder = struct {
 
         const out_desc = self.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| try self.markDescriptorLocalBound(local);
+        var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer result_desc_initializers.deinit(self.parent.allocator);
+        const result_desc = try self.exactCallResultDescriptorRef(callee_ret_rep);
+        try self.appendResultDescriptorInitializers(&result_desc_initializers, result_desc);
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
             .closure = callee_local,
             .args = try self.parent.result.store.addLocalSpan(call_args),
-            .result_desc = null,
+            .result_desc = result_desc.desc,
             .out_desc = out_desc,
             .next = continuation,
         } });
+        continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
         var index = args.len;
         while (index > 0) {
@@ -6796,6 +6906,11 @@ const ProcBodyBuilder = struct {
                 source
             else
                 try self.addFrameBoundaryTargetLocalForRep(target_arg_rep);
+            if (adapted.* != source) {
+                if (self.localDescriptorEnvironmentForLocal(source)) |env| {
+                    try self.recordLocalDescriptorEnvironment(adapted.*, target_arg_rep, env.bindings);
+                }
+            }
         }
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(
             hidden_desc_args,
@@ -6806,6 +6921,10 @@ const ProcBodyBuilder = struct {
             pre_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(hidden_desc_locals);
+        const call_descriptor_snapshot = try self.snapshotDescriptorBindings();
+        defer call_descriptor_snapshot.deinit(self.parent.allocator);
+        defer self.restoreDescriptorBindings(call_descriptor_snapshot);
+        try self.bindDirectCallHiddenDescriptorLocals(hidden_desc_args, hidden_desc_locals);
         const hidden_dict_locals = try self.lowerDirectCallHiddenDictionaryArgs(hidden_dict_args);
         defer self.parent.allocator.free(hidden_dict_locals);
 
@@ -7044,6 +7163,17 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    fn resultDescriptorTemplate(info: ResultDescriptorSource) ?DescriptorMaterialization {
+        const desc = info.desc orelse return null;
+        return switch (desc) {
+            .static => DescriptorMaterialization{ .desc = desc },
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| .{
+                .desc = materialize.materialize orelse return null,
+                .captures = materialize.captures,
+            } else null,
+        };
+    }
+
     fn adapterTagDescriptorForCallBoundary(
         self: *ProcBodyBuilder,
         target_rep: Plan.TypeRepId,
@@ -7058,25 +7188,18 @@ const ProcBodyBuilder = struct {
         const materialization = try self.descriptorMaterializationForKnownRep(target_rep);
         const template_id = switch (materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy adapter descriptor template was not static"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
         };
         const template = self.parent.result.boxy_type_descs.items[@intFromEnum(template_id)];
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy call adapter tag source had no descriptor");
-        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
-            .static => DescriptorMaterialization{ .desc = source_desc },
-            .local, .runtime, .dict_method_arg => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
-                .desc = materialize.materialize orelse
-                    boxyLowerInvariant("boxy call adapter source descriptor materialization had no template"),
-                .captures = materialize.captures,
-            } else null,
-        };
+        const source_materialization = resultDescriptorTemplate(source_desc_info);
 
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |source_materialize| blk: {
             const source_template_id = switch (source_materialize.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
         } else null;
@@ -7335,24 +7458,17 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForKnownRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
         };
         const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy record adapter source had no descriptor");
-        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
-            .static => DescriptorMaterialization{ .desc = source_desc },
-            .local, .runtime, .dict_method_arg => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
-                .desc = materialize.materialize orelse
-                    boxyLowerInvariant("boxy record adapter source descriptor materialization had no template"),
-                .captures = materialize.captures,
-            } else null,
-        };
+        const source_materialization = resultDescriptorTemplate(source_desc_info);
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
         } else null;
@@ -7495,24 +7611,17 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForKnownRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
         };
         const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy tuple adapter source had no descriptor");
-        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
-            .static => DescriptorMaterialization{ .desc = source_desc },
-            .local, .runtime, .dict_method_arg => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
-                .desc = materialize.materialize orelse
-                    boxyLowerInvariant("boxy tuple adapter source descriptor materialization had no template"),
-                .captures = materialize.captures,
-            } else null,
-        };
+        const source_materialization = resultDescriptorTemplate(source_desc_info);
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
         } else null;
@@ -7658,24 +7767,17 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForKnownRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
         };
         const target_template = self.parent.result.boxy_type_descs.items[@intFromEnum(target_template_id)];
 
         const source_desc = source_desc_info.desc orelse
             boxyLowerInvariant("boxy declared aggregate adapter source had no descriptor");
-        const source_materialization: ?DescriptorMaterialization = switch (source_desc) {
-            .static => DescriptorMaterialization{ .desc = source_desc },
-            .local, .runtime, .dict_method_arg => if (source_desc_info.materialize) |materialize| DescriptorMaterialization{
-                .desc = materialize.materialize orelse
-                    boxyLowerInvariant("boxy declared aggregate adapter source descriptor materialization had no template"),
-                .captures = materialize.captures,
-            } else null,
-        };
+        const source_materialization = resultDescriptorTemplate(source_desc_info);
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@intFromEnum(source_template_id)];
         } else null;
@@ -7840,7 +7942,7 @@ const ProcBodyBuilder = struct {
                 result.desc orelse boxyLowerInvariant("recursive boxy adapter descriptor had no result");
             const template_id = switch (template_ref) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
             };
             if (template_id == recursive_desc) {
                 boxyLowerInvariant("recursive boxy adapter descriptor resolved only to its unfinished reservation");
@@ -7928,7 +8030,7 @@ const ProcBodyBuilder = struct {
             known.desc orelse return known;
         const known_desc_id = switch (known_template_ref) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
         };
         const known_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(known_desc_id)];
 
@@ -7939,18 +8041,12 @@ const ProcBodyBuilder = struct {
         const target_elem_rep = self.requiredSingleChild(target_list_rep, .list_elem).rep;
         const source_elem_rep = self.requiredSingleChild(source_list_rep, .list_elem).rep;
 
-        const source_template_ref: ?LIR.BoxyDescRef = switch (source_desc) {
-            .static => source_desc,
-            .local, .runtime, .dict_method_arg => if (source_desc_info.materialize) |materialize|
-                materialize.materialize orelse
-                    boxyLowerInvariant("planned list adapter source descriptor materialization had no template")
-            else
-                null,
-        };
+        const source_template = resultDescriptorTemplate(source_desc_info);
+        const source_template_ref = if (source_template) |materialization| materialization.desc else null;
         const source_elem_desc_info: ResultDescriptorSource = if (source_template_ref) |template_ref| template_elem: {
             const source_desc_id = switch (template_ref) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
             };
             const source_type_desc = self.parent.result.boxy_type_descs.items[@intFromEnum(source_desc_id)];
             if (source_type_desc.nested_descs.len == 0) {
@@ -11344,10 +11440,13 @@ const ProcBodyBuilder = struct {
         });
         defer _ = self.loop_stack.pop();
 
-        const body = try self.lowerIteratorLoopBody(target, for_, plan_id, plan, step_type, iterator_param, join_id, next);
         var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = join_id } });
         initial_jump = try self.setLocalInitializeJoinParam(iterator_param, initial_iterator, initial_jump);
         initial_jump = try self.lowerIteratorDispatchCallInto(initial_iterator, plan_id, .iter, plan, plan.iter, null, initial_jump);
+        if (self.localDescriptorEnvironmentForLocal(initial_iterator)) |env| {
+            try self.recordLocalDescriptorEnvironment(iterator_param, env.rep, env.bindings);
+        }
+        const body = try self.lowerIteratorLoopBody(target, for_, plan_id, plan, step_type, iterator_param, join_id, next);
 
         return try self.parent.result.store.addCFStmt(.{ .join = .{
             .id = join_id,
@@ -11637,6 +11736,41 @@ const ProcBodyBuilder = struct {
         defer pre_arg_descriptor_initializers.deinit(self.parent.allocator);
         const hidden_desc_locals = try self.lowerDirectCallHiddenDescriptorArgs(hidden_desc_args, arg_types, arg_locals, null, null, &pre_arg_descriptor_initializers);
         defer self.parent.allocator.free(hidden_desc_locals);
+        for (hidden_desc_args, hidden_desc_locals, 0..) |hidden_arg, *hidden_local, hidden_index| {
+            if (hidden_arg.source_arg_index != null) continue;
+            hidden_local.local = try self.addFrameLocal(.opaque_ptr);
+            hidden_local.materialize = .{ .dict_method_hidden = .{
+                .dict = dict_local,
+                .method = required_method,
+                .method_slot = match.slot,
+                .hidden_index = @intCast(hidden_index),
+            } };
+            hidden_local.nested_index = null;
+            hidden_local.tag_ext = false;
+            hidden_local.tag_residual_for = null;
+            hidden_local.captures = LIR.LocalSpan.empty();
+        }
+        const requirement_desc_locals = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_desc_args.len);
+        defer self.parent.allocator.free(requirement_desc_locals);
+        for (requirement_desc_locals, 0..) |*requirement_local, hidden_index| {
+            requirement_local.* = .{
+                .local = try self.addFrameLocal(.opaque_ptr),
+                .materialize = .{ .dict_method_hidden = .{
+                    .dict = dict_local,
+                    .method = required_method,
+                    .method_slot = match.slot,
+                    .hidden_index = @intCast(hidden_index),
+                    .shape = .requirement,
+                } },
+            };
+            try pre_arg_descriptor_initializers.append(self.parent.allocator, requirement_local.*);
+        }
+        try self.recordDirectCallResultDescriptorEnvironment(
+            target,
+            method_function.ret,
+            hidden_desc_args,
+            requirement_desc_locals,
+        );
 
         const hidden_arg_locals = try self.parent.allocator.alloc(LIR.LocalId, hidden_desc_locals.len);
         defer self.parent.allocator.free(hidden_arg_locals);
@@ -12525,17 +12659,43 @@ const ProcBodyBuilder = struct {
         const hidden_rep = if (descriptor_arg_reps != null) hidden_arg.worker_rep else hidden_arg.rep;
         const identity_source_rep = self.descriptorStorageRep(source_rep);
         const identity_hidden_rep = self.descriptorStorageRep(hidden_rep);
-        if (identity_source_rep != identity_hidden_rep) {
-            if (try self.sourceNestedDescriptorLocalForHiddenCallArg(
-                source,
-                identity_source_rep,
-                identity_hidden_rep,
-                pre_arg_descriptor_initializers,
-            )) |nested| {
-                return nested;
+        if (self.localDescriptorEnvironmentForLocal(source)) |env| {
+            const call_identity_rep = self.descriptorStorageRep(hidden_arg.rep);
+            try self.bindLocalDescriptorEnvironment(source);
+            const source_template = try self.descriptorMaterializationForKnownRep(call_identity_rep);
+            for (env.bindings) |binding| {
+                if (self.descriptorStorageRep(binding.rep) != call_identity_rep) continue;
+                if (identity_hidden_rep == call_identity_rep) {
+                    return .{ .local = binding.local, .from_source_value = true };
+                }
+
+                const adapted = try self.adapterDescriptorForCallBoundary(
+                    identity_hidden_rep,
+                    call_identity_rep,
+                    .{
+                        .desc = .{ .local = binding.local },
+                        .template = source_template,
+                    },
+                    pre_arg_descriptor_initializers,
+                );
+                if (adapted.prerequisite) |prerequisite| {
+                    try pre_arg_descriptor_initializers.append(self.parent.allocator, prerequisite);
+                }
+                const adapted_desc = adapted.desc orelse
+                    boxyLowerInvariant("boxy hidden descriptor representation adapter produced no descriptor");
+                if (adapted.materialize) |materialize| {
+                    if (adapted_desc.localOrNull() != materialize.local) {
+                        boxyLowerInvariant("boxy hidden descriptor adapter materialization did not produce its result descriptor");
+                    }
+                    return materialize;
+                }
+                return .{
+                    .local = try self.addFrameLocal(.opaque_ptr),
+                    .materialize = adapted_desc,
+                };
             }
-            return null;
         }
+        if (identity_source_rep != identity_hidden_rep) return null;
 
         // The source value's live descriptor describes it in the concrete
         // call-site representation. When the worker receives the argument as
@@ -12604,47 +12764,6 @@ const ProcBodyBuilder = struct {
             .local = local,
             .materialize = materialization.desc,
             .captures = materialization.captures,
-            .from_source_value = true,
-        };
-    }
-
-    fn sourceNestedDescriptorLocalForHiddenCallArg(
-        self: *ProcBodyBuilder,
-        source: LIR.LocalId,
-        source_rep: Plan.TypeRepId,
-        hidden_rep: Plan.TypeRepId,
-        pre_arg_descriptor_initializers: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!?DescriptorArgLocal {
-        const nested_index = self.immediateNestedDescriptorIndexForRep(source_rep, hidden_rep) orelse return null;
-        const source_desc = if (self.parent.result.store.getLocal(source).boxy_desc) |existing| blk: {
-            if (existing.localOrNull() != null) {
-                break :blk DescriptorMaterialization{ .desc = existing };
-            }
-
-            const parent_desc_local = try self.addFrameLocal(.opaque_ptr);
-            const parent_desc_ref = LIR.BoxyDescRef{ .local = parent_desc_local };
-            try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
-                .local = parent_desc_local,
-                .materialize = existing,
-            });
-            break :blk DescriptorMaterialization{ .desc = parent_desc_ref };
-        } else blk: {
-            const parent_desc_local = try self.addFrameLocal(.opaque_ptr);
-            const parent_desc_ref = LIR.BoxyDescRef{ .local = parent_desc_local };
-
-            const materialization = try self.descriptorMaterializationForSourceRep(source_rep);
-            try pre_arg_descriptor_initializers.append(self.parent.allocator, .{
-                .local = parent_desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
-            break :blk DescriptorMaterialization{ .desc = parent_desc_ref };
-        };
-        return .{
-            .local = try self.addFrameLocal(.opaque_ptr),
-            .materialize = source_desc.desc,
-            .nested_index = nested_index,
-            .captures = source_desc.captures,
             .from_source_value = true,
         };
     }
@@ -13270,6 +13389,7 @@ const ProcBodyBuilder = struct {
             .local,
             .runtime,
             .dict_method_arg,
+            .dict_method_hidden,
             => null,
         };
     }
@@ -15385,12 +15505,14 @@ const ProcBodyBuilder = struct {
         const expr = self.module.checked_bodies.expr(expr_id);
         const expr_rep = self.repForType(expr.ty);
         const expr_layout = self.workerRuntimeLayoutForRep(expr_rep).layoutIdx();
-        const lambda_expr = self.module.checked_bodies.expr(lambda_id);
-        const ret_rep = self.functionReturnRepForRep(self.repForType(lambda_expr.ty));
+        const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
+        const worker_function = self.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("boxy explicit return reached a non-function worker");
+        const ret_rep = worker_function.ret;
         const ret_layout = self.workerReturnLayout();
 
         const expr_local = try self.addFrameBoundaryTargetLocalForRep(expr_rep);
-        const ret_local = try self.addFrameBoundaryTargetLocalForRep(ret_rep);
+        const ret_local = try self.addWorkerReturnLocal(true);
         if (self.parent.result.store.getLocal(expr_local).layout_idx != expr_layout or
             self.parent.result.store.getLocal(ret_local).layout_idx != ret_layout)
         {
@@ -16227,7 +16349,7 @@ const ProcBodyBuilder = struct {
         const payload_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return null;
         return switch (payload_desc) {
             .static => null,
-            .local, .runtime, .dict_method_arg => payload_desc,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => payload_desc,
         };
     }
 
@@ -16239,7 +16361,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
         const payload_layout = switch (payload_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)].payload_layout,
-            .local, .runtime, .dict_method_arg => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
         };
         if (payload_layout == target_layout) {
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
@@ -16266,7 +16388,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
         const payload_layout = switch (payload_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)].payload_layout,
-            .local, .runtime, .dict_method_arg => known_payload_layout,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => known_payload_layout,
         };
         if (payload_layout == target_layout) {
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
@@ -16319,7 +16441,7 @@ const ProcBodyBuilder = struct {
         };
         const needs_default_payload = switch (current_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)].payload_layout == target_layout,
-            .local, .runtime, .dict_method_arg => {
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => {
                 // A live binding knows the target's representation; the
                 // literal encodes itself against it at runtime instead of
                 // assuming the kind's default layout.
@@ -16803,14 +16925,18 @@ const ProcBodyBuilder = struct {
                 self.tagVariantRepForBoundary(capture.rep) != null;
             if (!force_materialize_self_tag_descriptor) {
                 if (self.descriptorLocalForRequirementAndRepOrNull(capture.desc, capture.rep)) |local| {
-                    capture_fields[1 + index] = local;
-                    capture_needs_materialization[index] = false;
-                    continue;
+                    if (self.descriptorLocalAvailableFromSource(source, local)) {
+                        capture_fields[1 + index] = local;
+                        capture_needs_materialization[index] = false;
+                        continue;
+                    }
                 }
                 if (self.descriptorLocalForRequirementAndRepOrNull(capture.desc, capture.materialize_rep)) |local| {
-                    capture_fields[1 + index] = local;
-                    capture_needs_materialization[index] = false;
-                    continue;
+                    if (self.descriptorLocalAvailableFromSource(source, local)) {
+                        capture_fields[1 + index] = local;
+                        capture_needs_materialization[index] = false;
+                        continue;
+                    }
                 }
                 // The capture requirement belongs to the adapted function,
                 // while materialize_rep belongs to the source function and can
@@ -16820,9 +16946,11 @@ const ProcBodyBuilder = struct {
                 // identity already established at the call site.
                 if (capture.materialize_nested_index == null) {
                     if (self.descriptorLocalForRepOrNull(capture.materialize_rep)) |local| {
-                        capture_fields[1 + index] = local;
-                        capture_needs_materialization[index] = false;
-                        continue;
+                        if (self.descriptorLocalAvailableFromSource(source, local)) {
+                            capture_fields[1 + index] = local;
+                            capture_needs_materialization[index] = false;
+                            continue;
+                        }
                     }
                 }
             }
@@ -17023,6 +17151,10 @@ const ProcBodyBuilder = struct {
 
         const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| try adapter_proc.markDescriptorLocalBound(local);
+        var result_desc_initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer result_desc_initializers.deinit(self.parent.allocator);
+        const result_desc = try adapter_proc.exactCallResultDescriptorRef(source_function.ret);
+        try adapter_proc.appendResultDescriptorInitializers(&result_desc_initializers, result_desc);
 
         const call_args = try self.parent.allocator.alloc(LIR.LocalId, source_function.arg_count);
         defer self.parent.allocator.free(call_args);
@@ -17037,10 +17169,11 @@ const ProcBodyBuilder = struct {
             .target = call_target,
             .closure = source_closure,
             .args = try self.parent.result.store.addLocalSpan(call_args),
-            .result_desc = null,
+            .result_desc = result_desc.desc,
             .out_desc = out_desc,
             .next = continuation,
         } });
+        continuation = try adapter_proc.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
         var arg_index = source_function.arg_count;
         while (arg_index > 0) {
@@ -17607,6 +17740,22 @@ const ProcBodyBuilder = struct {
         for (env.bindings) |binding| {
             try self.bindDescriptorRequirementLocalForRep(binding.desc, binding.rep, binding.local, false);
         }
+    }
+
+    fn descriptorLocalAvailableFromSource(
+        self: *ProcBodyBuilder,
+        source: LIR.LocalId,
+        descriptor_local: LIR.LocalId,
+    ) bool {
+        if (self.localIsReadOnlyDescriptorInput(descriptor_local)) return true;
+        if (self.parent.result.store.getLocal(source).boxy_desc) |desc| {
+            if (desc.localOrNull() == descriptor_local) return true;
+        }
+        const env = self.localDescriptorEnvironmentForLocal(source) orelse return false;
+        for (env.bindings) |binding| {
+            if (binding.local == descriptor_local) return true;
+        }
+        return false;
     }
 
     fn propagateLocalDescriptorEnvironmentToField(
@@ -19713,6 +19862,9 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.localDescriptorEnvironmentForLocal(source)) |env| {
+            try self.recordLocalDescriptorEnvironment(target, env.rep, env.bindings);
+        }
         if (self.isZstLocal(target)) return next;
         if (self.parent.result.store.getLocal(target).layout_idx != self.parent.result.store.getLocal(source).layout_idx) {
             boxyLowerInvariant("boxy reassignment required explicit box/adapt lowering before set_local");
@@ -19732,6 +19884,9 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
+        if (self.localDescriptorEnvironmentForLocal(source)) |env| {
+            try self.recordLocalDescriptorEnvironment(target, env.rep, env.bindings);
+        }
         if (self.parent.result.store.getLocal(target).layout_idx != self.parent.result.store.getLocal(source).layout_idx) {
             boxyLowerInvariant("boxy join parameter initialization required matching layouts");
         }
@@ -30371,17 +30526,33 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(GuardedList.at(args, 2)).layout_idx);
     try std.testing.expectEqual(layout.Idx.opaque_ptr, out.lir_result.store.getLocal(GuardedList.at(args, 3)).layout_idx);
 
-    const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_ref;
+    var cursor = proc.body orelse return error.TestUnexpectedResult;
+    while (true) {
+        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+            .set_local => |set| set.next,
+            .assign_boxy_desc_ref => |assign| assign.next,
+            else => break,
+        };
+    }
+    const first = out.lir_result.store.getCFStmt(cursor).assign_ref;
     switch (first.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
         else => return error.TestUnexpectedResult,
     }
-    const second = out.lir_result.store.getCFStmt(first.next).assign_ref;
+    cursor = first.next;
+    while (true) {
+        cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
+            .set_local => |set| set.next,
+            .assign_boxy_desc_ref => |assign| assign.next,
+            else => break,
+        };
+    }
+    const second = out.lir_result.store.getCFStmt(cursor).assign_ref;
     switch (second.op) {
         .local => |local| try std.testing.expectEqual(GuardedList.at(args, 1), local),
         else => return error.TestUnexpectedResult,
     }
-    var cursor = second.next;
+    cursor = second.next;
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,

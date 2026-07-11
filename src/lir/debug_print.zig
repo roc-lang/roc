@@ -609,6 +609,10 @@ fn writeBoxyDescRef(desc: LIR.BoxyDescRef, writer: *std.Io.Writer) Error!void {
             "desc=dict-arg(l{d},method={d},slot={d},arg={d})",
             .{ @intFromEnum(projection.dict), @intFromEnum(projection.method), projection.method_slot, projection.arg_index },
         ),
+        .dict_method_hidden => |projection| try writer.print(
+            "desc=dict-hidden(l{d},method={d},slot={d},hidden={d},shape={s})",
+            .{ @intFromEnum(projection.dict), @intFromEnum(projection.method), projection.method_slot, projection.hidden_index, @tagName(projection.shape) },
+        ),
     }
 }
 

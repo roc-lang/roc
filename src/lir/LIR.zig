@@ -79,16 +79,29 @@ pub const BoxyDictMethodArgDesc = struct {
     arg_index: u32,
 };
 
+/// Runtime lookup of one hidden descriptor carried by a dictionary method
+/// slot. This is the exact descriptor passed to the selected method worker.
+pub const BoxyDictMethodHiddenDesc = struct {
+    pub const Shape = enum(u32) { worker, requirement };
+
+    dict: LocalId,
+    method: names.MethodNameId,
+    method_slot: u32,
+    hidden_index: u32,
+    shape: Shape = .worker,
+};
+
 /// Reference to type-descriptor data available to boxy LIR.
 pub const BoxyDescRef = union(enum) {
     static: BoxyTypeDescId,
     local: LocalId,
     runtime: u32,
     dict_method_arg: BoxyDictMethodArgDesc,
+    dict_method_hidden: BoxyDictMethodHiddenDesc,
 
     pub fn localOrNull(self: BoxyDescRef) ?LocalId {
         return switch (self) {
-            .static, .runtime, .dict_method_arg => null,
+            .static, .runtime, .dict_method_arg, .dict_method_hidden => null,
             .local => |local| local,
         };
     }
@@ -1015,7 +1028,7 @@ test "RcHelper distinguishes concrete layout helpers from boxy descriptor helper
     switch (boxy) {
         .boxy => |desc| switch (desc) {
             .static => |id| try std.testing.expectEqual(@as(u32, 7), @intFromEnum(id)),
-            .local, .runtime, .dict_method_arg => return error.TestExpectedEqual,
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.TestExpectedEqual,
         },
         .concrete => return error.TestExpectedEqual,
     }

@@ -569,7 +569,7 @@ test "boxy abi move adapter releases tag payloads across differing discriminants
         &target,
         &target_desc,
         &source,
-        &descs[0],
+        &descs[1],
         &descs[2],
         0,
         @intFromEnum(LIR.BoxyTransferMode.move),

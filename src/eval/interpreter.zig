@@ -816,7 +816,7 @@ pub const Interpreter = struct {
                     }
                     return self.interp.runtime_boxy_type_descs.items[runtime_id];
                 },
-                .local, .dict_method_arg => {},
+                .local, .dict_method_arg, .dict_method_hidden => {},
             }
             const frame = self.frame orelse return self.interp.invariantFailedError(
                 "LIR/interpreter invariant violated: boxy operation resolved a descriptor reference without a frame",
@@ -1176,16 +1176,27 @@ pub const Interpreter = struct {
             if (comptime builtin.target.os.tag != .freestanding) {
                 const proc = self.store.getProcSpec(frame.proc_id);
                 debugPrint(
-                    "LIR/interpreter unassigned local in proc {d}: name={d} body={any} stmt={any} local={d} layout={d}\n",
+                    "LIR/interpreter unassigned local in proc {d}: name={d} body={any} stmt={any} region={any} local={d} layout={d}\n",
                     .{
                         @intFromEnum(frame.proc_id),
                         proc.name.raw(),
                         proc.body,
                         self.active_stmt_id,
+                        if (self.active_stmt_id) |stmt_id| self.store.stmtRegion(stmt_id) else base.Region.zero(),
                         @intFromEnum(local_id),
                         @intFromEnum(self.store.getLocal(local_id).layout_idx),
                     },
                 );
+                if (self.active_stmt_id) |stmt_id| {
+                    const loc = self.store.stmtLoc(stmt_id);
+                    if (loc.hasLocation()) {
+                        debugPrint("  source={s}:{d}:{d}\n", .{ self.store.sourceFileName(loc.file), loc.line, loc.column });
+                    }
+                }
+                const proc_loc = self.store.procLoc(frame.proc_id);
+                if (proc_loc.hasLocation()) {
+                    debugPrint("  proc_source={s}:{d}:{d}\n", .{ self.store.sourceFileName(proc_loc.file), proc_loc.line, proc_loc.column });
+                }
                 const params = self.store.getLocalSpan(proc.args);
                 debugPrint("  proc params:", .{});
                 for (0..params.len) |i| {
@@ -2159,14 +2170,29 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
                         return err;
                     };
-                    const materialized_result = try self.materializeCallResultToLayout(
+                    const materialized_result = self.materializeCallResultToLayout(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
                         self.store.getLocal(assign.target).layout_idx,
-                    );
+                    ) catch |err| {
+                        if (comptime builtin.target.os.tag != .freestanding) {
+                            debugPrint(
+                                "LIR/interpreter call-result materialization failed in proc {d} stmt {d}: callee={d} target={d} actual_layout={d} target_layout={d}\n",
+                                .{
+                                    @intFromEnum(frame.proc_id),
+                                    @intFromEnum(current),
+                                    @intFromEnum(assign.proc),
+                                    @intFromEnum(assign.target),
+                                    @intFromEnum(result.layout),
+                                    @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                                },
+                            );
+                        }
+                        return err;
+                    };
                     self.setLocalChecked(
                         frame,
                         current,
@@ -7894,6 +7920,17 @@ pub const Interpreter = struct {
                     projection.method_slot,
                     @intFromEnum(projection.method),
                     projection.arg_index,
+                );
+            },
+            .dict_method_hidden => |projection| blk: {
+                const dict = try self.resolveBoxyDictRef(frame, .{ .local = projection.dict });
+                break :blk try self.boxy_runtime.resolveDictMethodHiddenDesc(
+                    BoxyFrameHooks{ .interp = self, .frame = frame },
+                    dict,
+                    projection.method_slot,
+                    @intFromEnum(projection.method),
+                    projection.hidden_index,
+                    projection.shape,
                 );
             },
         };

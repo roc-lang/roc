@@ -518,6 +518,7 @@ pub const BoxyBuiltinFn = enum {
     static_desc,
     static_dict,
     dict_method_arg_desc,
+    dict_method_hidden_desc,
     nested_desc,
     tag_ext_desc,
     tag_residual_desc,
@@ -557,6 +558,7 @@ pub const BoxyBuiltinFn = enum {
             .static_desc => "roc_boxy_static_desc",
             .static_dict => "roc_boxy_static_dict",
             .dict_method_arg_desc => "roc_boxy_dict_method_arg_desc",
+            .dict_method_hidden_desc => "roc_boxy_dict_method_hidden_desc",
             .nested_desc => "roc_boxy_nested_desc",
             .tag_ext_desc => "roc_boxy_tag_ext_desc",
             .tag_residual_desc => "roc_boxy_tag_residual_desc",
@@ -13587,6 +13589,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
                     return slot;
                 },
+                .dict_method_hidden => |projection| {
+                    const dict_slot = try self.boxyDictRefToSlot(.{ .local = projection.dict });
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addMemArg(frame_ptr, dict_slot);
+                    try builder.addImmArg(projection.method_slot);
+                    try builder.addImmArg(@intFromEnum(projection.method));
+                    try builder.addImmArg(projection.hidden_index);
+                    try builder.addImmArg(@intFromEnum(projection.shape));
+                    try self.callBoxyBuiltin(&builder, .dict_method_hidden_desc);
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                    return slot;
+                },
                 .runtime => std.debug.panic(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
@@ -13731,7 +13746,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return self.stackLocationForLayout(target_layout, slot);
                     },
                     .local => |local| return try self.emitValueLocal(local),
-                    .dict_method_arg => {
+                    .dict_method_arg, .dict_method_hidden => {
                         const slot = try self.boxyDescRefToSlot(assign.desc);
                         return self.stackLocationForLayout(target_layout, slot);
                     },
@@ -13769,7 +13784,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return try self.emitValueLocal(local);
                 },
-                .runtime, .dict_method_arg => std.debug.panic(
+                .runtime, .dict_method_arg, .dict_method_hidden => std.debug.panic(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
                 ),
@@ -19234,7 +19249,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .static => try self.boxyDescRefToSlot(desc_ref),
                     .local => |local| paramSlotForLocal(param_refs, param_slots, local) orelse
                         @panic("Dev/codegen invariant violated: dictionary thunk return descriptor was not a procedure parameter"),
-                    .runtime, .dict_method_arg => std.debug.panic(
+                    .runtime, .dict_method_arg, .dict_method_hidden => std.debug.panic(
                         "Dev/codegen invariant violated: runtime boxy desc ref in dictionary thunk return",
                         .{},
                     ),

@@ -788,6 +788,13 @@ fn appendBoxyDescRef(context: *FailureContext, desc: LIR.BoxyDescRef) void {
             projection.method_slot,
             projection.arg_index,
         }),
+        .dict_method_hidden => |projection| context.append("dict-hidden:{d}:{d}:{d}:{d}:{s}", .{
+            @intFromEnum(projection.dict),
+            @intFromEnum(projection.method),
+            projection.method_slot,
+            projection.hidden_index,
+            @tagName(projection.shape),
+        }),
     }
 }
 

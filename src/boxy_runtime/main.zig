@@ -179,6 +179,7 @@ comptime {
         "roc_boxy_static_desc",
         "roc_boxy_static_dict",
         "roc_boxy_dict_method_arg_desc",
+        "roc_boxy_dict_method_hidden_desc",
         "roc_boxy_nested_desc",
         "roc_boxy_tag_ext_desc",
         "roc_boxy_tag_residual_desc",

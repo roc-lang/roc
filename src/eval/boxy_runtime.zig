@@ -434,10 +434,12 @@ pub const BoxyRuntime = struct {
     ) *const LirProgram.BoxyTagVariant {
         if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
         self.invariantFailed(
-            "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d}",
+            "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d} checked_type={any} variants={d}",
             .{
                 discriminant,
                 @intFromEnum(desc.payload_layout),
+                desc.debug_checked_type,
+                desc.tag_variants.len,
             },
         );
     }
@@ -956,7 +958,7 @@ pub const BoxyRuntime = struct {
         captures: LIR.LocalSpan,
     ) Error!*const LirProgram.BoxyTypeDesc {
         switch (desc_ref) {
-            .local, .runtime, .dict_method_arg => return try hooks.resolveDescRef(desc_ref),
+            .local, .runtime, .dict_method_arg, .dict_method_hidden => return try hooks.resolveDescRef(desc_ref),
             .static => {},
         }
 
@@ -1939,7 +1941,7 @@ pub const BoxyRuntime = struct {
         );
     }
 
-    fn releaseOwnedPayloadBoxesReboxedIntoDynamicResult(
+    fn transferOwnedPayloadIntoDynamicResult(
         self: *const BoxyRuntime,
         hooks: anytype,
         source: Value,
@@ -1949,16 +1951,23 @@ pub const BoxyRuntime = struct {
         result_layout: layout_mod.Idx,
         result_desc: *const LirProgram.BoxyTypeDesc,
     ) Error!void {
-        const result_payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, result_layout, result_desc) orelse result_desc;
-        const result_ptr = self.readBoxedDataPointer(result) orelse return;
-        try self.releaseMovedPayloadBoxesReboxedIntoResult(
+        try self.retainBorrowedMaterializedValue(
             hooks,
             source,
             source_layout,
             source_desc,
-            .{ .ptr = result_ptr },
-            result_payload_desc.payload_layout,
-            result_payload_desc,
+            result,
+            result_layout,
+            result_desc,
+        );
+        try self.performBoxyLayoutDrop(
+            hooks,
+            source,
+            source_layout,
+            source_desc,
+            .decref,
+            1,
+            .atomic,
         );
     }
 
@@ -2379,7 +2388,7 @@ pub const BoxyRuntime = struct {
                 );
             }
             const result = try self.allocBoxyDynamicPayload(hooks, allocated.outer, desc.payload_layout, desc, target_layout);
-            try self.releaseOwnedPayloadBoxesReboxedIntoDynamicResult(
+            try self.transferOwnedPayloadIntoDynamicResult(
                 hooks,
                 allocated.outer,
                 desc.payload_layout,
@@ -2415,7 +2424,7 @@ pub const BoxyRuntime = struct {
         }
         try self.writeVariantPayloadValue(hooks, allocated.base, ext_payload_layout, ext_value, ext_payload_layout);
         const result = try self.allocBoxyDynamicPayload(hooks, allocated.outer, desc.payload_layout, desc, target_layout);
-        try self.releaseOwnedPayloadBoxesReboxedIntoDynamicResult(
+        try self.transferOwnedPayloadIntoDynamicResult(
             hooks,
             allocated.outer,
             desc.payload_layout,
@@ -2841,6 +2850,19 @@ pub const BoxyRuntime = struct {
             @as(u16, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
+            if (source_discriminant == ext_discriminant) {
+                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
+                const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, ext_discriminant);
+                return try self.materializeBoxyPayloadToLayout(
+                    hooks,
+                    actual_base.value,
+                    actual_payload_layout,
+                    ext_desc,
+                    expected_layout,
+                );
+            }
+        }
         const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
         const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, source_discriminant);
         const source_payload_desc = if (self.findBoxyPayloadDesc(source_variant, 0)) |desc_ref|
@@ -3764,8 +3786,14 @@ pub const BoxyRuntime = struct {
         const target_variant = self.findLocalBoxyTagVariant(target_desc, source_variant.name) orelse {
             const target_ext_discriminant = self.boxyTagExtDiscriminant(target_desc) orelse {
                 return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: target boxy tag descriptor for layout {d} had no variant named {s}",
-                    .{ @intFromEnum(expected_layout), self.store.getString(source_variant.name) },
+                    "LIR/interpreter invariant violated: target boxy tag descriptor for layout {d} had no variant named {s}; target_type={any} target_variants={d} source_type={any}",
+                    .{
+                        @intFromEnum(expected_layout),
+                        self.store.getString(source_variant.name),
+                        target_desc.debug_checked_type,
+                        target_desc.tag_variants.len,
+                        source_desc.debug_checked_type,
+                    },
                 );
             };
             const target_ext_desc = try self.resolveBoxyTagExtDesc(hooks, target_desc);
@@ -3850,6 +3878,20 @@ pub const BoxyRuntime = struct {
             @as(u16, 0)
         else
             self.helper.readTagDiscriminant(actual_base.value, actual_base.layout);
+        if (self.boxyTagExtDiscriminant(source_desc)) |ext_discriminant| {
+            if (source_discriminant == ext_discriminant) {
+                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, source_desc);
+                const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, ext_discriminant);
+                return try self.materializeBoxyPayloadToLayoutWithTargetDesc(
+                    hooks,
+                    actual_base.value,
+                    actual_payload_layout,
+                    ext_desc,
+                    target_desc,
+                    expected_layout,
+                );
+            }
+        }
         const source_variant = self.requireBoxyTagVariantByDiscriminant(source_desc, source_discriminant);
         const actual_payload_layout = self.requireBoxyTagPayloadLayout(actual_base.layout, source_discriminant);
         const source_payload_desc = if (self.findBoxyPayloadDesc(source_variant, 0)) |desc_ref|
@@ -6040,8 +6082,6 @@ pub const BoxyRuntime = struct {
             return .{ .value = relabeled, .desc = target_desc orelse relabel_payload_desc };
         }
         const data_ptr = self.readBoxedDataPointer(source_value);
-        const moving_shared_box = source_mode == .move and source_is_box and
-            if (data_ptr) |ptr| !builtins.utils.isUnique(ptr, self.roc_ops) else false;
         const result = if (data_ptr) |ptr| blk: {
             if (target_desc) |target_box_desc| {
                 if (payload_desc) |payload_box_desc| {
@@ -6096,56 +6136,24 @@ pub const BoxyRuntime = struct {
                 );
             }
         } else if (source_mode == .move) {
-            if (moving_shared_box) {
-                try self.retainBorrowedMaterializedValue(
-                    hooks,
-                    source_value,
-                    source_layout,
-                    source_desc,
-                    result,
-                    target_layout,
-                    target_desc orelse payload_desc,
-                );
-            } else if (source_is_box and target_layout_value.tag != .box and target_layout_value.tag != .box_of_zst) {
-                if (data_ptr) |ptr| {
-                    if (source_payload_desc) |moved_payload_desc| {
-                        const moved_payload = Value{ .ptr = ptr };
-                        const payload_tag = self.layout_store.getLayout(moved_payload_desc.payload_layout).tag;
-                        if ((payload_tag == .list or payload_tag == .list_of_zst) and
-                            !try self.resultSharesListAllocation(
-                                hooks,
-                                moved_payload,
-                                moved_payload_desc.payload_layout,
-                                moved_payload_desc,
-                                result,
-                                target_layout,
-                                target_desc,
-                            ))
-                        {
-                            try self.performBoxyLayoutDrop(
-                                hooks,
-                                moved_payload,
-                                moved_payload_desc.payload_layout,
-                                moved_payload_desc,
-                                .decref,
-                                1,
-                                .atomic,
-                            );
-                        } else {
-                            try self.releaseMovedPayloadBoxesReboxedIntoResult(
-                                hooks,
-                                moved_payload,
-                                moved_payload_desc.payload_layout,
-                                moved_payload_desc,
-                                result,
-                                target_layout,
-                                target_desc orelse payload_desc,
-                            );
-                        }
-                    }
-                }
-            }
-            try self.releaseMovedBoxyDynamicPayload(hooks, source_value, source_layout, source_desc);
+            try self.retainBorrowedMaterializedValue(
+                hooks,
+                source_value,
+                source_layout,
+                source_desc,
+                result,
+                target_layout,
+                target_desc orelse payload_desc,
+            );
+            try self.performBoxyLayoutDrop(
+                hooks,
+                source_value,
+                source_layout,
+                source_desc,
+                .decref,
+                1,
+                .atomic,
+            );
         }
         return .{ .value = result, .desc = target_desc orelse payload_desc };
     }
@@ -6167,6 +6175,9 @@ pub const BoxyRuntime = struct {
         const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst;
         const expected_is_box = expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst;
         if (actual_desc) |returned_desc| {
+            if (result_desc == null and actual_layout == expected_layout) {
+                return .{ .value = value, .desc = returned_desc };
+            }
             if (result_desc) |target_desc| {
                 if (actual_layout == expected_layout and returned_desc == target_desc) return .{ .value = value, .desc = returned_desc };
                 if (actual_layout == expected_layout and expected_is_box and
@@ -6488,6 +6499,52 @@ pub const BoxyRuntime = struct {
             );
         }
         return try hooks.resolveDescRef(arg_descs[arg_index]);
+    }
+
+    /// Resolve one exact hidden descriptor carried by a dictionary method
+    /// slot for its worker invocation.
+    pub fn resolveDictMethodHiddenDesc(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        dict: *const LirProgram.BoxyDict,
+        method_slot_index: u32,
+        required_method: u32,
+        hidden_index: u32,
+        shape: LIR.BoxyDictMethodHiddenDesc.Shape,
+    ) Error!*const LirProgram.BoxyTypeDesc {
+        const method_slot = try self.dictionaryMethodSlot(dict, method_slot_index, required_method);
+        if (method_slot.structural_eq) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: structural equality slot has no method-worker hidden descriptors",
+                .{},
+            );
+        }
+        const call_descs = self.requireBoxyDescRefs(method_slot.adapter.call_descs);
+        if (hidden_index >= call_descs.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: dictionary method call descriptor index {d} exceeded adapter count {d}",
+                .{ hidden_index, call_descs.len },
+            );
+        }
+        if (shape == .worker) {
+            const hidden_descs = self.requireBoxyDescRefs(method_slot.hidden_descs);
+            const sources = self.requireBoxyMethodHiddenDescSources(method_slot.adapter.hidden_desc_sources);
+            if (hidden_descs.len != sources.len) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: dictionary method had {d} hidden descriptors but {d} source mappings",
+                    .{ hidden_descs.len, sources.len },
+                );
+            }
+            for (sources, 0..) |source, slot_index| {
+                switch (source) {
+                    .call => |call_index| if (call_index == hidden_index) {
+                        return try hooks.resolveDescRef(hidden_descs[slot_index]);
+                    },
+                    .slot => {},
+                }
+            }
+        }
+        return try hooks.resolveDescRef(call_descs[hidden_index]);
     }
 
     /// Resolve one dictionary method call into either the structural-equality
