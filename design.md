@@ -842,7 +842,7 @@ Boxy lowering is also post-check and root-specific. Its descriptors and
 dictionaries depend on the current roots, target pointer width, exact host ABI
 roots selected for this compilation, and the checked dispatch plans reachable
 from those roots. They are not checked cache data. Any cache that stores lowered
-LIR, LirImage data, object code, or executable output must include the lowering
+LIR, LirImage data, object code, or executable binary output must include the lowering
 strategy and every target/backend input that can change the lowered
 representation.
 
@@ -1342,7 +1342,7 @@ iterator `.iter`/`.next`, `dispatcher` is an argument index into `args`; iterato
 `.next` uses the compiler-created iterator state operand in `args[0]`. For type
 dispatch, `dispatcher` is `type_only`, and `dispatcher_ty` is the checked type
 that determines the owner. `resolution` names the concrete checked method target
-when checking has enough information to publish one. When it remains
+when checking has enough information to output one. When it remains
 `unresolved_checked_plan`, later lowering must use the plan plus its current
 type representation to choose either structural behavior or dictionary/vtable
 dispatch. Later stages must not rediscover a target from source names or type
@@ -2340,7 +2340,7 @@ It does not create Monotype IR, Monotype Lifted IR, Lambda Solved IR, Lambda
 Mono decisions, lambda sets, finite callable tag unions, or lambda-set
 specializations. It also does not consult those data structures through a
 compatibility shim. The selected lowerer owns a separate checked-to-LIR path
-whose inputs are checked artifacts and whose output is ordinary LIR.
+whose inputs are CheckedModule data and whose output is ordinary LIR.
 
 Boxy representation has one purpose: reach LIR without whole-program
 monomorphic specialization. Runtime performance may be lower because generic
@@ -2370,7 +2370,7 @@ closure expression that is the runtime callable body. It does not lower the
 compile-time entry-wrapper evaluator block as a runtime worker. A pending
 callable-eval root belongs to checking finalization, not runtime boxy lowering.
 Imported direct calls and restored const functions therefore keep imported type
-ids attached to the imported artifact that owns them; they are not projected
+ids attached to the imported CheckedModule that owns them; they are not mapped
 into root-module type ids and they are not recovered by name. A type that
 appears only in a local aggregate, temporary receiver, nested expression, or
 destructuring pattern is therefore still present in the explicit representation
@@ -2378,7 +2378,7 @@ table consumed by lowering.
 
 A finalized stored function may carry `ConstStore` captures. The worker plan
 records the exact module-qualified `ConstFnId` that owns those captures, and
-representation planning analyzes the checked type of every canonical captured
+representation planning analyzes the checked type of every captured
 binder in the nested function's checked module. Worker lowering reserves one
 frame local for each such binder, binds the original checked `PatternBinderId`,
 and restores the capture's explicit `ConstNodeId` from the owning `ConstStore`
@@ -2389,13 +2389,13 @@ type are all explicit checked-stage data.
 
 Entry wrapper procedure templates name an `EntryWrapperTable` entry. Boxy
 planning and lowering use the wrapper's checked `body_expr` as the worker body
-for that procedure template. The wrapper table is checked artifact data; the
+for that procedure template. The wrapper table is CheckedModule data; the
 boxy lowerer does not reconstruct wrapper bodies from root names, source
 strings, command kind, or host ABI metadata. Callable-eval roots are the
 separate case above: their runtime callable body is recovered from the finalized
 `ConstStore` function value, not from the compile-time evaluator entry wrapper.
 
-Checked value lookups are lowered from `ResolvedValueRefTable`. Local
+Checked value lookups are lowered from the checked resolved-value table. Local
 parameters, local values, mutable versions, and pattern binders map to the
 already-created LIR local for the checked binder. Selected hoisted constants
 reuse that local when the selected binder is currently live; otherwise they
@@ -2433,7 +2433,7 @@ value. The payload starts with the erased-callable header and stores capture
 bytes after the fixed capture offset. Captures may include hidden descriptors
 or dictionaries because the host ABI for `Box(function)` already treats
 capture bytes as opaque. The value pointer and header layout do not change.
-Zero-capture functions may use a static or otherwise canonical erased callable
+Zero-capture functions may use a static or otherwise immutable erased callable
 payload, but their value shape is still the erased callable pointer.
 
 The erased-callable header and public capture pointer are host ABI contracts.
@@ -2528,7 +2528,7 @@ a known LIR call shape. The LIR statement names the dictionary local or static
 dictionary id, the method slot, the explicit Roc arguments, and every hidden
 descriptor/dictionary argument. Dev codegen, LLVM codegen, and the interpreter
 implement the same generic indirect-call primitive. They do not know static
-dispatch semantics, do not look up methods by name, and do not reconstruct
+checked dispatch behavior, do not look up methods by name, and do not reconstruct
 dictionaries. Seeing an indirect call is still useful to a backend because it
 can lower the call with the normal target calling convention, keep arguments in
 registers, and avoid a universal trampoline.
@@ -2597,7 +2597,7 @@ between `.lss` and `.boxy`. Doing so would spend end-user time on an invariant
 that the compiler test suite owns.
 
 Tests must verify that the two strategies produce the same host-visible ABI for
-the same checked artifact: exported and hosted symbol signatures, lowered C ABI
+the same CheckedModule: exported and hosted symbol signatures, lowered C ABI
 placements, glue type tables, provided static data layouts, entrypoint ABI
 digests, and root metadata. Differences in private proc shape, hidden
 descriptors/dictionaries, indirect calls, RC statement count, backend code size,
@@ -3001,7 +3001,7 @@ Nominal records additionally carry their declared field order as separate
 explicit data, because their runtime layout follows declaration order rather
 than the lexicographic row order (see Nominal Record Field Order). The
 lexicographic row order remains the identity used for field-name resolution;
-declared order feeds only layout. In checked artifacts this is a flat
+declared order feeds only layout. In CheckedModule data this is a flat
 `CheckedDeclaredField` pool. A named entry stores the record-field label that
 must be matched against the lexicographic backing row; a padding entry stores
 the ordinal of the corresponding checked padding type in
@@ -4002,7 +4002,7 @@ The `.boxy` builder owns corresponding temporary maps such as
 `BoxyRuntimeLayout` pairs the committed storage `layout.Idx` with any dynamic
 descriptor requirement for descriptor-governed Roc box pointers. These maps are
 caches of explicit checked and boxy lowering data. They must not recover missing
-facts from source syntax, type display strings, backend symbols, or runtime
+data from source syntax, type display strings, backend symbols, or runtime
 bytes.
 
 Boxy representation planning consumes checked nominal declared-order entries
@@ -4011,9 +4011,9 @@ imported box-payload capability, the planner obtains the instantiated backing
 root and padding roots from that capability rather than treating empty
 `padding_field_types` on the usage payload as absence of padding. Imported
 capability roots are source-module checked ids; the planner maps them into the
-root checked type store by their published canonical checked type keys. Named
-declared fields from imported declarations are matched against the projected
-root backing row through canonical field-label text, not by assuming equal
+root checked type store by their exported checked type digests. Named
+declared fields from imported declarations are matched against the mapped
+root backing row through checked field-label text, not by assuming equal
 module-local label ids. The planner lowers each named entry to the matching
 backing-row child and each padding entry to the instantiated padding type
 referenced by its ordinal. The boxy layout planner then emits a nominal struct
@@ -4055,7 +4055,7 @@ Before emitting worker bodies, the boxy lowerer resolves every worker plan to a
 checked procedure source. A worker source is one of the explicit authorities
 recorded in checking: a checked procedure template, a top-level procedure
 binding, or a procedure-use template. Resolution follows those references by
-artifact key and table id. Direct checked templates record their checked body.
+CheckedModule digest and table id. Direct checked templates record their checked body.
 Callable-eval bindings first resolve the finalized compile-time root payload;
 the runtime worker is the stored `ConstStore` function's checked template or
 nested lambda expression, not the compile-time entry-wrapper evaluator. The
@@ -4082,7 +4082,7 @@ boxy layout plan; zst values use ordinary empty-struct assignment.
 
 An applied-tag worker argument pattern is irrefutable only when its planned
 checked representation contains exactly one tag variant with that checked tag
-identity. Lowering validates that fact, reserves the payload binders, and uses
+identity. Lowering validates that data, reserves the payload binders, and uses
 the explicit variant payload plan. It never assumes a tag pattern is
 irrefutable merely because its observed discriminant is zero.
 
@@ -4133,7 +4133,7 @@ local for the surrounding expression is not initialized on that path because the
 path does not continue.
 
 Checked `runtime_error` expressions and statements lower directly to terminal
-LIR `runtime_error`. This form is already a checked artifact marker for an
+LIR `runtime_error`. This form is already a CheckedModule marker for an
 impossible or intentionally error-recovered path; boxy lowering does not invent
 a message or reinterpret it as a user crash.
 
@@ -4235,7 +4235,7 @@ arguments in source evaluation order, and then emits the primitive operation.
 Ordinary primitive operations become `assign_low_level` with the op's explicit
 `RcEffect`; ARC and later consumers read that metadata exactly as they do for
 `.lss` output. Primitive operations whose raw machine operation is not the
-complete Roc semantics are expanded before the raw op is emitted: integer
+complete Roc behavior are expanded before the raw op is emitted: integer
 division and remainder emit explicit zero-denominator checks, signed integer
 division emits the lowest-value / negative-one check, signed `negate` and `abs`
 emit the lowest-value check, and checked integer multiplication emits the same
@@ -4270,7 +4270,7 @@ the expression type or parameter type is authoritative.
 
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
-one of static metadata, an argument descriptor, a nested projection from an
+one of static metadata, an argument descriptor, a nested descriptor read from an
 argument descriptor, a result descriptor, or another explicitly named planned
 value. The lowerer does not recursively compare worker and call representation
 trees, match children by source type or display name, or search row extensions
@@ -4319,8 +4319,8 @@ or consume. Argument binding, match-condition binding, result binding, and
 container element extraction copy descriptor identities into fresh locals; they
 never repurpose the source value's descriptor local as operation scratch space.
 
-Tag-row projections are explicit descriptor operations. Nested payload
-projection, row-extension projection, and residual-row subtraction are separate
+Tag-row reads are explicit descriptor operations. Nested payload descriptor
+read, row-extension descriptor read, and residual-row subtraction are separate
 LIR choices with separate operands. Residual-row subtraction names both the
 source row descriptor and the target descriptor whose direct variants are
 removed. The result preserves the source row's runtime discriminants, payload
@@ -4368,7 +4368,7 @@ For every checked direct call to a known procedure, the lowerer
 emits a direct LIR call to the corresponding private boxy worker and supplies
 the hidden descriptors and dictionaries required by that worker. A direct call
 may write into the requested result local only when its committed layout and
-canonical representation agree with the worker result and the descriptor
+descriptor representation identity agree with the worker result and the descriptor
 boundary is an identity. A descriptor-bearing result target requires a
 descriptor supplied by the call, and differing checked return types require the
 planned result adapter even when their layouts happen to be equal. When a match
@@ -4443,12 +4443,12 @@ const BoxyTypeDescId = enum(u32) { _ };
 const BoxyDictId = enum(u32) { _ };
 const BoxyAdapterId = enum(u32) { _ };
 
-const BoxyDescRef = union(enum) {
+const BoxyDescSource = union(enum) {
     static: BoxyTypeDescId,
     local: LirLocalId,
 };
 
-const BoxyDictRef = union(enum) {
+const BoxyDictSource = union(enum) {
     static: BoxyDictId,
     local: LirLocalId,
 };
@@ -4468,8 +4468,8 @@ const BoxyAdaptStep = union(enum) {
     dynamic_payload: struct {
         source_offset: u32,
         target_offset: u32,
-        source_desc: ?BoxyDescRef,
-        target_desc: ?BoxyDescRef,
+        source_desc: ?BoxyDescSource,
+        target_desc: ?BoxyDescSource,
         mode: BoxyTransferMode,
     },
     nested_adapter: struct {
@@ -4486,7 +4486,7 @@ not by a backend. Their contents are serialized into LirImage when any reachable
 LIR statement references them. A backend may cache lowered helper code for a
 descriptor, dictionary, or adapter, but it must not change that data's meaning.
 
-`BoxyDescRef` and `BoxyDictRef` are intentionally split into static side-table
+`BoxyDescSource` and `BoxyDictSource` are intentionally split into static side-table
 references and local references. A `.static` reference names immutable LIR-owned
 metadata. A `.local` reference names a runtime value that already has the
 host-compatible representation required for explicit `Box(...)` ABI positions.
@@ -4503,19 +4503,29 @@ adapter plan. Adapters are reusable LIR side-table entries so host wrappers,
 container element conversions, method arguments, and method returns can all name
 the exact same conversion plan when they need the same representation change.
 The interpreter executes adapters through the shared Boxy runtime. Dev, LLVM,
-and wasm invoke those same semantics through their backend-specific runtime ABI;
+and wasm invoke that same behavior through their backend-specific runtime ABI;
 reaching `assign_boxy_adapt` is never treated as unsupported.
+
+Machine-code backends lower the complete Boxy statement surface to the shared
+`roc_boxy_*` C ABI. Native LLVM links the target's standalone Boxy runtime
+object and an object containing the serialized sidecar. Wasm merges the
+relocatable Boxy runtime object and a static-data module containing that same
+sidecar into either the final surgical-link module or the emitted relocatable
+object. Entrypoint wrappers initialize the embedded runtime before calling Roc
+code. Dictionary worker thunks and erased-callable registrations expose only
+the proc ids, layouts, descriptor sources, and ownership metadata already
+present in LIR; backend code does not derive any of them from procedure bodies.
 
 Dynamic RC in boxy LIR is explicit. A local whose boxy runtime layout is a
 dynamic value has a pointer-sized committed storage layout, but its nested
 payload drop/copy behavior is not recoverable from that storage layout alone.
 ARC therefore emits RC statements whose helper plan contains the relevant
-`BoxyDescRef`:
+`BoxyDescSource`:
 
 ```zig
 const RcHelper = union(enum) {
-    concrete: layout.RcHelperKey,
-    boxy: BoxyDescRef,
+    concrete: layout.RcHelperIdentity,
+    boxy: BoxyDescSource,
 };
 ```
 
@@ -4530,6 +4540,13 @@ Boxy indirect calls are also explicit. A dictionary-call statement names the
 dictionary, method slot, argument span, result target, and hidden argument span.
 The backend lowers it as an indirect call with an explicit call shape. It does
 not know the checked method name or perform vtable lookup logic.
+
+Every `LirProcSpec` whose result descriptor can be exposed by a dictionary
+worker records an exact `ret_desc`. The producer sets it only when every return
+edge names the same immutable descriptor source and that source is either
+static or one of the proc's explicit parameters. Dictionary thunks read this
+field directly and write the descriptor beside the returned value. They never
+scan the proc body, inspect the returned layout, or reconstruct a descriptor.
 
 The boxy statement surface is:
 
@@ -4559,7 +4576,7 @@ successor traversal treat them as straight-line `next` statements. Passes that
 reason about local uses must account for their explicit source, descriptor,
 dictionary, argument, and hidden-argument locals. Backends must not infer any
 missing behavior from target layout shape; if codegen has not implemented a
-boxy statement's semantics, reaching that statement is an invariant failure in
+boxy statement's specified behavior, reaching that statement is an invariant failure in
 that backend.
 
 ### Debug Lambda Mono Verification
@@ -4769,7 +4786,7 @@ instantiation) because field-name resolution and digests depend on a single
 fixed order, so the declared order is not recoverable from the lowered record
 itself. Canonicalization preserves it — a nominal declaration's record
 annotation keeps its fields in source order — and checking records it as
-explicit checked artifact data distinct from the (lexicographic) backing row,
+explicit CheckedModule data distinct from the (lexicographic) backing row,
 so later stages consume it without rescanning declarations. Monotype lowering,
 boxy planning, and layout lowering all use this checked datum. The struct
 commit uses
@@ -5403,31 +5420,38 @@ outcome of emission order.
 ### In-Place List.map
 
 `List.map` may overwrite a uniquely owned input list's buffer instead of
-allocating an output list when the input and output element layouts are
-interchangeable in one allocation: same stride, same allocation alignment
-class, and the same refcounted-elements header shape. The hidden header in
-front of a list's data and the alignment handed to the allocator both
-derive from the element layout, so reusing an allocation across layouts
-that disagree on either would make a later free reconstruct the wrong
-allocation pointer.
+allocating an output list when the input and output element representations are
+interchangeable in one allocation. Fully concrete elements require the same
+stride, allocation alignment class, and refcounted-elements header shape.
+Descriptor-governed elements additionally require the same Boxy descriptor
+representation identity and therefore the same descriptor behavior. Two distinct
+dynamic types are not interchangeable merely because both commit to the same
+pointer-sized `box_of_zst` layout: their descriptors can require different
+payload layouts and RC header shapes. The hidden header in front of a list's
+data and the alignment handed to the allocator both derive from this explicit
+representation data, so reusing an allocation across incompatible descriptors
+would make element drops or the final free reconstruct the wrong allocation
+pointer.
 
 The decision has a compile-time half and a runtime half. `List.map`'s body
 in Builtin.roc matches on the `list_map_can_reuse` primitive, whose runtime
 meaning is "uniquely owned and not a seamless slice" — a slice's buffer
 points into the middle of an allocation whose header bookkeeping covers the
 whole allocation, so a unique slice still copies. At direct LIR lowering,
-where layouts exist, the primitive lowers to a constant 0 whenever the
-layouts are not interchangeable (or the optimization is off), so the
-runtime check never runs for a pair it could corrupt.
+where representations and layouts are committed, the primitive lowers to a
+constant 0 whenever the representations are not interchangeable (or the
+optimization is off), so the runtime check never runs for a pair it could
+corrupt.
 
 The in-place branch itself is dropped before it reaches LIR whenever the
-element layouts are not interchangeable or the optimization is disabled
+element representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off
 for dev, interpreter, and compile-time evaluation), so ineligible map
 specializations never carry dead in-place machinery and dev builds lower
-exactly the copy loop. The fold uses the same layout-eligibility decision
-as the primitive, so every interchangeable pair — including different
-types that share one layout — keeps the branch. The debug Lambda Mono
+exactly the copy loop. The fold uses the same representation-eligibility
+decision as the primitive. Different fully concrete types may keep the branch
+when their layouts are interchangeable; descriptor-bearing types may keep it
+only when their descriptor representation identity is the same. The debug Lambda Mono
 materializer runs before layout selection and cannot recompute that
 decision; instead, direct lowering records each statically resolved match
 site as explicit data and the verifier replays the record, so the two
@@ -5437,18 +5461,20 @@ runtime check — the primitive's own lowering independently gates the
 runtime path — and a fold regression surfaces as a Debug stride assertion
 in the backends rather than as silent dead code.
 
-Inside the in-place loop, `list_map_extract_unsafe` moves one element's
+Inside an eligible in-place loop, `list_map_extract_unsafe` moves one element's
 ownership out of the buffer and `list_map_write_unsafe` moves the
 transform's result into the vacated slot. Neither performs RC work: the
 extracted element is an ordinary owned local, so ARC places its release
 according to the transform's solved convention, and the certifier checks
-the loop like any other code. Between the two ops the slot holds stale
-bytes and the buffer is typed by the output element while later slots still
-hold input elements; this window is unobservable because no cleanup path
-walks live values — `crash` is fatal and leaks by design — and the loop
-itself is the only holder of the buffer (the runtime count of 1 proved
-there were no other counted handles, and a live borrow of the list would
-have forced the copy path through an owned capture's incref).
+the loop like any other code. Between the two ops the slot holds stale bytes
+and the buffer is typed by the output element while later slots still hold
+input elements. For descriptor-governed elements, the descriptor representation
+condition guarantees one descriptor remains valid for both states. The window
+is otherwise unobservable because no cleanup path walks live values — `crash`
+is fatal and leaks by design — and the loop itself is the only holder of the
+buffer (the runtime count of 1 proved there were no other counted handles, and
+a live borrow of the list would have forced the copy path through an owned
+capture's incref).
 
 Each stage fully replaces the previous behavior when it lands; there are no
 parallel insertion paths at any point:
@@ -5844,6 +5870,15 @@ reachable LIR statements reference them. Those tables are internal interpreter
 data; they do not add fields to platform entrypoint signatures or hosted
 function signatures.
 
+LirImage's on-disk and shared-memory form does not serialize
+`SafeMultiList`'s private allocation layout. Struct-field and tag-variant tables
+are stored as explicit typed columns. A mapped `ProgramView` or Boxy sidecar
+view leaves ordinary arrays in place, reconstructs target-native compact
+columns with its supplied scratch allocator, and owns those reconstructed
+columns until `deinit`. The mapped bytes and the scratch allocator must both
+outlive the view. Format version 15 introduced the portable columns; version 16
+added `LirProcSpec.ret_desc`.
+
 Hosted proc entries keep their exact checked hosted ABI in both strategies. A
 boxy caller adapts arguments before the hosted call and adapts the result after
 the hosted call. It must not change the hosted dispatch index, hosted symbol
@@ -6226,7 +6261,7 @@ Lambda Solved, and Lambda Mono stages for runtime roots. It keeps the same
 checked boundary and LIR boundary, but it reaches LIR by boxing polymorphic
 values, boxing closures as erased callables, and passing explicit descriptors
 and dictionaries. Its correctness is measured by the same observable Roc
-semantics and the same host ABI, not by producing the same private procedures or
+Roc language behavior and the same host ABI, not by producing the same private procedures or
 callable representation as `.lss`.
 
 ## Forbidden Shapes
@@ -6313,7 +6348,7 @@ Minimum boundary checks:
 - Checked compile-time stores contain only `ConstStore` data.
 - LIR lowering receives only the selected strategy's explicit inputs: Lambda
   Solved lifted syntax plus Lambda Mono decisions for `.lss`, or checked
-  artifacts plus boxy representation data for `.boxy`.
+CheckedModule data plus boxy representation data for `.boxy`.
 - ARC insertion receives LIR containing no RC statements.
 - ARC insertion sees dynamic boxy RC helper plans only where the LIR statement
   carries an explicit descriptor reference.
@@ -6324,9 +6359,9 @@ Minimum boundary checks:
   their declaring modules are byte-identical.
 
 The test suite also verifies cross-strategy host ABI equivalence. For the same
-checked artifact, `.lss` and `.boxy` must agree on exported and hosted symbol
+CheckedModule, `.lss` and `.boxy` must agree on exported and hosted symbol
 signatures, lowered C ABI placements, glue type tables, provided static data
 layouts, entrypoint ABI digests, and root metadata. This equivalence check is a
-test obligation, not a release-build compiler pass.
+test requirement, not a release-build compiler pass.
 
 If a boundary check fails, the compiler stops as a compiler bug.

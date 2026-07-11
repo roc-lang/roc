@@ -242,12 +242,13 @@ export fn roc_entrypoint_from_image(
         return;
     };
 
-    const view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
+    var view = viewEmbeddedLirImage(base, image_len, ops) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return,
     };
+    defer view.deinit();
 
     evaluateEntrypointInView(&view, entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
         error.ImageUnavailable,

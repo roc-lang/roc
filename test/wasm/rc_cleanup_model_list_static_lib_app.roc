@@ -14,11 +14,11 @@ step : Box(Model) -> Box(Model)
 step = |boxed| {
     model = Box.unbox(boxed)
     moved = List.map(model.plants, |plant| { ..plant, x: plant.x - 1 })
-    kept = List.drop_if(moved, |plant| plant.x < -12)
+    kept = List.drop_if(moved, |plant| plant.x < -2)
 
     plants =
-        if model.tick % 13 == 0 {
-            List.append(kept, { x: 160, kind: U64.to_u32_wrap(model.tick) })
+        if model.tick % 3 == 0 {
+            List.append(kept, { x: 3, kind: U64.to_u32_wrap(model.tick) })
         } else {
             kept
         }
@@ -40,11 +40,11 @@ run = |initial, count| {
 }
 
 main! = |seed| {
-    count = seed + 512
+    count = seed + 16
     final_box = run(Box.box({ tick: 0, plants: [] }), count)
     final = Box.unbox(final_box)
 
-    if final.tick == count and List.len(final.plants) < 20 {
+    if final.tick == count and List.len(final.plants) < 4 {
         "ok"
     } else {
         "bad"

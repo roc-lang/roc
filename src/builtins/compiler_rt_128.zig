@@ -848,7 +848,9 @@ pub fn pow10_i128(exp: u6) i128 {
 // On wasm32, Zig codegen emits calls to these for native i128 multiply ops.
 // We provide them ourselves so the builtins module is fully self-contained.
 comptime {
-    if (is_wasm) {
+    const root = @import("root");
+    const omit_wasm_exports = @hasDecl(root, "roc_omit_wasm_compiler_rt_exports") and root.roc_omit_wasm_compiler_rt_exports;
+    if (is_wasm and !omit_wasm_exports) {
         @export(&wasm_multi3, .{ .name = "__multi3", .linkage = .strong });
         @export(&wasm_muloti4, .{ .name = "__muloti4", .linkage = .strong });
     }

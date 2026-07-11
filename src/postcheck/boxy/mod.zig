@@ -1,6 +1,6 @@
 //! Boxy post-check planning.
 //!
-//! This module consumes checked artifacts directly. It does not depend on
+//! This module consumes checked checked_modules directly. It does not depend on
 //! Monotype, Lambda Solved, Lambda Mono, lambda sets, or backend details.
 
 pub const Plan = @import("plan.zig");

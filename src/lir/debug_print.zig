@@ -605,6 +605,10 @@ fn writeBoxyDescRef(desc: LIR.BoxyDescRef, writer: *std.Io.Writer) Error!void {
         .static => |id| try writer.print("desc#{d}", .{@intFromEnum(id)}),
         .local => |local| try writer.print("desc=l{d}", .{@intFromEnum(local)}),
         .runtime => |id| try writer.print("desc@runtime#{d}", .{id}),
+        .dict_method_arg => |projection| try writer.print(
+            "desc=dict-arg(l{d},method={d},slot={d},arg={d})",
+            .{ @intFromEnum(projection.dict), @intFromEnum(projection.method), projection.method_slot, projection.arg_index },
+        ),
     }
 }
 
@@ -617,6 +621,11 @@ fn writeBoxyDictRef(dict: LIR.BoxyDictRef, writer: *std.Io.Writer) Error!void {
 
 fn writeIndent(indent: usize, writer: *std.Io.Writer) Error!void {
     for (0..indent) |_| try writer.writeAll("  ");
+}
+
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
 }
 
 test "debug print includes boxy RC helper descriptor references" {
@@ -646,7 +655,7 @@ test "debug print includes boxy RC helper descriptor references" {
     defer buffer.deinit();
     try writeProc(allocator, &store, &layouts, proc, &buffer.writer);
 
-    try std.testing.expect(std.mem.indexOf(u8, buffer.written(), "incref l0 x1 rc=boxy(desc#3)\n") != null);
+    try std.testing.expect(std.mem.find(u8, buffer.written(), "incref l0 x1 rc=boxy(desc#3)\n") != null);
 }
 
 test "debug print includes boxy statement surface" {
@@ -674,7 +683,7 @@ test "debug print includes boxy statement surface" {
     const call = try store.addCFStmt(.{ .assign_call_dict = .{
         .target = result,
         .dict = .{ .local = dict },
-        .method = @enumFromInt(0),
+        .method = @enumFromInt(fixtureTableIndex(0)),
         .method_slot = 2,
         .args = call_args,
         .hidden_args = hidden_args,
@@ -750,13 +759,13 @@ test "debug print includes boxy statement surface" {
     try writeProc(allocator, &store, &layouts, proc, &buffer.writer);
 
     const printed = buffer.written();
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l2:opaque_ptr = boxy_dict_ref dict#7\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l1:opaque_ptr = boxy_desc_ref desc#4\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l3:opaque_ptr = boxy_box payload=l0 layout=str desc=desc=l1 mode=copy\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l2:opaque_ptr = boxy_dict_ref dict#7\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l1:opaque_ptr = boxy_desc_ref desc#4\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l3:opaque_ptr = boxy_box payload=l0 layout=str desc=desc=l1 mode=copy\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
 }

@@ -1569,7 +1569,7 @@ generate_host_abi_types =
 	\\};
 	\\
 	\\/// Private erased-callable function pointer stored in `RocErasedCallablePayload`.
-	\\pub const RocErasedCallableFn = *const fn (*RocHost, ?[*]u8, ?[*]const u8, ?[*]u8) callconv(.c) void;
+	\\pub const RocErasedCallableFn = *const fn (*RocHost, ?[*]u8, ?[*]const u8, ?[*]u8, *?*const anyopaque) callconv(.c) void;
 	\\
 	\\/// Final-drop callback for inline erased-callable captures.
 	\\pub const RocErasedCallableOnDrop = *const fn (?[*]u8, *RocHost) callconv(.c) void;

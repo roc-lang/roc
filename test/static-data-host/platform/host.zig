@@ -350,12 +350,14 @@ fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckF
 
     var args = I64ToI64Args{ .arg0 = 41 };
     var result: i64 = undefined;
+    var ret_desc: ?*const anyopaque = null;
     const payload = builtins.erased_callable.payloadPtr(ptr);
     payload.callable_fn_ptr(
         roc_ops,
         @ptrCast(&result),
         @ptrCast(&args),
         builtins.erased_callable.capturePtr(ptr),
+        &ret_desc,
     );
     try expectEqualI64(result, 42, "boxed_add_one call");
 

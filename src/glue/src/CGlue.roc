@@ -916,7 +916,7 @@ core_types_section = {
 
 	erased_callable_def =
 		"struct RocOps;\n\n"
-			.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);\n")
+			.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture, const void** ret_desc);\n")
 			.concat("typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);\n")
 			.concat("typedef struct {\n    RocErasedCallableFn callable_fn_ptr;\n    RocErasedCallableOnDrop on_drop;\n} RocErasedCallablePayload;\n")
 			.concat("typedef uint8_t* RocErasedCallable;\n")

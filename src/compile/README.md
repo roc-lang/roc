@@ -92,11 +92,13 @@ try lir.LirImage.fillHeaderInBuffer(
     lowered.target_usize,
     entrypoints,
 );
-const view = try lir.LirImage.viewMappedImage(
+var view = try lir.LirImage.viewMappedImage(
     image_header,
     runtime_buffer.ptr,
     runtime_fba.end_index,
+    lowered.target_usize,
 );
+defer view.deinit();
 
 // 7. Execute via the interpreter.
 var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &my_roc_ops);

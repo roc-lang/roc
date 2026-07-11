@@ -517,6 +517,7 @@ pub const BuiltinFn = enum {
 pub const BoxyBuiltinFn = enum {
     static_desc,
     static_dict,
+    dict_method_arg_desc,
     nested_desc,
     tag_ext_desc,
     tag_residual_desc,
@@ -555,6 +556,7 @@ pub const BoxyBuiltinFn = enum {
         return switch (self) {
             .static_desc => "roc_boxy_static_desc",
             .static_dict => "roc_boxy_static_dict",
+            .dict_method_arg_desc => "roc_boxy_dict_method_arg_desc",
             .nested_desc => "roc_boxy_nested_desc",
             .tag_ext_desc => "roc_boxy_tag_ext_desc",
             .tag_residual_desc => "roc_boxy_tag_residual_desc",
@@ -1035,6 +1037,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Set during deferred-prologue proc compilation, used by moveToReturnRegisterWithLayout
         /// and generateEarlyReturn.
         ret_ptr_slot: ?i32 = null,
+
+        /// Stack slot containing the erased-callable ABI's descriptor output
+        /// pointer for the proc currently being compiled.
+        erased_ret_desc_ptr_slot: ?i32 = null,
 
         /// The current AArch64 proc reads incoming stack arguments. Its prologue
         /// must initialize `caller_stack_arg_base_reg` to the callee-entry SP.
@@ -11455,6 +11461,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
+            const saved_erased_ret_desc_ptr_slot = self.erased_ret_desc_ptr_slot;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
 
             self.codegen.callee_saved_used = 0;
@@ -11465,6 +11472,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
             self.ret_ptr_slot = null;
+            self.erased_ret_desc_ptr_slot = null;
             self.uses_caller_stack_arg_base = false;
 
             if (comptime target.toCpuArch() == .x86_64) {
@@ -11488,6 +11496,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
+                self.erased_ret_desc_ptr_slot = saved_erased_ret_desc_ptr_slot;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             }
@@ -11581,6 +11590,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
             self.ret_ptr_slot = saved_ret_ptr_slot;
+            self.erased_ret_desc_ptr_slot = saved_erased_ret_desc_ptr_slot;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
 
             self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
@@ -11612,6 +11622,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
+            const saved_erased_ret_desc_ptr_slot = self.erased_ret_desc_ptr_slot;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
             // Reset register state for new function scope — each RC helper is a
             // separate callable with its own prologue/epilogue, so it starts with
@@ -11624,6 +11635,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = [_]?u32{null} ** CodeGen.NUM_FLOAT_REGS;
             self.roc_ops_reg = null;
             self.ret_ptr_slot = null;
+            self.erased_ret_desc_ptr_slot = null;
             self.uses_caller_stack_arg_base = false;
 
             if (comptime target.toCpuArch() == .x86_64) {
@@ -11647,6 +11659,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
                 self.ret_ptr_slot = saved_ret_ptr_slot;
+                self.erased_ret_desc_ptr_slot = saved_erased_ret_desc_ptr_slot;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
                 self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
             }
@@ -11756,6 +11769,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.float_owners = saved_float_owners;
             self.roc_ops_reg = saved_roc_ops_reg;
             self.ret_ptr_slot = saved_ret_ptr_slot;
+            self.erased_ret_desc_ptr_slot = saved_erased_ret_desc_ptr_slot;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
 
             self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
@@ -13539,6 +13553,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// linked program. Object-file entrypoints emit this before running any
         /// proc; the linked `roc_boxy_runtime` object provides the symbol.
         fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
+            self.boxy_runtime_used = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.callRelocatable("roc_boxy_init_embedded", self.allocator, &self.codegen.relocations);
         }
@@ -13559,6 +13574,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .local => |local| {
                     const loc = try self.emitValueLocal(local);
                     return try self.ensureOnStack(loc, 8);
+                },
+                .dict_method_arg => |projection| {
+                    const dict_slot = try self.boxyDictRefToSlot(.{ .local = projection.dict });
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    try builder.addMemArg(frame_ptr, dict_slot);
+                    try builder.addImmArg(projection.method_slot);
+                    try builder.addImmArg(@intFromEnum(projection.method));
+                    try builder.addImmArg(projection.arg_index);
+                    try self.callBoxyBuiltin(&builder, .dict_method_arg_desc);
+                    const slot = self.codegen.allocStackSlot(8);
+                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                    return slot;
                 },
                 .runtime => std.debug.panic(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
@@ -13704,6 +13731,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return self.stackLocationForLayout(target_layout, slot);
                     },
                     .local => |local| return try self.emitValueLocal(local),
+                    .dict_method_arg => {
+                        const slot = try self.boxyDescRefToSlot(assign.desc);
+                        return self.stackLocationForLayout(target_layout, slot);
+                    },
                     .runtime => std.debug.panic(
                         "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                         .{},
@@ -13738,7 +13769,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return try self.emitValueLocal(local);
                 },
-                .runtime => std.debug.panic(
+                .runtime, .dict_method_arg => std.debug.panic(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
                 ),
@@ -13909,6 +13940,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intFromEnum(assign.tag_name));
             try builder.addImmArg(@intCast(assign.payload_index));
             try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@intFromEnum(assign.source_mode));
             try self.callBoxyBuiltin(&builder, .tag_payload);
 
             if (assign.target_desc) |target_desc_local| {
@@ -15663,8 +15695,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate one dictionary-dispatch thunk per non-hosted `.roc`
         /// procedure and record its code offset. `roc_boxy_call_dict` resolves
         /// a worker slot to a procedure id and invokes the registered thunk,
-        /// which reconstructs the procedure's native ABI from the worker call's
-        /// argument-pointer array.
+        /// which marshals the procedure's explicit argument layouts from the
+        /// worker call's argument-pointer array.
         fn generateBoxyDictProcThunks(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
             for (proc_specs, 0..) |proc, i| {
                 // Erased-callable adapters carry their own uniform ABI and are
@@ -15717,6 +15749,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_float_owners = self.codegen.float_owners;
             const saved_roc_ops_reg = self.roc_ops_reg;
             const saved_ret_ptr_slot = self.ret_ptr_slot;
+            const saved_erased_ret_desc_ptr_slot = self.erased_ret_desc_ptr_slot;
             const saved_uses_caller_stack_arg_base = self.uses_caller_stack_arg_base;
             const saved_current_proc_name = self.current_proc_name;
             const saved_current_proc_args = self.current_proc_args;
@@ -15817,6 +15850,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.free_float = saved_free_float;
                 self.codegen.float_owners = saved_float_owners;
                 self.roc_ops_reg = saved_roc_ops_reg;
+                self.ret_ptr_slot = saved_ret_ptr_slot;
+                self.erased_ret_desc_ptr_slot = saved_erased_ret_desc_ptr_slot;
                 self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
                 self.current_proc_name = saved_current_proc_name;
                 self.current_proc_args = saved_current_proc_args;
@@ -15844,9 +15879,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
                 try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
+                self.erased_ret_desc_ptr_slot = self.codegen.allocStackSlot(8);
+                try self.codegen.emitStoreStack(.w64, self.erased_ret_desc_ptr_slot.?, self.getArgumentRegister(4));
                 try self.bindErasedCallableAdapterParams(proc.args);
+                if (proc.boxy_runtime_entry and self.generation_mode == .object_file) try self.emitBoxyRuntimeInit();
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else {
+                self.erased_ret_desc_ptr_slot = null;
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                     const first_reg = self.getArgumentRegister(0);
@@ -16023,6 +16062,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.roc_ops_reg = saved_roc_ops_reg;
             self.uses_caller_stack_arg_base = saved_uses_caller_stack_arg_base;
             self.ret_ptr_slot = saved_ret_ptr_slot;
+            self.erased_ret_desc_ptr_slot = saved_erased_ret_desc_ptr_slot;
             self.current_proc_name = saved_current_proc_name;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
@@ -17561,6 +17601,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.copyResultToReturnPointer(preserved_return_loc, ret_layout, ret_slot);
                             } else {
                                 try self.moveToReturnRegisterWithLayout(preserved_return_loc, ret_layout);
+                            }
+                            if (self.erased_ret_desc_ptr_slot) |desc_ptr_slot| {
+                                const desc_value_slot: ?i32 = if (self.store.getLocal(r.value).boxy_desc) |desc_ref|
+                                    try self.boxyDescRefToSlot(desc_ref)
+                                else
+                                    null;
+                                const desc_ptr_reg = try self.allocTempGeneral();
+                                try self.emitLoad(.w64, desc_ptr_reg, frame_ptr, desc_ptr_slot);
+                                const desc_value_reg = try self.allocTempGeneral();
+                                if (desc_value_slot) |slot|
+                                    try self.emitLoad(.w64, desc_value_reg, frame_ptr, slot)
+                                else
+                                    try self.codegen.emitLoadImm(desc_value_reg, 0);
+                                try self.emitStore(.w64, desc_ptr_reg, 0, desc_value_reg);
+                                self.codegen.freeGeneral(desc_value_reg);
+                                self.codegen.freeGeneral(desc_ptr_reg);
                             }
                             const patch = try self.codegen.emitJump();
                             try self.early_return_patches.append(self.allocator, patch);
@@ -19154,123 +19210,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitBoxyDictThunkReturnDesc(proc_id, ret_desc_ptr_slot, param_refs, param_slots);
         }
 
-        const ProcReturnDesc = union(enum) {
-            unseen,
-            none,
-            uniform: LIR.BoxyDescRef,
-            divergent,
-        };
-
-        fn mergeProcReturnDesc(current: *ProcReturnDesc, next: ?LIR.BoxyDescRef) void {
-            switch (current.*) {
-                .unseen => current.* = if (next) |desc| .{ .uniform = desc } else .none,
-                .none => {
-                    if (next != null) current.* = .divergent;
-                },
-                .uniform => |existing| {
-                    if (next == null or !std.meta.eql(existing, next.?)) {
-                        current.* = .divergent;
-                    }
-                },
-                .divergent => {},
-            }
-        }
-
-        fn procReturnDesc(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!ProcReturnDesc {
-            const proc = self.store.getProcSpec(proc_id);
-            const body = proc.body orelse return .none;
-
-            var result: ProcReturnDesc = .unseen;
-            var sfa = std.heap.stackFallback(64 * @sizeOf(lir.LIR.CFStmtId), self.allocator);
-            const sa = sfa.get();
-            var stack = std.ArrayList(lir.LIR.CFStmtId).empty;
-            defer stack.deinit(sa);
-            var visited = std.AutoHashMap(u32, void).init(self.allocator);
-            defer visited.deinit();
-
-            try stack.append(sa, body);
-            while (stack.pop()) |stmt_id| {
-                const gop = try visited.getOrPut(@intFromEnum(stmt_id));
-                if (gop.found_existing) continue;
-
-                switch (self.store.getCFStmt(stmt_id)) {
-                    .assign_ref => |assign| try stack.append(sa, assign.next),
-                    .assign_literal => |assign| try stack.append(sa, assign.next),
-                    .init_uninitialized => |uninit| try stack.append(sa, uninit.next),
-                    .assign_call => |assign| try stack.append(sa, assign.next),
-                    .assign_call_erased => |assign| try stack.append(sa, assign.next),
-                    .assign_packed_erased_fn => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_desc_ref => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_dict_ref => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_box => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_reuse_box => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_unbox => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_adapt => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_inspect => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_eq => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_tag => |assign| try stack.append(sa, assign.next),
-                    .assign_boxy_tag_payload => |assign| try stack.append(sa, assign.next),
-                    .boxy_tag_match => |tag_match| {
-                        try stack.append(sa, tag_match.on_match);
-                        try stack.append(sa, tag_match.on_miss);
-                    },
-                    .assign_call_dict => |assign| try stack.append(sa, assign.next),
-                    .assign_low_level => |assign| try stack.append(sa, assign.next),
-                    .assign_list => |assign| try stack.append(sa, assign.next),
-                    .assign_struct => |assign| try stack.append(sa, assign.next),
-                    .assign_tag => |assign| try stack.append(sa, assign.next),
-                    .set_local => |assign| try stack.append(sa, assign.next),
-                    .debug => |debug_stmt| try stack.append(sa, debug_stmt.next),
-                    .expect_err => {},
-                    .expect => |expect_stmt| try stack.append(sa, expect_stmt.next),
-                    .comptime_branch_taken => |marker| try stack.append(sa, marker.next),
-                    .runtime_error, .comptime_exhaustiveness_failed => {},
-                    .incref => |inc| try stack.append(sa, inc.next),
-                    .decref => |dec| try stack.append(sa, dec.next),
-                    .decref_if_initialized => |dec| try stack.append(sa, dec.next),
-                    .free => |free_stmt| try stack.append(sa, free_stmt.next),
-                    .switch_stmt => |sw| {
-                        const branches = self.store.getCFSwitchBranches(sw.branches);
-                        for (0..branches.len) |branch_index| {
-                            const branch = GuardedList.at(branches, branch_index);
-                            try stack.append(sa, branch.body);
-                        }
-                        try stack.append(sa, sw.default_branch);
-                    },
-                    .switch_initialized_payload => |sw| {
-                        try stack.append(sa, sw.initialized_branch);
-                        try stack.append(sa, sw.uninitialized_branch);
-                    },
-                    .str_match => |str_match| {
-                        try stack.append(sa, str_match.on_match);
-                        try stack.append(sa, str_match.on_miss);
-                    },
-                    .str_match_set => |str_match_set| {
-                        const arms = self.store.getStrMatchArms(str_match_set.arms);
-                        for (0..arms.len) |arm_index| {
-                            const arm = GuardedList.at(arms, arm_index);
-                            try stack.append(sa, arm.on_match);
-                        }
-                        try stack.append(sa, str_match_set.on_miss);
-                    },
-                    .join => |join| {
-                        try stack.append(sa, join.body);
-                        try stack.append(sa, join.remainder);
-                    },
-                    .jump => {},
-                    .ret => |ret_stmt| mergeProcReturnDesc(&result, self.store.getLocal(ret_stmt.value).boxy_desc),
-                    .crash => {},
-                    .loop_continue => {},
-                    .loop_break => {},
-                }
-            }
-
-            return switch (result) {
-                .unseen => .none,
-                else => result,
-            };
-        }
-
         fn paramSlotForLocal(
             param_refs: lir.LirStore.StoreSpanBorrow(lir.LIR.LocalId, "local_ids"),
             param_slots: []const ?i32,
@@ -19289,17 +19228,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             param_refs: lir.LirStore.StoreSpanBorrow(lir.LIR.LocalId, "local_ids"),
             param_slots: []const ?i32,
         ) Allocator.Error!void {
-            const desc_value_slot: ?i32 = switch (try self.procReturnDesc(proc_id)) {
-                .unseen, .none, .divergent => null,
-                .uniform => |desc_ref| switch (desc_ref) {
+            const proc = self.store.getProcSpec(proc_id);
+            const desc_value_slot: ?i32 = if (proc.ret_desc) |desc_ref|
+                switch (desc_ref) {
                     .static => try self.boxyDescRefToSlot(desc_ref),
-                    .local => |local| paramSlotForLocal(param_refs, param_slots, local),
-                    .runtime => std.debug.panic(
+                    .local => |local| paramSlotForLocal(param_refs, param_slots, local) orelse
+                        @panic("Dev/codegen invariant violated: dictionary thunk return descriptor was not a procedure parameter"),
+                    .runtime, .dict_method_arg => std.debug.panic(
                         "Dev/codegen invariant violated: runtime boxy desc ref in dictionary thunk return",
                         .{},
                     ),
-                },
-            };
+                }
+            else
+                null;
 
             const desc_ptr_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, desc_ptr_reg, frame_ptr, ret_desc_ptr_slot);

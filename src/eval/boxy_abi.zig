@@ -22,8 +22,6 @@
 //! through `ret_desc`.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const builtins = @import("builtins");
@@ -232,6 +230,7 @@ const AbiHooks = struct {
                 }
                 return error.RuntimeError;
             },
+            .dict_method_arg => return error.RuntimeError,
         };
     }
 
@@ -500,24 +499,27 @@ pub fn roc_boxy_call_erased(
     // Without an installed runtime there are no registered erased procs, so
     // every erased result already uses the caller's exact layout.
     const g = global orelse {
-        callable(ops, ret, args, capture);
-        out_desc.* = result_desc;
+        var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
+        callable(ops, ret, args, capture, &returned_desc);
+        out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     };
 
     const actual = g.erased_procs.get(@intFromPtr(raw));
     if (actual == null) {
-        callable(ops, ret, args, capture);
-        out_desc.* = result_desc;
+        var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
+        callable(g.runtime.roc_ops, ret, args, capture, &returned_desc);
+        out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
 
     const capture_ptr = capture orelse @panic("registered boxy erased callable had no capture pointer");
     const metadata = builtins.erased_callable.compilerMetadataPtr(capture_ptr, actual.?.metadata_offset);
-    const actual_desc: ?*const BoxyTypeDesc = if (metadata.result_desc) |ptr| @ptrCast(@alignCast(ptr)) else null;
-    if (actual.?.ret_layout == expected) {
-        callable(ops, ret, args, capture);
-        out_desc.* = actual_desc orelse result_desc;
+    const metadata_desc: ?*const BoxyTypeDesc = if (metadata.result_desc) |ptr| @ptrCast(@alignCast(ptr)) else null;
+    if (actual.?.ret_layout == expected and result_desc == null) {
+        var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
+        callable(g.runtime.roc_ops, ret, args, capture, &returned_desc);
+        out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
 
@@ -526,7 +528,9 @@ pub fn roc_boxy_call_erased(
     defer leave(g);
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
-    callable(ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), args, capture);
+    var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
+    callable(g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), args, capture, &returned_desc);
+    const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
         worker_result,
@@ -661,6 +665,7 @@ pub fn roc_boxy_tag_payload(
     tag_name: u32,
     payload_index: u32,
     target_layout: u32,
+    source_mode: u8,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -673,6 +678,7 @@ pub fn roc_boxy_tag_payload(
         @enumFromInt(tag_name),
         payload_index,
         layoutIdx(target_layout),
+        @enumFromInt(source_mode),
     ) catch abiCrash(g, "tag payload read");
     writeResult(g, out, read.value, layoutIdx(target_layout));
     out_desc.* = if (read.desc) |desc_ref|
@@ -767,6 +773,7 @@ pub fn roc_boxy_drop(
     }
 }
 
+/// Concatenate two lists using the element descriptor for copy and drop logic.
 pub fn roc_boxy_list_concat(
     out: *RocList,
     a_bytes: ?[*]u8,
@@ -780,7 +787,7 @@ pub fn roc_boxy_list_concat(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_modes: u64,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -800,10 +807,11 @@ pub fn roc_boxy_list_concat(
         &boxyListElementDecref,
         update_mode_a,
         update_mode_b,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Prepend one descriptor-governed element to a list.
 pub fn roc_boxy_list_prepend(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -815,7 +823,7 @@ pub fn roc_boxy_list_prepend(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -833,10 +841,11 @@ pub fn roc_boxy_list_prepend(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Produce a descriptor-governed sublist for the requested start and length.
 pub fn roc_boxy_list_sublist(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -849,7 +858,7 @@ pub fn roc_boxy_list_sublist(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -865,10 +874,11 @@ pub fn roc_boxy_list_sublist(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Remove one element at an index using descriptor-guided ownership operations.
 pub fn roc_boxy_list_drop_at(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -880,7 +890,7 @@ pub fn roc_boxy_list_drop_at(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -897,10 +907,11 @@ pub fn roc_boxy_list_drop_at(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Replace one list element and return both the new list and displaced value.
 pub fn roc_boxy_list_replace(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -914,7 +925,7 @@ pub fn roc_boxy_list_replace(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const input = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (update_mode == .InPlace) {
@@ -939,10 +950,11 @@ pub fn roc_boxy_list_replace(
         &boxyListElementDecref,
         out_element,
         &builtins.list.copy_fallback,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Set one list element using the descriptor to retain or release nested values.
 pub fn roc_boxy_list_set(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -955,7 +967,7 @@ pub fn roc_boxy_list_set(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -974,10 +986,11 @@ pub fn roc_boxy_list_set(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Swap two list elements while preserving descriptor-governed ownership.
 pub fn roc_boxy_list_swap(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -990,7 +1003,7 @@ pub fn roc_boxy_list_swap(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1009,10 +1022,11 @@ pub fn roc_boxy_list_swap(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Reverse a descriptor-governed list into the returned Roc list value.
 pub fn roc_boxy_list_reverse(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -1023,7 +1037,7 @@ pub fn roc_boxy_list_reverse(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1040,10 +1054,11 @@ pub fn roc_boxy_list_reverse(
         &boxyListElementDecref,
         update_mode,
         &builtins.list.copy_fallback,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Reserve list capacity while preserving descriptor-governed elements.
 pub fn roc_boxy_list_reserve(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -1055,7 +1070,7 @@ pub fn roc_boxy_list_reserve(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1072,10 +1087,11 @@ pub fn roc_boxy_list_reserve(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
+/// Shrink a list allocation to its logical length without changing elements.
 pub fn roc_boxy_list_release_excess_capacity(
     out: *RocList,
     list_bytes: ?[*]u8,
@@ -1086,7 +1102,7 @@ pub fn roc_boxy_list_release_excess_capacity(
     elem_layout: u32,
     list_desc: *const BoxyTypeDesc,
     update_mode: builtins.utils.UpdateMode,
-    roc_ops: *RocOps,
+    _: *RocOps,
 ) callconv(.c) void {
     const g = requireGlobal();
     enter(g);
@@ -1102,7 +1118,7 @@ pub fn roc_boxy_list_release_excess_capacity(
         @ptrCast(&ctx),
         &boxyListElementDecref,
         update_mode,
-        roc_ops,
+        g.runtime.roc_ops,
     );
 }
 
@@ -1193,6 +1209,26 @@ pub fn roc_boxy_static_dict(dict_id: u32) callconv(.c) *const BoxyDict {
     return g.runtime.requireBoxyDict(@enumFromInt(dict_id));
 }
 
+/// Resolve one explicit argument descriptor from a runtime dictionary method
+/// adapter. Backends use this to materialize `BoxyDescRef.dict_method_arg`.
+pub fn roc_boxy_dict_method_arg_desc(
+    dict: *const BoxyDict,
+    method_slot: u32,
+    method: u32,
+    arg_index: u32,
+) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    return g.runtime.resolveDictMethodArgDesc(
+        hooks(g),
+        dict,
+        method_slot,
+        method,
+        arg_index,
+    ) catch abiCrash(g, "dictionary method argument descriptor resolution");
+}
+
 /// Navigate to the nested descriptor at `nested_index` of an already-resolved
 /// descriptor pointer. Used when a boxy descriptor reference names a nested
 /// descriptor of a descriptor already materialized into a local.
@@ -1205,11 +1241,13 @@ pub fn roc_boxy_nested_desc(desc: *const BoxyTypeDesc, nested_index: u32) callco
     return hooks(g).resolveDescRef(nested[nested_index]) catch abiCrash(g, "nested descriptor resolution");
 }
 
+/// Resolve the descriptor of a tag union's row extension.
 pub fn roc_boxy_tag_ext_desc(desc: *const BoxyTypeDesc) callconv(.c) *const BoxyTypeDesc {
     const g = requireGlobal();
     return g.runtime.resolveBoxyTagExtDesc(hooks(g), desc) catch abiCrash(g, "tag-extension descriptor navigation");
 }
 
+/// Resolve the residual descriptor after subtracting a matched tag domain.
 pub fn roc_boxy_tag_residual_desc(
     source_desc: *const BoxyTypeDesc,
     target_desc: *const BoxyTypeDesc,
@@ -1264,6 +1302,7 @@ pub fn roc_boxy_dynamic_num_literal_ref(
     writeResult(g, out, literal, layoutIdx(target_layout));
 }
 
+/// Encode a fractional literal using a descriptor-selected or default layout.
 pub fn roc_boxy_dynamic_frac_literal_ref(
     out: ?[*]u8,
     dec_bits: *align(1) const i128,

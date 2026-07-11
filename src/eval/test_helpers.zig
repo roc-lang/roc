@@ -420,6 +420,7 @@ pub const LirImageProgram = struct {
     }
 
     pub fn deinit(self: *LirImageProgram, allocator: Allocator) void {
+        self.view.deinit();
         self.shm.deinit(allocator);
     }
 };

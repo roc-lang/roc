@@ -132,8 +132,8 @@ pub const Resolver = struct {
         switch (l.tag) {
             // An erased box carries a real refcounted heap allocation even
             // though its payload layout is zero-sized, so it participates in
-            // reference counting exactly like a box.
-            .box_of_zst => {},
+            // reference counting exactly like a box in descriptor-guided mode.
+            .box_of_zst => if (!self.erased_box_refcounted) return .noop,
             else => if (!self.nestedContainsRefcounted(l)) return .noop,
         }
 

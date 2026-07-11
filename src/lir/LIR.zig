@@ -69,15 +69,26 @@ pub const BoxyDictId = enum(u32) { _ };
 /// Identifier for one explicit boxy representation adapter plan.
 pub const BoxyAdapterId = enum(u32) { _ };
 
+/// Runtime projection of one explicit argument descriptor from a dictionary
+/// method adapter. The dictionary value is frame-local; the remaining fields
+/// identify the checked method slot and operand exactly.
+pub const BoxyDictMethodArgDesc = struct {
+    dict: LocalId,
+    method: names.MethodNameId,
+    method_slot: u32,
+    arg_index: u32,
+};
+
 /// Reference to type-descriptor data available to boxy LIR.
 pub const BoxyDescRef = union(enum) {
     static: BoxyTypeDescId,
     local: LocalId,
     runtime: u32,
+    dict_method_arg: BoxyDictMethodArgDesc,
 
     pub fn localOrNull(self: BoxyDescRef) ?LocalId {
         return switch (self) {
-            .static, .runtime => null,
+            .static, .runtime, .dict_method_arg => null,
             .local => |local| local,
         };
     }
@@ -897,7 +908,15 @@ pub const LirProcSpec = struct {
     join_points: JoinPointSpan = JoinPointSpan.empty(),
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
+    /// Exact descriptor source for a descriptor-governed return value.
+    /// Dictionary dispatch thunks consume this directly; backends never derive
+    /// it by inspecting the procedure body.
+    ret_desc: ?BoxyDescRef = null,
     abi: ProcAbi = .roc,
+    /// This callable can be invoked as an external function pointer before a
+    /// normal Roc root runs, so its entry must initialize the embedded Boxy
+    /// runtime before executing the body.
+    boxy_runtime_entry: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
@@ -996,7 +1015,7 @@ test "RcHelper distinguishes concrete layout helpers from boxy descriptor helper
     switch (boxy) {
         .boxy => |desc| switch (desc) {
             .static => |id| try std.testing.expectEqual(@as(u32, 7), @intFromEnum(id)),
-            .local, .runtime => return error.TestExpectedEqual,
+            .local, .runtime, .dict_method_arg => return error.TestExpectedEqual,
         },
         .concrete => return error.TestExpectedEqual,
     }

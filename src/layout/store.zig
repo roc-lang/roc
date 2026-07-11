@@ -1729,20 +1729,28 @@ pub const Store = struct {
         return @intCast(size_align.alignment.toByteUnits());
     }
 
+    pub inline fn getStructField(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) StructField {
+        const fields = self.getStructData(struct_idx).getFields();
+        std.debug.assert(field_index_in_sorted_fields < fields.count);
+        const absolute_index: StructField.SafeMultiList.Idx = @enumFromInt(@intFromEnum(fields.start) + field_index_in_sorted_fields);
+        return .{
+            .index = self.struct_fields.fieldItem(.index, absolute_index),
+            .layout = self.struct_fields.fieldItem(.layout, absolute_index),
+            .is_padding = self.struct_fields.fieldItem(.is_padding, absolute_index),
+        };
+    }
+
     pub fn getStructFieldOffsetAt(
         self: *const Self,
         struct_idx: StructIdx,
         field_index_in_sorted_fields: u32,
         target_usize: target.TargetUsize,
     ) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-
         var current_offset: u32 = 0;
         var field_idx: u32 = 0;
 
         while (field_idx < field_index_in_sorted_fields) : (field_idx += 1) {
-            const field = sorted_fields.get(field_idx);
+            const field = self.getStructField(struct_idx, field_idx);
             const field_layout = self.getLayout(field.layout);
             const field_size_align = self.layoutSizeAlignAt(field_layout, target_usize);
             const field_alignment = structFieldAlignmentBytes(field, field_size_align);
@@ -1750,7 +1758,7 @@ pub const Store = struct {
             current_offset += field_size_align.size;
         }
 
-        const requested_field = sorted_fields.get(field_index_in_sorted_fields);
+        const requested_field = self.getStructField(struct_idx, field_index_in_sorted_fields);
         const requested_field_layout = self.getLayout(requested_field.layout);
         const requested_field_size_align = self.layoutSizeAlignAt(requested_field_layout, target_usize);
         return @intCast(std.mem.alignForward(u32, current_offset, structFieldAlignmentBytes(requested_field, requested_field_size_align)));
@@ -1771,18 +1779,14 @@ pub const Store = struct {
 
     /// Get the size of a struct field at the given sorted index for an explicit pointer width.
     pub fn getStructFieldSizeAt(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32, target_usize: target.TargetUsize) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        const field = sorted_fields.get(field_index_in_sorted_fields);
+        const field = self.getStructField(struct_idx, field_index_in_sorted_fields);
         const field_layout = self.getLayout(field.layout);
         return self.layoutSizeAlignAt(field_layout, target_usize).size;
     }
 
     /// Get the alignment of a struct field at the given sorted index for an explicit pointer width.
     pub fn getStructFieldAlignmentAt(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32, target_usize: target.TargetUsize) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        const field = sorted_fields.get(field_index_in_sorted_fields);
+        const field = self.getStructField(struct_idx, field_index_in_sorted_fields);
         const field_layout = self.getLayout(field.layout);
         return structFieldAlignmentBytes(field, self.layoutSizeAlignAt(field_layout, target_usize));
     }
@@ -1793,9 +1797,7 @@ pub const Store = struct {
 
     /// Get the layout index of a struct field at the given sorted index.
     pub fn getStructFieldLayout(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) Idx {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        return sorted_fields.get(field_index_in_sorted_fields).layout;
+        return self.getStructField(struct_idx, field_index_in_sorted_fields).layout;
     }
 
     /// Whether the struct field at the given sorted index is an unnamed padding
@@ -1803,9 +1805,7 @@ pub const Store = struct {
     /// skipped by every semantic field operation (equality, refcount, inspect,
     /// glue, construction).
     pub fn getStructFieldIsPadding(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) bool {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-        return sorted_fields.get(field_index_in_sorted_fields).is_padding;
+        return self.getStructField(struct_idx, field_index_in_sorted_fields).is_padding;
     }
 
     /// Backwards-compat aliases
@@ -1815,11 +1815,9 @@ pub const Store = struct {
     /// Position in committed struct field order for an original field index.
     fn getStructFieldPositionByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) u32 {
         const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
-
-        for (0..sorted_fields.len) |i| {
-            const field = sorted_fields.get(@intCast(i));
-            if (field.index == original_index) {
+        const fields = sd.getFields();
+        for (0..fields.count) |i| {
+            if (self.getStructField(struct_idx, @intCast(i)).index == original_index) {
                 return @intCast(i);
             }
         }
@@ -1853,10 +1851,8 @@ pub const Store = struct {
 
     /// Get the layout index of a struct field by its ORIGINAL index (source order).
     pub fn getStructFieldLayoutByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) Idx {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        return sorted_fields.get(pos).layout;
+        return self.getStructField(struct_idx, pos).layout;
     }
 
     /// Backwards-compat alias
@@ -1869,10 +1865,8 @@ pub const Store = struct {
         original_index: u32,
         target_usize: target.TargetUsize,
     ) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        const field = sorted_fields.get(pos);
+        const field = self.getStructField(struct_idx, pos);
         const field_layout = self.getLayout(field.layout);
         return self.sizeAt(field_layout, target_usize);
     }
@@ -1884,10 +1878,8 @@ pub const Store = struct {
 
     /// Get the alignment of a struct field by its ORIGINAL index at an explicit pointer width.
     pub fn getStructFieldAlignmentByOriginalIndexAt(self: *const Self, struct_idx: StructIdx, original_index: u32, target_usize: target.TargetUsize) u32 {
-        const sd = self.getStructData(struct_idx);
-        const sorted_fields = self.struct_fields.sliceRange(sd.getFields());
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        const field = sorted_fields.get(pos);
+        const field = self.getStructField(struct_idx, pos);
         const field_layout = self.getLayout(field.layout);
         return structFieldAlignmentBytes(field, self.layoutSizeAlignAt(field_layout, target_usize));
     }

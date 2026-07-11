@@ -16,12 +16,14 @@ pub const RocOps = utils.RocOps;
 /// `args` points at the generated fixed-arity argument struct for this erased
 /// call signature, or is null for arity 0. `ret` points at caller-owned result
 /// storage, or is null for zero-sized results. `capture` is always the pointer
-/// returned by `capturePtr(payload_data_ptr)`.
+/// returned by `capturePtr(payload_data_ptr)`. `out_desc` receives the exact
+/// descriptor of the returned bytes, or null for descriptor-free results.
 pub const ErasedCallableFn = *const fn (
     ops: *RocOps,
     ret: ?[*]u8,
     args: ?[*]const u8,
     capture: ?[*]u8,
+    out_desc: *?*const anyopaque,
 ) callconv(.c) void;
 
 /// Stored function-pointer field type in `Payload`.
@@ -62,16 +64,20 @@ pub const CompilerMetadata = extern struct {
     result_desc: ?*const anyopaque,
 };
 
+/// Alignment of compiler-private metadata appended after capture bytes.
 pub const compiler_metadata_alignment: u32 = @alignOf(CompilerMetadata);
 
+/// Return the aligned byte offset of compiler metadata from the capture pointer.
 pub fn compilerMetadataOffset(capture_size: usize) usize {
     return std.mem.alignForward(usize, capture_size, compiler_metadata_alignment);
 }
 
+/// Return the complete erased-callable payload size including compiler metadata.
 pub fn compilerPayloadSize(capture_size: usize) usize {
     return payloadSize(compilerMetadataOffset(capture_size) + @sizeOf(CompilerMetadata));
 }
 
+/// Resolve compiler metadata at its precomputed offset from the capture pointer.
 pub fn compilerMetadataPtr(capture_ptr: [*]u8, metadata_offset: usize) *CompilerMetadata {
     return @ptrCast(@alignCast(capture_ptr + metadata_offset));
 }

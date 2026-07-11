@@ -141,12 +141,13 @@ test "embedding API: full canonical sequence on simple_success app" {
     //    pointer-width independent, so the consumer supplies the target;
     //    viewMappedImage accepts `[*]align(1) const u8` so no @constCast is
     //    needed on the buffer pointer.
-    const view = try lir.LirImage.viewMappedImage(
+    var view = try lir.LirImage.viewMappedImage(
         image_header,
         runtime_buffer.ptr,
         runtime_fba.end_index,
         lowered.target_usize,
     );
+    defer view.deinit();
 
     // 9. Wire RocOps with empty hosted_fns (simple_success has no hosted-fn
     //    calls). For platforms with hosted functions, the dispatch index

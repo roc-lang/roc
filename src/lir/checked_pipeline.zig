@@ -330,15 +330,13 @@ fn lowerBoxyCheckedModulesToLir(
     var boxy_layout_requests = std.ArrayList(checked.CheckedTypeId).empty;
     defer boxy_layout_requests.deinit(allocator);
     try boxy_layout_requests.appendSlice(allocator, layout_requests);
-    for (static_data_requests) |request| {
-        try boxy_layout_requests.append(allocator, request.data.checked_type);
-    }
 
     var plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
         .root_module = modules.root,
         .imports = modules.imports,
         .roots = roots.requests,
         .layout_requests = boxy_layout_requests.items,
+        .static_data_requests = static_data_requests,
     }, .{});
     defer plan.deinit();
 

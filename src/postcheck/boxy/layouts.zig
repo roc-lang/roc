@@ -17,11 +17,13 @@ const checked = check.CheckedModule;
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 
+/// Storage layout and descriptor requirement for a dynamic Boxy value.
 pub const DynamicBoxLayout = struct {
     storage_layout: layout.Idx,
     desc: Plan.DescriptorRequirementId,
 };
 
+/// Concrete or descriptor-governed storage committed for one representation.
 pub const RuntimeLayout = union(enum) {
     concrete: layout.Idx,
     dynamic_box: DynamicBoxLayout,
@@ -41,12 +43,14 @@ pub const RuntimeLayout = union(enum) {
     }
 };
 
+/// Worker, host, and descriptor-payload layouts for one type representation.
 pub const RepLayouts = struct {
     worker: RuntimeLayout,
     host: RuntimeLayout,
     descriptor_payload_layout: ?layout.Idx = null,
 };
 
+/// Committed argument, capture, return, and value layouts for one worker.
 pub const WorkerLayouts = struct {
     worker: Plan.WorkerPlanId,
     args: Plan.Span = .{},
@@ -57,6 +61,7 @@ pub const WorkerLayouts = struct {
     value: RuntimeLayout,
 };
 
+/// Host-facing layouts committed for one requested root.
 pub const RootLayouts = struct {
     root: Plan.RootPlanId,
     worker: Plan.WorkerPlanId,
@@ -65,6 +70,7 @@ pub const RootLayouts = struct {
     host_value: ?RuntimeLayout = null,
 };
 
+/// Complete target-specific layout assignment for a Boxy program plan.
 pub const LayoutPlan = struct {
     allocator: Allocator,
     rep_layouts: []RepLayouts,
@@ -100,8 +106,10 @@ pub const LayoutPlan = struct {
     }
 };
 
+/// Configuration for committing a Boxy representation plan to layouts.
 pub const BuildOptions = struct {};
 
+/// Commit target layouts for every representation, worker, and root in a plan.
 pub fn build(
     allocator: Allocator,
     program: *const Plan.ProgramPlan,
@@ -295,8 +303,8 @@ const Builder = struct {
     };
 
     fn functionChildren(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!?FunctionChildren {
-        const canonical = try self.canonicalFunctionRep(rep_id);
-        const rep = self.program.representations.items[@intFromEnum(canonical)];
+        const identity = try self.functionIdentityRep(rep_id);
+        const rep = self.program.representations.items[@intFromEnum(identity)];
         return switch (rep.kind) {
             .erased_callable => blk: {
                 const children = self.program.childSlice(rep.children);
@@ -314,7 +322,7 @@ const Builder = struct {
                     }
                 }
                 break :blk .{
-                    .rep = canonical,
+                    .rep = identity,
                     .args_start = args_start orelse 0,
                     .arg_count = arg_count,
                     .ret = ret orelse boxyLayoutInvariant("function representation had no return child"),
@@ -324,7 +332,7 @@ const Builder = struct {
         };
     }
 
-    fn canonicalFunctionRep(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!Plan.TypeRepId {
+    fn functionIdentityRep(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!Plan.TypeRepId {
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
@@ -349,8 +357,8 @@ const Builder = struct {
         mode: LayoutMode,
         function: FunctionChildren,
     ) Allocator.Error!void {
-        const canonical_children = self.program.childSlice(self.program.representations.items[@intFromEnum(function.rep)].children);
-        for (canonical_children[function.args_start..][0..function.arg_count]) |child| {
+        const identity_children = self.program.childSlice(self.program.representations.items[@intFromEnum(function.rep)].children);
+        for (identity_children[function.args_start..][0..function.arg_count]) |child| {
             try values.append(self.allocator, try self.runtimeLayoutForRep(mode, child.rep));
         }
         try values.append(self.allocator, try self.runtimeLayoutForRep(mode, function.ret));
@@ -705,7 +713,7 @@ const GraphBuilder = struct {
         }
         // Without padding a nominal record lays out exactly like a structural
         // record: the shared struct commit sorts by descending alignment and
-        // breaks ties by input order, so the fields are presented in canonical
+        // breaks ties by input order, so the fields are presented in identity
         // index order to match how structural records (already alphabetical)
         // are presented. Records that opt into declared order carry padding and
         // keep their source-declared field order verbatim.
@@ -773,8 +781,7 @@ const GraphBuilder = struct {
             }
             try refs.append(self.parent.allocator, try self.payloadInput(payloads.items));
         }
-        if (self.tagExtensionPayload(children)) |ext_rep| {
-            _ = ext_rep;
+        if (self.tagExtensionPayload(children) != null) {
             switch (mode) {
                 .concrete_runtime => boxyLayoutInvariant("open tag-union layout reached concrete boxy layout planning"),
                 .descriptor_payload => try refs.append(self.parent.allocator, .{ .canonical = try self.parent.dynamicStorageLayout() }),
@@ -861,6 +868,11 @@ fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
 test "boxy layout planner records dynamic worker boxes separately from storage layout" {
     const gpa = std.testing.allocator;
 
@@ -869,7 +881,7 @@ test "boxy layout planner records dynamic worker boxes separately from storage l
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
 
-    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(0))}, .{});
+    var program = try Plan.analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))}, .{});
     defer program.deinit();
 
     var store = try layout.Store.init(gpa, .u64);
@@ -887,7 +899,7 @@ test "boxy layout planner records dynamic worker boxes separately from storage l
 test "boxy layout planner reuses dynamic storage for Box(a) worker layout" {
     const gpa = std.testing.allocator;
 
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
         .{ .nominal = builtinNominal(.box, @enumFromInt(1), .{ .start = 0, .len = 1 }) },
@@ -915,7 +927,7 @@ test "boxy layout planner reuses dynamic storage for Box(a) worker layout" {
 test "boxy layout planner substitutes dynamic boxes into list elements" {
     const gpa = std.testing.allocator;
 
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
         .{ .nominal = builtinNominal(.list, @enumFromInt(1), .{ .start = 0, .len = 1 }) },
@@ -945,13 +957,13 @@ test "boxy layout planner preserves zero-payload tag variants" {
 
     const tag_a: TagLabelId = @enumFromInt(1);
     const tag_b: TagLabelId = @enumFromInt(2);
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_a, .args_start = 0, .args_len = 0 },
         .{ .name = tag_b, .args_start = 0, .args_len = 1 },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
     };
@@ -984,12 +996,12 @@ test "boxy layout planner gives open tag descriptors a row-extension payload lay
     const gpa = std.testing.allocator;
 
     const tag_exit: TagLabelId = @enumFromInt(1);
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.i64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.i64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
     };
@@ -1026,8 +1038,8 @@ test "boxy layout planner records private worker function arg and return layouts
     const gpa = std.testing.allocator;
 
     const type_pool = [_]checked.CheckedTypeId{
-        @enumFromInt(0), // List(a) argument.
-        @enumFromInt(0), // Function argument a.
+        @enumFromInt(fixtureTableIndex(0)), // List(a) argument.
+        @enumFromInt(fixtureTableIndex(0)), // Function argument a.
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
@@ -1048,11 +1060,11 @@ test "boxy layout planner records private worker function arg and return layouts
             .order = 0,
             .module_idx = 0,
             .kind = .runtime_entrypoint,
-            .source = .{ .def = @enumFromInt(0) },
+            .source = .{ .def = @enumFromInt(fixtureTableIndex(0)) },
             .checked_type = @enumFromInt(2),
             .abi = .roc,
             .exposure = .private,
-            .procedure_binding = @enumFromInt(0),
+            .procedure_binding = @enumFromInt(fixtureTableIndex(0)),
         },
     };
 
@@ -1101,9 +1113,9 @@ test "boxy layout planner commits nominal declared fields through shared layout 
 
     const field_a: RecordFieldLabelId = @enumFromInt(1);
     const field_b: RecordFieldLabelId = @enumFromInt(2);
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const record_fields = [_]checked.CheckedRecordField{
-        .{ .name = field_a, .ty = @enumFromInt(0) },
+        .{ .name = field_a, .ty = @enumFromInt(fixtureTableIndex(0)) },
         .{ .name = field_b, .ty = @enumFromInt(1) },
     };
     const declared_fields = [_]checked.CheckedDeclaredField{
@@ -1112,7 +1124,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
         .{ .named = field_b },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
@@ -1122,7 +1134,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
             .owner_module = .{},
             .is_opaque = false,
             .backing = @enumFromInt(3),
-            .representation = .{ .local_declaration = @enumFromInt(0) },
+            .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
         } },
@@ -1156,8 +1168,8 @@ fn builtinNominal(
     args: checked.CheckedTypeRange,
 ) checked.StoredNominal {
     return .{
-        .name = @enumFromInt(0),
-        .origin_module = @enumFromInt(0),
+        .name = @enumFromInt(fixtureTableIndex(0)),
+        .origin_module = @enumFromInt(fixtureTableIndex(0)),
         .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,

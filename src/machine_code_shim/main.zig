@@ -131,8 +131,15 @@ fn initBoxyRuntime(gpa: Allocator, ops: *RocOps, view: *const RunImage.ProgramVi
     ) catch return error.InvalidDevRunImage;
 
     eval.boxy_abi.initGlobalFromSidecarView(gpa, boxy_view, ops) catch |err| switch (err) {
-        error.AlreadyInitialized => gpa.destroy(boxy_view),
-        error.OutOfMemory => return error.OutOfMemory,
+        error.AlreadyInitialized => {
+            boxy_view.deinit();
+            gpa.destroy(boxy_view);
+        },
+        error.OutOfMemory => {
+            boxy_view.deinit();
+            gpa.destroy(boxy_view);
+            return error.OutOfMemory;
+        },
     };
 }
 

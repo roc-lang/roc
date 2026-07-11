@@ -1,16 +1,17 @@
-//! Root for the standalone boxy runtime object linked into `roc build --opt=dev`
+//! Root for the standalone Boxy runtime object linked into native and wasm
 //! executables.
 //!
 //! It exports the `roc_boxy_*` C-ABI wrappers over the process-global boxy
 //! runtime (the same wrappers the machine-code shim resolves in-process) plus a
 //! `roc_boxy_init_embedded` entry that installs that runtime from a boxy sidecar
-//! embedded in the linked program. The dev backend emits a call to
+//! embedded in the linked program. Each machine-code backend emits a call to
 //! `roc_boxy_init_embedded` at the top of each exported entrypoint, so the
 //! runtime is ready before any Roc procedure runs. Host operations reach the
 //! program through linker-resolved symbols (the extern symbol ABI), matching the
 //! app and builtins objects this runtime links beside.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 const eval = @import("eval");
@@ -23,8 +24,19 @@ const BoxySidecar = lir.LirImage.BoxySidecar;
 
 /// Host operations resolve through linker-provided symbols.
 pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .extern_symbols;
+/// This standalone wasm object bundles Zig's compiler-rt. The ordinary wasm
+/// builtins object supplies Roc's decomposed i128 replacements instead.
+pub const roc_omit_wasm_compiler_rt_exports = true;
 
-pub const panic = std.debug.no_panic;
+/// Route runtime panics through the Roc host crash callback.
+pub const panic = std.debug.FullPanic(panicImpl);
+
+extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
+
+fn panicImpl(msg: []const u8, _: ?usize) noreturn {
+    roc_crashed(msg.ptr, msg.len);
+    unreachable;
+}
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
 /// Minimal debug output override; avoids pulling in the full threaded IO vtable.
 pub const std_options_debug_io = shim_io.io();
@@ -86,8 +98,7 @@ const RuntimeArena = struct {
         return true;
     }
 
-    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        _ = ret_addr;
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, _: usize) ?[*]u8 {
         const self: *RuntimeArena = @ptrCast(@alignCast(ctx));
         if (!self.ensure()) return null;
         const start = std.mem.alignForward(usize, self.used, alignment.toByteUnits());
@@ -120,13 +131,16 @@ const RuntimeArena = struct {
 };
 
 var runtime_arena: RuntimeArena = .{};
-const host_allocator = runtime_arena.allocator();
+const host_allocator = if (builtin.cpu.arch.isWasm()) std.heap.page_allocator else runtime_arena.allocator();
+var initialized = false;
 
 /// Install the process-global boxy runtime from the embedded sidecar. The
 /// entrypoint wrappers call this before invoking any Roc procedure; the first
 /// call installs the runtime and later calls return early. The decoded sidecar
 /// view lives for the process, so it is intentionally leaked.
 export fn roc_boxy_init_embedded() callconv(.c) void {
+    if (initialized) return;
+
     const blob_len: usize = @intCast(roc_boxy_sidecar_blob_len);
     if (blob_len == 0) return;
 
@@ -144,9 +158,16 @@ export fn roc_boxy_init_embedded() callconv(.c) void {
         return;
     };
 
-    boxy_abi.initGlobalFromSidecarView(gpa, view, &startup_ops) catch |err| switch (err) {
-        error.AlreadyInitialized, error.OutOfMemory => gpa.destroy(view),
+    boxy_abi.initGlobalFromSidecarView(gpa, view, &startup_ops) catch |err| {
+        view.deinit();
+        gpa.destroy(view);
+        switch (err) {
+            error.AlreadyInitialized => initialized = true,
+            error.OutOfMemory => {},
+        }
+        return;
     };
+    initialized = true;
 }
 
 // Force-export the boxy C-ABI wrappers so the object compiler's relocations
@@ -157,6 +178,7 @@ comptime {
     const names = [_][:0]const u8{
         "roc_boxy_static_desc",
         "roc_boxy_static_dict",
+        "roc_boxy_dict_method_arg_desc",
         "roc_boxy_nested_desc",
         "roc_boxy_tag_ext_desc",
         "roc_boxy_tag_residual_desc",

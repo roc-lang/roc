@@ -265,7 +265,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
 
-    const view = lir.LirImage.viewMappedImage(
+    var view = lir.LirImage.viewMappedImage(
         image_header,
         opts.runtime_fba.buffer.ptr,
         opts.runtime_fba.end_index,
@@ -274,6 +274,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         diag.step("LirImage.viewMappedImage", err);
         return err;
     };
+    defer view.deinit();
 
     return runEchoView(allocator, &view, diag, opts.std_io) catch |err| {
         diag.step("runEchoView", err);

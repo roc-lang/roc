@@ -62,7 +62,7 @@ typedef void* RocBox;
 
 struct RocOps;
 
-typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture);
+typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture, const void** ret_desc);
 typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);
 typedef struct {
     RocErasedCallableFn callable_fn_ptr;

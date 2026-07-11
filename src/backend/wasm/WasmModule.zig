@@ -1660,6 +1660,17 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
                             symbol_remap[src_sym_idx] = existing;
                             continue;
                         }
+                        if (mode == .final_link) {
+                            // PIC compilers represent the address of an external
+                            // data symbol as an imported GOT global. At a static
+                            // final link that global resolves directly to the
+                            // already-merged data definition; relocation patching
+                            // rewrites `global.get` to the absolute data address.
+                            if (self.findSymbolByNameAndKind(name, .data)) |existing| {
+                                symbol_remap[src_sym_idx] = existing;
+                                continue;
+                            }
+                        }
                         if (mode == .relocatable_object) {
                             if (src_sym.index >= source.global_imports.items.len) return error.InvalidSection;
                             const src_imp = source.global_imports.items[src_sym.index];
@@ -1919,6 +1930,15 @@ fn patchGlobalIndexCodeRelocation(
 ) Allocator.Error!void {
     switch (sym.kind) {
         .global => overwritePaddedU32(target_bytes, patch_offset, sym.index),
+        .data => {
+            const o: usize = @intCast(patch_offset);
+            if (o == 0 or target_bytes[o - 1] != Op.global_get) unreachable;
+            if (sym.index >= self.data_segments.items.len) unreachable;
+            const segment = self.data_segments.items[sym.index];
+            const address = segment.offset + sym.data_offset;
+            target_bytes[o - 1] = Op.i32_const;
+            overwritePaddedU32(target_bytes, patch_offset, address);
+        },
         .function => {
             const o: usize = @intCast(patch_offset);
             if (o == 0) unreachable;

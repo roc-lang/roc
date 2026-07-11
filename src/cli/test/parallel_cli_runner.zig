@@ -12,6 +12,7 @@
 //!   --threads <N>        Max concurrent child processes (default: CPU count)
 //!   --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
 //!   --include-llvm       Include size and speed LLVM backend jobs
+//!   --specialize=<yes|no> Override the runtime lowering strategy for platform jobs
 //!   --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
 //!   --glue-opt <opt>     Glue execution mode; supported value: interpreter
 //!   --verbose            Print PASS results and timing details
@@ -1337,6 +1338,7 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
 var roc_binary_path: []const u8 = "";
 var glue_roc_binary_path: []const u8 = "";
 var glue_execution_mode: GlueExecutionMode = .default;
+var platform_specialization_arg: ?[]const u8 = null;
 var project_root_path: []const u8 = "";
 
 const CaseEnv = struct {
@@ -1495,7 +1497,7 @@ fn runInterpreterTest(
     const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{backend.cliName()}) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate opt arg" };
 
-    var argv_buf: [5][]const u8 = undefined;
+    var argv_buf: [6][]const u8 = undefined;
     var argc: usize = 0;
     argv_buf[argc] = roc_binary_path;
     argc += 1;
@@ -1503,6 +1505,10 @@ fn runInterpreterTest(
     argc += 1;
     argv_buf[argc] = opt_arg;
     argc += 1;
+    if (platform_specialization_arg) |specialization_arg| {
+        argv_buf[argc] = specialization_arg;
+        argc += 1;
+    }
     switch (platform.test_kind) {
         .native_run => {},
         .io_spec => |io_spec| {
@@ -1548,7 +1554,23 @@ fn runCompiledTest(
     const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{backend.cliName()}) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate opt arg" };
 
-    const build_argv = &[_][]const u8{ roc_binary_path, "build", output_arg, opt_arg, roc_file };
+    var build_argv_buf: [6][]const u8 = undefined;
+    var build_argc: usize = 0;
+    build_argv_buf[build_argc] = roc_binary_path;
+    build_argc += 1;
+    build_argv_buf[build_argc] = "build";
+    build_argc += 1;
+    build_argv_buf[build_argc] = output_arg;
+    build_argc += 1;
+    build_argv_buf[build_argc] = opt_arg;
+    build_argc += 1;
+    if (platform_specialization_arg) |specialization_arg| {
+        build_argv_buf[build_argc] = specialization_arg;
+        build_argc += 1;
+    }
+    build_argv_buf[build_argc] = roc_file;
+    build_argc += 1;
+    const build_argv = build_argv_buf[0..build_argc];
 
     var build_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .build, .duration_ns = timer.read(), .message = "no clock" };
     const build_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
@@ -6218,7 +6240,7 @@ fn customGlueZigBoxHelperTest(
         \\    env_ref.callback_rc = refcountPtr(data_ptr orelse unreachable).*;
         \\}
         \\
-        \\fn erasedCallableFn(_: *abi.RocHost, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8) callconv(.c) void {}
+        \\fn erasedCallableFn(_: *abi.RocHost, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, out_desc: *?*const anyopaque) callconv(.c) void { out_desc.* = null; }
         \\
         \\fn erasedDrop(_: ?[*]u8, host: *abi.RocHost) callconv(.c) void {
         \\    const env_ref: *Env = @ptrCast(@alignCast(host.env));
@@ -6812,6 +6834,7 @@ fn printUsage() void {
         \\  --threads <N>        Max concurrent workers (default: CPU count)
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs
+        \\  --specialize=<yes|no> Override the runtime lowering strategy for platform jobs
         \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
         \\  --glue-opt <opt>     Glue execution mode; supported value: interpreter
         \\  --verbose            Show PASS results with timing
@@ -6824,6 +6847,7 @@ const ParsedRunnerArgs = struct {
     suites: SuiteSelection,
     glue_options: GlueRunnerOptions,
     glue_roc: ?[]const u8 = null,
+    specialization_arg: ?[]const u8 = null,
 };
 
 fn parseSuiteName(value: []const u8) ?Suite {
@@ -6848,6 +6872,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
     var suites = SuiteSelection{};
     var glue_options = GlueRunnerOptions{};
     var glue_roc: ?[]const u8 = null;
+    var specialization_arg: ?[]const u8 = null;
     var saw_suite = false;
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
@@ -6883,6 +6908,15 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
             glue_roc = arg["--glue-roc=".len..];
             continue;
         }
+        if (std.mem.startsWith(u8, arg, "--specialize=")) {
+            const value = arg["--specialize=".len..];
+            if (!std.mem.eql(u8, value, "yes") and !std.mem.eql(u8, value, "no")) {
+                std.debug.print("unknown specialization strategy: {s}\n", .{value});
+                return error.InvalidArgs;
+            }
+            specialization_arg = arg;
+            continue;
+        }
         if (std.mem.eql(u8, arg, "--glue-opt")) {
             i += 1;
             if (i >= raw_args.len) {
@@ -6916,6 +6950,7 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
         .suites = suites,
         .glue_options = glue_options,
         .glue_roc = glue_roc,
+        .specialization_arg = specialization_arg,
     };
 }
 
@@ -6978,6 +7013,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     else
         roc_binary_path;
     glue_execution_mode = parsed.glue_options.execution_mode;
+    platform_specialization_arg = parsed.specialization_arg;
 
     const tests = try buildCases(spec_arena.allocator(), args.filters, args.include_llvm, parsed.suites, parsed.glue_options);
     if (tests.len == 0) return;

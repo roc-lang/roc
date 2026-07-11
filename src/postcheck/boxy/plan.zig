@@ -1,6 +1,6 @@
 //! Boxy representation planner.
 //!
-//! The planner records explicit facts consumed by the boxy lowerer: how each
+//! The planner records explicit data consumed by the boxy lowerer: how each
 //! checked type is represented internally, which descriptor data dynamic
 //! positions require, and which static-dispatch constraints require dictionary
 //! arguments. It only consumes checked type data.
@@ -8,10 +8,11 @@
 const std = @import("std");
 const can = @import("can");
 const check = @import("check");
+const Common = @import("../common.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
-const canonical = check.CanonicalNames;
+const checked_names = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
@@ -31,32 +32,40 @@ const empty_hosted_procs = checked.HostedProcTable{};
 const empty_static_dispatch_plans = static_dispatch.StaticDispatchPlanTable{};
 const empty_method_registry = static_dispatch.MethodRegistry{};
 
+/// Stable index of a checked type's planned Boxy representation.
 pub const TypeRepId = enum(u32) { _ };
+/// Stable index of a requested root in a program plan.
 pub const RootPlanId = enum(u32) { _ };
+/// Stable index of a lowered worker in a program plan.
 pub const WorkerPlanId = enum(u32) { _ };
+/// Stable index of an explicit runtime descriptor requirement.
 pub const DescriptorRequirementId = enum(u32) { _ };
+/// Stable index of an explicit runtime dictionary requirement.
 pub const DictionaryRequirementId = enum(u32) { _ };
 
-pub const TypeRef = struct {
+/// Module-qualified checked type reference used throughout planning.
+pub const CheckedTypeIdentity = struct {
     module: checked.ModuleId = .{},
     ty: checked.CheckedTypeId,
 };
 
-pub const ExprRef = struct {
+/// Module-qualified checked expression reference used throughout planning.
+pub const CheckedExprIdentity = struct {
     module: checked.ModuleId = .{},
     expr: checked.CheckedExprId,
 };
 
-const PatternRef = struct {
+const CheckedPatternIdentity = struct {
     module: checked.ModuleId = .{},
     pattern: checked.CheckedPatternId,
 };
 
-const StatementRef = struct {
+const CheckedStatementIdentity = struct {
     module: checked.ModuleId = .{},
     statement: checked.CheckedStatementId,
 };
 
+/// Compact start and length pair into an append-only plan table.
 pub const Span = extern struct {
     start: u32 = 0,
     len: u32 = 0,
@@ -66,17 +75,20 @@ pub const Span = extern struct {
     }
 };
 
+/// Whether a dynamic type variable is flexible or rigid.
 pub const DynamicKind = enum {
     flex,
     rigid,
 };
 
+/// Representation policy for a nominal checked type.
 pub const NominalKind = enum {
     transparent,
     opaque_nominal,
     builtin_other,
 };
 
+/// Complete planned representation category for one checked type.
 pub const RepresentationKind = union(enum) {
     in_progress,
     dynamic: DynamicKind,
@@ -95,6 +107,7 @@ pub const RepresentationKind = union(enum) {
     empty_tag_union,
 };
 
+/// Structural relationship between a representation and one child.
 pub const ChildRole = union(enum) {
     alias_backing,
     alias_arg: u32,
@@ -115,32 +128,37 @@ pub const ChildRole = union(enum) {
     box_payload,
 };
 
+/// One explicitly analyzed child of a type representation.
 pub const RepChild = struct {
     role: ChildRole,
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
 };
 
+/// One tag name and its planned payload representation span.
 pub const TagVariant = struct {
     name: TagLabelId,
     name_module: checked.ModuleId = .{},
     payloads: Span = .{},
 };
 
+/// Source and representation metadata for one declared aggregate field.
 pub const DeclaredField = struct {
     index: u16,
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     is_padding: bool = false,
 };
 
+/// Mapping from a module-qualified checked type to its representation id.
 pub const TypeRepBinding = struct {
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
 };
 
+/// Planner output describing one checked type's complete representation.
 pub const TypeRepresentation = struct {
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     kind: RepresentationKind,
     children: Span = .{},
     tag_variants: Span = .{},
@@ -153,6 +171,7 @@ pub const TypeRepresentation = struct {
     inspect_opaque: bool = false,
 };
 
+/// Reason a representation must carry an explicit runtime descriptor.
 pub const DescriptorReason = enum {
     dynamic_payload,
     aggregate_contains_dynamic,
@@ -160,36 +179,41 @@ pub const DescriptorReason = enum {
     box_payload_dynamic,
 };
 
+/// Explicit runtime descriptor demanded by one planned representation.
 pub const DescriptorRequirement = struct {
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     reason: DescriptorReason,
 };
 
+/// Hidden worker parameter that supplies a runtime type descriptor.
 pub const HiddenDescriptorParam = struct {
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     desc: DescriptorRequirementId,
 };
 
+/// Hidden worker parameter that supplies one or more method dictionaries.
 pub const HiddenDictionaryParam = struct {
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     dictionaries: Span,
 };
 
+/// Descriptor argument mapping for one direct worker call.
 pub const DirectCallHiddenDescriptorArg = struct {
     worker_desc: DescriptorRequirementId,
     worker_rep: TypeRepId,
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     source_arg_index: ?u32 = null,
     source_value_rep: ?TypeRepId = null,
 };
 
+/// Dictionary argument mapping for one direct worker call.
 pub const DirectCallHiddenDictionaryArg = struct {
     worker_dictionaries: Span,
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
 };
 
@@ -200,122 +224,147 @@ pub const DirectCallHiddenDictionaryArg = struct {
 /// call. The corresponding reps make both checked relations explicit before
 /// the final boundary into `worker_rep`.
 pub const CallTypeSubstitution = struct {
-    operand_type: TypeRef,
+    operand_type: CheckedTypeIdentity,
     operand_rep: TypeRepId,
-    call_type: TypeRef,
+    call_type: CheckedTypeIdentity,
     call_rep: TypeRepId,
     worker_rep: TypeRepId,
 };
 
+/// Storage role of one field in an erased callable capture.
 pub const ErasedCaptureKind = enum {
     captured_value,
     hidden_desc,
     hidden_dict,
 };
 
+/// Planned value, descriptor, or dictionary captured by an erased callable.
 pub const ErasedCapture = struct {
     kind: ErasedCaptureKind,
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     desc: ?DescriptorRequirementId = null,
     dictionaries: Span = .{},
+    body_dictionary: bool = false,
+    capture_id: ?checked.CaptureId = null,
 };
 
+pub const StaticFnPlan = struct {
+    store_module: checked.ModuleId,
+    fn_id: checked.ConstFnId,
+    rep: TypeRepId,
+    worker: WorkerPlanId,
+};
+
+/// One checked static-dispatch constraint requiring a runtime dictionary slot.
 pub const DictionaryRequirement = struct {
-    source_type: TypeRef,
+    source_type: CheckedTypeIdentity,
     constraint_index: u32,
     fn_name: MethodNameId,
-    fn_ty: TypeRef,
+    fn_ty: CheckedTypeIdentity,
     origin: StaticDispatchOrigin,
     binop_negated: bool,
     num_literal: ?NumeralInfo,
 };
 
+/// Whether a root needs only a worker or also a host-shaped ABI wrapper.
 pub const RootWrapperKind = enum {
     private_worker_only,
     host_shaped_wrapper,
 };
 
+/// Checked checked_module from which a worker body is lowered.
 pub const WorkerSource = union(enum) {
-    procedure_template: canonical.ProcedureTemplateRef,
+    procedure_template: checked_names.ProcedureTemplateRef,
     procedure_binding: checked.ArtifactTopLevelProcedureBindingRef,
     procedure_use: checked.ProcedureUseTemplate,
-    nested_expr: ExprRef,
+    nested_expr: CheckedExprIdentity,
 };
 
+/// Const-store identity of a function value persisted into runtime code.
 pub const StoredFnSource = struct {
     module: checked.ModuleId,
     fn_id: checked.ConstFnId,
 };
 
+/// Complete checked source and hidden-input plan for one worker.
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
     root_request: ?checked.RootRequest = null,
     source: WorkerSource,
-    checked_type: TypeRef,
+    checked_type: CheckedTypeIdentity,
     rep: TypeRepId,
     stored_fn: ?StoredFnSource = null,
     hidden_descs: Span = .{},
     hidden_dicts: Span = .{},
+    body_hidden_dicts: Span = .{},
     erased_captures: Span = .{},
 };
 
+/// Explicit worker, substitutions, and hidden arguments for one direct call.
 pub const DirectCallPlan = struct {
-    call: ExprRef,
+    call: CheckedExprIdentity,
     worker: WorkerPlanId,
-    source_fn_type: TypeRef,
+    source_fn_type: CheckedTypeIdentity,
     arg_substitutions: Span = .{},
     ret_substitution: ?CallTypeSubstitution = null,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
 
+/// Worker and contextual callable type for one nested callable expression.
 pub const NestedCallableUsePlan = struct {
     worker: WorkerPlanId,
-    callable_ty: TypeRef,
+    callable_ty: CheckedTypeIdentity,
 };
 
+/// Custom inspect worker selected for one source representation.
 pub const InspectMethodPlan = struct {
     source_rep: TypeRepId,
     worker: WorkerPlanId,
 };
 
+/// Which protocol operation an iterator call performs.
 pub const IteratorCallKind = enum {
     iter,
     next,
 };
 
+/// Worker and substitutions for one checked iterator protocol call.
 pub const IteratorCallPlan = struct {
     module: checked.ModuleId,
     for_plan: static_dispatch.IteratorForPlanId,
     kind: IteratorCallKind,
     worker: WorkerPlanId,
-    source_fn_type: TypeRef,
+    source_fn_type: CheckedTypeIdentity,
     arg_substitutions: Span = .{},
-    ret_type: TypeRef,
+    ret_type: CheckedTypeIdentity,
     ret_substitution: CallTypeSubstitution,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
 
+/// Worker and return substitution for one compile-time-evaluated call.
 pub const ConstEvalCallPlan = struct {
     worker: WorkerPlanId,
-    ret_type: TypeRef,
+    ret_type: CheckedTypeIdentity,
     ret_substitution: CallTypeSubstitution,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
 };
 
+/// Host and worker representation plan for one requested root.
 pub const RootPlan = struct {
     id: RootPlanId,
     request: checked.RootRequest,
     worker: WorkerPlanId,
     wrapper_kind: RootWrapperKind,
-    host_type: TypeRef,
+    host_type: CheckedTypeIdentity,
     host_rep: TypeRepId,
     worker_rep: TypeRepId,
 };
 
+/// Target-independent Boxy representation and call plan for a checked program.
 pub const ProgramPlan = struct {
     allocator: Allocator,
     roots: std.ArrayList(RootPlan),
@@ -339,6 +388,7 @@ pub const ProgramPlan = struct {
     call_type_substitutions: std.ArrayList(CallTypeSubstitution),
     erased_captures: std.ArrayList(ErasedCapture),
     dictionaries: std.ArrayList(DictionaryRequirement),
+    static_fns: std.ArrayList(StaticFnPlan),
 
     pub fn init(allocator: Allocator) ProgramPlan {
         return .{
@@ -364,10 +414,12 @@ pub const ProgramPlan = struct {
             .call_type_substitutions = .empty,
             .erased_captures = .empty,
             .dictionaries = .empty,
+            .static_fns = .empty,
         };
     }
 
     pub fn deinit(self: *ProgramPlan) void {
+        self.static_fns.deinit(self.allocator);
         self.dictionaries.deinit(self.allocator);
         self.erased_captures.deinit(self.allocator);
         self.call_type_substitutions.deinit(self.allocator);
@@ -432,19 +484,19 @@ pub const ProgramPlan = struct {
         return self.erased_captures.items[span.start .. span.start + span.len];
     }
 
-    pub fn directWorkerForCall(self: *const ProgramPlan, call: ExprRef) ?WorkerPlanId {
+    pub fn directWorkerForCall(self: *const ProgramPlan, call: CheckedExprIdentity) ?WorkerPlanId {
         return if (self.directCallPlanForCall(call)) |plan| plan.worker else null;
     }
 
-    pub fn directCallPlanForCall(self: *const ProgramPlan, call: ExprRef) ?DirectCallPlan {
+    pub fn directCallPlanForCall(self: *const ProgramPlan, call: CheckedExprIdentity) ?DirectCallPlan {
         for (self.direct_calls.items) |direct| {
             if (exprRefEql(direct.call, call)) return direct;
         }
         return null;
     }
 
-    pub fn uniqueNestedCallableUseType(self: *const ProgramPlan, worker: WorkerPlanId) ?TypeRef {
-        var found: ?TypeRef = null;
+    pub fn uniqueNestedCallableUseType(self: *const ProgramPlan, worker: WorkerPlanId) ?CheckedTypeIdentity {
+        var found: ?CheckedTypeIdentity = null;
         for (self.nested_callable_uses.items) |use| {
             if (use.worker != worker) continue;
             if (found) |existing| {
@@ -463,21 +515,21 @@ pub const ProgramPlan = struct {
         return null;
     }
 
-    pub fn constEvalCallFor(self: *const ProgramPlan, worker: WorkerPlanId, ret_type: TypeRef) ?ConstEvalCallPlan {
+    pub fn constEvalCallFor(self: *const ProgramPlan, worker: WorkerPlanId, ret_type: CheckedTypeIdentity) ?ConstEvalCallPlan {
         for (self.const_eval_calls.items) |call| {
             if (call.worker == worker and typeRefEql(call.ret_type, ret_type)) return call;
         }
         return null;
     }
 
-    pub fn repForSourceType(self: *const ProgramPlan, source_type: TypeRef) ?TypeRepId {
+    pub fn repForSourceType(self: *const ProgramPlan, source_type: CheckedTypeIdentity) ?TypeRepId {
         for (self.type_reps.items) |binding| {
             if (typeRefEql(binding.source_type, source_type)) return binding.rep;
         }
         return null;
     }
 
-    pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: TypeRef) ?WorkerPlanId {
+    pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: CheckedTypeIdentity) ?WorkerPlanId {
         for (self.workers.items) |worker| {
             if (!workerSourceEql(worker.source, source)) continue;
             switch (source) {
@@ -501,11 +553,13 @@ pub const ProgramPlan = struct {
     }
 };
 
+/// Configuration for target-independent Boxy planning.
 pub const AnalyzeOptions = struct {};
 
+/// Checked module data required by the Boxy representation planner.
 pub const ModuleView = struct {
     key: checked.ModuleId = .{},
-    canonical_names: ?*const canonical.CanonicalNameStore = null,
+    canonical_names: ?*const checked_names.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView = .{},
     compile_time_roots: *const checked.CompileTimeRootTable = &empty_compile_time_roots,
@@ -525,6 +579,7 @@ pub const ModuleView = struct {
     const_templates: ?*const checked.ConstTemplateTable = null,
 };
 
+/// Checked modules, roots, and standalone layout requests to analyze together.
 pub const ProgramInput = struct {
     checked_types: checked.CheckedTypeStoreView = .{},
     root_view: ?ModuleView = null,
@@ -533,8 +588,10 @@ pub const ProgramInput = struct {
     imports: []const checked.ImportedModuleView = &.{},
     roots: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
+    static_data_requests: []const Common.StaticDataRequest = &.{},
 };
 
+/// Analyze a checked program into explicit Boxy representations and call plans.
 pub fn analyzeProgram(
     allocator: Allocator,
     input: ProgramInput,
@@ -548,6 +605,9 @@ pub fn analyzeProgram(
     }
     for (input.layout_requests) |layout_request| {
         try builder.plan.root_reps.append(allocator, try builder.analyzeType(builder.root_view, layout_request));
+    }
+    for (input.static_data_requests) |request| {
+        try builder.analyzeStaticDataRequest(request.data);
     }
 
     builder.propagateDynamicRequirements();
@@ -574,6 +634,7 @@ pub fn analyzeProgram(
     return out;
 }
 
+/// Analyze standalone checked types when no executable program roots are needed.
 pub fn analyzeCheckedTypes(
     allocator: Allocator,
     checked_types: checked.CheckedTypeStoreView,
@@ -587,6 +648,16 @@ pub fn analyzeCheckedTypes(
 }
 
 const Builder = struct {
+    const WorkerDictionaryUse = struct {
+        worker: WorkerPlanId,
+        rep: TypeRepId,
+    };
+
+    const StaticConstVisit = struct {
+        node: checked.ConstNodeId,
+        rep: TypeRepId,
+    };
+
     allocator: Allocator,
     root_module: ?checked.LoweringModuleView,
     root_view: ModuleView,
@@ -594,16 +665,18 @@ const Builder = struct {
     imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
-    by_type: std.AutoHashMap(TypeRef, TypeRepId),
-    body_exprs_seen: std.AutoHashMap(ExprRef, void),
-    body_patterns_seen: std.AutoHashMap(PatternRef, void),
-    body_statements_seen: std.AutoHashMap(StatementRef, void),
+    by_type: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
+    body_exprs_seen: std.AutoHashMap(CheckedExprIdentity, void),
+    body_patterns_seen: std.AutoHashMap(CheckedPatternIdentity, void),
+    body_statements_seen: std.AutoHashMap(CheckedStatementIdentity, void),
+    worker_dictionary_uses: std.ArrayList(WorkerDictionaryUse),
+    active_worker: ?WorkerPlanId,
 
     fn init(allocator: Allocator, input: ProgramInput) Builder {
         const root_view = if (input.root_view) |root_view|
             root_view
         else if (input.root_module) |root_module|
-            moduleViewFromArtifact(root_module.module)
+            moduleViewFromCheckedModule(root_module.module)
         else
             ModuleView{ .checked_types = input.checked_types };
 
@@ -615,14 +688,17 @@ const Builder = struct {
             .imports = if (input.root_module != null) input.imports else &.{},
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
-            .by_type = std.AutoHashMap(TypeRef, TypeRepId).init(allocator),
-            .body_exprs_seen = std.AutoHashMap(ExprRef, void).init(allocator),
-            .body_patterns_seen = std.AutoHashMap(PatternRef, void).init(allocator),
-            .body_statements_seen = std.AutoHashMap(StatementRef, void).init(allocator),
+            .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
+            .body_exprs_seen = std.AutoHashMap(CheckedExprIdentity, void).init(allocator),
+            .body_patterns_seen = std.AutoHashMap(CheckedPatternIdentity, void).init(allocator),
+            .body_statements_seen = std.AutoHashMap(CheckedStatementIdentity, void).init(allocator),
+            .worker_dictionary_uses = .empty,
+            .active_worker = null,
         };
     }
 
     fn deinit(self: *Builder) void {
+        self.worker_dictionary_uses.deinit(self.allocator);
         self.body_statements_seen.deinit();
         self.body_patterns_seen.deinit();
         self.body_exprs_seen.deinit();
@@ -644,8 +720,8 @@ const Builder = struct {
         boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
     }
 
-    fn moduleForArtifactRef(self: *Builder, artifact: anytype) ModuleView {
-        return self.moduleForId(.{ .bytes = artifact.bytes });
+    fn moduleForCheckedModuleId(self: *Builder, checked_module: anytype) ModuleView {
+        return self.moduleForId(.{ .bytes = checked_module.bytes });
     }
 
     fn analyzeRoot(self: *Builder, root: checked.RootRequest) Allocator.Error!void {
@@ -672,10 +748,171 @@ const Builder = struct {
         }
     }
 
+    fn analyzeStaticDataRequest(self: *Builder, request: checked.ProvidedDataExport) Allocator.Error!void {
+        try self.plan.root_reps.append(self.allocator, try self.analyzeType(self.root_view, request.checked_type));
+
+        const store_view = self.moduleForId(checked.constModuleId(request.const_ref));
+        const templates = store_view.const_templates orelse
+            boxyPlanInvariant("static data request module had no const templates");
+        const node = switch (templates.get(request.const_ref).state) {
+            .stored_const => |stored| stored.node,
+            .reserved,
+            .eval_template,
+            => boxyPlanInvariant("static data request const was not stored before boxy planning"),
+        };
+        const root_rep = self.plan.root_reps.items[self.plan.root_reps.items.len - 1];
+        var visited = std.AutoHashMap(StaticConstVisit, void).init(self.allocator);
+        defer visited.deinit();
+        try self.analyzeStaticConstNode(store_view, node, root_rep, &visited);
+    }
+
+    fn analyzeStaticConstNode(
+        self: *Builder,
+        store_view: ModuleView,
+        node: checked.ConstNodeId,
+        rep_id: TypeRepId,
+        visited: *std.AutoHashMap(StaticConstVisit, void),
+    ) Allocator.Error!void {
+        const entry = try visited.getOrPut(.{ .node = node, .rep = rep_id });
+        if (entry.found_existing) return;
+        const store = store_view.const_store orelse
+            boxyPlanInvariant("static data request module had no ConstStore");
+        const rep = self.plan.representations.items[@intFromEnum(rep_id)];
+        switch (rep.kind) {
+            .alias => return try self.analyzeStaticConstNode(store_view, node, requiredSingleChild(&self.plan, rep_id, .alias_backing).rep, visited),
+            .nominal => |kind| {
+                const backing = requiredSingleChild(&self.plan, rep_id, .nominal_backing).rep;
+                const backing_node = switch (store.get(node)) {
+                    .nominal => |nominal| nominal.backing,
+                    else => node,
+                };
+                if (kind != .opaque_nominal) return try self.analyzeStaticConstNode(store_view, backing_node, backing, visited);
+            },
+            else => {},
+        }
+        switch (store.get(node)) {
+            .pending => boxyPlanInvariant("pending ConstStore node reached static data planning"),
+            .crash => boxyPlanInvariant("crashing ConstStore node reached static data planning"),
+            .zst, .scalar, .str => {},
+            .box => |child| try self.analyzeStaticConstNode(
+                store_view,
+                child,
+                requiredSingleChild(&self.plan, rep_id, .box_payload).rep,
+                visited,
+            ),
+            .nominal => |nominal| try self.analyzeStaticConstNode(
+                store_view,
+                nominal.backing,
+                requiredSingleChild(&self.plan, rep_id, .nominal_backing).rep,
+                visited,
+            ),
+            .list => |children| {
+                const elem_rep = requiredSingleChild(&self.plan, rep_id, .list_elem).rep;
+                for (children) |child| try self.analyzeStaticConstNode(store_view, child, elem_rep, visited);
+            },
+            .tuple, .record => |children| {
+                var child_index: usize = 0;
+                for (self.plan.childSlice(rep.children)) |rep_child| {
+                    const is_value_child = switch (rep_child.role) {
+                        .tuple_elem, .record_field => true,
+                        else => false,
+                    };
+                    if (!is_value_child) continue;
+                    if (child_index >= children.len) boxyPlanInvariant("static aggregate ConstStore node had too few children");
+                    try self.analyzeStaticConstNode(store_view, children[child_index], rep_child.rep, visited);
+                    child_index += 1;
+                }
+                if (child_index != children.len) boxyPlanInvariant("static aggregate ConstStore node had too many children");
+            },
+            .tag => |tag| {
+                var selected: ?TagVariant = null;
+                for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
+                    const name_view = self.moduleForId(variant.name_module);
+                    const canonical_names = name_view.canonical_names orelse
+                        boxyPlanInvariant("static tag representation module had no canonical names");
+                    if (std.mem.eql(u8, tag.tag_name, canonical_names.tagLabelText(variant.name))) {
+                        selected = variant;
+                        break;
+                    }
+                }
+                const variant = selected orelse boxyPlanInvariant("static tag ConstStore node was absent from its representation");
+                const payload_reps = self.plan.childSlice(variant.payloads);
+                if (payload_reps.len != tag.payloads.len) boxyPlanInvariant("static tag payload count disagreed with its representation");
+                for (tag.payloads, payload_reps) |child, payload_rep| {
+                    try self.analyzeStaticConstNode(store_view, child, payload_rep.rep, visited);
+                }
+            },
+            .fn_value => |fn_id| {
+                const function = (try self.functionChildren(rep_id)) orelse
+                    boxyPlanInvariant("static function ConstStore node had a non-callable representation");
+                try self.analyzeStaticFnValue(store_view, fn_id, function.rep);
+                const fn_value = store.getFn(fn_id);
+                const fn_view = switch (fn_value.fn_def) {
+                    .nested => |nested| self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes }),
+                    else => store_view,
+                };
+                for (fn_value.captures) |capture| {
+                    if (!capture.id.isCanonical()) {
+                        boxyPlanInvariant("static function capture had no canonical checked binder identity");
+                    }
+                    const capture_rep = try self.analyzeType(fn_view, self.checkedBinderType(fn_view, capture.id.binder()));
+                    try self.analyzeStaticConstNode(store_view, capture.value, capture_rep, visited);
+                }
+            },
+        }
+    }
+
+    fn analyzeStaticFnValue(self: *Builder, store_view: ModuleView, fn_id: checked.ConstFnId, requested_rep: TypeRepId) Allocator.Error!void {
+        for (self.plan.static_fns.items) |planned| {
+            if (moduleKeyEqual(planned.store_module, store_view.key) and planned.fn_id == fn_id and planned.rep == requested_rep) return;
+        }
+        const store = store_view.const_store orelse
+            boxyPlanInvariant("static function value had no ConstStore");
+        const fn_value = store.getFn(fn_id);
+        const source: WorkerSource = switch (fn_value.fn_def) {
+            .local_template,
+            .imported_template,
+            .checked_generated,
+            .local_hosted,
+            .imported_hosted,
+            => |template| .{ .procedure_template = template },
+            .nested => |nested| blk: {
+                const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
+                var site_expr: ?checked.CheckedExprId = null;
+                for (view.nested_proc_sites.sites) |site| {
+                    if (site.site == nested.site and checked_names.procedureTemplateRefEql(site.owner_template, nested.owner)) {
+                        site_expr = site.checked_expr orelse
+                            boxyPlanInvariant("stored nested function had no checked expression site");
+                        break;
+                    }
+                }
+                break :blk .{ .nested_expr = .{
+                    .module = view.key,
+                    .expr = site_expr orelse boxyPlanInvariant("stored nested function referenced a missing checked nested site"),
+                } };
+            },
+            .parser_runtime,
+            .encoder_for_runtime,
+            => boxyPlanInvariant("generated parser/encoder reached static callable planning before runtime worker support"),
+        };
+        const checked_type = switch (source) {
+            .procedure_template => |template| self.checkedTypeForTemplate(template),
+            .nested_expr => self.workerCheckedTypeForSource(source, typeRef(store_view, fn_value.source_fn_ty)),
+            .procedure_binding, .procedure_use => unreachable,
+        };
+        const worker = try self.ensureWorker(source, checked_type, null);
+        try self.plan.static_fns.append(self.allocator, .{
+            .store_module = store_view.key,
+            .fn_id = fn_id,
+            .rep = requested_rep,
+            .worker = worker,
+        });
+    }
+
     fn ensureWorker(
         self: *Builder,
         source: WorkerSource,
-        checked_type: TypeRef,
+        checked_type: CheckedTypeIdentity,
         root_request: ?checked.RootRequest,
     ) Allocator.Error!WorkerPlanId {
         const worker_type = switch (source) {
@@ -709,6 +946,9 @@ const Builder = struct {
         });
 
         if (body) |resolved_body| {
+            const previous_worker = self.active_worker;
+            self.active_worker = worker_id;
+            defer self.active_worker = previous_worker;
             try self.analyzeWorkerBodyTypes(resolved_body);
         }
 
@@ -757,7 +997,7 @@ const Builder = struct {
 
     fn dynamicRepresentation(
         self: *Builder,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         constraints: []const checked.CheckedStaticDispatchConstraint,
         kind: DynamicKind,
     ) Allocator.Error!TypeRepresentation {
@@ -773,7 +1013,7 @@ const Builder = struct {
     fn aliasRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         alias: checked.CheckedAliasType,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
@@ -792,7 +1032,7 @@ const Builder = struct {
     fn recordRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         kind: RepresentationKind,
         fields: []const checked.CheckedRecordField,
         ext: ?checked.CheckedTypeId,
@@ -801,7 +1041,7 @@ const Builder = struct {
         defer children.deinit(self.allocator);
         const closed = try self.appendRecordRowChildren(&children, view, fields, ext);
         // Record-field children are ordered alphabetically by name so every
-        // record representation shares one canonical field-index space (the same
+        // record representation shares one identity field-index space (the same
         // order structural record types already carry). Nominal declaration
         // backings, which the checker keeps in source-declared order, are
         // canonicalized here so a value pairs fields identically on both sides of
@@ -839,7 +1079,7 @@ const Builder = struct {
             }
         }
         const SortContext = struct {
-            names: *const canonical.CanonicalNameStore,
+            names: *const checked_names.CanonicalNameStore,
             fn lessThan(ctx: @This(), a: RepChild, b: RepChild) bool {
                 const a_label = switch (a.role) {
                     .record_field => |label| label,
@@ -866,7 +1106,7 @@ const Builder = struct {
             try self.appendPendingChild(children, view, .{ .record_field = field.name }, field.ty);
         }
 
-        var seen = std.AutoHashMap(TypeRef, void).init(self.allocator);
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
         defer seen.deinit();
 
         var current = ext;
@@ -907,38 +1147,10 @@ const Builder = struct {
         return true;
     }
 
-    fn recordExtensionIsExplicitlyClosed(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-    ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(TypeRef, void).init(self.allocator);
-        defer seen.deinit();
-        return try self.recordExtensionIsExplicitlyClosedInner(view, ext_ty, &seen);
-    }
-
-    fn recordExtensionIsExplicitlyClosedInner(
-        self: *Builder,
-        view: ModuleView,
-        ext_ty: checked.CheckedTypeId,
-        seen: *std.AutoHashMap(TypeRef, void),
-    ) Allocator.Error!bool {
-        const source = typeRef(view, ext_ty);
-        const entry = try seen.getOrPut(source);
-        if (entry.found_existing) return false;
-
-        return switch (view.checked_types.payload(ext_ty)) {
-            .empty_record => true,
-            .alias => |alias| try self.recordExtensionIsExplicitlyClosedInner(view, alias.backing, seen),
-            .flex, .rigid => |variable| variable.row_default == .empty_record,
-            else => false,
-        };
-    }
-
     fn tupleRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         elems: []const checked.CheckedTypeId,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
@@ -956,7 +1168,7 @@ const Builder = struct {
     fn nominalRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         nominal: checked.CheckedNominalType,
     ) Allocator.Error!TypeRepresentation {
         if (nominal.builtin) |builtin| {
@@ -1156,7 +1368,7 @@ const Builder = struct {
             else => boxyPlanInvariant("checked nominal declared field order had a non-record backing"),
         };
 
-        // Canonical field indices are alphabetical-by-name, matching the index
+        // Layout field indices are alphabetical-by-name, matching the index
         // space structural records use, so a value that materializes across an
         // erased structural/nominal boundary pairs fields by the same key on
         // both sides. The backing record's stored field order is not relied on.
@@ -1199,10 +1411,10 @@ const Builder = struct {
     }
 
     /// For each backing-record field position, its rank when the backing
-    /// record's field names are ordered alphabetically. This is the canonical
+    /// record's field names are ordered alphabetically. This is the identity
     /// field index space (shared with structural records). When the backing
     /// view has no name store to compare text with, the backing order is taken
-    /// as canonical.
+    /// as checked_names.
     fn nominalBackingFieldAlphabeticalRanks(
         self: *Builder,
         backing_view: ModuleView,
@@ -1226,7 +1438,7 @@ const Builder = struct {
         for (order, 0..) |*slot, index| slot.* = @intCast(index);
 
         const SortContext = struct {
-            names: *const canonical.CanonicalNameStore,
+            names: *const checked_names.CanonicalNameStore,
             fields: []const checked.CheckedRecordField,
             fn lessThan(ctx: @This(), lhs: u16, rhs: u16) bool {
                 return ctx.names.recordFieldLabelTextLessThan(ctx.fields[lhs].name, ctx.fields[rhs].name);
@@ -1292,7 +1504,7 @@ const Builder = struct {
     fn builtinUnaryNominalRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         kind: RepresentationKind,
         role: ChildRole,
         nominal: checked.CheckedNominalType,
@@ -1313,7 +1525,7 @@ const Builder = struct {
     fn functionRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         function: checked.CheckedFunctionType,
     ) Allocator.Error!TypeRepresentation {
         var children = std.ArrayList(RepChild).empty;
@@ -1332,7 +1544,7 @@ const Builder = struct {
     fn tagUnionRepresentation(
         self: *Builder,
         view: ModuleView,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         tag_union: checked.CheckedTagUnionType,
     ) Allocator.Error!TypeRepresentation {
         const closed = try self.tagUnionExtensionIsExplicitlyClosed(view, tag_union.ext);
@@ -1403,7 +1615,7 @@ const Builder = struct {
         const sorted = try self.allocator.dupe(checked.CheckedTag, tags);
         errdefer self.allocator.free(sorted);
         std.mem.sort(checked.CheckedTag, sorted, names, struct {
-            fn lessThan(name_store: *const canonical.CanonicalNameStore, lhs: checked.CheckedTag, rhs: checked.CheckedTag) bool {
+            fn lessThan(name_store: *const checked_names.CanonicalNameStore, lhs: checked.CheckedTag, rhs: checked.CheckedTag) bool {
                 return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
             }
         }.lessThan);
@@ -1425,7 +1637,7 @@ const Builder = struct {
         view: ModuleView,
         ext_ty: checked.CheckedTypeId,
     ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(TypeRef, void).init(self.allocator);
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
         defer seen.deinit();
         return try self.tagUnionExtensionIsExplicitlyClosedInner(view, ext_ty, &seen);
     }
@@ -1434,7 +1646,7 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         ext_ty: checked.CheckedTypeId,
-        seen: *std.AutoHashMap(TypeRef, void),
+        seen: *std.AutoHashMap(CheckedTypeIdentity, void),
     ) Allocator.Error!bool {
         const source = typeRef(view, ext_ty);
         const entry = try seen.getOrPut(source);
@@ -1454,7 +1666,7 @@ const Builder = struct {
         ext_ty: checked.CheckedTypeId,
         expected: checked.RowDefault,
     ) Allocator.Error!bool {
-        var seen = std.AutoHashMap(TypeRef, void).init(self.allocator);
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
         defer seen.deinit();
         return try self.rowExtensionIsDefaultClosedInner(view, ext_ty, expected, &seen);
     }
@@ -1464,7 +1676,7 @@ const Builder = struct {
         view: ModuleView,
         ext_ty: checked.CheckedTypeId,
         expected: checked.RowDefault,
-        seen: *std.AutoHashMap(TypeRef, void),
+        seen: *std.AutoHashMap(CheckedTypeIdentity, void),
     ) Allocator.Error!bool {
         const source = typeRef(view, ext_ty);
         const entry = try seen.getOrPut(source);
@@ -1479,7 +1691,7 @@ const Builder = struct {
 
     fn appendDictionaryRequirements(
         self: *Builder,
-        source_type: TypeRef,
+        source_type: CheckedTypeIdentity,
         constraints: []const checked.CheckedStaticDispatchConstraint,
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
@@ -1630,11 +1842,21 @@ const Builder = struct {
                 try self.collectHiddenDictionariesForRep(worker.rep, &pending, &seen_reps);
             }
 
+            const body_start: u32 = @intCast(pending.items.len);
+            for (self.worker_dictionary_uses.items) |use| {
+                if (use.worker != worker.id) continue;
+                try self.collectHiddenDictionariesForRep(use.rep, &pending, &seen_reps);
+            }
+
             const start: u32 = @intCast(self.plan.hidden_dictionary_params.items.len);
             try self.plan.hidden_dictionary_params.appendSlice(self.allocator, pending.items);
             self.plan.workers.items[worker_index].hidden_dicts = .{
                 .start = start,
                 .len = @intCast(pending.items.len),
+            };
+            self.plan.workers.items[worker_index].body_hidden_dicts = .{
+                .start = start + body_start,
+                .len = @intCast(pending.items.len - body_start),
             };
         }
     }
@@ -1662,6 +1884,7 @@ const Builder = struct {
                                 .kind = .captured_value,
                                 .source_type = typeRef(view, pattern.ty),
                                 .rep = rep,
+                                .capture_id = capture.capture_id,
                             });
                         }
                     }
@@ -1681,12 +1904,15 @@ const Builder = struct {
                 });
             }
 
-            for (self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts)) |param| {
+            for (self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts), 0..) |param, param_index| {
                 try pending.append(self.allocator, .{
                     .kind = .hidden_dict,
                     .source_type = param.source_type,
                     .rep = param.rep,
                     .dictionaries = param.dictionaries,
+                    .body_dictionary = worker.body_hidden_dicts.len != 0 and
+                        worker.hidden_dicts.start + param_index >= worker.body_hidden_dicts.start and
+                        worker.hidden_dicts.start + param_index < worker.body_hidden_dicts.start + worker.body_hidden_dicts.len,
                 });
             }
 
@@ -1752,7 +1978,7 @@ const Builder = struct {
 
             const start: u32 = @intCast(self.plan.call_type_substitutions.items.len);
             for (source_function.args, worker_args, call_args) |call_arg_ty, worker_arg, call_arg| {
-                const call_type = TypeRef{ .module = direct.source_fn_type.module, .ty = call_arg_ty };
+                const call_type = CheckedTypeIdentity{ .module = direct.source_fn_type.module, .ty = call_arg_ty };
                 const call_rep = try self.analyzeType(source_view, call_arg_ty);
                 const actual_expr = call_view.checked_bodies.expr(call_arg);
                 const actual_rep = try self.analyzeType(call_view, actual_expr.ty);
@@ -1867,7 +2093,7 @@ const Builder = struct {
                     if (self.lookupMethodTarget(view, owner, view, method_name)) |lookup| {
                         if (self.plan.inspectMethodForRep(rep_id) == null) {
                             const source = self.workerSourceForMethodTarget(lookup);
-                            const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+                            const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
                             _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                             const worker = try self.ensureWorker(source, source_fn_type, null);
                             try self.plan.inspect_methods.append(self.allocator, .{
@@ -2001,9 +2227,9 @@ const Builder = struct {
         self: *Builder,
         span: Span,
         kind: SubstitutionTypeKind,
-    ) Allocator.Error![]TypeRef {
+    ) Allocator.Error![]CheckedTypeIdentity {
         const substitutions = self.plan.callTypeSubstitutionSlice(span);
-        const types = try self.allocator.alloc(TypeRef, substitutions.len);
+        const types = try self.allocator.alloc(CheckedTypeIdentity, substitutions.len);
         errdefer self.allocator.free(types);
         for (substitutions, types) |substitution, *ty| {
             ty.* = switch (kind) {
@@ -2017,8 +2243,8 @@ const Builder = struct {
     fn materializeWorkerCallHiddenDescriptorArgs(
         self: *Builder,
         worker_id: WorkerPlanId,
-        arg_types: []const TypeRef,
-        ret_type: TypeRef,
+        arg_types: []const CheckedTypeIdentity,
+        ret_type: CheckedTypeIdentity,
     ) Allocator.Error!Span {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
@@ -2061,8 +2287,8 @@ const Builder = struct {
     fn materializeWorkerCallHiddenDictionaryArgs(
         self: *Builder,
         worker_id: WorkerPlanId,
-        arg_types: []const TypeRef,
-        ret_type: TypeRef,
+        arg_types: []const CheckedTypeIdentity,
+        ret_type: CheckedTypeIdentity,
     ) Allocator.Error!Span {
         const worker = self.plan.workers.items[@intFromEnum(worker_id)];
         const params = self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
@@ -2207,7 +2433,7 @@ const Builder = struct {
                 boxyPlanInvariant("boxy direct call hidden descriptor order disagreed with worker descriptor params");
             }
             next_param.* += 1;
-            const desc_arg_rep_id = self.canonicalDescriptorArgRep(call_rep_id);
+            const desc_arg_rep_id = self.descriptorArgumentIdentityRep(call_rep_id);
             const desc_arg_rep = self.plan.representations.items[@intFromEnum(desc_arg_rep_id)];
             try pending.append(self.allocator, .{
                 .worker_desc = worker_desc,
@@ -2295,7 +2521,7 @@ const Builder = struct {
                 boxyPlanInvariant("boxy direct call hidden dictionary order disagreed with worker dictionary params");
             }
             next_param.* += 1;
-            const dict_arg_rep_id = self.canonicalDictionaryArgRep(call_rep_id);
+            const dict_arg_rep_id = self.dictionaryArgumentIdentityRep(call_rep_id);
             const dict_arg_rep = self.plan.representations.items[@intFromEnum(dict_arg_rep_id)];
             if (dict_arg_rep.dictionaries.len == 0) {
                 try self.ensureStaticDictionaryWorkers(dict_arg_rep_id, worker_rep.dictionaries);
@@ -2377,7 +2603,7 @@ const Builder = struct {
             for (self.plan.dictionarySlice(worker_dictionaries)) |requirement| {
                 const requirement_view = self.moduleForId(requirement.source_type.module);
                 const requirement_names = requirement_view.canonical_names orelse
-                    boxyPlanInvariant("structural dictionary requirement module had no canonical names");
+                    boxyPlanInvariant("structural dictionary requirement module had no identity names");
                 const method_text = requirement_names.methodNameText(requirement.fn_name);
                 if (!std.mem.eql(u8, method_text, "is_eq")) {
                     boxyPlanInvariant("static boxy dictionary on a structural type required a non-equality method");
@@ -2397,12 +2623,12 @@ const Builder = struct {
                 // An equality slot with no resolvable method dispatches to the
                 // runtime's structural comparison, so there is no worker to plan.
                 const requirement_names = requirement_view.canonical_names orelse
-                    boxyPlanInvariant("static dictionary requirement module had no canonical names");
+                    boxyPlanInvariant("static dictionary requirement module had no identity names");
                 if (std.mem.eql(u8, requirement_names.methodNameText(requirement.fn_name), "is_eq")) continue;
                 boxyPlanInvariant("static boxy dictionary could not resolve a checked method target");
             };
             const source = self.workerSourceForMethodTarget(lookup);
-            const source_fn_type = TypeRef{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+            const source_fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
             _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
             _ = try self.ensureWorker(source, source_fn_type, null);
         }
@@ -2436,13 +2662,12 @@ const Builder = struct {
     }
 
     fn lookupMethodTargetInView(
-        self: *Builder,
+        _: *Builder,
         candidate: ModuleView,
         owner_view: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_text: []const u8,
     ) ?MethodTargetLookup {
-        _ = self;
         const owner_names = owner_view.canonical_names orelse return null;
         const candidate_names = candidate.canonical_names orelse return null;
         const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
@@ -2518,8 +2743,8 @@ const Builder = struct {
     };
 
     fn functionChildren(self: *Builder, rep_id: TypeRepId) Allocator.Error!?FunctionChildren {
-        const canonical_rep = try self.canonicalFunctionRep(rep_id);
-        const rep = self.plan.representations.items[@intFromEnum(canonical_rep)];
+        const identity_rep = try self.functionIdentityRep(rep_id);
+        const rep = self.plan.representations.items[@intFromEnum(identity_rep)];
         return switch (rep.kind) {
             .erased_callable => blk: {
                 const children = self.plan.childSlice(rep.children);
@@ -2537,7 +2762,7 @@ const Builder = struct {
                     }
                 }
                 break :blk .{
-                    .rep = canonical_rep,
+                    .rep = identity_rep,
                     .args_start = args_start orelse 0,
                     .arg_count = arg_count,
                     .ret = ret orelse boxyPlanInvariant("function representation had no return child"),
@@ -2547,7 +2772,7 @@ const Builder = struct {
         };
     }
 
-    fn canonicalFunctionRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
+    fn functionIdentityRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
@@ -2701,7 +2926,7 @@ const Builder = struct {
         };
     }
 
-    fn canonicalDescriptorArgRep(self: *Builder, rep_id: TypeRepId) TypeRepId {
+    fn descriptorArgumentIdentityRep(self: *Builder, rep_id: TypeRepId) TypeRepId {
         var current = rep_id;
         var depth: u16 = 0;
         while (true) {
@@ -2712,7 +2937,7 @@ const Builder = struct {
         }
     }
 
-    fn canonicalDictionaryArgRep(self: *Builder, rep_id: TypeRepId) TypeRepId {
+    fn dictionaryArgumentIdentityRep(self: *Builder, rep_id: TypeRepId) TypeRepId {
         // Aliases are pure transparency, but a transparent nominal owns the
         // method namespace its dictionary slots dispatch through, so only
         // aliases are unwrapped here; the nominal identity is preserved.
@@ -2864,7 +3089,7 @@ const Builder = struct {
         };
     }
 
-    fn nestedExprWorkerBody(self: *Builder, expr_ref: ExprRef) WorkerBody {
+    fn nestedExprWorkerBody(self: *Builder, expr_ref: CheckedExprIdentity) WorkerBody {
         const view = self.moduleForId(expr_ref.module);
         const expr = view.checked_bodies.expr(expr_ref.expr);
         const root_expr = switch (expr.data) {
@@ -2946,8 +3171,8 @@ const Builder = struct {
         boxyPlanInvariant("imported procedure binding was not exported by its checked module");
     }
 
-    fn rootProcedureTemplateBody(self: *Builder, template_ref: canonical.ProcedureTemplateRef) WorkerBody {
-        const view = self.moduleForArtifactRef(template_ref.artifact);
+    fn rootProcedureTemplateBody(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) WorkerBody {
+        const view = self.moduleForCheckedModuleId(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
         if (template.target == .hosted) {
             return .{ .hosted_proc = .{
@@ -3032,7 +3257,7 @@ const Builder = struct {
             boxyPlanInvariant("stored function capture plan had no checked ConstStore");
         const fn_value = store.getFn(stored_fn.fn_id);
         const fn_view = switch (fn_value.fn_def) {
-            .nested => |nested| self.moduleForId(.{ .bytes = canonical.procTemplateModuleDigest(nested.owner).bytes }),
+            .nested => |nested| self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes }),
             else => boxyPlanInvariant("capturing stored function did not reference a checked nested function"),
         };
         for (fn_value.captures) |capture| {
@@ -3042,7 +3267,7 @@ const Builder = struct {
     }
 
     fn nestedConstFnBody(self: *Builder, nested: anytype) WorkerBody {
-        const view = self.moduleForId(.{ .bytes = canonical.procTemplateModuleDigest(nested.owner).bytes });
+        const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
         const expr_id = self.checkedLambdaExprForNestedFn(view, nested);
         return .{ .checked_expr = .{
             .view = view,
@@ -3099,7 +3324,7 @@ const Builder = struct {
     ) checked.CheckedExprId {
         for (view.nested_proc_sites.sites) |site| {
             if (site.site != nested.site) continue;
-            if (!canonical.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
+            if (!checked_names.procedureTemplateRefEql(site.owner_template, nested.owner)) continue;
             const expr_id = site.checked_expr orelse
                 boxyPlanInvariant("stored nested function had no checked expression site");
             const expr = view.checked_bodies.expr(expr_id);
@@ -3226,13 +3451,11 @@ const Builder = struct {
             .nominal => |nominal| try self.analyzeExprTypes(view, nominal.backing_expr),
             .closure => |closure| {
                 try self.ensureNestedCallableWorker(view, expr_id);
-                try self.analyzeWorkerRootExprTypes(view, closure.lambda);
                 for (closure.captures) |capture| try self.analyzePatternTypes(view, capture.pattern);
             },
             .lambda => |lambda| {
                 try self.ensureNestedCallableWorker(view, expr_id);
                 for (lambda.args) |arg| try self.analyzePatternTypes(view, arg);
-                try self.analyzeExprTypes(view, lambda.body);
             },
             .binop => |binop| {
                 try self.analyzeExprTypes(view, binop.lhs);
@@ -3424,7 +3647,7 @@ const Builder = struct {
             const fn_children = (try self.functionChildren(callable_rep)) orelse continue;
             const fn_rep = fn_children.rep;
 
-            const arg_types = try self.allocator.alloc(TypeRef, fn_children.arg_count);
+            const arg_types = try self.allocator.alloc(CheckedTypeIdentity, fn_children.arg_count);
             defer self.allocator.free(arg_types);
             const children_span = self.plan.representations.items[@intFromEnum(fn_rep)].children;
             var arg_index: usize = 0;
@@ -3481,11 +3704,14 @@ const Builder = struct {
             boxyPlanInvariant("checked dispatch expression referenced a missing dispatch plan");
         }
         const dispatch = view.static_dispatch_plans.plans[raw];
+        if (directDispatchTarget(view.static_dispatch_plans, dispatch.resolution) == null) {
+            try self.recordActiveWorkerDictionaryUse(try self.analyzeType(view, dispatch.dispatcher_ty));
+        }
         const target = directDispatchTarget(view.static_dispatch_plans, dispatch.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
-        const source_fn_type = TypeRef{ .module = view.key, .ty = dispatch.callable_ty };
+        const source_fn_type = CheckedTypeIdentity{ .module = view.key, .ty = dispatch.callable_ty };
         const worker = try self.ensureWorker(lookup.source, self.workerCheckedTypeForSource(lookup.source, source_fn_type), null);
-        const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
+        const call_ref = CheckedExprIdentity{ .module = view.key, .expr = call_expr };
         if (self.plan.directWorkerForCall(call_ref)) |existing| {
             if (existing != worker) {
                 boxyPlanInvariant("boxy dispatch call plan tried to bind a checked call to two workers");
@@ -3497,6 +3723,15 @@ const Builder = struct {
             .worker = worker,
             .source_fn_type = source_fn_type,
         });
+    }
+
+    fn recordActiveWorkerDictionaryUse(self: *Builder, rep: TypeRepId) Allocator.Error!void {
+        const worker = self.active_worker orelse
+            boxyPlanInvariant("unresolved dictionary dispatch was analyzed outside a worker body");
+        for (self.worker_dictionary_uses.items) |use| {
+            if (use.worker == worker and use.rep == rep) return;
+        }
+        try self.worker_dictionary_uses.append(self.allocator, .{ .worker = worker, .rep = rep });
     }
 
     fn analyzeIteratorForPlan(
@@ -3526,9 +3761,9 @@ const Builder = struct {
         plan: static_dispatch.IteratorForPlan,
         kind: IteratorCallKind,
         call: static_dispatch.IteratorDispatchCall,
-        ret_type: TypeRef,
+        ret_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
-        _ = try self.analyzeType(view, call.dispatcher_ty);
+        const dispatcher_rep = try self.analyzeType(view, call.dispatcher_ty);
         _ = try self.analyzeType(view, call.callable_ty);
         _ = try self.analyzeType(self.moduleForId(ret_type.module), ret_type.ty);
         for (call.argsSlice(view.static_dispatch_plans)) |operand| {
@@ -3538,9 +3773,12 @@ const Builder = struct {
             }
         }
 
+        if (directDispatchTarget(view.static_dispatch_plans, call.resolution) == null) {
+            try self.recordActiveWorkerDictionaryUse(dispatcher_rep);
+        }
         const target = directDispatchTarget(view.static_dispatch_plans, call.resolution) orelse return;
         const lookup = self.dispatchMethodTargetLookup(target);
-        const source_fn_type = TypeRef{ .module = view.key, .ty = call.callable_ty };
+        const source_fn_type = CheckedTypeIdentity{ .module = view.key, .ty = call.callable_ty };
         const worker = try self.ensureWorker(lookup.source, self.workerCheckedTypeForSource(lookup.source, source_fn_type), null);
 
         if (self.plan.iteratorCallPlanFor(view.key, plan_id, kind)) |existing| {
@@ -3613,7 +3851,7 @@ const Builder = struct {
     ) DispatchWorkerLookup {
         return switch (target.kind) {
             .procedure => |procedure| .{
-                .view = self.moduleForArtifactRef(procedure.template.artifact),
+                .view = self.moduleForCheckedModuleId(procedure.template.artifact),
                 .source = .{ .procedure_template = procedure.template },
             },
             .local_proc => boxyPlanInvariant("local procedure dispatch target reached boxy planning before nested procedure worker planning"),
@@ -3733,7 +3971,7 @@ const Builder = struct {
         const source_fn_type = self.directCallInstantiationSourceFnType(view, target, call.source_fn_ty_payload);
         _ = try self.analyzeType(self.moduleForId(source_fn_type.module), source_fn_type.ty);
         const worker = try self.ensureWorker(source, checked_type, null);
-        const call_ref = ExprRef{ .module = view.key, .expr = call_expr };
+        const call_ref = CheckedExprIdentity{ .module = view.key, .expr = call_expr };
         if (self.plan.directWorkerForCall(call_ref)) |existing| {
             if (existing != worker) {
                 boxyPlanInvariant("boxy direct call plan tried to bind a checked call to two workers");
@@ -3770,7 +4008,7 @@ const Builder = struct {
         };
     }
 
-    fn nestedCallableHasNoCaptures(self: *Builder, expr_ref: ExprRef) bool {
+    fn nestedCallableHasNoCaptures(self: *Builder, expr_ref: CheckedExprIdentity) bool {
         const view = self.moduleForId(expr_ref.module);
         const expr = view.checked_bodies.expr(expr_ref.expr);
         return switch (expr.data) {
@@ -3784,8 +4022,8 @@ const Builder = struct {
         self: *Builder,
         view: ModuleView,
         target: checked.ResolvedValueId,
-        fallback: checked.CheckedTypeId,
-    ) TypeRef {
+        call_site_type: checked.CheckedTypeId,
+    ) CheckedTypeIdentity {
         const record = self.resolvedValueRecord(view, target);
         return switch (record.ref) {
             .platform_required_proc => |required| .{
@@ -3793,7 +4031,7 @@ const Builder = struct {
                 .ty = required.procedure.source_fn_ty_payload orelse
                     boxyPlanInvariant("platform-required procedure call missing relation-owned source function type"),
             },
-            else => typeRef(view, fallback),
+            else => typeRef(view, call_site_type),
         };
     }
 
@@ -3906,7 +4144,7 @@ const Builder = struct {
     }
 
     fn topLevelProcedureBindingForExpr(
-        self: *Builder,
+        _: *Builder,
         view: ModuleView,
         expr: checked.CheckedExprId,
     ) ?checked.ArtifactTopLevelProcedureBindingRef {
@@ -3928,7 +4166,6 @@ const Builder = struct {
                 => continue,
             };
             if (view.checked_bodies.body(body_id).root_expr == expr) {
-                _ = self;
                 return .{
                     .artifact = view.key,
                     .binding = @enumFromInt(@as(u32, @intCast(index))),
@@ -3938,7 +4175,7 @@ const Builder = struct {
         return null;
     }
 
-    fn workerCheckedTypeForSource(self: *Builder, source: WorkerSource, fallback: TypeRef) TypeRef {
+    fn workerCheckedTypeForSource(self: *Builder, source: WorkerSource, requested_type: CheckedTypeIdentity) CheckedTypeIdentity {
         return switch (source) {
             .procedure_template => |template| self.checkedTypeForTemplate(template),
             .procedure_binding => |binding| self.checkedTypeForTopLevelBinding(binding),
@@ -3949,13 +4186,13 @@ const Builder = struct {
                     .binding = required.procedure_binding,
                 }),
                 .imported => |imported| self.checkedTypeForImportedBinding(imported),
-                .hosted => fallback,
+                .hosted => requested_type,
             },
             .nested_expr => |expr_ref| self.nestedExprDefinitionType(expr_ref),
         };
     }
 
-    fn nestedExprDefinitionType(self: *Builder, expr_ref: ExprRef) TypeRef {
+    fn nestedExprDefinitionType(self: *Builder, expr_ref: CheckedExprIdentity) CheckedTypeIdentity {
         const view = self.moduleForId(expr_ref.module);
         return typeRef(view, view.checked_bodies.expr(expr_ref.expr).ty);
     }
@@ -3963,7 +4200,7 @@ const Builder = struct {
     fn checkedTypeForTopLevelBinding(
         self: *Builder,
         binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
-    ) TypeRef {
+    ) CheckedTypeIdentity {
         const view = self.moduleForId(binding_ref.artifact);
         const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
         return switch (binding.body) {
@@ -3980,7 +4217,7 @@ const Builder = struct {
     fn checkedTypeForImportedBinding(
         self: *Builder,
         binding_ref: checked.ImportedProcedureBindingRef,
-    ) TypeRef {
+    ) CheckedTypeIdentity {
         const view = self.moduleForId(binding_ref.artifact);
         const binding = self.importedProcedureBinding(view, binding_ref);
         return switch (binding.body) {
@@ -3994,8 +4231,8 @@ const Builder = struct {
         };
     }
 
-    fn checkedTypeForTemplate(self: *Builder, template_ref: canonical.ProcedureTemplateRef) TypeRef {
-        const view = self.moduleForArtifactRef(template_ref.artifact);
+    fn checkedTypeForTemplate(self: *Builder, template_ref: checked_names.ProcedureTemplateRef) CheckedTypeIdentity {
+        const view = self.moduleForCheckedModuleId(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
         return typeRef(view, template.checked_fn_root);
     }
@@ -4079,13 +4316,6 @@ fn workerSourceEql(a: WorkerSource, b: WorkerSource) bool {
     return std.meta.eql(a, b);
 }
 
-fn findChildByRole(children: []const RepChild, role: ChildRole) ?RepChild {
-    for (children) |child| {
-        if (std.meta.eql(child.role, role)) return child;
-    }
-    return null;
-}
-
 fn requiredSingleChild(plan: *const ProgramPlan, rep_id: TypeRepId, role: ChildRole) RepChild {
     var found: ?RepChild = null;
     const rep = plan.representations.items[@intFromEnum(rep_id)];
@@ -4117,9 +4347,9 @@ fn checkedFunctionPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) c
     }
 }
 
-fn hostedProcForTemplate(view: ModuleView, template_ref: canonical.ProcedureTemplateRef) checked.HostedProc {
+fn hostedProcForTemplate(view: ModuleView, template_ref: checked_names.ProcedureTemplateRef) checked.HostedProc {
     for (view.hosted_procs.procs) |hosted| {
-        if (canonical.procedureTemplateRefEql(hosted.template, template_ref)) {
+        if (checked_names.procedureTemplateRefEql(hosted.template, template_ref)) {
             return hosted;
         }
     }
@@ -4128,10 +4358,10 @@ fn hostedProcForTemplate(view: ModuleView, template_ref: canonical.ProcedureTemp
 
 fn hostedRepresentationForTemplate(
     view: ModuleView,
-    template_ref: canonical.ProcedureTemplateRef,
+    template_ref: checked_names.ProcedureTemplateRef,
 ) checked.HostedRepresentationCapability {
     for (view.interface_capabilities.hosted_representations) |hosted| {
-        if (canonical.procedureTemplateRefEql(hosted.template, template_ref)) {
+        if (checked_names.procedureTemplateRefEql(hosted.template, template_ref)) {
             return hosted;
         }
     }
@@ -4162,39 +4392,39 @@ fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     };
 }
 
-fn moduleViewFromArtifact(artifact: *const checked.CheckedModuleArtifact) ModuleView {
+fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtifact) ModuleView {
     return .{
-        .key = artifact.key,
-        .canonical_names = &artifact.canonical_names,
-        .checked_types = artifact.checked_types.view(),
-        .checked_bodies = artifact.checked_bodies.view(),
-        .compile_time_roots = &artifact.compile_time_roots,
-        .entry_wrappers = &artifact.entry_wrappers,
-        .intrinsic_wrappers = &artifact.intrinsic_wrappers,
-        .hosted_procs = &artifact.hosted_procs,
-        .resolved_value_refs = &artifact.resolved_value_refs,
-        .static_dispatch_plans = &artifact.static_dispatch_plans,
-        .method_registry = &artifact.method_registry,
-        .checked_procedure_templates = &artifact.checked_procedure_templates,
-        .nested_proc_sites = &artifact.nested_proc_sites,
-        .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
-        .callable_eval_templates = artifact.callable_eval_templates.view(),
-        .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
-        .interface_capabilities = &artifact.interface_capabilities,
-        .const_store = &artifact.const_store,
-        .const_templates = &artifact.const_templates,
+        .key = checked_module.key,
+        .canonical_names = &checked_module.canonical_names,
+        .checked_types = checked_module.checked_types.view(),
+        .checked_bodies = checked_module.checked_bodies.view(),
+        .compile_time_roots = &checked_module.compile_time_roots,
+        .entry_wrappers = &checked_module.entry_wrappers,
+        .intrinsic_wrappers = &checked_module.intrinsic_wrappers,
+        .hosted_procs = &checked_module.hosted_procs,
+        .resolved_value_refs = &checked_module.resolved_value_refs,
+        .static_dispatch_plans = &checked_module.static_dispatch_plans,
+        .method_registry = &checked_module.method_registry,
+        .checked_procedure_templates = &checked_module.checked_procedure_templates,
+        .nested_proc_sites = &checked_module.nested_proc_sites,
+        .top_level_procedure_bindings = &checked_module.top_level_procedure_bindings,
+        .callable_eval_templates = checked_module.callable_eval_templates.view(),
+        .exported_procedure_bindings = checked_module.exported_procedure_bindings.view(),
+        .interface_capabilities = &checked_module.interface_capabilities,
+        .const_store = &checked_module.const_store,
+        .const_templates = &checked_module.const_templates,
     };
 }
 
-fn typeRef(view: ModuleView, ty: checked.CheckedTypeId) TypeRef {
+fn typeRef(view: ModuleView, ty: checked.CheckedTypeId) CheckedTypeIdentity {
     return .{ .module = view.key, .ty = ty };
 }
 
-fn typeRefEql(a: TypeRef, b: TypeRef) bool {
+fn typeRefEql(a: CheckedTypeIdentity, b: CheckedTypeIdentity) bool {
     return a.ty == b.ty and moduleKeyEqual(a.module, b.module);
 }
 
-fn exprRefEql(a: ExprRef, b: ExprRef) bool {
+fn exprRefEql(a: CheckedExprIdentity, b: CheckedExprIdentity) bool {
     return a.expr == b.expr and moduleKeyEqual(a.module, b.module);
 }
 
@@ -4237,8 +4467,8 @@ fn builtinOwnerForCheckedBuiltin(builtin: checked.CheckedBuiltinNominal) static_
 }
 
 fn methodOwnerInNames(
-    source_names: *const canonical.CanonicalNameStore,
-    target_names: *const canonical.CanonicalNameStore,
+    source_names: *const checked_names.CanonicalNameStore,
+    target_names: *const checked_names.CanonicalNameStore,
     owner: static_dispatch.MethodOwner,
 ) ?static_dispatch.MethodOwner {
     return switch (owner) {
@@ -4287,11 +4517,16 @@ fn boxyPlanInvariant(comptime message: []const u8) noreturn {
     unreachable;
 }
 
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
 test "boxy planner records root wrapper plans from checked root metadata" {
     const gpa = std.testing.allocator;
 
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
     const roots = [_]checked.RootRequest{
@@ -4300,7 +4535,7 @@ test "boxy planner records root wrapper plans from checked root metadata" {
             .module_idx = 0,
             .kind = .provided_export,
             .source = .{ .def = @enumFromInt(4) },
-            .checked_type = @enumFromInt(0),
+            .checked_type = @enumFromInt(fixtureTableIndex(0)),
             .abi = .roc,
             .exposure = .exported,
             .procedure_template = dummyProcedureTemplate(),
@@ -4330,58 +4565,58 @@ test "boxy planner walks callable eval finalized const function bodies" {
         .{ .function = .{
             .kind = .pure,
             .args = .{},
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         } },
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
     };
     const exprs = [_]checked.StoredCheckedExpr{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .ty = @enumFromInt(1),
             .source_region = .zero(),
             .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
         },
         .{
             .id = @enumFromInt(1),
-            .ty = @enumFromInt(0),
+            .ty = @enumFromInt(fixtureTableIndex(0)),
             .source_region = .zero(),
             .data = .empty_record,
         },
     };
     const callable_templates = [_]checked.CallableEvalTemplate{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .module_idx = 0,
-            .pattern = @enumFromInt(0),
-            .root = @enumFromInt(0),
+            .pattern = @enumFromInt(fixtureTableIndex(0)),
+            .root = @enumFromInt(fixtureTableIndex(0)),
             .source_scheme = .{},
             .checked_fn_root = @enumFromInt(1),
         },
     };
     const patterns = [_]checked.StoredCheckedPattern{.{
-        .id = @enumFromInt(0),
+        .id = @enumFromInt(fixtureTableIndex(0)),
         .ty = @enumFromInt(2),
         .source_region = .zero(),
-        .data = .{ .assign = @enumFromInt(0) },
+        .data = .{ .assign = @enumFromInt(fixtureTableIndex(0)) },
     }};
     const pattern_binders = [_]checked.CheckedPatternBinder{.{
-        .id = @enumFromInt(0),
-        .pattern = @enumFromInt(0),
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .pattern = @enumFromInt(fixtureTableIndex(0)),
         .reassignable = false,
     }};
     var const_store = check.ConstStore.ConstStore.init(gpa);
     defer const_store.deinit();
     const capture_value = try const_store.append(.{ .scalar = .{ .u64 = 42 } });
     const captures = [_]check.ConstStore.ConstCapture{.{
-        .id = checked.CaptureId.fromBinder(@enumFromInt(0)),
-        .ty = @enumFromInt(0),
+        .id = checked.CaptureId.fromBinder(@enumFromInt(fixtureTableIndex(0))),
+        .ty = @enumFromInt(fixtureTableIndex(0)),
         .value = capture_value,
     }};
     const fn_id = try const_store.appendFn(.{
         .fn_def = .{ .nested = .{
             .owner = template_ref,
-            .site = @enumFromInt(0),
+            .site = @enumFromInt(fixtureTableIndex(0)),
             .context_fn_key = typeKey(1),
         } },
         .source_fn_ty = @enumFromInt(1),
@@ -4390,12 +4625,12 @@ test "boxy planner walks callable eval finalized const function bodies" {
     });
     var compile_time_roots = [_]checked.CompileTimeRoot{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .module_idx = 0,
             .kind = .callable_binding,
-            .source = .{ .def = @enumFromInt(0) },
-            .pattern = @enumFromInt(0),
-            .expr = @enumFromInt(0),
+            .source = .{ .def = @enumFromInt(fixtureTableIndex(0)) },
+            .pattern = @enumFromInt(fixtureTableIndex(0)),
+            .expr = @enumFromInt(fixtureTableIndex(0)),
             .checked_type = @enumFromInt(1),
             .payload = .{ .fn_value = fn_id },
         },
@@ -4403,12 +4638,12 @@ test "boxy planner walks callable eval finalized const function bodies" {
     var compile_time_root_table = checked.CompileTimeRootTable{ .roots = &compile_time_roots };
     var nested_sites = [_]checked.NestedProcSite{
         .{
-            .site = @enumFromInt(0),
+            .site = @enumFromInt(fixtureTableIndex(0)),
             .owner_template = template_ref,
             .path_start = 0,
             .path_len = 0,
             .kind = .local_function,
-            .checked_expr = @enumFromInt(0),
+            .checked_expr = @enumFromInt(fixtureTableIndex(0)),
             .checked_pattern = null,
         },
     };
@@ -4416,7 +4651,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     var bindings = [_]checked.TopLevelProcedureBinding{
         .{
             .source_scheme = .{},
-            .body = .{ .callable_eval_template = @enumFromInt(0) },
+            .body = .{ .callable_eval_template = @enumFromInt(fixtureTableIndex(0)) },
         },
     };
     var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = &bindings };
@@ -4425,11 +4660,11 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .order = 0,
             .module_idx = 0,
             .kind = .runtime_entrypoint,
-            .source = .{ .def = @enumFromInt(0) },
+            .source = .{ .def = @enumFromInt(fixtureTableIndex(0)) },
             .checked_type = @enumFromInt(1),
             .abi = .roc,
             .exposure = .private,
-            .procedure_binding = @enumFromInt(0),
+            .procedure_binding = @enumFromInt(fixtureTableIndex(0)),
         },
     };
     const root_view = ModuleView{
@@ -4449,7 +4684,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
 
     var body_builder = Builder.init(gpa, .{ .root_view = root_view });
     defer body_builder.deinit();
-    const body = body_builder.callableEvalTemplateBody(root_view, @enumFromInt(0));
+    const body = body_builder.callableEvalTemplateBody(root_view, @enumFromInt(fixtureTableIndex(0)));
     const stored_fn = switch (body) {
         .checked_expr => |checked_body| checked_body.stored_fn orelse return error.TestUnexpectedResult,
         .intrinsic_wrapper, .hosted_proc => return error.TestUnexpectedResult,
@@ -4466,48 +4701,48 @@ test "boxy planner walks callable eval finalized const function bodies" {
     defer plan.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
-    try std.testing.expectEqual(WorkerSource{ .procedure_binding = .{ .artifact = root_key, .binding = @enumFromInt(0) } }, plan.workers.items[0].source);
+    try std.testing.expectEqual(WorkerSource{ .procedure_binding = .{ .artifact = root_key, .binding = @enumFromInt(fixtureTableIndex(0)) } }, plan.workers.items[0].source);
     try expectTypeRef(root_key, @enumFromInt(1), plan.workers.items[0].checked_type);
-    try std.testing.expect(plan.repForSourceType(.{ .module = root_key, .ty = @enumFromInt(0) }) != null);
+    try std.testing.expect(plan.repForSourceType(.{ .module = root_key, .ty = @enumFromInt(fixtureTableIndex(0)) }) != null);
 }
 
 test "boxy planner does not add hidden descriptor params to imported hosted workers" {
     const gpa = std.testing.allocator;
 
-    var root_artifact = minimalCheckedArtifact(gpa);
-    defer root_artifact.canonical_names.deinit();
-    defer root_artifact.checked_types.deinit(gpa);
-    defer root_artifact.checked_bodies.deinit(gpa);
+    var root_checked_module = minimalCheckedArtifact(gpa);
+    defer root_checked_module.canonical_names.deinit();
+    defer root_checked_module.checked_types.deinit(gpa);
+    defer root_checked_module.checked_bodies.deinit(gpa);
 
-    var import_artifact = minimalCheckedArtifact(gpa);
-    import_artifact.key = moduleKey(2);
-    defer import_artifact.canonical_names.deinit();
-    defer import_artifact.checked_types.deinit(gpa);
+    var import_checked_module = minimalCheckedArtifact(gpa);
+    import_checked_module.key = moduleKey(2);
+    defer import_checked_module.canonical_names.deinit();
+    defer import_checked_module.checked_types.deinit(gpa);
 
-    try import_artifact.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(0)));
-    try import_artifact.checked_types.payloads.append(gpa, .{ .flex = .{ .constraints = .{} } });
-    try import_artifact.checked_types.payloads.append(gpa, .{
+    try import_checked_module.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0))));
+    try import_checked_module.checked_types.payloads.append(gpa, .{ .flex = .{ .constraints = .{} } });
+    try import_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
             .args = .{ .start = 0, .len = 1 },
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         },
     });
 
-    const import_template = procedureTemplateRef(import_artifact.key, 0);
+    const import_template = procedureTemplateRef(import_checked_module.key, 0);
     var import_templates = [_]checked.CheckedProcedureTemplate{
-        checkedTemplate(import_template, @enumFromInt(1), @enumFromInt(0), .hosted),
+        checkedTemplate(import_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .hosted),
     };
-    import_artifact.checked_procedure_templates = .{ .templates = &import_templates };
+    import_checked_module.checked_procedure_templates = .{ .templates = &import_templates };
 
     const hosted_order_key = "Import.dynamic_hosted";
     var hosted_procs = [_]checked.HostedProc{
         .{
             .module_idx = 0,
-            .def_idx = @enumFromInt(0),
-            .expr_idx = @enumFromInt(0),
-            .external_symbol_name = @enumFromInt(0),
+            .def_idx = @enumFromInt(fixtureTableIndex(0)),
+            .expr_idx = @enumFromInt(fixtureTableIndex(0)),
+            .external_symbol_name = @enumFromInt(fixtureTableIndex(0)),
             .deterministic_index = 0,
             .order_key_start = 0,
             .order_key_len = hosted_order_key.len,
@@ -4515,25 +4750,25 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
             .template = import_template,
         },
     };
-    import_artifact.hosted_procs = .{
+    import_checked_module.hosted_procs = .{
         .procs = &hosted_procs,
         .order_key_bytes = hosted_order_key,
     };
     var hosted_representations = [_]checked.HostedRepresentationCapability{
         .{
-            .id = @enumFromInt(0),
-            .external_symbol_name = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
+            .external_symbol_name = @enumFromInt(fixtureTableIndex(0)),
             .proc = procedureValueRef(import_template),
             .template = import_template,
             .host_checked_fn_root = @enumFromInt(1),
         },
     };
-    import_artifact.interface_capabilities.hosted_representations = &hosted_representations;
+    import_checked_module.interface_capabilities.hosted_representations = &hosted_representations;
 
     const imported_binding = checked.ImportedProcedureBindingRef{
-        .artifact = import_artifact.key,
-        .def = @enumFromInt(0),
-        .pattern = @enumFromInt(0),
+        .artifact = import_checked_module.key,
+        .def = @enumFromInt(fixtureTableIndex(0)),
+        .pattern = @enumFromInt(fixtureTableIndex(0)),
     };
     var exported_bindings = [_]checked.ImportedProcedureBindingView{
         .{
@@ -4546,38 +4781,38 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
             .template_closure = .{},
         },
     };
-    import_artifact.exported_procedure_bindings = .{ .bindings = &exported_bindings };
+    import_checked_module.exported_procedure_bindings = .{ .bindings = &exported_bindings };
 
-    try root_artifact.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(0)));
-    try root_artifact.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(0)));
-    try root_artifact.checked_types.payloads.append(gpa, .{ .flex = .{ .constraints = .{} } });
-    try root_artifact.checked_types.payloads.append(gpa, .{
+    try root_checked_module.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0))));
+    try root_checked_module.checked_types.type_id_pool.append(gpa, @as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0))));
+    try root_checked_module.checked_types.payloads.append(gpa, .{ .flex = .{ .constraints = .{} } });
+    try root_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
             .args = .{ .start = 0, .len = 1 },
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         },
     });
-    try root_artifact.checked_types.payloads.append(gpa, .{
+    try root_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
             .args = .{ .start = 1, .len = 1 },
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         },
     });
 
-    try root_artifact.checked_bodies.pattern_id_pool.append(gpa, @as(checked.CheckedPatternId, @enumFromInt(0)));
-    try root_artifact.checked_bodies.expr_id_pool.append(gpa, @as(checked.CheckedExprId, @enumFromInt(3)));
-    try root_artifact.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @enumFromInt(0),
-        .ty = @enumFromInt(0),
+    try root_checked_module.checked_bodies.pattern_id_pool.append(gpa, @as(checked.CheckedPatternId, @enumFromInt(fixtureTableIndex(0))));
+    try root_checked_module.checked_bodies.expr_id_pool.append(gpa, @as(checked.CheckedExprId, @enumFromInt(3)));
+    try root_checked_module.checked_bodies.stored_patterns.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = .zero(),
-        .data = .{ .assign = @enumFromInt(0) },
+        .data = .{ .assign = @enumFromInt(fixtureTableIndex(0)) },
     });
-    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @enumFromInt(0),
+    try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
         .ty = @enumFromInt(1),
         .source_region = .zero(),
         .data = .{ .lambda = .{
@@ -4585,41 +4820,41 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
             .body = @enumFromInt(1),
         } },
     });
-    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+    try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),
-        .ty = @enumFromInt(0),
+        .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = .zero(),
         .data = .{ .call = .{
             .func = @enumFromInt(2),
             .args = .{ .start = 0, .len = 1 },
             .called_via = .apply,
             .source_fn_ty_payload = @enumFromInt(2),
-            .direct_target = @enumFromInt(0),
+            .direct_target = @enumFromInt(fixtureTableIndex(0)),
         } },
     });
-    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+    try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(2),
         .ty = @enumFromInt(2),
         .source_region = .zero(),
-        .data = .{ .lookup_external = @enumFromInt(0) },
+        .data = .{ .lookup_external = @enumFromInt(fixtureTableIndex(0)) },
     });
-    try root_artifact.checked_bodies.stored_exprs.append(gpa, .{
+    try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
-        .ty = @enumFromInt(0),
+        .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = .zero(),
-        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(0), .resolved = null } },
+        .data = .{ .lookup_local = .{ .pattern = @enumFromInt(fixtureTableIndex(0)), .resolved = null } },
     });
 
-    const root_template = procedureTemplateRef(root_artifact.key, 0);
-    try root_artifact.checked_bodies.bodies.append(gpa, .{
-        .id = @enumFromInt(0),
-        .root_expr = @enumFromInt(0),
+    const root_template = procedureTemplateRef(root_checked_module.key, 0);
+    try root_checked_module.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .root_expr = @enumFromInt(fixtureTableIndex(0)),
         .owner_template = root_template,
     });
     var root_templates = [_]checked.CheckedProcedureTemplate{
-        checkedTemplate(root_template, @enumFromInt(1), @enumFromInt(0), .roc),
+        checkedTemplate(root_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    root_artifact.checked_procedure_templates = .{ .templates = &root_templates };
+    root_checked_module.checked_procedure_templates = .{ .templates = &root_templates };
 
     const imported_use = checked.ProcedureUseTemplate{
         .binding = .{ .imported = imported_binding },
@@ -4637,45 +4872,45 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     var refs_by_expr = [_]?checked.ResolvedValueRefId{
         null,
         null,
-        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+        @as(checked.ResolvedValueRefId, @enumFromInt(fixtureTableIndex(0))),
         null,
     };
-    root_artifact.resolved_value_refs = .{
+    root_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
         .by_checked_expr = &refs_by_expr,
     };
 
     const imports = [_]checked.ImportedModuleView{
         .{
-            .key = import_artifact.key,
+            .key = import_checked_module.key,
             .module_env = undefined,
-            .canonical_names = &import_artifact.canonical_names,
+            .canonical_names = &import_checked_module.canonical_names,
             .module_identity = undefined,
             .exports = .{},
-            .checked_types = import_artifact.checked_types.view(),
-            .checked_bodies = import_artifact.checked_bodies.view(),
+            .checked_types = import_checked_module.checked_types.view(),
+            .checked_bodies = import_checked_module.checked_bodies.view(),
             .exhaustiveness_sites = undefined,
             .checked_const_bodies = undefined,
-            .checked_procedure_templates = &import_artifact.checked_procedure_templates,
+            .checked_procedure_templates = &import_checked_module.checked_procedure_templates,
             .compile_time_roots = undefined,
             .entry_wrappers = undefined,
             .intrinsic_wrappers = undefined,
-            .resolved_value_refs = &import_artifact.resolved_value_refs,
+            .resolved_value_refs = &import_checked_module.resolved_value_refs,
             .nested_proc_sites = undefined,
             .static_dispatch_plans = undefined,
-            .hosted_procs = &import_artifact.hosted_procs,
+            .hosted_procs = &import_checked_module.hosted_procs,
             .exported_procedure_templates = .{},
-            .exported_procedure_bindings = import_artifact.exported_procedure_bindings.view(),
+            .exported_procedure_bindings = import_checked_module.exported_procedure_bindings.view(),
             .exported_const_templates = .{},
             .provided_exports = undefined,
-            .top_level_procedure_bindings = &import_artifact.top_level_procedure_bindings,
+            .top_level_procedure_bindings = &import_checked_module.top_level_procedure_bindings,
             .platform_required_declarations = undefined,
             .platform_required_bindings = undefined,
             .callable_eval_templates = .{},
             .hoisted_constants = undefined,
             .const_templates = undefined,
             .method_registry = undefined,
-            .interface_capabilities = &import_artifact.interface_capabilities,
+            .interface_capabilities = &import_checked_module.interface_capabilities,
             .const_store = undefined,
         },
     };
@@ -4684,21 +4919,21 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
         .order = 0,
         .module_idx = 0,
         .kind = .runtime_entrypoint,
-        .source = .{ .def = @enumFromInt(0) },
+        .source = .{ .def = @enumFromInt(fixtureTableIndex(0)) },
         .checked_type = @enumFromInt(1),
         .abi = .roc,
         .exposure = .private,
         .procedure_template = root_template,
     };
     var plan = try analyzeProgram(gpa, .{
-        .root_module = .{ .module = &root_artifact, .roots = undefined },
+        .root_module = .{ .module = &root_checked_module, .roots = undefined },
         .imports = &imports,
         .roots = &.{root},
     }, .{});
     defer plan.deinit();
 
     try std.testing.expect(plan.descriptors.items.len != 0);
-    const call_ref = ExprRef{ .module = root_artifact.key, .expr = @enumFromInt(1) };
+    const call_ref = CheckedExprIdentity{ .module = root_checked_module.key, .expr = @enumFromInt(1) };
     const direct = plan.directCallPlanForCall(call_ref) orelse return error.TestUnexpectedResult;
     const callee_worker = plan.workers.items[@intFromEnum(direct.worker)];
     try std.testing.expectEqual(WorkerSource{ .procedure_use = imported_use }, callee_worker.source);
@@ -4706,63 +4941,63 @@ test "boxy planner does not add hidden descriptor params to imported hosted work
     try std.testing.expectEqual(@as(usize, 0), plan.directCallHiddenDescriptorArgSlice(direct.hidden_desc_args).len);
     const substitutions = plan.callTypeSubstitutionSlice(direct.arg_substitutions);
     try std.testing.expectEqual(@as(usize, 1), substitutions.len);
-    try expectTypeRef(root_artifact.key, @enumFromInt(0), substitutions[0].operand_type);
+    try expectTypeRef(root_checked_module.key, @enumFromInt(fixtureTableIndex(0)), substitutions[0].operand_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].operand_type).?, substitutions[0].operand_rep);
-    try expectTypeRef(root_artifact.key, @enumFromInt(0), substitutions[0].call_type);
+    try expectTypeRef(root_checked_module.key, @enumFromInt(fixtureTableIndex(0)), substitutions[0].call_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].call_type).?, substitutions[0].call_rep);
-    try expectTypeRef(import_artifact.key, @enumFromInt(0), plan.representations.items[@intFromEnum(substitutions[0].worker_rep)].source_type);
+    try expectTypeRef(import_checked_module.key, @enumFromInt(fixtureTableIndex(0)), plan.representations.items[@intFromEnum(substitutions[0].worker_rep)].source_type);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(root_artifact.key, @enumFromInt(0), ret_substitution.call_type);
-    try expectTypeRef(import_artifact.key, @enumFromInt(0), plan.representations.items[@intFromEnum(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(root_checked_module.key, @enumFromInt(fixtureTableIndex(0)), ret_substitution.call_type);
+    try expectTypeRef(import_checked_module.key, @enumFromInt(fixtureTableIndex(0)), plan.representations.items[@intFromEnum(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records relation-owned source type for platform-required direct calls" {
     const gpa = std.testing.allocator;
 
-    var platform_artifact = minimalCheckedArtifact(gpa);
-    defer platform_artifact.canonical_names.deinit();
-    defer platform_artifact.checked_types.deinit(gpa);
-    defer platform_artifact.checked_bodies.deinit(gpa);
+    var platform_checked_module = minimalCheckedArtifact(gpa);
+    defer platform_checked_module.canonical_names.deinit();
+    defer platform_checked_module.checked_types.deinit(gpa);
+    defer platform_checked_module.checked_bodies.deinit(gpa);
 
-    var app_artifact = minimalCheckedArtifact(gpa);
-    app_artifact.key = moduleKey(3);
-    defer app_artifact.canonical_names.deinit();
-    defer app_artifact.checked_types.deinit(gpa);
-    defer app_artifact.checked_bodies.deinit(gpa);
+    var app_checked_module = minimalCheckedArtifact(gpa);
+    app_checked_module.key = moduleKey(3);
+    defer app_checked_module.canonical_names.deinit();
+    defer app_checked_module.checked_types.deinit(gpa);
+    defer app_checked_module.checked_bodies.deinit(gpa);
 
-    try app_artifact.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    try app_checked_module.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}),
     });
-    try app_artifact.checked_types.payloads.append(gpa, .{
+    try app_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
             .args = .{},
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         },
     });
-    const app_template = procedureTemplateRef(app_artifact.key, 0);
-    try app_artifact.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @enumFromInt(0),
+    const app_template = procedureTemplateRef(app_checked_module.key, 0);
+    try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
         .ty = @enumFromInt(1),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
     });
-    try app_artifact.checked_bodies.stored_exprs.append(gpa, .{
+    try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),
-        .ty = @enumFromInt(0),
+        .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = .zero(),
         .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
     });
-    try app_artifact.checked_bodies.bodies.append(gpa, .{
-        .id = @enumFromInt(0),
-        .root_expr = @enumFromInt(0),
+    try app_checked_module.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .root_expr = @enumFromInt(fixtureTableIndex(0)),
         .owner_template = app_template,
     });
     var app_templates = [_]checked.CheckedProcedureTemplate{
-        checkedTemplate(app_template, @enumFromInt(1), @enumFromInt(0), .roc),
+        checkedTemplate(app_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    app_artifact.checked_procedure_templates = .{ .templates = &app_templates };
+    app_checked_module.checked_procedure_templates = .{ .templates = &app_templates };
     var app_bindings = [_]checked.TopLevelProcedureBinding{
         .{
             .source_scheme = typeSchemeKey(4),
@@ -4772,70 +5007,70 @@ test "boxy planner records relation-owned source type for platform-required dire
             } },
         },
     };
-    app_artifact.top_level_procedure_bindings = .{ .bindings = &app_bindings };
+    app_checked_module.top_level_procedure_bindings = .{ .bindings = &app_bindings };
 
-    try platform_artifact.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @enumFromInt(0), .{}),
+    try platform_checked_module.checked_types.payloads.append(gpa, .{
+        .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}),
     });
-    try platform_artifact.checked_types.payloads.append(gpa, .{
+    try platform_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
             .args = .{},
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         },
     });
-    try platform_artifact.checked_types.payloads.append(gpa, .{
+    try platform_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
             .args = .{},
-            .ret = @enumFromInt(0),
+            .ret = @enumFromInt(fixtureTableIndex(0)),
             .needs_instantiation = false,
         },
     });
 
-    const platform_template = procedureTemplateRef(platform_artifact.key, 0);
-    try platform_artifact.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @enumFromInt(0),
+    const platform_template = procedureTemplateRef(platform_checked_module.key, 0);
+    try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
         .ty = @enumFromInt(1),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @enumFromInt(1) } },
     });
-    try platform_artifact.checked_bodies.stored_exprs.append(gpa, .{
+    try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(1),
-        .ty = @enumFromInt(0),
+        .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = .zero(),
         .data = .{ .call = .{
             .func = @enumFromInt(2),
             .args = .{},
             .called_via = .apply,
             .source_fn_ty_payload = @enumFromInt(1),
-            .direct_target = @enumFromInt(0),
+            .direct_target = @enumFromInt(fixtureTableIndex(0)),
         } },
     });
-    try platform_artifact.checked_bodies.stored_exprs.append(gpa, .{
+    try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(2),
         .ty = @enumFromInt(1),
         .source_region = .zero(),
-        .data = .{ .lookup_required = @as(?checked.ResolvedValueRefId, @enumFromInt(0)) },
+        .data = .{ .lookup_required = @as(?checked.ResolvedValueRefId, @enumFromInt(fixtureTableIndex(0))) },
     });
-    try platform_artifact.checked_bodies.bodies.append(gpa, .{
-        .id = @enumFromInt(0),
-        .root_expr = @enumFromInt(0),
+    try platform_checked_module.checked_bodies.bodies.append(gpa, .{
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .root_expr = @enumFromInt(fixtureTableIndex(0)),
         .owner_template = platform_template,
     });
     var platform_templates = [_]checked.CheckedProcedureTemplate{
-        checkedTemplate(platform_template, @enumFromInt(1), @enumFromInt(0), .roc),
+        checkedTemplate(platform_template, @enumFromInt(1), @enumFromInt(fixtureTableIndex(0)), .roc),
     };
-    platform_artifact.checked_procedure_templates = .{ .templates = &platform_templates };
+    platform_checked_module.checked_procedure_templates = .{ .templates = &platform_templates };
 
     const required = checked.RequiredAppProcedureRef{
-        .artifact = app_artifact.key,
+        .artifact = app_checked_module.key,
         .app_value = .{
-            .artifact = app_artifact.key,
-            .pattern = @enumFromInt(0),
+            .artifact = app_checked_module.key,
+            .pattern = @enumFromInt(fixtureTableIndex(0)),
         },
-        .procedure_binding = @enumFromInt(0),
+        .procedure_binding = @enumFromInt(fixtureTableIndex(0)),
     };
     const required_use = checked.ProcedureUseTemplate{
         .binding = .{ .platform_required = required },
@@ -4846,7 +5081,7 @@ test "boxy planner records relation-owned source type for platform-required dire
         .{
             .expr = @enumFromInt(2),
             .ref = .{ .platform_required_proc = .{
-                .binding = @enumFromInt(0),
+                .binding = @enumFromInt(fixtureTableIndex(0)),
                 .procedure = required_use,
             } },
             .checked_ty = @enumFromInt(1),
@@ -4856,44 +5091,44 @@ test "boxy planner records relation-owned source type for platform-required dire
     var refs_by_expr = [_]?checked.ResolvedValueRefId{
         null,
         null,
-        @as(checked.ResolvedValueRefId, @enumFromInt(0)),
+        @as(checked.ResolvedValueRefId, @enumFromInt(fixtureTableIndex(0))),
     };
-    platform_artifact.resolved_value_refs = .{
+    platform_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
         .by_checked_expr = &refs_by_expr,
     };
 
     const imports = [_]checked.ImportedModuleView{
         .{
-            .key = app_artifact.key,
+            .key = app_checked_module.key,
             .module_env = undefined,
-            .canonical_names = &app_artifact.canonical_names,
+            .canonical_names = &app_checked_module.canonical_names,
             .module_identity = undefined,
             .exports = .{},
-            .checked_types = app_artifact.checked_types.view(),
-            .checked_bodies = app_artifact.checked_bodies.view(),
+            .checked_types = app_checked_module.checked_types.view(),
+            .checked_bodies = app_checked_module.checked_bodies.view(),
             .exhaustiveness_sites = undefined,
             .checked_const_bodies = undefined,
-            .checked_procedure_templates = &app_artifact.checked_procedure_templates,
+            .checked_procedure_templates = &app_checked_module.checked_procedure_templates,
             .compile_time_roots = undefined,
             .entry_wrappers = undefined,
             .intrinsic_wrappers = undefined,
-            .resolved_value_refs = &app_artifact.resolved_value_refs,
+            .resolved_value_refs = &app_checked_module.resolved_value_refs,
             .nested_proc_sites = undefined,
             .static_dispatch_plans = undefined,
-            .hosted_procs = &app_artifact.hosted_procs,
+            .hosted_procs = &app_checked_module.hosted_procs,
             .exported_procedure_templates = .{},
-            .exported_procedure_bindings = app_artifact.exported_procedure_bindings.view(),
+            .exported_procedure_bindings = app_checked_module.exported_procedure_bindings.view(),
             .exported_const_templates = .{},
             .provided_exports = undefined,
-            .top_level_procedure_bindings = &app_artifact.top_level_procedure_bindings,
+            .top_level_procedure_bindings = &app_checked_module.top_level_procedure_bindings,
             .platform_required_declarations = undefined,
             .platform_required_bindings = undefined,
             .callable_eval_templates = .{},
             .hoisted_constants = undefined,
             .const_templates = undefined,
             .method_registry = undefined,
-            .interface_capabilities = &app_artifact.interface_capabilities,
+            .interface_capabilities = &app_checked_module.interface_capabilities,
             .const_store = undefined,
         },
     };
@@ -4902,37 +5137,37 @@ test "boxy planner records relation-owned source type for platform-required dire
         .order = 0,
         .module_idx = 0,
         .kind = .runtime_entrypoint,
-        .source = .{ .def = @enumFromInt(0) },
+        .source = .{ .def = @enumFromInt(fixtureTableIndex(0)) },
         .checked_type = @enumFromInt(1),
         .abi = .roc,
         .exposure = .private,
         .procedure_template = platform_template,
     };
     var plan = try analyzeProgram(gpa, .{
-        .root_module = .{ .module = &platform_artifact, .roots = undefined },
+        .root_module = .{ .module = &platform_checked_module, .roots = undefined },
         .imports = &imports,
         .roots = &.{root},
     }, .{});
     defer plan.deinit();
 
     const direct = plan.directCallPlanForCall(.{
-        .module = platform_artifact.key,
+        .module = platform_checked_module.key,
         .expr = @enumFromInt(1),
     }) orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_artifact.key, @enumFromInt(2), direct.source_fn_type);
-    try std.testing.expect(plan.repForSourceType(.{ .module = platform_artifact.key, .ty = @enumFromInt(2) }) != null);
+    try expectTypeRef(platform_checked_module.key, @enumFromInt(2), direct.source_fn_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = platform_checked_module.key, .ty = @enumFromInt(2) }) != null);
     try std.testing.expectEqual(@as(usize, 0), plan.callTypeSubstitutionSlice(direct.arg_substitutions).len);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_artifact.key, @enumFromInt(0), ret_substitution.call_type);
+    try expectTypeRef(platform_checked_module.key, @enumFromInt(fixtureTableIndex(0)), ret_substitution.call_type);
     try std.testing.expectEqual(plan.repForSourceType(ret_substitution.call_type).?, ret_substitution.call_rep);
-    try expectTypeRef(app_artifact.key, @enumFromInt(0), plan.representations.items[@intFromEnum(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(app_checked_module.key, @enumFromInt(fixtureTableIndex(0)), plan.representations.items[@intFromEnum(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records explicit source type representation bindings" {
     const gpa = std.testing.allocator;
 
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u8, @enumFromInt(1), .{}) },
         .{ .function = .{
             .kind = .pure,
@@ -4941,7 +5176,7 @@ test "boxy planner records explicit source type representation bindings" {
             .needs_instantiation = false,
         } },
     };
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
         .type_id_pool = &type_pool,
@@ -4952,7 +5187,7 @@ test "boxy planner records explicit source type representation bindings" {
 
     try std.testing.expectEqual(@as(usize, 3), plan.type_reps.items.len);
     try std.testing.expectEqual(plan.root_reps.items[0], plan.repForSourceType(rootTypeRef(@enumFromInt(2))).?);
-    try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(0))) != null);
+    try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(fixtureTableIndex(0)))) != null);
     try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(1))) != null);
     try std.testing.expect(plan.repForSourceType(rootTypeRef(@enumFromInt(99))) == null);
 }
@@ -4973,7 +5208,7 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
         .{
             .fn_name = @enumFromInt(9),
-            .fn_ty = @enumFromInt(0),
+            .fn_ty = @enumFromInt(fixtureTableIndex(0)),
             .origin = .method_call,
         },
     };
@@ -4999,11 +5234,11 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
     const gpa = std.testing.allocator;
 
     const fields = [_]checked.CheckedRecordField{
-        .{ .name = @enumFromInt(1), .ty = @enumFromInt(0) },
+        .{ .name = @enumFromInt(1), .ty = @enumFromInt(fixtureTableIndex(0)) },
         .{ .name = @enumFromInt(2), .ty = @enumFromInt(1) },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .rigid = .{} },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @enumFromInt(2) } },
@@ -5029,11 +5264,11 @@ test "boxy planner represents open record rows dynamically" {
     const gpa = std.testing.allocator;
 
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .record = .{ .fields = .{}, .ext = @enumFromInt(0) } },
+        .{ .record = .{ .fields = .{}, .ext = @enumFromInt(fixtureTableIndex(0)) } },
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
 
-    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(0))}, .{});
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))}, .{});
     defer plan.deinit();
 
     const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
@@ -5046,11 +5281,11 @@ test "boxy planner represents open tag-union rows dynamically" {
     const gpa = std.testing.allocator;
 
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .tag_union = .{ .tags = .{}, .ext = @enumFromInt(0) } },
+        .{ .tag_union = .{ .tags = .{}, .ext = @enumFromInt(fixtureTableIndex(0)) } },
     };
     const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
 
-    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(0))}, .{});
+    var plan = try analyzeCheckedTypes(gpa, view, &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))}, .{});
     defer plan.deinit();
 
     const rep = plan.representations.items[@intFromEnum(plan.root_reps.items[0])];
@@ -5063,12 +5298,12 @@ test "boxy planner preserves known variants on open tag-union rows" {
     const gpa = std.testing.allocator;
 
     const tag_exit: TagLabelId = @enumFromInt(1);
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.i64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.i64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
     };
@@ -5098,7 +5333,7 @@ test "boxy planner preserves known variants on open tag-union rows" {
 test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic payload representation" {
     const gpa = std.testing.allocator;
 
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
         .{ .nominal = builtinNominal(.box, @enumFromInt(1), .{ .start = 0, .len = 1 }) },
@@ -5126,13 +5361,13 @@ test "boxy planner preserves zero-payload tag variants explicitly" {
 
     const tag_a: TagLabelId = @enumFromInt(1);
     const tag_b: TagLabelId = @enumFromInt(2);
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_a, .args_start = 0, .args_len = 0 },
         .{ .name = tag_b, .args_start = 0, .args_len = 1 },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(1) } },
     };
@@ -5160,16 +5395,16 @@ test "boxy planner preserves zero-payload tag variants explicitly" {
     try std.testing.expectEqual(ChildRole{ .tag_payload = .{ .tag = tag_b, .index = 0 } }, payload_children[0].role);
 }
 
-test "boxy planner stores tag variants in canonical layout order" {
+test "boxy planner stores tag variants in identity layout order" {
     const gpa = std.testing.allocator;
 
-    var canonical_names = canonical.CanonicalNameStore.init(gpa);
+    var canonical_names = checked_names.CanonicalNameStore.init(gpa);
     defer canonical_names.deinit();
 
     const ok_tag = try canonical_names.internTagLabel("Ok");
     const err_tag = try canonical_names.internTagLabel("Err");
     const type_pool = [_]checked.CheckedTypeId{
-        @enumFromInt(0),
+        @enumFromInt(fixtureTableIndex(0)),
         @enumFromInt(1),
     };
     const tags = [_]checked.CheckedTag{
@@ -5177,7 +5412,7 @@ test "boxy planner stores tag variants in canonical layout order" {
         .{ .name = err_tag, .args_start = 1, .args_len = 1 },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u64, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u8, @enumFromInt(1), .{}) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @enumFromInt(2) } },
@@ -5211,7 +5446,7 @@ test "boxy planner stores tag variants in canonical layout order" {
     const ok_payloads = plan.childSlice(variants[1].payloads);
     try std.testing.expectEqual(@as(usize, 1), ok_payloads.len);
     try std.testing.expectEqual(ChildRole{ .tag_payload = .{ .tag = ok_tag, .index = 0 } }, ok_payloads[0].role);
-    try expectTypeRef(.{}, @enumFromInt(0), ok_payloads[0].source_type);
+    try expectTypeRef(.{}, @enumFromInt(fixtureTableIndex(0)), ok_payloads[0].source_type);
 }
 
 test "boxy planner records nominal declared field order from checked payloads" {
@@ -5219,9 +5454,9 @@ test "boxy planner records nominal declared field order from checked payloads" {
 
     const field_a: RecordFieldLabelId = @enumFromInt(1);
     const field_b: RecordFieldLabelId = @enumFromInt(2);
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const record_fields = [_]checked.CheckedRecordField{
-        .{ .name = field_a, .ty = @enumFromInt(0) },
+        .{ .name = field_a, .ty = @enumFromInt(fixtureTableIndex(0)) },
         .{ .name = field_b, .ty = @enumFromInt(1) },
     };
     const declared_fields = [_]checked.CheckedDeclaredField{
@@ -5230,7 +5465,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
         .{ .named = field_b },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
@@ -5240,7 +5475,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
             .owner_module = .{},
             .is_opaque = false,
             .backing = @enumFromInt(3),
-            .representation = .{ .local_declaration = @enumFromInt(0) },
+            .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
         } },
@@ -5273,14 +5508,14 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     const root_key = moduleKey(1);
     const field_a: RecordFieldLabelId = @enumFromInt(1);
     const field_b: RecordFieldLabelId = @enumFromInt(2);
-    const nominal_key = canonical.NominalTypeKey{
+    const nominal_key = checked_names.NominalTypeKey{
         .module = @enumFromInt(4),
         .type_name = @enumFromInt(3),
         .source_decl = 9,
     };
-    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const type_pool = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const record_fields = [_]checked.CheckedRecordField{
-        .{ .name = field_a, .ty = @enumFromInt(0) },
+        .{ .name = field_a, .ty = @enumFromInt(fixtureTableIndex(0)) },
         .{ .name = field_b, .ty = @enumFromInt(1) },
     };
     const declared_fields = [_]checked.CheckedDeclaredField{
@@ -5290,7 +5525,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     };
     const declarations = [_]checked.CheckedNominalDeclaration{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .nominal = nominal_key,
             .source_statement = 9,
             .declaration_root = @enumFromInt(4),
@@ -5302,7 +5537,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
         },
     };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
@@ -5313,13 +5548,13 @@ test "boxy planner resolves local nominal declared order from box payload capabi
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
-            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(0) } },
+            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(fixtureTableIndex(0)) } },
         } },
     };
-    const capability_padding = [_]checked.CheckedTypeId{@enumFromInt(0)};
+    const capability_padding = [_]checked.CheckedTypeId{@enumFromInt(fixtureTableIndex(0))};
     const capabilities = [_]checked.BoxPayloadCapabilityEntry{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .nominal = nominal_key,
             .source_ty_payload = @enumFromInt(4),
             .source_ty = typeKey(14),
@@ -5357,23 +5592,23 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     try std.testing.expectEqual(@as(usize, 2), children.len);
     try std.testing.expectEqual(ChildRole.nominal_backing, children[0].role);
     try std.testing.expectEqual(ChildRole{ .nominal_padding_field = 0 }, children[1].role);
-    try expectTypeRef(moduleKey(1), @enumFromInt(0), children[1].source_type);
+    try expectTypeRef(moduleKey(1), @enumFromInt(fixtureTableIndex(0)), children[1].source_type);
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
     try std.testing.expectEqual(@as(u16, 0), fields[0].index);
     try std.testing.expectEqual(@as(u16, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try expectTypeRef(moduleKey(1), @enumFromInt(0), fields[1].source_type);
+    try expectTypeRef(moduleKey(1), @enumFromInt(fixtureTableIndex(0)), fields[1].source_type);
     try std.testing.expectEqual(@as(u16, 1), fields[2].index);
 }
 
 test "boxy planner records imported box payload capability source modules" {
     const gpa = std.testing.allocator;
 
-    var root_names = canonical.CanonicalNameStore.init(gpa);
+    var root_names = checked_names.CanonicalNameStore.init(gpa);
     defer root_names.deinit();
-    var source_names = canonical.CanonicalNameStore.init(gpa);
+    var source_names = checked_names.CanonicalNameStore.init(gpa);
     defer source_names.deinit();
 
     _ = try root_names.internRecordFieldLabel("different-root-id");
@@ -5389,18 +5624,18 @@ test "boxy planner records imported box payload capability source modules" {
     const nominal_module = try root_names.internModuleIdentity(&nominal_identity);
     const source_nominal_module = try source_names.internModuleIdentity(&nominal_identity);
     try std.testing.expectEqual(nominal_module, source_nominal_module);
-    const nominal_key = canonical.NominalTypeKey{
+    const nominal_key = checked_names.NominalTypeKey{
         .module = nominal_module,
         .type_name = @enumFromInt(3),
         .source_decl = 9,
     };
 
     const root_record_fields = [_]checked.CheckedRecordField{
-        .{ .name = root_a, .ty = @enumFromInt(0) },
+        .{ .name = root_a, .ty = @enumFromInt(fixtureTableIndex(0)) },
         .{ .name = root_b, .ty = @enumFromInt(1) },
     };
     const root_payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
@@ -5413,12 +5648,12 @@ test "boxy planner records imported box payload capability source modules" {
             .backing = @enumFromInt(3),
             .representation = .{ .imported_box_payload_capability = .{
                 .artifact = source_key,
-                .capability = @enumFromInt(0),
+                .capability = @enumFromInt(fixtureTableIndex(0)),
             } },
         } },
     };
     const root_roots = [_]checked.CheckedTypeRoot{
-        .{ .id = @enumFromInt(0), .key = typeKey(15) },
+        .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(15) },
         .{ .id = @enumFromInt(1), .key = typeKey(11) },
         .{ .id = @enumFromInt(2), .key = typeKey(12) },
         .{ .id = @enumFromInt(3), .key = typeKey(13) },
@@ -5442,7 +5677,7 @@ test "boxy planner records imported box payload capability source modules" {
     };
     const source_declarations = [_]checked.CheckedNominalDeclaration{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .nominal = nominal_key,
             .source_statement = 9,
             .declaration_root = @enumFromInt(4),
@@ -5454,7 +5689,7 @@ test "boxy planner records imported box payload capability source modules" {
         },
     };
     const source_payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @enumFromInt(0), .{}) },
+        .{ .nominal = builtinNominal(.u8, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @enumFromInt(2) } },
@@ -5465,12 +5700,12 @@ test "boxy planner records imported box payload capability source modules" {
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .backing = @enumFromInt(3),
-            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(0) } },
+            .representation = .{ .local_box_payload_capability = .{ .capability = @enumFromInt(fixtureTableIndex(0)) } },
         } },
         .{ .nominal = builtinNominal(.u8, @enumFromInt(5), .{}) },
     };
     const source_roots = [_]checked.CheckedTypeRoot{
-        .{ .id = @enumFromInt(0), .key = typeKey(10) },
+        .{ .id = @enumFromInt(fixtureTableIndex(0)), .key = typeKey(10) },
         .{ .id = @enumFromInt(1), .key = typeKey(11) },
         .{ .id = @enumFromInt(2), .key = typeKey(12) },
         .{ .id = @enumFromInt(3), .key = typeKey(13) },
@@ -5480,7 +5715,7 @@ test "boxy planner records imported box payload capability source modules" {
     const source_capability_padding = [_]checked.CheckedTypeId{@enumFromInt(5)};
     const source_capabilities = [_]checked.BoxPayloadCapabilityEntry{
         .{
-            .id = @enumFromInt(0),
+            .id = @enumFromInt(fixtureTableIndex(0)),
             .nominal = nominal_key,
             .source_ty_payload = @enumFromInt(4),
             .source_ty = typeKey(14),
@@ -5545,8 +5780,8 @@ fn builtinNominal(
     args: checked.CheckedTypeRange,
 ) checked.StoredNominal {
     return .{
-        .name = @enumFromInt(0),
-        .origin_module = @enumFromInt(0),
+        .name = @enumFromInt(fixtureTableIndex(0)),
+        .origin_module = @enumFromInt(fixtureTableIndex(0)),
         .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
@@ -5562,28 +5797,28 @@ fn moduleKey(byte: u8) checked.ModuleId {
     return key;
 }
 
-fn rootTypeRef(ty: checked.CheckedTypeId) TypeRef {
+fn rootTypeRef(ty: checked.CheckedTypeId) CheckedTypeIdentity {
     return .{ .ty = ty };
 }
 
-fn expectTypeRef(module: checked.ModuleId, ty: checked.CheckedTypeId, actual: TypeRef) !void {
+fn expectTypeRef(module: checked.ModuleId, ty: checked.CheckedTypeId, actual: CheckedTypeIdentity) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     try std.testing.expect(moduleKeyEqual(module, actual.module));
     try std.testing.expectEqual(ty, actual.ty);
 }
 
-fn typeKey(byte: u8) canonical.CanonicalTypeKey {
-    var key = canonical.CanonicalTypeKey{};
+fn typeKey(byte: u8) checked_names.CanonicalTypeKey {
+    var key = checked_names.CanonicalTypeKey{};
     key.bytes[0] = byte;
     return key;
 }
 
-fn typeSchemeKey(byte: u8) canonical.CanonicalTypeSchemeKey {
-    var key = canonical.CanonicalTypeSchemeKey{};
+fn typeSchemeKey(byte: u8) checked_names.CanonicalTypeSchemeKey {
+    var key = checked_names.CanonicalTypeSchemeKey{};
     key.bytes[0] = byte;
     return key;
 }
 
-fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) canonical.ProcedureTemplateRef {
+fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) checked_names.ProcedureTemplateRef {
     return .{
         .artifact = .{ .bytes = key.bytes },
         .proc_base = @enumFromInt(raw_template_id),
@@ -5591,7 +5826,7 @@ fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: 
     };
 }
 
-fn procedureValueRef(template: canonical.ProcedureTemplateRef) canonical.ProcedureValueRef {
+fn procedureValueRef(template: checked_names.ProcedureTemplateRef) checked_names.ProcedureValueRef {
     return .{
         .artifact = template.artifact,
         .proc_base = template.proc_base,
@@ -5599,7 +5834,7 @@ fn procedureValueRef(template: canonical.ProcedureTemplateRef) canonical.Procedu
 }
 
 fn checkedTemplate(
-    template_ref: canonical.ProcedureTemplateRef,
+    template_ref: checked_names.ProcedureTemplateRef,
     checked_fn_root: checked.CheckedTypeId,
     body: checked.CheckedBodyId,
     target: checked.ProcTarget,
@@ -5628,7 +5863,7 @@ fn intValue(value: i128) can.CIR.IntValue {
 fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
     return .{
         .key = moduleKey(1),
-        .canonical_names = canonical.CanonicalNameStore.init(allocator),
+        .canonical_names = checked_names.CanonicalNameStore.init(allocator),
         .module_identity = undefined,
         .checking_context_identity = undefined,
         .module_env = undefined,
@@ -5652,9 +5887,9 @@ fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
     };
 }
 
-fn dummyProcedureTemplate() canonical.ProcedureTemplateRef {
+fn dummyProcedureTemplate() checked_names.ProcedureTemplateRef {
     return .{
-        .proc_base = @enumFromInt(0),
-        .template = @enumFromInt(0),
+        .proc_base = @enumFromInt(fixtureTableIndex(0)),
+        .template = @enumFromInt(fixtureTableIndex(0)),
     };
 }

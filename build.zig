@@ -5359,7 +5359,7 @@ fn buildBoxyRuntimeObject(
     // Bundle compiler-rt on non-macOS so any math libcalls the runtime lowers
     // to resolve inside the -nostdlib executable; macOS resolves them against
     // -lSystem at the final link.
-    obj.bundle_compiler_rt = target.result.os.tag != .macos;
+    obj.bundle_compiler_rt = target.result.os.tag != .macos and !target.result.cpu.arch.isWasm();
     configureBackend(obj, target);
     return obj;
 }
@@ -5775,13 +5775,10 @@ fn addMainExe(
         exe.step.dependOn(&copy_cross_builtins_extern.step);
 
         // Boxy runtime object for this target, linked by `roc build --opt=dev`
-        // into programs that emit boxy statements. The runtime shares the
-        // interpreter's boxy core, whose module graph only compiles for
-        // x86_64-linux (the same reason the interpreter shim is host-only), so
-        // it is built only for those targets; other targets fall back to the
-        // in-process shim run path for boxy programs.
+        // into programs that emit boxy statements.
         const cross_supports_boxy_runtime = std.mem.eql(u8, cross_target.name, "x64musl") or
-            std.mem.eql(u8, cross_target.name, "x64glibc");
+            std.mem.eql(u8, cross_target.name, "x64glibc") or
+            std.mem.eql(u8, cross_target.name, "wasm32");
         if (cross_supports_boxy_runtime) {
             const cross_boxy_runtime_obj = buildBoxyRuntimeObject(
                 b,
@@ -5793,9 +5790,17 @@ fn addMainExe(
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
             );
             add_tracy(b, roc_modules.build_options, cross_boxy_runtime_obj, b.graph.host, false, flag_enable_tracy);
+            const boxy_runtime_artifact = if (cross_is_wasm) blk: {
+                // Zig emits wasm object code beside its nominal output as a
+                // `_zcu.o` file when compiler-rt is not bundled. The nominal
+                // output is empty; the ZCU object is the relocatable PIC input
+                // the surgical linker needs, including its GOT imports.
+                const zcu_name = b.fmt("{s}_zcu.o", .{std.fs.path.stem(cross_boxy_runtime_obj.out_filename)});
+                break :blk cross_boxy_runtime_obj.getEmittedBinDirectory().path(b, zcu_name);
+            } else cross_boxy_runtime_obj.getEmittedBin();
             const copy_cross_boxy_runtime = b.addUpdateSourceFiles();
             copy_cross_boxy_runtime.addCopyFileToSource(
-                cross_boxy_runtime_obj.getEmittedBin(),
+                boxy_runtime_artifact,
                 b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_boxy_runtime.o" }),
             );
             exe.step.dependOn(&copy_cross_boxy_runtime.step);

@@ -87,6 +87,7 @@
 //! entry point panics in debug builds; release builds never run the certifier.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -195,7 +196,7 @@ fn computeLocalContainsRefcounted(
         const local = store.getLocal(local_id);
         const has_boxy_rc = index < boxy_rc_descs.len and boxy_rc_descs[index] != null;
         contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx)) or
-            has_boxy_rc;
+            (has_boxy_rc and layouts.layoutContainsRcErasedBox(layouts.getLayout(local.layout_idx)));
     }
 
     var changed = true;
@@ -459,7 +460,9 @@ pub fn certifyStoreOrPanic(
     var diag = Diagnostic{};
     certifyStore(allocator, store, layouts, boxy_rc_descs, sigs, roots, &diag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.Certification => {
+        error.Certification => if (comptime builtin.target.os.tag == .freestanding) {
+            @panic("ARC certification failed");
+        } else {
             var context = FailureContext{};
             if (diag.context_proc) |proc_id| {
                 var extra_locals: [8]LIR.LocalId = undefined;
@@ -779,6 +782,12 @@ fn appendBoxyDescRef(context: *FailureContext, desc: LIR.BoxyDescRef) void {
         .static => |id| context.append("static:{d}", .{@intFromEnum(id)}),
         .local => |local| context.append("local:{d}", .{@intFromEnum(local)}),
         .runtime => |id| context.append("runtime:{d}", .{id}),
+        .dict_method_arg => |projection| context.append("dict-arg:{d}:{d}:{d}:{d}", .{
+            @intFromEnum(projection.dict),
+            @intFromEnum(projection.method),
+            projection.method_slot,
+            projection.arg_index,
+        }),
     }
 }
 
@@ -2899,7 +2908,8 @@ const Certifier = struct {
                     if (self.isRc(assign.target)) {
                         switch (assign.source_mode) {
                             .move => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
-                            .borrow, .copy => _ = try self.bindFresh(&state, assign.target, 0, &.{source_value}),
+                            .borrow => _ = try self.bindFresh(&state, assign.target, 0, &.{source_value}),
+                            .copy => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
                         }
                     }
                     cursor = assign.next;

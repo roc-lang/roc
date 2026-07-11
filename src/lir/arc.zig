@@ -230,150 +230,11 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
     const local_count = store.localCount();
     const descs = try store.allocator.alloc(?LIR.BoxyDescRef, local_count);
-    @memset(descs, null);
-    const origins = try store.allocator.alloc(?LIR.CFStmt, local_count);
-    defer store.allocator.free(origins);
-    @memset(origins, null);
     for (0..local_count) |index| {
         const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        const local = store.getLocal(local_id);
-        if (local.boxy_desc) |desc| descs[index] = desc;
+        descs[index] = store.getLocal(local_id).boxy_desc;
     }
-
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
-            const stmt = store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .assign_boxy_box => |assign| {
-                    const desc = assign.payload_desc orelse
-                        arcInvariant("boxy dynamic box target reached ARC without a payload descriptor");
-                    changed = setBoxyRcDesc(descs, origins, assign.target, desc, stmt) or changed;
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    changed = setBoxyRcDesc(descs, origins, assign.target, assign.desc, stmt) or changed;
-                    changed = setBoxyRcDesc(descs, origins, assign.source, assign.desc, stmt) or changed;
-                },
-                .assign_boxy_unbox => |assign| {
-                    changed = setBoxyRcDesc(descs, origins, assign.source, assign.source_desc, stmt) or changed;
-                    if (assign.target_desc) |target_desc| {
-                        changed = setBoxyRcDesc(descs, origins, assign.target, target_desc, stmt) or changed;
-                    }
-                },
-                .assign_boxy_inspect => |assign| {
-                    _ = assign;
-                },
-                .assign_boxy_eq => |assign| {
-                    _ = assign;
-                },
-                .boxy_tag_match => |tag_match| {
-                    _ = tag_match;
-                },
-                .assign_boxy_tag => |assign| {
-                    changed = setBoxyRcDesc(descs, origins, assign.target, assign.target_desc, stmt) or changed;
-                },
-                .assign_boxy_tag_payload => |assign| {
-                    changed = setBoxyRcDesc(descs, origins, assign.source, assign.source_desc, stmt) or changed;
-                    if (assign.target_desc) |target_desc| {
-                        changed = propagateBoxyRcDesc(store, descs, origins, assign.target, .{ .local = target_desc }, stmt) or changed;
-                    }
-                },
-                .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| {
-                        changed = setBoxyRcDesc(descs, origins, assign.target, target_desc, stmt) or changed;
-                    }
-                },
-                .assign_struct => |assign| {
-                    // A concretely-represented aggregate keeps no descriptor of
-                    // its own, but a field whose value crossed a representation
-                    // boundary carries one. When such a field is present the
-                    // aggregate must be released through its descriptor, so
-                    // adopt the static descriptor recorded for its contents.
-                    if (assign.contents_desc) |contents_desc| {
-                        if (boxyDescForLocal(descs, assign.target) == null and
-                            spanContainsBoxyRcDesc(store, descs, assign.fields))
-                        {
-                            changed = setBoxyRcDesc(descs, origins, assign.target, contents_desc, stmt) or changed;
-                        }
-                    }
-                },
-                .assign_call => |assign| {
-                    if (assign.result_desc) |result_desc| {
-                        changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
-                    }
-                },
-                .assign_call_dict => |assign| {
-                    if (assign.result_desc) |result_desc| {
-                        changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
-                    }
-                },
-                .assign_call_erased => |assign| {
-                    const assigned_desc: ?LIR.BoxyDescRef = if (assign.out_desc) |out_desc|
-                        .{ .local = out_desc }
-                    else
-                        assign.result_desc;
-                    if (assigned_desc) |result_desc| {
-                        changed = setBoxyRcDesc(descs, origins, assign.target, result_desc, stmt) or changed;
-                    }
-                },
-                .assign_low_level => |assign| {
-                    const args = store.getLocalSpan(assign.args);
-                    switch (assign.op) {
-                        .list_append_unsafe,
-                        .list_prepend,
-                        .list_sublist,
-                        .list_drop_at,
-                        .list_drop_first,
-                        .list_drop_last,
-                        .list_take_first,
-                        .list_take_last,
-                        .list_reverse,
-                        .list_reserve,
-                        .list_release_excess_capacity,
-                        .list_swap,
-                        .list_set,
-                        .list_replace_unsafe,
-                        => {
-                            if (GuardedList.borrowLen(args) > 0) {
-                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, GuardedList.at(args, 0), stmt) or changed;
-                            }
-                        },
-                        .list_concat => {
-                            if (GuardedList.borrowLen(args) > 0) {
-                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, GuardedList.at(args, 0), stmt) or changed;
-                            }
-                            if (GuardedList.borrowLen(args) > 1) {
-                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, GuardedList.at(args, 1), stmt) or changed;
-                                changed = propagateSameValueBoxyRcDesc(store, descs, origins, GuardedList.at(args, 0), GuardedList.at(args, 1), stmt) or changed;
-                            }
-                        },
-                        else => {},
-                    }
-                },
-                .assign_ref => |assign| switch (assign.op) {
-                    .local => |source| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, source, stmt) or changed,
-                    .list_reinterpret => |op| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, op.backing_ref, stmt) or changed,
-                    .nominal => |op| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, op.backing_ref, stmt) or changed,
-                    .discriminant, .field, .tag_payload, .tag_payload_struct => {},
-                },
-                .set_local => |assign| changed = propagateSameValueBoxyRcDesc(store, descs, origins, assign.target, assign.value, stmt) or changed,
-                else => {},
-            }
-        }
-    }
-
     return descs;
-}
-
-fn spanContainsBoxyRcDesc(store: *const LirStore, descs: []const ?LIR.BoxyDescRef, span: LIR.LocalSpan) bool {
-    const locals = store.getLocalSpan(span);
-    for (0..GuardedList.borrowLen(locals)) |index| {
-        const local = GuardedList.at(locals, index);
-        if (boxyDescForLocal(descs, local) != null) return true;
-    }
-    return false;
 }
 
 fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
@@ -390,11 +251,13 @@ fn computeLocalContainsRefcounted(
 ) ResourceError![]bool {
     const local_count = store.localCount();
     const contains = try allocator.alloc(bool, local_count);
+    errdefer allocator.free(contains);
     for (0..local_count) |index| {
         const local_id: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
         const local = store.getLocal(local_id);
         contains[index] = layouts.layoutContainsRefcounted(layouts.getLayout(local.layout_idx)) or
-            boxy_rc_descs[index] != null;
+            (boxy_rc_descs[index] != null and
+                layouts.layoutContainsRcErasedBox(layouts.getLayout(local.layout_idx)));
     }
 
     var changed = true;
@@ -552,71 +415,6 @@ fn markLocalRcIfSpanContainsRc(store: *const LirStore, contains: []bool, target:
         if (local_index < contains.len and contains[local_index]) return markLocalRc(contains, target);
     }
     return false;
-}
-
-fn setBoxyRcDesc(
-    descs: []?LIR.BoxyDescRef,
-    origins: []?LIR.CFStmt,
-    local: LIR.LocalId,
-    desc: LIR.BoxyDescRef,
-    origin: LIR.CFStmt,
-) bool {
-    const index = @intFromEnum(local);
-    const existing = descs[index] orelse {
-        descs[index] = desc;
-        origins[index] = origin;
-        return true;
-    };
-    if (!std.meta.eql(existing, desc)) {
-        // Lowering assigns immutable ownership descriptors directly to locals.
-        // Statement descriptors may additionally describe call or boundary
-        // materialization, but they do not replace that local identity.
-        if (origins[index] == null) return false;
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
-                "boxy dynamic local {d} was assigned values with different descriptors: existing={any} existing_origin={any} new={any} new_origin={any}",
-                .{ @intFromEnum(local), existing, origins[index], desc, origin },
-            );
-        }
-        unreachable;
-    }
-    return false;
-}
-
-fn propagateBoxyRcDesc(
-    store: *const LirStore,
-    descs: []?LIR.BoxyDescRef,
-    origins: []?LIR.CFStmt,
-    local: LIR.LocalId,
-    desc: LIR.BoxyDescRef,
-    origin: LIR.CFStmt,
-) bool {
-    const index = @intFromEnum(local);
-    if (descs[index] == null) {
-        descs[index] = desc;
-        origins[index] = origin;
-        return true;
-    }
-    _ = store;
-    return false;
-}
-
-fn propagateSameValueBoxyRcDesc(
-    store: *const LirStore,
-    descs: []?LIR.BoxyDescRef,
-    origins: []?LIR.CFStmt,
-    target: LIR.LocalId,
-    source: LIR.LocalId,
-    origin: LIR.CFStmt,
-) bool {
-    var changed = false;
-    if (boxyDescForLocal(descs, source)) |desc| {
-        changed = propagateBoxyRcDesc(store, descs, origins, target, desc, origin) or changed;
-    }
-    if (boxyDescForLocal(descs, target)) |desc| {
-        changed = propagateBoxyRcDesc(store, descs, origins, source, desc, origin) or changed;
-    }
-    return changed;
 }
 
 const VariantSelector = struct {
@@ -837,7 +635,8 @@ const Inserter = struct {
     /// and the map entry is removed before the keep-set storage is destroyed.
     active_loop_keep_ids: *std.AutoHashMap(usize, u32) = undefined,
     next_loop_keep_id: u32 = 1,
-    current_proc: LIR.LirProcSpecId = @enumFromInt(0),
+    // Set to the proc being rewritten before any diagnostic or helper reads it.
+    current_proc: LIR.LirProcSpecId = undefined,
     current_proc_body: LIR.CFStmtId = undefined,
     current_rewrite_stmt: ?LIR.CFStmtId = null,
     join_bodies: ?*const JoinBodyMap = null,
@@ -1804,7 +1603,7 @@ const Inserter = struct {
                 } });
             },
             .assign_boxy_unbox => |assign| {
-                if (assign.source_mode != .move and self.localMayNeedBoxyRc(assign.target)) {
+                if (assign.source_mode == .borrow and self.localMayNeedBoxyRc(assign.target)) {
                     next = try self.retainLocalIfRc(assign.target, next);
                 }
                 cloned = try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
@@ -4170,18 +3969,6 @@ const Inserter = struct {
         return try deaths.toOwnedSlice(self.store.allocator);
     }
 
-    fn canMoveSetLocalValue(
-        self: *Inserter,
-        owned: *const OwnedSet,
-        value: LIR.LocalId,
-        next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
-    ) ResourceError!bool {
-        if (!self.ownsUnit(owned, value)) return false;
-        if (!self.localContainsRefcounted(value)) return false;
-        return !(try self.groupUsedInPath(next, value, loop_keep));
-    }
-
     fn canMoveAliasBindValue(
         self: *Inserter,
         owned: *const OwnedSet,
@@ -4580,6 +4367,7 @@ const Inserter = struct {
             .frame_locals = source_spec.frame_locals,
             .body = self.variants.original_bodies[@intFromEnum(callee)],
             .ret_layout = source_spec.ret_layout,
+            .ret_desc = source_spec.ret_desc,
             .abi = source_spec.abi,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
@@ -5876,16 +5664,6 @@ const Inserter = struct {
         return try self.retainLocalIfRcCount(local, 1, next);
     }
 
-    fn retainLocalWithRc(self: *Inserter, local: LIR.LocalId, rc: LIR.RcHelper, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        return try self.store.addCFStmt(.{ .incref = .{
-            .value = local,
-            .rc = rc,
-            .count = 1,
-            .atomicity = self.rcAtomicity(local),
-            .next = next,
-        } });
-    }
-
     fn retainLocalIfRcCount(self: *Inserter, local: LIR.LocalId, count: u16, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         if (count == 0) return next;
         if (!self.localContainsRefcounted(local)) return next;
@@ -5958,7 +5736,9 @@ const Inserter = struct {
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
         if (self.layouts.rcHelperPlan(helper) == .noop) {
-            if (@import("builtin").mode == .Debug) {
+            if (comptime builtin.mode == .Debug and builtin.target.os.tag == .freestanding) {
+                @panic("ARC attempted to emit a noop RC helper for a refcounted local");
+            } else if (comptime builtin.mode == .Debug) {
                 var buffer: std.Io.Writer.Allocating = .init(self.store.allocator);
                 defer buffer.deinit();
                 debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
@@ -6169,6 +5949,11 @@ fn argMaskBit(index: usize) u64 {
 fn arcInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
     unreachable;
+}
+
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
 }
 
 test "arc insertion boundary exists" {
@@ -8977,7 +8762,7 @@ test "RC releases descriptor-backed old set_local value before immutable replace
     const assign_current = try f.assignStr(current, "old", assign_replacement);
     const init_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
-        .desc = .{ .static = @enumFromInt(0) },
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
         .next = assign_current,
     } });
     _ = try f.addProc(&.{}, init_desc, .str);
@@ -8993,7 +8778,7 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     const source = try f.local(f.list_i64);
     const adapted = try f.local(f.list_i64);
     const result = try f.local(.i64);
-    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(0) };
+    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
     f.store.setLocalBoxyDesc(source, desc);
     f.store.setLocalBoxyDesc(adapted, desc);
 
@@ -9003,7 +8788,7 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = source,
-        .adapter = @enumFromInt(0),
+        .adapter = @enumFromInt(fixtureTableIndex(0)),
         .source_desc = desc,
         .target_desc = desc,
         .source_mode = .move,

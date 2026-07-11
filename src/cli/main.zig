@@ -484,6 +484,7 @@ const DefaultPlatformRuntimeObjects = struct {
 const BoxyRuntimeObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/roc_boxy_runtime.o");
     const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/roc_boxy_runtime.o");
+    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/roc_boxy_runtime.o");
 
     /// The boxy runtime object bytes for `target`, or null when the target has
     /// no runtime and boxy programs cannot be built standalone for it.
@@ -491,6 +492,7 @@ const BoxyRuntimeObjects = struct {
         return switch (target) {
             .x64musl => x64musl,
             .x64glibc, .x64linux => x64glibc,
+            .wasm32 => wasm32,
             else => null,
         };
     }
@@ -1390,9 +1392,10 @@ fn generatePlatformHostShim(
     // The host shim's C-ABI lowering needs layout sizes for the target being
     // built, so resolve the width-independent image for that pointer width.
     const shim_target_usize: base.target.TargetUsize = if (target.ptrBitWidth() == 64) .u64 else .u32;
-    const view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, shim_target_usize, ctx.arena) catch |err| {
+    var view = lir.LirImage.viewMappedImageWithAllocator(image_header, lir_image.ptr, lir_image.len, shim_target_usize, ctx.arena) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
+    defer view.deinit();
 
     return generatePlatformHostShimFromLirData(
         ctx,
@@ -2621,7 +2624,8 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                         }
                         unreachable;
                     };
-                    const view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
+                    var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
+                    defer view.deinit();
                     break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
                 },
                 .size, .speed => unreachable,
@@ -3016,7 +3020,8 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
     }
     reporter.finish();
 
-    const view = try viewLirImageFromHandle(shm_result.handle, base.target.TargetUsize.native, ctx.arena);
+    var view = try viewLirImageFromHandle(shm_result.handle, base.target.TargetUsize.native, ctx.arena);
+    defer view.deinit();
 
     var hosted_fn_array = [_]echo_platform.host_abi.HostedFn{echo_platform.host_abi.hostedFn(&echo_platform.echoHostedFn)};
     var echo_env = echo_platform.EchoEnv{ .std_io = ctx.io.std_io };
@@ -4961,7 +4966,7 @@ fn closeSharedMemoryHandle(handle: SharedMemoryHandle) void {
     }
 }
 
-fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.TargetUsize, arena: std.mem.Allocator) lir.LirImage.ImageError!lir.LirImage.ProgramView {
+fn viewLirImageFromHandle(handle: SharedMemoryHandle, target_usize: base.target.TargetUsize, arena: std.mem.Allocator) lir.LirImage.ViewError!lir.LirImage.ProgramView {
     const base_ptr: [*]align(1) u8 = @ptrCast(@alignCast(handle.ptr));
     const header: *const lir.LirImage.Header = @ptrCast(@alignCast(base_ptr + @sizeOf(SharedMemoryAllocator.Header)));
     return lir.LirImage.viewMappedImageWithAllocator(header, base_ptr, handle.size, target_usize, arena);
@@ -7090,7 +7095,13 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
-/// Add the boxy runtime object and its embedded sidecar to a standalone dev
+fn lirResultUsesBoxy(result: *const lir.Program.Result) bool {
+    return result.boxy_type_descs.items.len != 0 or
+        result.boxy_dicts.items.len != 0 or
+        result.boxy_adapters.items.len != 0;
+}
+
+/// Add the boxy runtime object and its embedded sidecar to a standalone
 /// link. The runtime object provides the `roc_boxy_*` wrappers and
 /// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
 /// symbols read (the descriptor tables, layout store, and string store the
@@ -7138,6 +7149,46 @@ fn appendBoxyRuntimeLinkInputs(
 
     try object_files.append(sidecar_path);
     try object_files.append(runtime_path);
+}
+
+fn mergeBoxyRuntimeWasm(
+    ctx: *CliCtx,
+    module: *backend.wasm.WasmModule,
+    lir_result: *const lir.Program.Result,
+    mode: backend.wasm.WasmModule.MergeMode,
+) CliMainError!void {
+    if (!lirResultUsesBoxy(lir_result)) return;
+    const runtime_bytes = BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget;
+
+    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
+    defer sidecar_blob.deinit(ctx.gpa);
+    const blob_len: u64 = @intCast(sidecar_blob.bytes.len);
+    const exports = [_]backend.StaticDataExport{
+        .{ .symbol_name = "roc_boxy_sidecar_blob", .bytes = sidecar_blob.bytes, .alignment = 16, .is_global = true },
+        .{ .symbol_name = "roc_boxy_sidecar_blob_len", .bytes = std.mem.asBytes(&blob_len), .alignment = 8, .is_global = true },
+        .{ .symbol_name = "roc_boxy_sidecar_desc", .bytes = std.mem.asBytes(&sidecar_blob.sidecar), .alignment = 8, .is_global = true },
+    };
+    var sidecar_module = try backend.wasm.WasmModule.staticDataModule(ctx.gpa, &exports);
+    defer sidecar_module.deinit();
+    var sidecar_merge = switch (mode) {
+        .final_link => try module.mergeModule(&sidecar_module),
+        .relocatable_object => try module.mergeModuleForObject(&sidecar_module),
+    };
+    sidecar_merge.deinit();
+
+    // Merge the definitions before the PIC runtime. In final-link mode this
+    // lets runtime GOT globals resolve directly to the sidecar data symbols;
+    // object mode preserves the corresponding GOT imports for wasm-ld.
+    var runtime_module = backend.wasm.WasmModule.preload(ctx.gpa, runtime_bytes, true) catch |err| {
+        std.log.err("Failed to preload wasm Boxy runtime: {}", .{err});
+        return err;
+    };
+    defer runtime_module.deinit();
+    var runtime_merge = switch (mode) {
+        .final_link => try module.mergeModule(&runtime_module),
+        .relocatable_object => try module.mergeModuleForObject(&runtime_module),
+    };
+    runtime_merge.deinit();
 }
 
 /// The host inputs of a link, in link order.
@@ -7532,6 +7583,7 @@ fn writeDevWasmObject(
         var merge_result = try codegen.module.mergeModuleForObject(&builtins_module);
         merge_result.deinit();
     }
+    try mergeBoxyRuntimeWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
 
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&codegen.module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
@@ -7540,6 +7592,7 @@ fn writeDevWasmObject(
     codegen.configureBuiltinRelocs(builtin_symbols);
 
     try codegen.registerIndirectCallTypes();
+    if (lirResultUsesBoxy(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     for (entrypoints) |entry| {
@@ -7669,6 +7722,7 @@ fn rocBuildWasmSurgical(
         var merge_result = try wasm_module.mergeModule(&builtins_module);
         merge_result.deinit();
     }
+    try mergeBoxyRuntimeWasm(ctx, &wasm_module, &lowered.lir_result, .final_link);
 
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&wasm_module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after merge: {}", .{err});
@@ -7689,6 +7743,7 @@ fn rocBuildWasmSurgical(
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
+    if (lirResultUsesBoxy(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
 
     var host_to_app_map: std.ArrayList(backend.wasm.WasmModule.HostToAppEntry) = .empty;
@@ -8442,6 +8497,9 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             } else {
                 return error.UnsupportedTarget;
             }
+        }
+        if (lirResultUsesBoxy(&lowered.lir_result)) {
+            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result);
         }
         reporter.end();
 

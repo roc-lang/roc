@@ -20,12 +20,17 @@ const LirStore = lir.LirStore;
 const LirProgram = lir.Program;
 const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
+}
+
 const TestSetup = struct {
     store: LirStore,
     layouts: layout_mod.Store,
     env: RuntimeHostEnv,
 
-    fn init(allocator: std.mem.Allocator) !TestSetup {
+    fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!TestSetup {
         return .{
             .store = LirStore.init(allocator),
             .layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native),
@@ -33,7 +38,7 @@ const TestSetup = struct {
         };
     }
 
-    fn startRuntime(self: *TestSetup, allocator: std.mem.Allocator, tables: boxy_runtime.BoxyTables) !void {
+    fn startRuntime(self: *TestSetup, allocator: std.mem.Allocator, tables: boxy_runtime.BoxyTables) error{ OutOfMemory, AlreadyInitialized }!void {
         try boxy_abi.initGlobal(allocator, &self.store, &self.layouts, tables, self.env.get_ops());
     }
 
@@ -120,12 +125,12 @@ test "boxy abi inspect dispatches descriptor method and releases its owned resul
     const descs = [_]BoxyTypeDesc{.{
         .payload_layout = .u64,
         .contains_refcounted = false,
-        .inspect_method = @enumFromInt(0),
+        .inspect_method = @enumFromInt(fixtureTableIndex(0)),
     }};
-    const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(0) }};
+    const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
     const method_slots = [_]LirProgram.BoxyMethodSlot{.{
-        .method = @enumFromInt(0),
-        .proc = @enumFromInt(0),
+        .method = @enumFromInt(fixtureTableIndex(0)),
+        .proc = @enumFromInt(fixtureTableIndex(0)),
         .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },
@@ -211,7 +216,7 @@ test "boxy abi list materialization preserves reserved capacity" {
 
     const list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
     const desc_refs = [_]LIR.BoxyDescRef{
-        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
         .{ .static = @enumFromInt(1) },
     };
     const descs = [_]BoxyTypeDesc{
@@ -275,7 +280,7 @@ test "boxy abi call result transfers nested tag list ownership" {
     const node_layout = try setup.layouts.putTagUnion(&.{list_str_layout});
     const list_node_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(node_layout));
     const desc_refs = [_]LIR.BoxyDescRef{
-        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
         .{ .static = @enumFromInt(1) },
         .{ .static = @enumFromInt(2) },
         .{ .static = @enumFromInt(3) },
@@ -376,7 +381,7 @@ test "boxy abi relabel adapter transfers a list allocation unchanged" {
 
     const list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
     const desc_refs = [_]LIR.BoxyDescRef{
-        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
         .{ .static = @enumFromInt(1) },
     };
     const descs = [_]BoxyTypeDesc{
@@ -427,8 +432,8 @@ test "boxy abi move adapter transfers unique boxed list elements" {
     const source_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(box_layout));
     const target_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
     const desc_refs = [_]LIR.BoxyDescRef{
-        .{ .static = @enumFromInt(0) },
-        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     };
     const descs = [_]BoxyTypeDesc{
         .{ .payload_layout = .u64, .contains_refcounted = false },
@@ -502,7 +507,7 @@ test "boxy abi move adapter releases tag payloads across differing discriminants
     const target_union_layout = try setup.layouts.putTagUnion(&.{ .u64, .u64 });
     const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
         .payload_index = 0,
-        .desc = .{ .static = @enumFromInt(0) },
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     }};
     const variants = [_]LirProgram.BoxyTagVariant{
         .{ .name = name_a, .discriminant = 0, .payload_layout = .u64 },
@@ -564,7 +569,7 @@ test "boxy abi move adapter releases tag payloads across differing discriminants
         &target,
         &target_desc,
         &source,
-        &descs[1],
+        &descs[0],
         &descs[2],
         0,
         @intFromEnum(LIR.BoxyTransferMode.move),
@@ -583,6 +588,7 @@ test "boxy abi move adapter releases tag payloads across differing discriminants
         @intFromEnum(name_b),
         0,
         @intFromEnum(layout_mod.Idx.u64),
+        @intFromEnum(LIR.BoxyTransferMode.borrow),
     );
     try std.testing.expectEqual(@as(u64, 99), adapted_payload);
 
@@ -602,7 +608,7 @@ test "boxy abi move adapter transfers a dynamic box into a target tag extension"
     const target_union_layout = try setup.layouts.putTagUnion(&.{ .zst, box_layout });
     const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
         .payload_index = 0,
-        .desc = .{ .static = @enumFromInt(0) },
+        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     }};
     const variants = [_]LirProgram.BoxyTagVariant{
         .{
@@ -684,6 +690,237 @@ test "boxy abi move adapter transfers a dynamic box into a target tag extension"
     ));
 
     boxy_abi.roc_boxy_drop(&target, @intFromEnum(target_union_layout), &descs[2], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi moved reboxed payload transfers a nested list allocation" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const list_str_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.str));
+    const struct_box_layout = try setup.layouts.putStructFields(&.{.{ .index = 0, .layout = box_layout }});
+    const desc_refs = [_]LIR.BoxyDescRef{
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .static = @enumFromInt(1) },
+        .{ .static = @enumFromInt(2) },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = struct_box_layout, .contains_refcounted = true, .nested_descs = .{ .start = 2, .len = 1 } },
+        .{ .payload_layout = struct_box_layout, .contains_refcounted = true, .nested_descs = .{ .start = 3, .len = 1 } },
+    };
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+    });
+
+    var source_list = builtins.list.listWithCapacity(
+        1,
+        @alignOf(builtins.str.RocStr),
+        @sizeOf(builtins.str.RocStr),
+        true,
+        null,
+        &builtins.utils.rcNone,
+        setup.env.get_ops(),
+    );
+    source_list.length = 1;
+    const source_strings: [*]builtins.str.RocStr = @ptrCast(@alignCast(source_list.bytes.?));
+    source_strings[0] = builtins.str.RocStr.fromSlice(
+        "a heap string nested in a moved and reboxed list payload",
+        setup.env.get_ops(),
+    );
+
+    var inner_box: usize = 0;
+    var inner_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&inner_box),
+        &inner_desc,
+        @ptrCast(&source_list),
+        @intFromEnum(list_str_layout),
+        &descs[1],
+        &descs[1],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(box_layout),
+    );
+
+    var source_struct: [@sizeOf(usize)]u8 align(@alignOf(usize)) = undefined;
+    @memcpy(&source_struct, std.mem.asBytes(&inner_box));
+    var outer_box: usize = 0;
+    var outer_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&outer_box),
+        &outer_desc,
+        &source_struct,
+        @intFromEnum(struct_box_layout),
+        &descs[3],
+        &descs[3],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(box_layout),
+    );
+
+    var target_struct: [@sizeOf(usize)]u8 align(@alignOf(usize)) = undefined;
+    var target_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_unbox(
+        &target_struct,
+        &target_desc,
+        @ptrCast(&outer_box),
+        @intFromEnum(box_layout),
+        outer_desc.?,
+        &descs[4],
+        @intFromEnum(struct_box_layout),
+        @intFromEnum(LIR.BoxyTransferMode.move),
+    );
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[4]), target_desc);
+
+    const target_inner_box = std.mem.bytesToValue(usize, &target_struct);
+    const target_list: *const builtins.list.RocList = @ptrFromInt(target_inner_box);
+    try std.testing.expectEqual(@as(usize, 1), target_list.len());
+    const target_strings: [*]const builtins.str.RocStr = @ptrCast(@alignCast(target_list.bytes.?));
+    try std.testing.expectEqualStrings(
+        "a heap string nested in a moved and reboxed list payload",
+        target_strings[0].asSlice(),
+    );
+
+    boxy_abi.roc_boxy_drop(&target_struct, @intFromEnum(struct_box_layout), &descs[4], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi copied recursive tag retains boxed children" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const leaf_name = try setup.store.insertString("Leaf");
+    const node_name = try setup.store.insertString("Node");
+    const erased_box_layout = try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst());
+    const node_layout = try setup.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = erased_box_layout },
+        .{ .index = 1, .layout = erased_box_layout },
+    });
+    const tree_layout = try setup.layouts.putTagUnion(&.{ .i64, node_layout });
+    const concrete_box_layout = try setup.layouts.insertLayout(layout_mod.Layout.box(tree_layout));
+    const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{
+        .{ .payload_index = 0, .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) } },
+        .{ .payload_index = 1, .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) } },
+    };
+    const variants = [_]LirProgram.BoxyTagVariant{
+        .{ .name = leaf_name, .discriminant = 0, .payload_layout = .i64 },
+        .{
+            .name = node_name,
+            .discriminant = 1,
+            .payload_layout = node_layout,
+            .payload_descs = .{ .start = 0, .len = 2 },
+        },
+    };
+    const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
+    const descs = [_]BoxyTypeDesc{
+        .{
+            .payload_layout = tree_layout,
+            .contains_refcounted = true,
+            .tag_variants = .{ .start = 0, .len = 2 },
+        },
+        .{
+            .payload_layout = concrete_box_layout,
+            .contains_refcounted = true,
+            .nested_descs = .{ .start = 0, .len = 1 },
+        },
+    };
+    const adapters = [_]LirProgram.BoxyAdapter{.{
+        .kind = .boxy_to_boxy,
+        .operation = .materialize,
+        .source_layout = concrete_box_layout,
+        .target_layout = erased_box_layout,
+        .consumes_source = true,
+        .produces_owned_result = true,
+    }};
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+        .adapters = &adapters,
+        .tag_variants = &variants,
+        .tag_payload_descs = &payload_descs,
+    });
+
+    var left_leaf: [64]u8 align(16) = @splat(0);
+    var right_leaf: [64]u8 align(16) = @splat(0);
+    std.mem.writeInt(i64, left_leaf[0..@sizeOf(i64)], 7, .little);
+    std.mem.writeInt(i64, right_leaf[0..@sizeOf(i64)], 11, .little);
+    const tree_info = setup.layouts.getTagUnionInfo(setup.layouts.getLayout(tree_layout));
+    tree_info.data.writeDiscriminant(&left_leaf, 0, setup.layouts.targetUsize());
+    tree_info.data.writeDiscriminant(&right_leaf, 0, setup.layouts.targetUsize());
+
+    var left_box: usize = 0;
+    var right_box: usize = 0;
+    var left_desc: ?*const BoxyTypeDesc = null;
+    var right_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&left_box),
+        &left_desc,
+        &left_leaf,
+        @intFromEnum(tree_layout),
+        &descs[0],
+        &descs[0],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(erased_box_layout),
+    );
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&right_box),
+        &right_desc,
+        &right_leaf,
+        @intFromEnum(tree_layout),
+        &descs[0],
+        &descs[0],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(erased_box_layout),
+    );
+
+    var root: [64]u8 align(16) = @splat(0);
+    const node_struct = setup.layouts.getLayout(node_layout).getStruct().idx;
+    const left_offset = setup.layouts.getStructFieldOffsetByOriginalIndex(node_struct, 0);
+    const right_offset = setup.layouts.getStructFieldOffsetByOriginalIndex(node_struct, 1);
+    @memcpy(root[left_offset..][0..@sizeOf(usize)], std.mem.asBytes(&left_box));
+    @memcpy(root[right_offset..][0..@sizeOf(usize)], std.mem.asBytes(&right_box));
+    tree_info.data.writeDiscriminant(&root, 1, setup.layouts.targetUsize());
+
+    var source_box: usize = 0;
+    var source_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_box(
+        @ptrCast(&source_box),
+        &source_desc,
+        &root,
+        @intFromEnum(tree_layout),
+        &descs[0],
+        &descs[1],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        @intFromEnum(concrete_box_layout),
+    );
+
+    var copied_box: usize = 0;
+    var copied_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_adapt(
+        @ptrCast(&copied_box),
+        &copied_desc,
+        @ptrCast(&source_box),
+        source_desc.?,
+        &descs[1],
+        0,
+        @intFromEnum(LIR.BoxyTransferMode.move),
+    );
+
+    const copied: [*]const u8 = @ptrFromInt(copied_box);
+    const copied_left_box = std.mem.bytesToValue(usize, copied[left_offset..][0..@sizeOf(usize)]);
+    const copied_right_box = std.mem.bytesToValue(usize, copied[right_offset..][0..@sizeOf(usize)]);
+    const copied_left: [*]const u8 = @ptrFromInt(copied_left_box);
+    const copied_right: [*]const u8 = @ptrFromInt(copied_right_box);
+    try std.testing.expectEqual(@as(i64, 7), std.mem.readInt(i64, copied_left[0..@sizeOf(i64)], .little));
+    try std.testing.expectEqual(@as(i64, 11), std.mem.readInt(i64, copied_right[0..@sizeOf(i64)], .little));
+
+    boxy_abi.roc_boxy_drop(@ptrCast(&copied_box), @intFromEnum(erased_box_layout), copied_desc, 1, 1, 0);
     try setup.env.checkForLeaks();
 }
 
@@ -774,11 +1011,101 @@ test "boxy abi tag construction, matching, and payload reads" {
         @intFromEnum(name_a),
         0,
         @intFromEnum(layout_mod.Idx.u64),
+        @intFromEnum(LIR.BoxyTransferMode.borrow),
     );
     try std.testing.expectEqual(@as(u64, 7), read_payload);
     try std.testing.expectEqual(@as(?*const BoxyTypeDesc, null), read_desc);
 
     boxy_abi.roc_boxy_drop(@ptrCast(&tagged), box_layout, &descs[0], 1, 1, 0);
+    try setup.env.checkForLeaks();
+}
+
+test "boxy abi copied tag payload owns its nested list" {
+    const allocator = std.testing.allocator;
+    var setup = try TestSetup.init(allocator);
+    defer setup.deinit();
+
+    const empty_name = try setup.store.insertString("Empty");
+    const values_name = try setup.store.insertString("Values");
+    const list_str_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.str));
+    const union_layout = try setup.layouts.putTagUnion(&.{ .zst, list_str_layout });
+    const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
+    const payload_descs = [_]LirProgram.BoxyTagPayloadDesc{.{
+        .payload_index = 0,
+        .desc = .{ .static = @enumFromInt(1) },
+    }};
+    const variants = [_]LirProgram.BoxyTagVariant{
+        .{ .name = empty_name, .discriminant = 0, .payload_layout = .zst },
+        .{
+            .name = values_name,
+            .discriminant = 1,
+            .payload_layout = list_str_layout,
+            .payload_descs = .{ .start = 0, .len = 1 },
+        },
+    };
+    const descs = [_]BoxyTypeDesc{
+        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = union_layout, .contains_refcounted = true, .tag_variants = .{ .start = 0, .len = 2 } },
+    };
+    try setup.startRuntime(allocator, .{
+        .type_descs = &descs,
+        .desc_refs = &desc_refs,
+        .tag_variants = &variants,
+        .tag_payload_descs = &payload_descs,
+    });
+
+    var source_list = builtins.list.listWithCapacity(
+        1,
+        @alignOf(builtins.str.RocStr),
+        @sizeOf(builtins.str.RocStr),
+        true,
+        null,
+        &builtins.utils.rcNone,
+        setup.env.get_ops(),
+    );
+    source_list.length = 1;
+    const source_strings: [*]builtins.str.RocStr = @ptrCast(@alignCast(source_list.bytes.?));
+    source_strings[0] = builtins.str.RocStr.fromSlice(
+        "a heap string retained by copied tag payload ownership",
+        setup.env.get_ops(),
+    );
+
+    const box_layout = @intFromEnum(try setup.layouts.insertLayout(layout_mod.Layout.boxOfZst()));
+    var tagged: usize = 0;
+    boxy_abi.roc_boxy_tag(
+        @ptrCast(&tagged),
+        &descs[2],
+        @intFromEnum(values_name),
+        @ptrCast(&source_list),
+        @intFromEnum(list_str_layout),
+        &descs[1],
+        @intFromEnum(LIR.BoxyTransferMode.move),
+        box_layout,
+    );
+
+    var copied: builtins.list.RocList = undefined;
+    var copied_desc: ?*const BoxyTypeDesc = null;
+    boxy_abi.roc_boxy_tag_payload(
+        @ptrCast(&copied),
+        &copied_desc,
+        @ptrCast(&tagged),
+        box_layout,
+        &descs[2],
+        @intFromEnum(values_name),
+        0,
+        @intFromEnum(list_str_layout),
+        @intFromEnum(LIR.BoxyTransferMode.copy),
+    );
+    try std.testing.expectEqual(@as(?*const BoxyTypeDesc, &descs[1]), copied_desc);
+
+    boxy_abi.roc_boxy_drop(@ptrCast(&tagged), box_layout, &descs[2], 1, 1, 0);
+    const copied_strings: [*]const builtins.str.RocStr = @ptrCast(@alignCast(copied.bytes.?));
+    try std.testing.expectEqualStrings(
+        "a heap string retained by copied tag payload ownership",
+        copied_strings[0].asSlice(),
+    );
+    boxy_abi.roc_boxy_drop(@ptrCast(&copied), @intFromEnum(list_str_layout), &descs[1], 1, 1, 0);
     try setup.env.checkForLeaks();
 }
 
@@ -825,12 +1152,11 @@ test "boxy abi descriptor copy materializes a template with local captures" {
 }
 
 fn sumTwoU64s(
-    ops: *builtins.host_abi.RocOps,
+    _: *builtins.host_abi.RocOps,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
-    _ = ops;
     const a: *align(1) const u64 = @ptrCast(args[0].?);
     const b: *align(1) const u64 = @ptrCast(args[1].?);
     const out: *align(1) u64 = @ptrCast(ret.?);
@@ -845,7 +1171,7 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
 
     const method_slots = [_]LirProgram.BoxyMethodSlot{
         .{
-            .method = @enumFromInt(0),
+            .method = @enumFromInt(fixtureTableIndex(0)),
             .proc = @enumFromInt(3),
         },
     };
@@ -893,12 +1219,12 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
         .{ .payload_layout = .u64, .contains_refcounted = false },
     };
     const desc_refs = [_]LirProgram.BoxyDescRef{
-        .{ .static = @enumFromInt(0) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     };
     const method_slots = [_]LirProgram.BoxyMethodSlot{
         .{
-            .method = @enumFromInt(0),
-            .proc = @enumFromInt(0),
+            .method = @enumFromInt(fixtureTableIndex(0)),
+            .proc = @enumFromInt(fixtureTableIndex(0)),
             .hidden_descs = .{ .start = 0, .len = 1 },
             .structural_eq = true,
         },
@@ -1012,7 +1338,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
 
     const sidecar = try lir.LirImage.BoxySidecar.fromProgram(buffer.ptr, buffer.len, &lowered);
     var view = try sidecar.view(buffer.ptr, buffer.len, base.target.TargetUsize.native, allocator);
-    defer view.layouts.interned_layouts.deinit();
+    defer view.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), view.tables.type_descs.len);
     try std.testing.expectEqual(layout_mod.Idx.u64, view.tables.type_descs[0].payload_layout);
