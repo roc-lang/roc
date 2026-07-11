@@ -5517,7 +5517,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("ConstStore tag payload count differed from checked tag type");
         }
 
-        const variant = self.tagVariant(rep, name);
+        const variant = self.tagVariantForModule(rep, type_module, name);
         const payload_children = self.parent.plan.childSlice(variant.payloads);
         if (payload_children.len != tag.payloads.len) {
             boxyLowerInvariant("ConstStore tag payload count disagreed with its boxy representation");
@@ -5525,7 +5525,7 @@ const ProcBodyBuilder = struct {
         for (payload_children, 0..) |child, index| {
             switch (child.role) {
                 .tag_payload => |payload| {
-                    if (payload.tag != name or payload.index != index) {
+                    if (payload.tag != variant.name or payload.index != index) {
                         boxyLowerInvariant("ConstStore tag variant payload span did not match its payload child roles");
                     }
                 },
@@ -8736,7 +8736,7 @@ const ProcBodyBuilder = struct {
         for (payload_children, 0..) |child, index| {
             switch (child.role) {
                 .tag_payload => |payload| {
-                    if (payload.tag != name or payload.index != index) {
+                    if (payload.tag != variant.name or payload.index != index) {
                         boxyLowerInvariant("tag variant payload span did not match its payload child roles");
                     }
                 },
@@ -10298,7 +10298,7 @@ const ProcBodyBuilder = struct {
             .tag_union => blk: {
                 const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
                 const variant = self.tagVariant(rep, name);
-                try self.validateTagPatternPayloads(name, variant.payloads, args);
+                try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
                 const payloads_bound = try self.lowerTagPayloadPatterns(rep_id, name, variant.index, args, source, on_match, miss, remaps);
                 if (variants.len == 1) break :blk payloads_bound;
                 break :blk try self.lowerTagDiscriminantSwitch(source, variant.index, payloads_bound, miss);
@@ -13356,16 +13356,26 @@ const ProcBodyBuilder = struct {
         errdefer self.parent.allocator.free(lowered);
 
         for (hidden_args, lowered) |arg, *local| {
-            const dict_ref = try self.dictionaryRefForKnownRep(arg.rep, arg.worker_dictionaries);
+            const dict_ref: LIR.BoxyDictRef = switch (arg.source) {
+                .bound_dictionaries => |dictionaries| blk: {
+                    if (dictionaries.len == 0) {
+                        boxyLowerInvariant("boxy direct call bound dictionary source was empty");
+                    }
+                    const first: Plan.DictionaryRequirementId = @enumFromInt(dictionaries.start);
+                    if (!self.dictionaryBindingIsBound(first)) {
+                        boxyLowerInvariant("boxy direct call dictionary source was not bound in the enclosing worker");
+                    }
+                    const dict_local = self.dictionaryLocalForRequirementOrNull(first) orelse
+                        boxyLowerInvariant("boxy direct call bound dictionary source had no local");
+                    break :blk .{ .local = dict_local };
+                },
+                .static_rep => |source_rep| try self.parent.staticDictRefForRep(source_rep, arg.worker_dictionaries),
+            };
             local.* = switch (dict_ref) {
                 .local => |dict_local| blk: {
                     if (self.parent.result.store.getLocal(dict_local).layout_idx != .opaque_ptr) {
                         boxyLowerInvariant("boxy hidden dictionary local was not opaque_ptr");
                     }
-                    // dictionaryRefForKnownRep yields a local only when the
-                    // representation's own dictionary binding is live; that
-                    // dictionary value satisfies the callee's requirements
-                    // regardless of the callee-side requirement ids.
                     break :blk .{ .local = dict_local };
                 },
                 .static => blk: {
@@ -20644,7 +20654,7 @@ const ProcBodyBuilder = struct {
                     if (variant.index != 0) {
                         boxyLowerInvariant("single-variant tag pattern had a nonzero variant index");
                     }
-                    return try self.validateTagPatternPayloads(name, variant.payloads, args);
+                    return try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
                 },
                 else => boxyLowerInvariant("irrefutable tag pattern did not have a tag-union representation"),
             }
@@ -22131,6 +22141,7 @@ const ProcBodyBuilder = struct {
 
     const TagVariantLookup = struct {
         index: u16,
+        name: names.TagNameId,
         payloads: Plan.Span,
     };
 
@@ -22183,6 +22194,7 @@ const ProcBodyBuilder = struct {
             }
             return .{
                 .index = @intCast(index),
+                .name = variant.name,
                 .payloads = variant.payloads,
             };
         }
