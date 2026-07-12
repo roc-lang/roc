@@ -6,6 +6,7 @@ pub const native_runtime_libcalls = @import("native_runtime_libcalls.zig");
 pub const host_abi = @import("host_abi.zig");
 pub const dec = @import("dec.zig");
 pub const crypto = @import("crypto.zig");
+pub const builtin_registry = @import("builtin_registry.zig");
 pub const dev_wrappers = @import("dev_wrappers.zig");
 pub const erased_callable = @import("erased_callable.zig");
 pub const hash = @import("hash.zig");
@@ -18,6 +19,7 @@ pub const utils = @import("utils.zig");
 pub const float_math_tan = @import("float_math/tan.zig");
 
 test "builtins tests" {
+    std.testing.refAllDecls(@import("builtin_registry.zig"));
     std.testing.refAllDecls(@import("crypto.zig"));
     std.testing.refAllDecls(@import("dec.zig"));
     std.testing.refAllDecls(@import("erased_callable.zig"));

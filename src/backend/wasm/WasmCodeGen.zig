@@ -664,17 +664,17 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .dec_acos => self.dec_acos_import,
             .dec_atan => self.dec_atan_import,
             .dec_to_str => self.dec_to_str_import,
-            .i128_div_s => self.i128_div_s_import,
-            .i128_mod_s => self.i128_mod_s_import,
+            .num_div_trunc_i128 => self.i128_div_s_import,
+            .num_rem_trunc_i128 => self.i128_mod_s_import,
             .num_mod_i128 => self.num_mod_i128_import,
-            .u128_div => self.u128_div_import,
-            .u128_mod => self.u128_mod_import,
+            .num_div_trunc_u128 => self.u128_div_import,
+            .num_rem_trunc_u128 => self.u128_mod_import,
             .num_mul_with_overflow_i128 => self.num_mul_with_overflow_i128_import,
             .num_mul_with_overflow_u128 => self.num_mul_with_overflow_u128_import,
-            .i128_to_dec => self.i128_to_dec_import,
-            .u128_to_dec => self.u128_to_dec_import,
+            .i128_to_dec_try_unsafe => self.i128_to_dec_import,
+            .u128_to_dec_try_unsafe => self.u128_to_dec_import,
             .dec_to_int_try_unsafe => null,
-            .dec_to_f32 => self.dec_to_f32_import,
+            .dec_to_f32_try_unsafe => self.dec_to_f32_import,
             .float_to_str => self.float_to_str_import,
             .float_pow => self.float_pow_import,
             .float_sin => self.float_sin_import,
@@ -1619,8 +1619,8 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
         &.{ .i32, .i32, .i64, .i64, .i64, .i64 },
         &.{.i32},
     );
-    self.num_mul_with_overflow_i128_import = try self.module.addImport("env", "roc_builtins_num_mul_with_overflow_i128", i128_mul_overflow_type);
-    self.num_mul_with_overflow_u128_import = try self.module.addImport("env", "roc_builtins_num_mul_with_overflow_u128", i128_mul_overflow_type);
+    self.num_mul_with_overflow_i128_import = try self.module.addImport("env", builtins.builtin_registry.BuiltinFn.num_mul_with_overflow_i128.symbolName(), i128_mul_overflow_type);
+    self.num_mul_with_overflow_u128_import = try self.module.addImport("env", builtins.builtin_registry.BuiltinFn.num_mul_with_overflow_u128.symbolName(), i128_mul_overflow_type);
 
     // Signed i128 modulo (decomposed wrapper ABI):
     // (out_low_ptr, out_high_ptr, a_low, a_high, b_low, b_high, roc_ops) -> void
@@ -1628,7 +1628,7 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
         &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 },
         &.{},
     );
-    self.num_mod_i128_import = try self.module.addImport("env", "roc_builtins_num_mod_i128", i128_mod_type);
+    self.num_mod_i128_import = try self.module.addImport("env", builtins.builtin_registry.BuiltinFn.num_mod_i128.symbolName(), i128_mod_type);
 
     const dec_unary_type = try self.module.addFuncType(
         &.{ .i32, .i32 },
@@ -4646,25 +4646,25 @@ fn emitCompositeNumericOp(self: *Self, op: anytype, args: anytype, ret_layout: l
                 if (operand_layout == .dec) {
                     try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .dec_div, self.dec_div_import);
                 } else if (operand_layout == .i128) {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .i128_div_s, self.i128_div_s_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_div_trunc_i128, self.i128_div_s_import);
                 } else {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .u128_div, self.u128_div_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_div_trunc_u128, self.u128_div_import);
                 }
             },
             .num_div_trunc_by => {
                 if (operand_layout == .dec) {
                     try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .dec_div_trunc, self.dec_div_trunc_import);
                 } else if (operand_layout == .i128) {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .i128_div_s, self.i128_div_s_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_div_trunc_i128, self.i128_div_s_import);
                 } else {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .u128_div, self.u128_div_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_div_trunc_u128, self.u128_div_import);
                 }
             },
             .num_rem_by => {
                 if (operand_layout == .i128 or operand_layout == .dec) {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .i128_mod_s, self.i128_mod_s_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_rem_trunc_i128, self.i128_mod_s_import);
                 } else {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .u128_mod, self.u128_mod_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_rem_trunc_u128, self.u128_mod_import);
                 }
             },
             .num_mod_by => {
@@ -4672,7 +4672,7 @@ fn emitCompositeNumericOp(self: *Self, op: anytype, args: anytype, ret_layout: l
                     try self.emitI128ModBuiltin(lhs_local, rhs_local);
                 } else {
                     // Unsigned modulo equals the truncated remainder.
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .u128_mod, self.u128_mod_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_rem_trunc_u128, self.u128_mod_import);
                 }
             },
             .num_is_gt => {
@@ -4962,9 +4962,9 @@ fn emitCheckedCompositeNumericOp(self: *Self, checked_op: LIR.LowLevel, plain_op
                 try self.emitCrashIfStackBool(checkedOverflowMessage(checked_op));
             }
             if (operand_layout == .i128) {
-                try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .i128_div_s, self.i128_div_s_import);
+                try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_div_trunc_i128, self.i128_div_s_import);
             } else {
-                try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .u128_div, self.u128_div_import);
+                try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_div_trunc_u128, self.u128_div_import);
             }
         },
         .num_rem_by, .num_mod_by => {
@@ -4979,11 +4979,11 @@ fn emitCheckedCompositeNumericOp(self: *Self, checked_op: LIR.LowLevel, plain_op
                 if (plain_op == .num_mod_by) {
                     try self.emitI128ModBuiltin(lhs_local, rhs_local);
                 } else {
-                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .i128_mod_s, self.i128_mod_s_import);
+                    try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_rem_trunc_i128, self.i128_mod_s_import);
                 }
                 self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             } else {
-                try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .u128_mod, self.u128_mod_import);
+                try self.emitI128BuiltinBinOp(lhs_local, rhs_local, .num_rem_trunc_u128, self.u128_mod_import);
             }
         },
         else => unreachable,
@@ -13496,14 +13496,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLoadOp(.i64, 8);
                 try self.emitI32Const(@intCast(offsets.success));
                 try self.emitI32Const(@intCast(offsets.value));
-                try self.emitBuiltinCall(if (is_signed) .i128_to_dec else .u128_to_dec, null);
+                try self.emitBuiltinCall(if (is_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe, null);
             } else {
                 try self.emitLocalGet(val_ptr);
                 try self.emitLocalGet(result_local);
                 try self.emitI32Const(@intCast(offsets.value));
                 self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 try self.emitBuiltinCall(
-                    if (is_signed) .i128_to_dec else .u128_to_dec,
+                    if (is_signed) .i128_to_dec_try_unsafe else .u128_to_dec_try_unsafe,
                     if (is_signed) self.i128_to_dec_import else self.u128_to_dec_import,
                 );
                 const success_flag = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -13608,7 +13608,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitStoreOp(.i64, 8);
 
             // Call roc_i128_div_s(dec_ptr, divisor_ptr, result_ptr)
-            try self.emitI128BuiltinBinOp(dec_local, divisor_local, .i128_div_s, self.i128_div_s_import);
+            try self.emitI128BuiltinBinOp(dec_local, divisor_local, .num_div_trunc_i128, self.i128_div_s_import);
             // Result is an i32 pointer to the 16-byte quotient; load low i64
             try self.emitLoadOp(.i64, 0);
 
@@ -13652,7 +13652,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             WasmModule.leb128WriteI64(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
             try self.emitStoreOp(.i64, 8);
 
-            try self.emitI128BuiltinBinOp(dec_local, divisor_local, .i128_div_s, self.i128_div_s_import);
+            try self.emitI128BuiltinBinOp(dec_local, divisor_local, .num_div_trunc_i128, self.i128_div_s_import);
         },
         .dec_to_f64 => {
             // Dec → f64: load i128 as i64 (low word), convert to f64, divide by 10^18.0
@@ -13761,10 +13761,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitLoadOp(.i64, 8);
                 try self.emitI32Const(@intCast(offsets.success));
                 try self.emitI32Const(@intCast(offsets.value));
-                try self.emitBuiltinCall(.dec_to_f32, null);
+                try self.emitBuiltinCall(.dec_to_f32_try_unsafe, null);
             } else {
                 try self.emitLocalGet(val_ptr);
-                try self.emitBuiltinCall(.dec_to_f32, self.dec_to_f32_import);
+                try self.emitBuiltinCall(.dec_to_f32_try_unsafe, self.dec_to_f32_import);
                 const f32_val = self.storage.allocAnonymousLocal(.f32) catch return error.OutOfMemory;
                 try self.emitLocalSet(f32_val);
 

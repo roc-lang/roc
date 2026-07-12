@@ -198,9 +198,9 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_i128_mod_s", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostI128ModS, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostU128Div, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_mod", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostU128Mod, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_builtins_num_mod_i128", &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostI128Mod, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_builtins_num_mul_with_overflow_i128", &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{.I32}, hostI128MulWithOverflow, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_builtins_num_mul_with_overflow_u128", &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{.I32}, hostU128MulWithOverflow, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.builtin_registry.BuiltinFn.num_mod_i128.symbolName(), &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostI128Mod, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.builtin_registry.BuiltinFn.num_mul_with_overflow_i128.symbolName(), &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{.I32}, hostI128MulWithOverflow, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction(builtins.builtin_registry.BuiltinFn.num_mul_with_overflow_u128.symbolName(), &[_]bytebox.ValType{ .I32, .I32, .I64, .I64, .I64, .I64 }, &[_]bytebox.ValType{.I32}, hostU128MulWithOverflow, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDiv, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_div_trunc", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecDivTrunc, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_dec_pow", &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostDecPow, null) catch return error.WasmExecFailed;

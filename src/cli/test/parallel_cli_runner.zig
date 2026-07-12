@@ -25,6 +25,7 @@ const harness = @import("test_harness");
 const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 const collections = @import("collections");
+const builtins = @import("builtins");
 const bytebox = @import("bytebox");
 
 /// Error returned when a hosted function reports a Roc panic to the runner.
@@ -4572,7 +4573,7 @@ fn customListBuiltinInlined(
 
     const archive_bytes = std.Io.Dir.cwd().readFileAlloc(io, archive_path, allocator, .limited(64 * 1024 * 1024)) catch |err|
         return customInfraFailure(allocator, timer, "failed to read archive {s}: {}", .{ archive_path, err });
-    if (std.mem.find(u8, archive_bytes, "roc_builtins_list_append_unsafe") != null) {
+    if (std.mem.find(u8, archive_bytes, builtins.builtin_registry.BuiltinFn.list_append_unsafe.symbolName()) != null) {
         return customFailure(allocator, timer, "list_append_unsafe was not inlined into the --opt=speed archive object (it still references the builtin symbol)", .{});
     }
     return null;

@@ -1,17 +1,25 @@
 //! Wasm-level signatures for builtin wrapper calls.
 //!
-//! The ABI is per wrapper. Codegen must push the exact params listed here and
-//! then emit a relocation to the listed `roc_builtins_*` symbol.
+//! Every signature is derived at comptime from the wrapper function types in
+//! `builtins.dev_wrappers` via the builtin registry: the wrapper's Zig
+//! parameter and return types ARE the ABI, so a hand-written row cannot
+//! drift from it. Codegen must push exactly `wasm_params` and then emit a
+//! relocation to the `name` symbol.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
 const SymbolIndex = @import("index_types.zig").SymbolIndex;
+const builtins = @import("builtins");
+const registry = builtins.builtin_registry;
+const RocOps = builtins.host_abi.RocOps;
 
 /// Wasm value type used in builtin wrapper signatures.
 pub const ValType = WasmModule.ValType;
 
-/// Builtin wrapper known to wasm codegen.
+/// Builtin wrapper known to wasm codegen: the subset of the registry the
+/// wasm backend calls. Member names must match `registry.BuiltinFn` members;
+/// a name with no registry counterpart is a compile error (see `sigs`).
 pub const BuiltinKind = enum {
     dec_mul,
     dec_div,
@@ -25,17 +33,17 @@ pub const BuiltinKind = enum {
     dec_acos,
     dec_atan,
     dec_to_str,
-    i128_div_s,
-    i128_mod_s,
-    u128_div,
-    u128_mod,
+    num_div_trunc_i128,
+    num_rem_trunc_i128,
+    num_div_trunc_u128,
+    num_rem_trunc_u128,
     num_mod_i128,
     num_mul_with_overflow_i128,
     num_mul_with_overflow_u128,
-    i128_to_dec,
-    u128_to_dec,
+    i128_to_dec_try_unsafe,
+    u128_to_dec_try_unsafe,
     dec_to_int_try_unsafe,
-    dec_to_f32,
+    dec_to_f32_try_unsafe,
     float_to_str,
     float_pow,
     float_sin,
@@ -108,105 +116,49 @@ pub const BuiltinKind = enum {
 
 /// Wasm call signature and symbol name for a builtin wrapper.
 pub const Sig = struct {
-    name: []const u8,
+    name: [:0]const u8,
     wasm_params: []const ValType,
     wasm_results: []const ValType,
     takes_roc_ops: bool,
 };
 
-/// Builtin signatures indexed by `BuiltinKind`.
-pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = .{
-    .{ .name = "roc_builtins_dec_mul", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_div", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_div_trunc", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_pow", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_sqrt", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_sin", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_cos", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_tan", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_asin", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_acos", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_atan", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_dec_to_str", .wasm_params = &.{ .i32, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_num_div_trunc_i128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_num_rem_trunc_i128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_num_div_trunc_u128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_num_rem_trunc_u128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_num_mod_i128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_num_mul_with_overflow_i128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_num_mul_with_overflow_u128", .wasm_params = &.{ .i32, .i32, .i64, .i64, .i64, .i64 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_i128_to_dec_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_u128_to_dec_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_dec_to_int_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_dec_to_f32_try_unsafe", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_to_str", .wasm_params = &.{ .i32, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_float_pow", .wasm_params = &.{ .f64, .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_sin", .wasm_params = &.{ .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_cos", .wasm_params = &.{ .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_tan", .wasm_params = &.{ .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_asin", .wasm_params = &.{ .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_acos", .wasm_params = &.{ .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_atan", .wasm_params = &.{ .f64, .i32 }, .wasm_results = &.{.f64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_int_to_str", .wasm_params = &.{ .i32, .i64, .i64, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_int_from_str", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_dec_from_str", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_float_from_str", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_str_equal", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_str_find_first", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_repeat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_trim", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_trim_start", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_trim_end", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_split", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_join_with", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i64, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_release_excess_capacity", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_with_capacity", .wasm_params = &.{ .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_drop_prefix", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_drop_prefix_caseless_ascii", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_drop_suffix", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_with_ascii_lowercased", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_with_ascii_uppercased", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_caseless_ascii_equals", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_str_escape_and_quote", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_from_utf8", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_str_from_utf8_result", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_append_unsafe", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_concat", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_drop_at", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_reserve", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_replace", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_swap", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_list_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_list_str_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_list_list_eq", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_list_reverse", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_allocate_with_refcount", .wasm_params = &.{ .i32, .i32, .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_i8_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_u8_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_i16_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_u16_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_i32_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_u32_mod_by", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{.i32}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_i64_mod_by", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_u64_mod_by", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_dict_pseudo_seed", .wasm_params = &.{}, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_finish", .wasm_params = &.{.i64}, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_write_u64", .wasm_params = &.{ .i64, .i32, .i64, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_write_u128", .wasm_params = &.{ .i64, .i32, .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_write_f32_bits", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_write_f64_bits", .wasm_params = &.{ .i64, .i64 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_write_bytes", .wasm_params = &.{ .i64, .i32, .i32, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_hasher_write_str", .wasm_params = &.{ .i64, .i32, .i32, .i32 }, .wasm_results = &.{.i64}, .takes_roc_ops = false },
-    .{ .name = "roc_builtins_crypto_sha256_hash_bytes", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_sha256_hasher_empty", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_sha256_hasher_write", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_sha256_hasher_finish", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_blake3_hash_bytes", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_blake3_hasher_empty", .wasm_params = &.{ .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_blake3_hasher_write", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
-    .{ .name = "roc_builtins_crypto_blake3_hasher_finish", .wasm_params = &.{ .i32, .i32, .i32, .i32, .i32 }, .wasm_results = &.{}, .takes_roc_ops = true },
+/// Derive a wrapper's wasm-level call signature from its Zig function type.
+fn deriveSig(comptime b: registry.BuiltinFn) Sig {
+    const fn_info = @typeInfo(b.WrapperType()).@"fn";
+
+    var params: [fn_info.params.len]ValType = undefined;
+    for (fn_info.params, 0..) |param, i| {
+        params[i] = wasmValTypeOf(param.type.?);
+    }
+    const params_final = params;
+
+    const ret = fn_info.return_type.?;
+    const results: []const ValType = if (ret == void) &.{} else &.{wasmValTypeOf(ret)};
+
+    const takes_roc_ops = fn_info.params.len > 0 and blk: {
+        const last = fn_info.params[fn_info.params.len - 1].type.?;
+        break :blk @typeInfo(last) == .pointer and @typeInfo(last).pointer.child == RocOps;
+    };
+
+    return .{
+        .name = b.symbolName(),
+        .wasm_params = &params_final,
+        .wasm_results = results,
+        .takes_roc_ops = takes_roc_ops,
+    };
+}
+
+/// Builtin signatures indexed by `BuiltinKind`, derived from the registry.
+pub const sigs: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = blk: {
+    @setEvalBranchQuota(100_000);
+    var result: [@typeInfo(BuiltinKind).@"enum".fields.len]Sig = undefined;
+    for (@typeInfo(BuiltinKind).@"enum".fields) |field| {
+        // Name-matching is the kind->registry mapping; @field fails to
+        // compile if a BuiltinKind member has no registry counterpart.
+        const b = @field(registry.BuiltinFn, field.name);
+        result[field.value] = deriveSig(b);
+    }
+    break :blk result;
 };
 
 /// Return the builtin wrapper signature for `kind`.
@@ -250,12 +202,12 @@ pub fn populateForRelocs(module: *const WasmModule) WasmModule.SymbolLookupError
 /// - `f32` → `.f32`, `f64` → `.f64`
 ///
 /// Any other shape (a by-value aggregate, a >64-bit integer, a non-pointer
-/// optional) is a compile error, so a newly added wrapper cannot silently bypass
-/// verification.
+/// optional) is a compile error, so a newly added wrapper cannot silently
+/// receive a wrong derived signature.
 fn wasmValTypeOf(comptime T: type) ValType {
-    // On wasm32 `usize`/`isize` are 32-bit even though the verifier itself is
-    // compiled for a 64-bit host (`usize` and `u64` are distinct types, so this
-    // check does not also catch genuine `u64` params).
+    // On wasm32 `usize`/`isize` are 32-bit even though the signatures are
+    // derived while compiling for a 64-bit host (`usize` and `u64` are
+    // distinct types, so this check does not also catch genuine `u64` params).
     if (T == usize or T == isize) return .i32;
     return switch (@typeInfo(T)) {
         .bool => .i32,
@@ -274,65 +226,4 @@ fn wasmValTypeOf(comptime T: type) ValType {
         .@"enum" => |info| wasmValTypeOf(info.tag_type),
         else => @compileError("unsupported builtin wrapper type: " ++ @typeName(T)),
     };
-}
-
-// Pin every `sigs` row to the real Zig wrapper signature it names.
-//
-// Each row's `.name` is the pub wrapper function in `builtins.dev_wrappers`; a
-// wrong ValType, arity, result, or `takes_roc_ops` flag is silent stack
-// corruption at runtime, so this comptime block re-derives the whole wasm ABI
-// from `@typeInfo` of the wrapper and asserts it matches the hand-written row.
-//
-// Row-to-wrapper mapping: `@field(dev_wrappers, row.name)`. Every row must
-// resolve to a wrapper — the `@hasDecl` guard makes a missing wrapper a compile
-// error. There is deliberately no exceptions list: all rows map to a wrapper,
-// and if that ever stops holding the guard fails loudly rather than skipping.
-comptime {
-    @setEvalBranchQuota(100_000);
-    const dw = @import("builtins").dev_wrappers;
-    const RocOps = @import("builtins").host_abi.RocOps;
-    for (sigs) |sig| {
-        if (!@hasDecl(dw, sig.name)) @compileError("missing dev wrapper: " ++ sig.name);
-        const fn_info = @typeInfo(@TypeOf(@field(dw, sig.name))).@"fn";
-
-        if (fn_info.params.len != sig.wasm_params.len) {
-            @compileError("builtin ABI mismatch (" ++ sig.name ++ "): wrapper param count differs from wasm_params length");
-        }
-
-        for (fn_info.params, sig.wasm_params, 0..) |param, want, i| {
-            const got = wasmValTypeOf(param.type.?);
-            if (got != want) {
-                @compileError(std.fmt.comptimePrint(
-                    "builtin ABI mismatch ({s}): param {d} wrapper lowers to .{s} but sigs row declares .{s}",
-                    .{ sig.name, i, @tagName(got), @tagName(want) },
-                ));
-            }
-        }
-
-        const ret = fn_info.return_type.?;
-        if (ret == void) {
-            if (sig.wasm_results.len != 0) {
-                @compileError("builtin ABI mismatch (" ++ sig.name ++ "): wrapper returns void but sigs row lists a result");
-            }
-        } else {
-            if (sig.wasm_results.len != 1) {
-                @compileError("builtin ABI mismatch (" ++ sig.name ++ "): wrapper returns a value but sigs row does not list exactly one result");
-            }
-            const got = wasmValTypeOf(ret);
-            if (got != sig.wasm_results[0]) {
-                @compileError(std.fmt.comptimePrint(
-                    "builtin ABI mismatch ({s}): result wrapper returns .{s} but sigs row declares .{s}",
-                    .{ sig.name, @tagName(got), @tagName(sig.wasm_results[0]) },
-                ));
-            }
-        }
-
-        const takes_roc_ops = fn_info.params.len > 0 and blk: {
-            const last = fn_info.params[fn_info.params.len - 1].type.?;
-            break :blk @typeInfo(last) == .pointer and @typeInfo(last).pointer.child == RocOps;
-        };
-        if (takes_roc_ops != sig.takes_roc_ops) {
-            @compileError("builtin ABI mismatch (" ++ sig.name ++ "): takes_roc_ops flag disagrees with trailing *RocOps param");
-        }
-    }
 }

@@ -29,7 +29,6 @@ const RocOps = builtins.host_abi.RocOps;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
-const dev_wrappers = builtins.dev_wrappers;
 
 const DevProgram = struct {
     entrypoints: []const RunImage.Entrypoint,
@@ -394,12 +393,8 @@ fn ensureFunctionStub(gpa: Allocator, stubs: *std.ArrayList(FunctionStub), name:
 }
 
 fn resolveShimFunction(name: []const u8) ?usize {
-    inline for (std.meta.fields(backend.LirCodeGenMod.BuiltinFn)) |field| {
-        const builtin_fn: backend.LirCodeGenMod.BuiltinFn = @enumFromInt(field.value);
-        const symbol_name = comptime builtin_fn.symbolName();
-        if (std.mem.eql(u8, name, symbol_name)) {
-            return @intFromPtr(&@field(dev_wrappers, symbol_name));
-        }
+    if (builtins.builtin_registry.BuiltinFn.byName(name)) |b| {
+        return b.wrapperAddr();
     }
     return null;
 }

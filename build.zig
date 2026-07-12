@@ -2824,6 +2824,7 @@ pub fn build(b: *std.Build) void {
                 .imports = &.{
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
+                    .{ .name = "builtins", .module = roc_modules.builtins },
                     .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 },
             }),
@@ -2882,6 +2883,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
             .{ .name = "collections", .module = roc_modules.collections },
+            .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
@@ -3166,6 +3168,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
             .{ .name = "collections", .module = roc_modules.collections },
+            .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
@@ -5876,6 +5879,7 @@ fn addLlvmSupportToStep(
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
             .{ .name = "collections", .module = roc_modules.collections },
+            .{ .name = "builtins", .module = roc_modules.builtins },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "backend", .module = roc_modules.backend },
             .{ .name = "lir", .module = roc_modules.lir },
