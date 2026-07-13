@@ -1891,7 +1891,9 @@ test "direct float wrapper f32" {
     roc_builtins_float_to_str(&out, bits, true, env.getOps());
     defer out.decref(env.getOps());
 
-    try std.testing.expectEqualStrings("3.140000104904175", out.asSlice());
+    // f32 values print their shortest round-trip representation (see
+    // str.floatToStrBytes), not the value widened to f64.
+    try std.testing.expectEqualStrings("3.14", out.asSlice());
 }
 
 // ── Numeric-from-string wrappers ──
