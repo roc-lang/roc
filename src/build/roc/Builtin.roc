@@ -4348,6 +4348,14 @@ Builtin :: [].{
 		## Wraps a value in a generic, opaque representation (box) that can easily be passed to the platform.
 		## Boxing is an expensive process because it copies the value from the stack to the heap.
 		## This may provide a performance optimization for advanced use cases with large values.
+		##
+		## A box is a heap cell, and its address is its identity: each runtime
+		## call to `Box.box` allocates a fresh cell, so two boxes created by
+		## separate calls are never the same allocation. Platforms may rely on
+		## a live box's address as a stable identity (for example, as a handle
+		## key). The one deliberate exception is a top-level constant: it is one
+		## binding evaluated once, so every reference shares its single
+		## program-lifetime allocation.
 		box : item -> Box(item)
 
 		## Unwraps a value from a box. This is the inverse of `Box.box`, and is also an expensive operation.

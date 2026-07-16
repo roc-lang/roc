@@ -16,6 +16,12 @@ ownership, and refcounting contracts:
   alignment, discriminants, payload offsets, and pointer-width differences
 - `Str`, `List`, `Box`, and erased callables have runtime allocation headers
   and ownership rules that are not visible from the Roc source type alone
+- a `Box`'s payload pointer is the value's representation and a stable
+  identity: each runtime `Box.box` evaluation whose result reaches the host is
+  a distinct allocation, so hosts may key on live box addresses (boxes inside
+  top-level constants are the exception — one binding shares one static,
+  refcount-pinned allocation whose retain/release are no-ops). `Str` and
+  `List` addresses carry no such guarantee and may be shared or interned.
 - lists of refcounted elements need different allocation metadata and teardown
   than lists of plain bytes
 - seamless slices do not necessarily point at the allocation base that must be
@@ -156,6 +162,7 @@ language-specific.
 | Lists with refcounted elements, including backing element-count headers | List helpers that know element width, alignment, and whether element teardown is required | `glue runtime: cli-main` constructs `List(Str)` args and validates the refcounted element-count header; `glue runtime: app-model` renders and decrefs `View.messages : List(Msg)`. |
 | Seamless slices for `Str` and `List` | Allocation-base recovery helpers that never free the visible slice pointer directly | `glue runtime: cli-main` uses generated Zig/Rust `RocStr.fromSlice` and `RocList.fromSlice` helpers and decrefs through allocation-base recovery; CGlue helper source is covered by `glue command generated C header compiles with zig cc` and `CGlue.roc expect tests pass`. |
 | Roc allocation headers, static refcount zero, and deallocation alignment | Allocator wrappers and assertions for header size, alignment, canaries, and static-data no-op release | `glue runtime: cli-main` and `glue runtime: app-model` use adversarial host allocators with alignment/live-allocation checks; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` and the Rust equivalent cover boxed payload alignment/static-release helpers. |
+| Box allocation identity as a host-visible handle (issue #10171) | Documentation and helpers must treat live `RocBox` addresses as stable identities; only boxes from top-level constants are shared static data | The fx platform `box_freshness_*` and `box_top_level_*` specs (src/cli/test/fx_test_specs.zig) pin distinct-per-call allocation and top-level static sharing across interpreter and dev backends; the compiler-side guarantee lives at `LowLevel.resultIdentityObservable`. |
 | `RocStr` small, big, static, and sliced representations | Safe byte/as-str views, constructors with UTF-8 policy, retain/release helpers, and no C-string assumptions | `glue runtime: cli-main` covers `roc_cli_read`, `roc_cli_log`, and app args; `glue runtime: type-catalog` covers provided/result strings in records and tag payloads; `glue runtime: app-model` covers `View.title`. |
 | `RocList` representation, including different field order from `RocStr` | Typed list helpers for allocation, initialization, slicing, element access, retain, and release | `glue runtime: cli-main` validates `List(Str)` construction and teardown; `glue runtime: type-catalog` covers `List(Bool)` fields; `glue runtime: app-model` checks `List(Msg)` layout in `View`. |
 | Erased callable invocation from the host | Generated callable wrapper APIs for args buffer, return buffer, capture pointer, host context, and owned result handling | `glue command with CGlue generates expected C header`, `glue regression: RustGlue succeeds on fx platform`, `glue command generated Zig compiles with zig build-obj`, and `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` cover generated callable payload, capture, call, and drop APIs. |
