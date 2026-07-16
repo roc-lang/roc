@@ -17,6 +17,7 @@ platform ""
         "roc_host_release_stored_boxed": Host.release_stored_boxed!,
         "roc_host_reset_boxed_drop_report": Host.reset_boxed_drop_report!,
         "roc_host_roundtrip_boxed": Host.roundtrip_boxed!,
+        "roc_host_same_box_u64": Host.same_box_u64!,
         "roc_host_store_boxed": Host.store_boxed!,
         "roc_host_stored_boxed_call": Host.stored_boxed_call!,
         "roc_padded_check": Padded.check!,

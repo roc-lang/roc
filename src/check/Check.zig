@@ -5619,7 +5619,11 @@ fn hoistedRootIsIntrinsicallyKept(
     if (self.cir.store.getExpr(root.expr) == .e_runtime_error) return true;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(root.expr))) return false;
     if (self.varIsFunctionType(type_var)) return false;
-    return try self.varIsConcreteHoistedConstType(type_var);
+    if (!try self.varIsConcreteHoistedConstType(type_var)) return false;
+    // A root whose value may contain a Box allocation must stay runtime code:
+    // storing it would share one static allocation across every runtime
+    // evaluation, violating Box.box's distinct-allocation guarantee (#10171).
+    return !try self.varMayContainBoxAllocation(type_var);
 }
 
 fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
@@ -5764,6 +5768,110 @@ fn flatTypeIsConcreteHoistedConst(
             // checked above, so the template walk admits rigids.
             const template = self.nominalDeclBackingTemplate(nominal) orelse break :blk false;
             break :blk try self.varIsConcreteHoistedConstTypeInternal(.decl_template, template, visited);
+        },
+    };
+}
+
+/// Whether a settled value type may transitively contain a `Box` allocation —
+/// directly, or hidden inside a closure capture (function types are
+/// conservatively box-bearing, since a stored function constant carries
+/// capture VALUES that types cannot see). Hoisted compile-time roots must not
+/// store such values: a stored constant is rematerialized as shared static
+/// data, but `Box.box` guarantees a distinct heap allocation per runtime
+/// evaluation whose result escapes (issue #10171; the axiom is documented on
+/// `LowLevel.resultIdentityObservable`). Unlike the concreteness
+/// walk above, this walk pierces OPAQUE nominal backings — wrapping a box in
+/// an opaque type does not make its allocation identity unobservable to the
+/// host. Top-level bindings are unaffected (one binding is one value, so its
+/// single shared allocation is the declared semantics); only hoisted roots
+/// consult this walk.
+fn varMayContainBoxAllocation(self: *Self, var_: Var) Allocator.Error!bool {
+    self.var_set.clearRetainingCapacity();
+    return try self.varMayContainBoxAllocationInternal(var_, &self.var_set);
+}
+
+fn varMayContainBoxAllocationInternal(
+    self: *Self,
+    var_: Var,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    const resolved = self.types.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        // Conservative: an unsettled type could stand for a box. The
+        // concreteness gate rejects these roots already; kept for
+        // self-containedness.
+        .flex, .err => true,
+        // Value-graph rigids are rejected by the concreteness gate; backing
+        // template formals stand for application args walked at the use site
+        // (same rationale as the concreteness walk's template handling).
+        .rigid => false,
+        .alias => |alias| (try self.varsMayContainBoxAllocation(self.types.sliceAliasArgs(alias), visited)) or
+            try self.varMayContainBoxAllocationInternal(self.types.getAliasBackingVar(alias), visited),
+        .structure => |flat| try self.flatTypeMayContainBoxAllocation(flat, visited),
+    };
+}
+
+fn varsMayContainBoxAllocation(
+    self: *Self,
+    vars: []const Var,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try self.varMayContainBoxAllocationInternal(var_, visited)) return true;
+    }
+    return false;
+}
+
+fn flatTypeMayContainBoxAllocation(
+    self: *Self,
+    flat: FlatType,
+    visited: *std.AutoHashMap(Var, void),
+) Allocator.Error!bool {
+    return switch (flat) {
+        .empty_record, .empty_tag_union => false,
+        // Conservative: closure captures are invisible at the type level, and
+        // a stored function constant carries capture values (which may hold
+        // boxes) into shared static data. Direct function-typed roots are
+        // already rejected, but a function can hide behind an opaque nominal
+        // backing, which this walk pierces.
+        .fn_pure, .fn_effectful, .fn_unbound => true,
+        .record => |record| blk: {
+            const fields = self.types.getRecordFieldsSlice(record.fields);
+            if (try self.varsMayContainBoxAllocation(fields.items(.var_), visited)) break :blk true;
+            break :blk try self.varMayContainBoxAllocationInternal(record.ext, visited);
+        },
+        .record_unbound => |fields| blk: {
+            const fields_slice = self.types.getRecordFieldsSlice(fields);
+            break :blk try self.varsMayContainBoxAllocation(fields_slice.items(.var_), visited);
+        },
+        .tuple => |tuple| try self.varsMayContainBoxAllocation(self.types.sliceVars(tuple.elems), visited),
+        .tag_union => |tag_union| blk: {
+            const tags = self.types.getTagsSlice(tag_union.tags);
+            for (tags.items(.args)) |tag_args| {
+                if (try self.varsMayContainBoxAllocation(self.types.sliceVars(tag_args), visited)) break :blk true;
+            }
+            break :blk try self.varMayContainBoxAllocationInternal(tag_union.ext, visited);
+        },
+        .nominal_type => |nominal| blk: {
+            if (self.nominalIsBoxType(nominal)) break :blk true;
+            if (try self.varsMayContainBoxAllocation(self.types.sliceNominalArgs(nominal), visited)) break :blk true;
+            if (self.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional())) |builtin_decl| {
+                switch (builtin_decl) {
+                    // Value-semantic builtin containers: element/key/value
+                    // types are exactly the nominal args walked above.
+                    .list, .dict, .set, .fields, .field, .num => break :blk false,
+                    .box => break :blk true,
+                    .try_type, .numeral => {},
+                }
+            }
+            // Pierce the declaration backing — including opaque nominals.
+            // Formals in the template are rigid leaves standing for the args
+            // walked above. A missing backing is conservatively box-bearing.
+            const template = self.nominalDeclBackingTemplate(nominal) orelse break :blk true;
+            break :blk try self.varMayContainBoxAllocationInternal(template, visited);
         },
     };
 }
@@ -6042,6 +6150,11 @@ fn hoistedExprAllowsStoredConst(
 ) Allocator.Error!bool {
     if (self.moduleHoistExprInvalidated(module, expr)) return false;
     return switch (module.store.getExpr(expr)) {
+        // `box_box` is deliberately allowed here: only the root's RESULT
+        // value is stored, and the keep-gate (`hoistedRootIsIntrinsicallyKept`
+        // via `varMayContainBoxAllocation`) rejects roots whose result may
+        // contain a box. Boxes that exist only as compile-time intermediates
+        // never escape into shared static data.
         .e_run_low_level => |run| run.op != .dict_pseudo_seed and
             try self.hoistedExprSpanAllowsStoredConst(module, run.args, context),
         .e_lookup_local,
@@ -6541,6 +6654,11 @@ fn hoistedRootPatternSelectedDependenciesAreKept(
     };
 }
 
+/// Note: internal binders are checked for concreteness only, NOT for box
+/// containment — a box-typed local inside a root whose RESULT is box-free is
+/// a legitimate compile-time intermediate (its allocation never escapes into
+/// stored data). Box rejection happens once, on the root's own value type,
+/// in `hoistedRootIsIntrinsicallyKept`.
 fn hoistedRootPatternBindersAreConcrete(
     self: *Self,
     pattern: CIR.Pattern.Idx,
@@ -7841,6 +7959,10 @@ fn varIsEffectfulFunction(self: *Self, var_: Var) bool {
 /// A constrained or otherwise open dispatcher needs specialization-edge
 /// evidence, so selecting it as a caller-less compile-time root would erase the
 /// evidence scope that gives the dispatch meaning.
+/// Note: a box-typed dispatcher is deliberately NOT rejected here — a dispatch
+/// on a box inside a root whose result is box-free (e.g. unboxing an
+/// intermediate) is legitimate compile-time work. Box rejection happens on the
+/// root's own value type in `hoistedRootIsIntrinsicallyKept`.
 fn staticDispatchAllowsHoistedRoot(self: *Self, dispatcher_var: Var, callable_var: Var) Allocator.Error!bool {
     if (!self.varIsFunctionType(callable_var) or self.varIsEffectfulFunction(callable_var)) return false;
     return try self.varIsConcreteHoistedConstType(dispatcher_var);

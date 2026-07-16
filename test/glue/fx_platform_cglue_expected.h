@@ -153,7 +153,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 17
+#define HOSTED_FUNCTION_COUNT 18
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -167,12 +167,13 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_HOST_RELEASE_STORED_BOXED 8
 #define HOSTED_IDX_HOST_RESET_BOXED_DROP_REPORT 9
 #define HOSTED_IDX_HOST_ROUNDTRIP_BOXED 10
-#define HOSTED_IDX_HOST_STORE_BOXED 11
-#define HOSTED_IDX_HOST_STORED_BOXED_CALL 12
-#define HOSTED_IDX_PADDED_CHECK 13
-#define HOSTED_IDX_STDERR_LINE 14
-#define HOSTED_IDX_STDIN_LINE 15
-#define HOSTED_IDX_STDOUT_LINE 16
+#define HOSTED_IDX_HOST_SAME_BOX_U64 11
+#define HOSTED_IDX_HOST_STORE_BOXED 12
+#define HOSTED_IDX_HOST_STORED_BOXED_CALL 13
+#define HOSTED_IDX_PADDED_CHECK 14
+#define HOSTED_IDX_STDERR_LINE 15
+#define HOSTED_IDX_STDIN_LINE 16
+#define HOSTED_IDX_STDOUT_LINE 17
 
 // Argument Structures
 
@@ -274,6 +275,16 @@ typedef struct {
 } HostRoundtripBoxedArgs;
 
 /**
+ * Arguments for Host.same_box_u64!
+ * Roc signature: Box(U64), Box(U64) => U64
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    uint64_t* arg0;
+    uint64_t* arg1;
+} HostSameBoxU64Args;
+
+/**
  * Arguments for Host.store_boxed!
  * Roc signature: Box(I64 -> I64) => {}
  * Refcounted fields are owned by the hosted function.
@@ -368,6 +379,9 @@ extern void roc_host_reset_boxed_drop_report(void);
 /* Host.roundtrip_boxed!: Box(I64 -> I64) => Box(I64 -> I64) */
 extern RocErasedCallable roc_host_roundtrip_boxed(RocErasedCallable arg0);
 
+/* Host.same_box_u64!: Box(U64), Box(U64) => U64 */
+extern uint64_t roc_host_same_box_u64(uint64_t* arg0, uint64_t* arg1);
+
 /* Host.store_boxed!: Box(I64 -> I64) => {} */
 extern void roc_host_store_boxed(RocErasedCallable arg0);
 
@@ -411,12 +425,13 @@ typedef struct {
     HostedFn host_release_stored_boxed_bang;  /* index 8, C name: host_release_stored_boxed */
     HostedFn host_reset_boxed_drop_report_bang;  /* index 9, C name: host_reset_boxed_drop_report */
     HostedFn host_roundtrip_boxed_bang;  /* index 10, C name: host_roundtrip_boxed */
-    HostedFn host_store_boxed_bang;  /* index 11, C name: host_store_boxed */
-    HostedFn host_stored_boxed_call_bang;  /* index 12, C name: host_stored_boxed_call */
-    HostedFn padded_check_bang;  /* index 13, C name: padded_check */
-    HostedFn stderr_line_bang;  /* index 14, C name: stderr_line */
-    HostedFn stdin_line_bang;  /* index 15, C name: stdin_line */
-    HostedFn stdout_line_bang;  /* index 16, C name: stdout_line */
+    HostedFn host_same_box_u64_bang;  /* index 11, C name: host_same_box_u64 */
+    HostedFn host_store_boxed_bang;  /* index 12, C name: host_store_boxed */
+    HostedFn host_stored_boxed_call_bang;  /* index 13, C name: host_stored_boxed_call */
+    HostedFn padded_check_bang;  /* index 14, C name: padded_check */
+    HostedFn stderr_line_bang;  /* index 15, C name: stderr_line */
+    HostedFn stdin_line_bang;  /* index 16, C name: stdin_line */
+    HostedFn stdout_line_bang;  /* index 17, C name: stdout_line */
 } HostedFunctions;
 
 

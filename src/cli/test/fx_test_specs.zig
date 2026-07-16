@@ -188,6 +188,41 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>b",
         .description = "Regression test: compiled Dict operations call the hasher builtins",
     },
+    // Issue #10171: each runtime evaluation of `Box.box` whose result escapes
+    // yields a distinct allocation. Hoisted-root compile-time evaluation must
+    // never intern a box into shared static data (the pre-fix bug reported
+    // "same allocation" for the shapes below). Top-level bindings are the one
+    // deliberate exception: one binding is one value (see box_top_level tests).
+    .{
+        .roc_file = "test/fx/box_freshness_repro.roc",
+        .io_spec = "1>distinct allocations",
+        .description = "Issue #10171: zero-arg Box helper called from a generic associated method allocates per call",
+    },
+    .{
+        .roc_file = "test/fx/box_freshness_variants.roc",
+        .io_spec = "1>direct fresh() twice: distinct allocations|1>plain fn calling fresh(): distinct allocations|1>plain fn inlining Box.box(0): distinct allocations",
+        .description = "Issue #10171: Box allocation freshness per hoisted-root shape (plain functions)",
+    },
+    .{
+        .roc_file = "test/fx/box_freshness_generic.roc",
+        .io_spec = "1>generic method inlining Box.box(0): distinct allocations|1>fresh() across two specializations: distinct allocations",
+        .description = "Issue #10171: Box allocation freshness per hoisted-root shape (generic associated methods)",
+    },
+    .{
+        .roc_file = "test/fx/box_freshness_capture.roc",
+        .io_spec = "1>distinct allocations",
+        .description = "Issue #10171: boxes captured by closures behind opaque nominals allocate per call",
+    },
+    .{
+        .roc_file = "test/fx/box_top_level_static.roc",
+        .io_spec = "1>same allocation",
+        .description = "Issue #10171: a top-level box binding is one value sharing one static allocation",
+    },
+    .{
+        .roc_file = "test/fx/box_top_level_two_bindings.roc",
+        .io_spec = "1>distinct allocations",
+        .description = "Issue #10171: two identical top-level box bindings keep distinct allocation identities",
+    },
     .{
         .roc_file = "test/fx/issue_10038_top_level_dict.roc",
         .io_spec = "0<a|1>b",

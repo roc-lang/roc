@@ -44,6 +44,9 @@ Host :: {
     ## Return the same boxed function back to Roc after taking a host reference.
     roundtrip_boxed! : Box(I64ToI64) => Box(I64ToI64)
 
+    ## Report whether two boxed U64 payloads share one allocation.
+    same_box_u64! : Box(U64), Box(U64) => U64
+
     ## Store a boxed function in the host by incrementing its outer refcount.
     store_boxed! : Box(I64ToI64) => {}
 

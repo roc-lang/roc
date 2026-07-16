@@ -1248,6 +1248,182 @@ test "hoist roots are not selected for effectful static dispatch calls" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
+test "hoist roots are not selected for direct box allocation function body" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| Box.box(42.U64)
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for box bindings or their dependents" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    b = Box.box(42.U64)
+        \\    Box.unbox(b) + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are selected for box-free results with internal box intermediates" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    v = {
+        \\        b = Box.box(41.U64)
+        \\        Box.unbox(b) + 1.U64
+        \\    }
+        \\    v + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(roots[0].pattern != null);
+    try expectExprTag(&test_env, roots[0].expr, .e_block);
+}
+
+test "hoist roots are not selected for records containing boxes" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    r = { boxed: Box.box(1.U64), num: 2.U64 }
+        \\    r.num + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for lists containing boxes" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| [Box.box(1.U64), Box.box(2.U64)]
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for box helper bodies in generic associated methods" {
+    // The exact shape from issue #10171: pre-fix, fresh's body `Box.box(0)`
+    // was hoisted to one shared static box returned by every runtime call.
+    var test_env = try TestEnv.init("Test",
+        \\fresh : () -> Box(U64)
+        \\fresh = || Box.box(0)
+        \\
+        \\Signal(a) := { token : Box(U64) }.{
+        \\    const : a -> Signal(a)
+        \\    const = |_| { token: fresh() }
+        \\
+        \\    map : Signal(a), (a -> b) -> Signal(b)
+        \\    map = |_, _| { token: fresh() }
+        \\}
+        \\
+        \\main = |_| {
+        \\    base = Signal.const("base")
+        \\    base.map(|value| value)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for boxes behind opaque nominal backings" {
+    var test_env = try TestEnv.init("Test",
+        \\Token :: { boxed : Box(U64) }.{
+        \\    new : () -> Token
+        \\    new = || { boxed: Box.box(0.U64) }
+        \\}
+        \\
+        \\main = |arg| {
+        \\    t = Token.new()
+        \\    _ = t
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected for boxes captured by closures behind opaque backings" {
+    // Closure captures are invisible at the type level; a stored function
+    // constant would carry the captured box into shared static data, so
+    // function-containing backings are conservatively rejected.
+    var test_env = try TestEnv.init("Test",
+        \\Thunk :: [Mk(() -> Box(U64))].{
+        \\    make : () -> Thunk
+        \\    make = || {
+        \\        b = Box.box(0.U64)
+        \\        Mk(|| b)
+        \\    }
+        \\}
+        \\
+        \\main = |arg| {
+        \\    t = Thunk.make()
+        \\    _ = t
+        \\    arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist extraction roots keep box-free binders and drop box binders" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    { num, boxed } = { num: 41.U64, boxed: Box.box(7.U64) }
+        \\    Box.unbox(boxed) + num + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try expectPatternExtractionRoot(roots[0]);
+}
+
+test "hoist roots are not selected for imported opaque box tokens" {
+    var token_env = try TestEnv.init("Token",
+        \\Token :: { boxed : Box(U64) }.{
+        \\    new : () -> Token
+        \\    new = || { boxed: Box.box(0.U64) }
+        \\}
+    );
+    defer token_env.deinit();
+    try token_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), token_env.checker.selectedHoistedRoots().len);
+
+    var test_env = try TestEnv.initWithImport("Main",
+        \\import Token
+        \\
+        \\main = |arg| {
+        \\    t = Token.new()
+        \\    _ = t
+        \\    arg
+        \\}
+    , "Token", &token_env);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots are not selected for dict pseudo-seed dependent values" {
     var test_env = try TestEnv.init("Test",
         \\main! = || {

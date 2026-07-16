@@ -1312,6 +1312,13 @@ fn hostedHostRoundtripBoxed(boxed: ?[*]u8) callconv(.c) ?[*]u8 {
     return boxed;
 }
 
+fn hostedHostSameBoxU64(left: ?[*]u8, right: ?[*]u8) callconv(.c) u64 {
+    const ops = g_roc_ops.?;
+    defer builtins.dev_wrappers.roc_builtins_box_decref_with(left, @alignOf(u64), null, ops);
+    defer builtins.dev_wrappers.roc_builtins_box_decref_with(right, @alignOf(u64), null, ops);
+    return @intFromBool(left == right);
+}
+
 fn hostedHostStoreBoxed(boxed: ?[*]u8) callconv(.c) void {
     const ops = g_roc_ops.?;
     if (stored_boxed_callable) |prev| {
@@ -1373,6 +1380,7 @@ comptime {
     @export(&hostedHostReleaseStoredBoxed, .{ .name = "roc_host_release_stored_boxed", .visibility = .hidden });
     @export(&hostedHostResetBoxedDropReport, .{ .name = "roc_host_reset_boxed_drop_report", .visibility = .hidden });
     @export(&hostedHostRoundtripBoxed, .{ .name = "roc_host_roundtrip_boxed", .visibility = .hidden });
+    @export(&hostedHostSameBoxU64, .{ .name = "roc_host_same_box_u64", .visibility = .hidden });
     @export(&hostedHostStoreBoxed, .{ .name = "roc_host_store_boxed", .visibility = .hidden });
     @export(&hostedHostStoredBoxedCall, .{ .name = "roc_host_stored_boxed_call", .visibility = .hidden });
     @export(&hostedPaddedCheck, .{ .name = "roc_padded_check", .visibility = .hidden });
