@@ -6,9 +6,6 @@ const can = @import("can");
 const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
-/// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 1;
-
 /// Collection of hoisted roots selected for a checked module.
 pub const SelectedHoistedRootSet = struct {
     roots: []const SelectedHoistedRoot,

@@ -1129,6 +1129,48 @@ pub const LowLevel = enum(u16) {
         };
     }
 
+    /// Whether this primitive's result is a heap cell whose allocation
+    /// identity is program-observable (issue #10171).
+    ///
+    /// A `Box`'s runtime representation at the host ABI is its payload
+    /// pointer: hosts receive it, refcount it, and may key on it as a stable
+    /// identity. The language guarantees that each dynamic execution of one of
+    /// these ops whose result escapes yields a DISTINCT allocation. Passes and
+    /// backends must therefore never:
+    ///   - merge two executions into one (no CSE/GVN over these ops — none
+    ///     exists today; this property is the axiom for any future pass),
+    ///   - hoist one execution across its executing scope (one call site
+    ///     executed N times must allocate N times), or
+    ///   - share a result as static data (the checker's hoisted-root keep
+    ///     gate, `varMayContainBoxAllocation`, and compile-time finalization's
+    ///     `constNodeContainsBox` backstop enforce this for compile-time
+    ///     constants; top-level bindings are exempt because one binding is one
+    ///     value).
+    ///
+    /// Reusing a DEAD allocation is fine: `box_prepare_update`'s consume
+    /// semantics (and src/lir/box_reuse.zig's rewrite to it) recycle an input
+    /// box only when it is uniquely owned and about to be dropped — the moral
+    /// equivalent of free-then-malloc returning the same address. Likewise,
+    /// eliding an allocation that provably never escapes is legal, since its
+    /// identity is unobservable in-language (Roc has no pointer equality).
+    ///
+    /// Deliberately excluded:
+    ///   - Str/List/Dict/Set allocations: value semantics; their addresses are
+    ///     not identities and static sharing/interning stays legal.
+    ///   - `ptr_alloca`: a stack slot, documented as prologue-hoistable.
+    ///   - erased-callable creation: function identity is unobservable (no
+    ///     function equality); their capture PAYLOADS are covered because the
+    ///     captures themselves hold boxes.
+    pub fn resultIdentityObservable(self: LowLevel) bool {
+        return switch (self) {
+            .box_box,
+            .box_alloc_zeroed,
+            .box_prepare_update,
+            => true,
+            else => false,
+        };
+    }
+
     /// Whether this primitive can consume borrowed string views directly,
     /// without first materializing them into RocStr values.
     pub fn acceptsStrViewArgs(self: LowLevel) bool {
@@ -1184,3 +1226,15 @@ pub const LowLevel = enum(u16) {
         };
     }
 };
+
+test "resultIdentityObservable covers exactly the box allocation ops" {
+    const testing = @import("std").testing;
+    try testing.expect(LowLevel.box_box.resultIdentityObservable());
+    try testing.expect(LowLevel.box_alloc_zeroed.resultIdentityObservable());
+    try testing.expect(LowLevel.box_prepare_update.resultIdentityObservable());
+    // Value-semantic allocations and stack slots are deliberately excluded.
+    try testing.expect(!LowLevel.box_unbox.resultIdentityObservable());
+    try testing.expect(!LowLevel.str_concat.resultIdentityObservable());
+    try testing.expect(!LowLevel.list_with_capacity.resultIdentityObservable());
+    try testing.expect(!LowLevel.ptr_alloca.resultIdentityObservable());
+}

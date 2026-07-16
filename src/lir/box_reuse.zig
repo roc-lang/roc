@@ -27,6 +27,15 @@
 //! platform-entrypoint form where the unbox and update call live in the join's
 //! remainder. The join matchers only cross local aliases and zero-sized struct
 //! statements, and validate the payload/box layouts before rewriting.
+//!
+//! Allocation identity: box allocations are identity-observable across the
+//! host ABI (`LowLevel.resultIdentityObservable`, issue #10171) — every
+//! dynamic execution of an escaping `box_box` must yield a distinct
+//! allocation. This rewrite is legal under that axiom because it recycles
+//! only the CONSUMED input box: `box_prepare_update` takes the in-place path
+//! solely when the input is uniquely owned and about to be dropped (the moral
+//! equivalent of free-then-malloc returning the same address), and otherwise
+//! copies into a fresh allocation. It never gives two live boxes one address.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

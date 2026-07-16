@@ -132,6 +132,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
+    std.testing.refAllDecls(@import("LowLevel.zig"));
     std.testing.refAllDecls(@import("module_identity.zig"));
     std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
