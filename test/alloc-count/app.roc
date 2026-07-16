@@ -99,6 +99,15 @@ check_json_parse_allocs! = |input| {
 	skip_allocs = Host.alloc_count!() - skip_before
 	expect skip_allocs == 0
 	expect skipped == Ok({ a: 7 })
+
+	# a skipped numeric field: scalar validation must not allocate either
+	num_doc = Str.concat("{\"z\":", Str.concat(Str.repeat("7", 1 + Str.count_utf8_bytes(input) % 3), ",\"a\":1}"))
+	skip_num_before = Host.alloc_count!()
+	skipped_num : Try({ a : U64 }, Json.ParseErr)
+	skipped_num = Json.parse(num_doc)
+	skip_num_allocs = Host.alloc_count!() - skip_num_before
+	expect skip_num_allocs == 0
+	expect skipped_num == Ok({ a: 1 })
 	{}
 }
 
