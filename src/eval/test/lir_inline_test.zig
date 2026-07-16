@@ -5577,3 +5577,57 @@ test "compiler-generated dispatch classes lower via checked evidence" {
     defer allocator.free(output);
     try std.testing.expectEqualStrings("True", output);
 }
+
+test "hoisted const templates never store box-carrying values" {
+    // Box allocation identity (#10171): the checker's keep-gate
+    // (`varMayContainBoxAllocation`) must prevent any hoisted root whose
+    // value contains a box from being published, and finalization's backstop
+    // (`constNodeContainsBox` in compile_time_finalization.zig) must never
+    // upgrade one to a stored constant. This publishes a program full of
+    // box-adjacent shapes and asserts the finalized artifact holds no
+    // box-carrying stored template.
+    const allocator = std.testing.allocator;
+    const source =
+        \\fresh : () -> Box(U64)
+        \\fresh = || Box.box(0)
+        \\
+        \\make_token : () -> { token : Box(U64) }
+        \\make_token = || { token: fresh() }
+        \\
+        \\add_one : U64 -> U64
+        \\add_one = |n| n + 1
+        \\
+        \\unbox_sum : () -> U64
+        \\unbox_sum = || {
+        \\    b = Box.box(41.U64)
+        \\    Box.unbox(b) + 1.U64
+        \\}
+        \\
+        \\main = |_| {
+        \\    forty_two = add_one(41.U64)
+        \\    t = make_token()
+        \\    Box.unbox(t.token) + unbox_sum() + forty_two
+        \\}
+    ;
+
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltinPublishingHoistedRoots(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const artifact = &resources.checked_artifact;
+    var stored_count: usize = 0;
+    for (artifact.hoisted_constants.entries) |entry| {
+        switch (artifact.const_templates.get(entry.const_ref).state) {
+            .stored_const => |stored| {
+                stored_count += 1;
+                try std.testing.expect(!eval.CompileTimeFinalization.constNodeContainsBox(&artifact.const_store, stored.node));
+            },
+            .eval_template, .reserved => {},
+        }
+    }
+    // `forty_two`'s box-free binding must still be hoisted and stored —
+    // otherwise this test is vacuous. (`unbox_sum`'s direct body root is
+    // conservatively cascade-pruned: its internal box binding root is
+    // rejected by the keep gate, and the body root's dependency check follows
+    // it — safe direction, less hoisting than strictly necessary.)
+    try std.testing.expect(stored_count >= 1);
+}

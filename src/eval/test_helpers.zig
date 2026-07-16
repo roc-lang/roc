@@ -1091,6 +1091,7 @@ fn publishProgramForComptimeProblemsImpl(
         pre_published_builtin,
         .report_comptime_problems,
         null,
+        .omit,
     ) catch |err| switch (err) {
         error.CompileTimeProblem => return .comptime_problems,
         else => return err,
@@ -1124,6 +1125,32 @@ pub fn publishProgramKeepingReportedComptimeProblems(
         .published_roots_only,
         null,
         .report_comptime_problems,
+        null,
+        .omit,
+    );
+}
+
+/// Same as `parseAndCanonicalizeProgramWithBuiltin`, but publishes the
+/// checker's selected hoisted compile-time roots the way the production
+/// drivers do. See `HoistedRootPublication` for when to use which.
+pub fn parseAndCanonicalizeProgramWithBuiltinPublishingHoistedRoots(
+    allocator: Allocator,
+    source_kind: SourceKind,
+    source: []const u8,
+    imports: []const ModuleSource,
+    pre_published_builtin: PrePublishedBuiltin,
+) TestHelperError!ParsedResources {
+    return parseAndCanonicalizeProgramWithRootModeReporting(
+        allocator,
+        source_kind,
+        source,
+        imports,
+        false,
+        .{ .eval_root = false },
+        pre_published_builtin,
+        .ignore_comptime_problems,
+        null,
+        .publish,
     );
 }
 
@@ -1151,6 +1178,18 @@ fn checkedModuleHasArtifactBlockingProblems(module: *const CheckedModule) bool {
     return module.module_env.types.containsErrContent();
 }
 
+/// Whether publication carries the checker's selected hoisted compile-time
+/// roots, as the production drivers do (compile_package.zig, coordinator.zig).
+///
+/// `.omit` is the harness default: most structural tests pin lowering shapes
+/// for deliberately CLOSED programs, and faithful hoisted publication would
+/// fold their entire bodies to compile-time constants, erasing the very
+/// machinery they exist to inspect. Tests that assert production hoisted-const
+/// behavior (e.g. Box allocation identity, issue #10171) opt in with
+/// `.publish`; end-to-end production fidelity is covered by the CLI fx suite,
+/// which runs the real drivers.
+pub const HoistedRootPublication = enum { omit, publish };
+
 fn parseAndCanonicalizeProgramWithRootMode(
     allocator: Allocator,
     source_kind: SourceKind,
@@ -1171,6 +1210,7 @@ fn parseAndCanonicalizeProgramWithRootMode(
         pre_published_builtin,
         .ignore_comptime_problems,
         roc_ctx,
+        .omit,
     );
 }
 
@@ -1184,6 +1224,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
     pre_published_builtin: ?PrePublishedBuiltin,
     problem_reporting: ComptimeProblemReporting,
     roc_ctx: ?CoreCtx,
+    hoisted_root_publication: HoistedRootPublication,
 ) TestHelperError!ParsedResources {
     const builtin_indices: CIR.BuiltinIndices = if (pre_published_builtin) |ppb|
         ppb.indices
@@ -1358,6 +1399,14 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             .imports = publish_imports,
             .available_artifacts = available_artifacts,
             .explicit_roots = explicit_roots,
+            // `.publish` matches the production drivers (compile_package.zig,
+            // coordinator.zig), which carry the checker's selected hoisted
+            // compile-time roots into publication. See HoistedRootPublication
+            // for why the harness defaults to `.omit`.
+            .hoisted_roots = switch (hoisted_root_publication) {
+                .publish => main_checked.checker.selectedHoistedRoots(),
+                .omit => &.{},
+            },
             .compile_time_finalizer = CompileTimeFinalization.finalizer(),
             .problem_store = switch (problem_reporting) {
                 .ignore_comptime_problems => null,

@@ -1704,6 +1704,11 @@ fn finishConstRoot(
         .expect,
         => finalizationInvariant("constant root finalized with non-constant payload"),
     };
+    const hoisted_entry: ?checked.HoistedConstEntry = switch (root.kind) {
+        .hoisted_constant => module.hoisted_constants.lookupByRoot(root.id) orelse
+            finalizationInvariant("hoisted constant root had no hoisted const entry"),
+        else => null,
+    };
     const const_ref = switch (root.kind) {
         .constant => blk: {
             const pattern = root.pattern orelse finalizationInvariant("constant root had no checked pattern");
@@ -1714,17 +1719,35 @@ fn finishConstRoot(
                 .procedure_binding => finalizationInvariant("constant root top-level value was not a constant"),
             };
         },
-        .hoisted_constant => blk: {
-            const hoisted = module.hoisted_constants.lookupByRoot(root.id) orelse
-                finalizationInvariant("hoisted constant root had no hoisted const entry");
-            break :blk hoisted.const_ref;
-        },
+        .hoisted_constant => hoisted_entry.?.const_ref,
         .callable_binding,
         .expect,
         .numeral_conversion,
         .quote_conversion,
         => unreachable,
     };
+    // Backstop for Box allocation identity (#10171): a hoisted root's stored
+    // value must never contain a box — storing it would share one static
+    // allocation across every runtime evaluation, but `Box.box` guarantees a
+    // distinct allocation per evaluation whose result escapes (see
+    // `LowLevel.resultIdentityObservable`). The checker's keep-gate
+    // (`varMayContainBoxAllocation`) prunes such roots before they get here,
+    // so this branch is a tripwire in Debug builds. Top-level `.constant`
+    // roots are exempt: one binding is one value, so its single shared
+    // (static, refcount-pinned) allocation is the declared semantics.
+    if (root.kind == .hoisted_constant and constNodeContainsBox(&module.const_store, node)) {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("compile-time finalization invariant violated: hoisted root stored a Box allocation; the checker prune (varMayContainBoxAllocation) should have rejected it", .{});
+        }
+        // Release fallback: an expr-shaped root left as `.eval_template`
+        // re-lowers inline at its one use site — one runtime evaluation per
+        // dynamic execution, preserving freshness. A binding-shaped root must
+        // NOT take that fallback: reads go through the binding, so per-READ
+        // re-evaluation would break local binding sharing. Keeping the stored
+        // const there preserves the status-quo behavior on a path the checker
+        // prune makes unreachable.
+        if (hoisted_entry.?.pattern == null) return;
+    }
     const stored = checked.StoredConstTemplate{
         .node = node,
         .root_type = root_type orelse finalizationInvariant("constant root finalized without exact Monotype representation evidence"),
@@ -1733,6 +1756,37 @@ fn finishConstRoot(
     if (root.kind == .constant) {
         module.exported_const_templates.fillStoredConst(const_ref, stored);
     }
+}
+
+/// Whether a stored compile-time value transitively contains a box allocation,
+/// including boxes held by closure captures. The const store is a tree — nodes
+/// are appended without content dedup and Debug-mode `verifyComplete` proves
+/// acyclicity — so no visited set is needed.
+pub fn constNodeContainsBox(store: *const check.ConstStore.ConstStore, node: check.ConstStore.ConstNodeId) bool {
+    return switch (store.get(node)) {
+        .box => true,
+        .zst, .scalar, .str, .crash => false,
+        .pending => finalizationInvariant("stored constant contained a pending node"),
+        .list, .tuple, .record => |children| blk: {
+            for (children) |child| {
+                if (constNodeContainsBox(store, child)) break :blk true;
+            }
+            break :blk false;
+        },
+        .tag => |tag| blk: {
+            for (tag.payloads) |payload| {
+                if (constNodeContainsBox(store, payload)) break :blk true;
+            }
+            break :blk false;
+        },
+        .nominal => |nominal| constNodeContainsBox(store, nominal.backing),
+        .fn_value => |fn_id| blk: {
+            for (store.getFn(fn_id).captures) |capture| {
+                if (constNodeContainsBox(store, capture.value)) break :blk true;
+            }
+            break :blk false;
+        },
+    };
 }
 
 fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
@@ -1773,4 +1827,60 @@ test "compile-time progress wait avoids timestamp wraparound" {
 
 test "compile-time finalization declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "constNodeContainsBox finds boxes nested in structural values" {
+    var store = check.ConstStore.ConstStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const payload = try store.append(.{ .scalar = .{ .u64 = 7 } });
+    const boxed = try store.append(.{ .box = payload });
+    const num = try store.append(.{ .scalar = .{ .i64 = 41 } });
+    const record = try store.append(.{ .record = &.{ num, boxed } });
+    const nominal_over_record = try store.append(.{ .nominal = .{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(0) },
+        .backing = record,
+    } });
+    const tag_over_box = try store.append(.{ .tag = .{ .tag_name = "Mk", .payloads = &.{boxed} } });
+    const box_free_list = try store.append(.{ .list = &.{ num, num } });
+
+    try std.testing.expect(constNodeContainsBox(&store, boxed));
+    try std.testing.expect(constNodeContainsBox(&store, record));
+    try std.testing.expect(constNodeContainsBox(&store, nominal_over_record));
+    try std.testing.expect(constNodeContainsBox(&store, tag_over_box));
+    try std.testing.expect(!constNodeContainsBox(&store, payload));
+    try std.testing.expect(!constNodeContainsBox(&store, num));
+    try std.testing.expect(!constNodeContainsBox(&store, box_free_list));
+}
+
+test "constNodeContainsBox finds boxes held by closure captures" {
+    var store = check.ConstStore.ConstStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const payload = try store.append(.{ .scalar = .{ .u64 = 0 } });
+    const boxed = try store.append(.{ .box = payload });
+    const num = try store.append(.{ .scalar = .{ .i64 = 1 } });
+
+    const template = canonical.ProcTemplate{
+        .proc_base = @enumFromInt(0),
+        .template = @enumFromInt(0),
+    };
+    const capturing_fn = try store.appendFn(.{
+        .fn_def = .{ .local_template = template },
+        .source_fn_ty = @enumFromInt(0),
+        .source_fn_key = .{},
+        .captures = &.{.{ .id = @enumFromInt(0), .ty = @enumFromInt(0), .value = boxed }},
+    });
+    const capturing_value = try store.append(.{ .fn_value = capturing_fn });
+
+    const box_free_fn = try store.appendFn(.{
+        .fn_def = .{ .local_template = template },
+        .source_fn_ty = @enumFromInt(0),
+        .source_fn_key = .{},
+        .captures = &.{.{ .id = @enumFromInt(0), .ty = @enumFromInt(0), .value = num }},
+    });
+    const box_free_value = try store.append(.{ .fn_value = box_free_fn });
+
+    try std.testing.expect(constNodeContainsBox(&store, capturing_value));
+    try std.testing.expect(!constNodeContainsBox(&store, box_free_value));
 }
