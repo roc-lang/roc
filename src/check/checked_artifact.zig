@@ -2322,7 +2322,26 @@ fn topLevelExprIsAlreadyProcedure(expr: CIR.Expr) bool {
 }
 
 fn sourceTypeIsFunction(module: TypedCIR.Module, var_: Var) bool {
-    return module.typeStoreConst().varResolvesToFunction(var_);
+    return sourceVarIsFunction(module.typeStoreConst(), var_);
+}
+
+fn sourceVarIsFunction(store: *const types.Store, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = store.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| {
+                current = store.getAliasBackingVar(alias);
+                continue;
+            },
+            .structure => |flat| return switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound => true,
+                else => false,
+            },
+            .err => return false,
+            .flex, .rigid => return false,
+        }
+    }
 }
 
 fn isHostedProcedureExpr(expr: CIR.Expr) bool {
@@ -15293,13 +15312,12 @@ const PlatformRelationTypeSubstitutions = struct {
                     std.debug.assert(checkedTypePayloadIsIdentity(checked_types.store.payload(formal)));
                 }
                 const actual = try projector.project(app_identity_root);
-                try recordRelationSubstitution(allocator, names, &checked_types.store, &formals, &actuals, formal, actual);
+                try recordRelationSubstitution(allocator, &formals, &actuals, formal, actual);
             }
 
             try appendForClauseAliasSubstitutions(
                 allocator,
                 module,
-                names,
                 checked_types,
                 declaration,
                 &formals,
@@ -15340,19 +15358,22 @@ const PlatformRelationTypeSubstitutions = struct {
     }
 };
 
-/// Append a `formal -> actual` substitution. Repeated equivalent bindings keep
-/// the first root; conflicting bindings violate the checked relation invariant.
+/// Append a `formal -> actual` substitution, keeping the first binding recorded
+/// for a given formal (later substitution reads take the first paired actual).
 fn recordRelationSubstitution(
     allocator: Allocator,
-    names: *const canonical.CanonicalNameStore,
-    store: *const CheckedTypeStore,
     formals: *std.ArrayList(CheckedTypeId),
     actuals: *std.ArrayList(CheckedTypeId),
     formal: CheckedTypeId,
     actual: CheckedTypeId,
 ) Allocator.Error!void {
     if (formal == actual) return;
-    try appendUniqueCheckedTypeSubstitution(formals, actuals, allocator, names, store, formal, actual);
+    for (formals.items) |existing| {
+        if (existing == formal) return;
+    }
+    try formals.append(allocator, formal);
+    errdefer _ = formals.pop();
+    try actuals.append(allocator, actual);
 }
 
 /// The recorded actual paired with `formal`, or null if `formal` is unbound.
@@ -15375,7 +15396,6 @@ fn relationSubstitutionActual(
 fn appendForClauseAliasSubstitutions(
     allocator: Allocator,
     module: TypedCIR.Module,
-    names: *const canonical.CanonicalNameStore,
     checked_types: *const CheckedTypePublication,
     declaration: PlatformRequiredDeclaration,
     formals: *std.ArrayList(CheckedTypeId),
@@ -15401,12 +15421,12 @@ fn appendForClauseAliasSubstitutions(
         const alias_root = checked_types.rootForSourceVar(module, ModuleEnv.varFrom(alias.alias_stmt_idx)) orelse {
             checkedArtifactInvariant("platform/app relation alias substitution could not find alias checked root", .{});
         };
-        try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_root, resolved);
+        try recordRelationSubstitution(allocator, formals, actuals, alias_root, resolved);
         switch (checked_types.store.payload(alias_root)) {
-            .alias => |alias_payload| try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_payload.backing, resolved),
+            .alias => |alias_payload| try recordRelationSubstitution(allocator, formals, actuals, alias_payload.backing, resolved),
             else => {},
         }
-        try recordRelationSubstitution(allocator, names, &checked_types.store, formals, actuals, alias_anno_root, resolved);
+        try recordRelationSubstitution(allocator, formals, actuals, alias_anno_root, resolved);
     }
 }
 
@@ -15654,7 +15674,7 @@ fn platformRequirementSolutionTableFromInputs(
     errdefer identity_solutions.deinit(allocator);
 
     for (inputs) |input| {
-        if (try solutionVarsReachErr(allocator, module, input)) continue;
+        if (try solutionVarsReachErr(allocator, module.typeStoreConst(), input)) continue;
 
         const top_level = top_level_values.lookupByDef(input.def) orelse {
             checkedArtifactInvariant("platform requirement solution references a def with no published top-level value", .{});
@@ -15712,22 +15732,76 @@ fn platformRequirementSolutionTableFromInputs(
 
 fn solutionVarsReachErr(
     allocator: Allocator,
-    module: TypedCIR.Module,
+    store: *const types.Store,
     input: requirement_solution.SolutionInput,
 ) Allocator.Error!bool {
-    if (try canonical_type_keys.containsError(
-        allocator,
-        module.typeStoreConst(),
-        module.moduleEnvConst(),
-        input.solved_var,
-    )) return true;
+    var visited = std.AutoHashMap(Var, void).init(allocator);
+    defer visited.deinit();
+    if (try solverVarReachesErr(store, &visited, input.solved_var)) return true;
     for (input.identity_vars) |identity_var| {
-        if (try canonical_type_keys.containsError(
-            allocator,
-            module.typeStoreConst(),
-            module.moduleEnvConst(),
-            identity_var,
-        )) return true;
+        if (try solverVarReachesErr(store, &visited, identity_var)) return true;
+    }
+    return false;
+}
+
+/// Whether any part of a solver var's structure is an error type. Mirrors the
+/// checker's own reachability walk; `visited` must start empty per top-level
+/// query group (a var proven err-free may be memoized as visited, but a var
+/// containing an error must not be re-queried through the memo).
+fn solverVarReachesErr(
+    store: *const types.Store,
+    visited: *std.AutoHashMap(Var, void),
+    var_: Var,
+) Allocator.Error!bool {
+    const resolved = store.resolveVar(var_);
+    if (visited.contains(resolved.var_)) return false;
+    try visited.put(resolved.var_, {});
+
+    return switch (resolved.desc.content) {
+        .err => true,
+        .flex, .rigid => false,
+        .alias => |alias| try solverVarReachesErr(store, visited, store.getAliasBackingVar(alias)),
+        .structure => |flat_type| switch (flat_type) {
+            .tuple => |tuple| try solverVarsReachErr(store, visited, store.sliceVars(tuple.elems)),
+            .nominal_type => |nominal| blk: {
+                var arg_iter = store.iterNominalArgs(nominal);
+                while (arg_iter.next()) |arg_var| {
+                    if (try solverVarReachesErr(store, visited, arg_var)) break :blk true;
+                }
+                break :blk store.nominalDeclIsInvalid(nominal);
+            },
+            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+                if (try solverVarsReachErr(store, visited, store.sliceVars(func.args))) break :blk true;
+                break :blk try solverVarReachesErr(store, visited, func.ret);
+            },
+            .record => |record| blk: {
+                const fields = store.getRecordFieldsSlice(record.fields);
+                if (try solverVarsReachErr(store, visited, fields.items(.var_))) break :blk true;
+                break :blk try solverVarReachesErr(store, visited, record.ext);
+            },
+            .record_unbound => |fields| blk: {
+                const fields_slice = store.getRecordFieldsSlice(fields);
+                break :blk try solverVarsReachErr(store, visited, fields_slice.items(.var_));
+            },
+            .tag_union => |tag_union| blk: {
+                const tags = store.getTagsSlice(tag_union.tags);
+                for (tags.items(.args)) |tag_args| {
+                    if (try solverVarsReachErr(store, visited, store.sliceVars(tag_args))) break :blk true;
+                }
+                break :blk try solverVarReachesErr(store, visited, tag_union.ext);
+            },
+            .empty_record, .empty_tag_union => false,
+        },
+    };
+}
+
+fn solverVarsReachErr(
+    store: *const types.Store,
+    visited: *std.AutoHashMap(Var, void),
+    vars: []const Var,
+) Allocator.Error!bool {
+    for (vars) |var_| {
+        if (try solverVarReachesErr(store, visited, var_)) return true;
     }
     return false;
 }
@@ -16849,7 +16923,7 @@ fn appendUniqueCheckedTypeSubstitution(
     actuals: *std.ArrayList(CheckedTypeId),
     allocator: Allocator,
     names: *const canonical.CanonicalNameStore,
-    store: *const CheckedTypeStore,
+    store: *CheckedTypeStore,
     formal: CheckedTypeId,
     actual: CheckedTypeId,
 ) Allocator.Error!void {
@@ -17073,7 +17147,7 @@ pub fn buildPlatformAppRelation(
             .pattern = solution.pattern,
         };
 
-        const required_ty_is_function = platform_module_env.types.varResolvesToFunction(ModuleEnv.varFrom(declaration.type_anno));
+        const required_ty_is_function = sourceVarIsFunction(&platform_module_env.types, ModuleEnv.varFrom(declaration.type_anno));
         if (builtin.mode == .Debug) {
             const derived_kind: PlatformRequiredValueKind = if (required_ty_is_function) .procedure_value else .const_value;
             std.debug.assert(derived_kind == solution.value_kind);
@@ -24719,6 +24793,7 @@ const CheckedTypeStoreImportProjector = struct {
         projector.preserve_source_instance = true;
         return projector;
     }
+
     fn deinit(self: *CheckedTypeStoreImportProjector) void {
         self.projected.deinit();
         self.active.deinit();
@@ -26588,92 +26663,6 @@ test "checked type store preserves distinct identity roots with equal variable s
     try std.testing.expectEqual(@as(usize, 2), store.roots.items.len);
     try std.testing.expectEqual(@as(usize, 2), store.payloads.items.len);
     try std.testing.expectEqualDeep(store.payload(first), store.payload(second));
-}
-
-test "relation projection preserves anonymous row identity and provenance" {
-    const allocator = std.testing.allocator;
-
-    var source_names = canonical.CanonicalNameStore.init(allocator);
-    defer source_names.deinit();
-    const module_name = try source_names.internModuleName("App");
-    const baz_name = try source_names.internTagLabel("Baz");
-
-    var source_store = CheckedTypeStore{};
-    defer source_store.deinit(allocator);
-    const anonymous_key = testCanonicalTypeKey(70);
-    const source_tail = try source_store.reserveDistinctSyntheticTypeRoot(allocator, anonymous_key);
-    try source_store.fillSyntheticTypeRoot(allocator, source_tail, .{ .flex = .{ .row_default = .empty_tag_union } });
-
-    const source_union = try source_store.reserveDistinctSyntheticTypeRoot(allocator, testCanonicalTypeKey(71));
-    const tags = try allocator.alloc(CheckedTagBuild, 1);
-    tags[0] = .{ .name = baz_name, .args = &.{} };
-    try source_store.fillSyntheticTypeRoot(allocator, source_union, .{ .tag_union = .{
-        .tags = tags,
-        .ext = source_tail,
-    } });
-
-    var module_env = try ModuleEnv.init(allocator, "");
-    defer module_env.deinit();
-    var source_artifact = CheckedModuleArtifact{
-        .key = testCheckedModuleKey(70),
-        .canonical_names = source_names,
-        .module_identity = .{
-            .module_idx = 1,
-            .module_name = module_name,
-            .display_module_name = module_name,
-            .qualified_module_name = module_name,
-            .kind = .app,
-        },
-        .checking_context_identity = .{},
-        .module_env = .{ .checked_source = &module_env },
-        .exports = .{},
-        .provides_requires = .{},
-        .method_registry = .{},
-        .static_dispatch_plans = .{},
-        .resolved_value_refs = .{},
-        .checked_procedure_templates = .{},
-        .intrinsic_wrappers = .{},
-        .top_level_procedure_bindings = .{},
-        .root_requests = .{},
-        .hosted_procs = .{},
-        .platform_required_declarations = .{},
-        .platform_required_bindings = .{},
-        .interface_capabilities = .{},
-        .compile_time_roots = .{},
-        .top_level_values = .{},
-        .hoisted_constants = .{},
-        .const_templates = .{},
-        .checked_types = source_store,
-        .const_store = ConstStore.init(allocator),
-    };
-    defer source_artifact.const_store.deinit();
-
-    var target_names = canonical.CanonicalNameStore.init(allocator);
-    defer target_names.deinit();
-    var target_store = CheckedTypeStore{};
-    defer target_store.deinit(allocator);
-    const platform_tail = try target_store.reserveSyntheticTypeRoot(allocator, anonymous_key);
-    try target_store.fillSyntheticTypeRoot(allocator, platform_tail, .{ .flex = .{} });
-
-    var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(
-        allocator,
-        &target_store,
-        &target_names,
-        importedView(&source_artifact),
-    );
-    defer projector.deinit();
-
-    const projected_union = try projector.project(source_union);
-    const projected = switch (target_store.payload(projected_union)) {
-        .tag_union => |tag_union| tag_union,
-        else => return error.TestUnexpectedResult,
-    };
-    try std.testing.expect(projected.ext != platform_tail);
-    try std.testing.expectEqual(projected.ext, try projector.project(source_tail));
-    switch (target_store.payload(projected.ext)) {
-        .flex => |variable| try std.testing.expectEqual(RowDefault.empty_tag_union, variable.row_default.?),
-        else => return error.TestUnexpectedResult,
-    }
 }
 
 test "source-instance projection does not coalesce a solved payload with an equal-key target root" {

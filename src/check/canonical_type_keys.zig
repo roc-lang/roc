@@ -104,6 +104,30 @@ pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// True when the type reachable from `var_` references a named type (alias or
+/// nominal) declared by `env`'s own module. Drives the platform root's
+/// publication deferral decision: when a `requires` signature names a
+/// platform-root-declared type (e.g. a for-clause identity alias used by name),
+/// requirement unification copies that self-origin named type into the app's
+/// store, so the app's checked-module output needs the platform root's checked
+/// module as the type's owner — the platform root must then produce its checked
+/// module at check time rather than deferring to finalization. Erroneous type
+/// content conservatively counts as a reference for this probe, while ordinary
+/// key construction records it explicitly.
+pub fn varReferencesModuleLocalNamedType(
+    allocator: Allocator,
+    store: *const TypeStore,
+    env: *const ModuleEnv,
+    var_: Var,
+) Allocator.Error!bool {
+    var builder = Builder.init(allocator, store, env);
+    defer builder.deinit();
+    builder.local_named_type_probe = true;
+    builder.writeTag("module_local_named_type_probe");
+    try builder.writeVar(var_);
+    return builder.references_module_local_named_type;
+}
+
 /// Public `schemeFromVar` function.
 pub fn schemeFromVar(
     allocator: Allocator,
@@ -118,22 +142,6 @@ pub fn schemeFromVar(
     return .{ .bytes = builder.hasher.finalResult() };
 }
 
-/// Whether the canonical-key traversal for `var_` reaches erroneous checked
-/// type content. This uses the key builder itself in detection mode, so guards
-/// for later key construction cannot accidentally inspect a narrower graph.
-pub fn containsError(
-    allocator: Allocator,
-    store: *const TypeStore,
-    env: *const ModuleEnv,
-    var_: Var,
-) Allocator.Error!bool {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    builder.detect_errors = true;
-    try builder.writeVar(var_);
-    return builder.contains_error;
-}
-
 const Builder = struct {
     allocator: Allocator,
     store: *const TypeStore,
@@ -144,8 +152,12 @@ const Builder = struct {
     identity_variables: std.ArrayList(Var),
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
-    detect_errors: bool = false,
-    contains_error: bool = false,
+    /// Probe mode for `varReferencesModuleLocalNamedType`: tolerate erroneous
+    /// content (recording it as a conservative reference) instead of treating
+    /// it as an invariant violation, since the probe may run over types whose
+    /// diagnostics are still owned by the surrounding check.
+    local_named_type_probe: bool = false,
+    references_module_local_named_type: bool = false,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
@@ -234,7 +246,10 @@ const Builder = struct {
     fn writeContent(self: *Builder, content: types.Content) Allocator.Error!void {
         switch (content) {
             .err => {
-                if (self.detect_errors) self.contains_error = true;
+                if (self.local_named_type_probe) {
+                    self.references_module_local_named_type = true;
+                    return;
+                }
                 self.writeTag("err");
             },
             .flex => |flex| {
@@ -327,9 +342,6 @@ const Builder = struct {
                 try self.writeVarRange(tuple.elems);
             },
             .nominal_type => |nominal| {
-                if (self.detect_errors and self.store.nominalDeclIsInvalid(nominal)) {
-                    self.contains_error = true;
-                }
                 self.writeTag("nominal");
                 self.writeNamedSourceIdentity(nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
                 self.writeBool(nominal.isOpaque());
@@ -620,6 +632,9 @@ const Builder = struct {
     /// in the module component, so the digest never depends on coordinator
     /// naming or build directories.
     fn writeNamedSourceIdentity(self: *Builder, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) void {
+        if (!self.env.self_module_identity.isNone() and origin_module == self.env.self_module_identity) {
+            self.references_module_local_named_type = true;
+        }
         self.writeBytes(self.env.moduleIdentityHash(origin_module));
         self.writeOptionalU32(source_decl);
         if (source_decl == null) {
@@ -804,27 +819,4 @@ test "source type keys normalize closed empty tag unions to empty tag union" {
     const closed_key = try fromVar(allocator, &store, &env, closed_empty);
 
     try std.testing.expectEqualSlices(u8, empty_key.bytes[0..], closed_key.bytes[0..]);
-}
-
-test "canonical error detection traverses alias arguments" {
-    const allocator = std.testing.allocator;
-
-    var env = try ModuleEnv.init(allocator, "");
-    defer env.deinit();
-    try env.setContentIdentity([_]u8{0xA5} ** 32);
-    const alias_ident = try env.insertIdent(Ident.for_text("Alias"));
-
-    var store = try TypeStore.initCapacity(allocator, 16, 8);
-    defer store.deinit();
-
-    const backing = try store.freshFromContent(.{ .structure = .empty_record });
-    const erroneous_arg = try store.freshFromContent(.err);
-    const alias = try store.freshFromContent(try store.mkAlias(
-        .{ .ident_idx = alias_ident },
-        backing,
-        &.{erroneous_arg},
-        env.selfModuleIdentity(),
-    ));
-
-    try std.testing.expect(try containsError(allocator, &store, &env, alias));
 }

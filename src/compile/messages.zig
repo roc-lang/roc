@@ -11,7 +11,6 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const eval = @import("eval");
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -265,28 +264,6 @@ pub const TypeCheckedResult = struct {
     /// deferred to finalization (the platform root of an app build); lets the
     /// coordinator distinguish deferral from an artifact-blocking failure.
     publication_deferred: bool = false,
-    /// Owned checking-finalization state retained until the relation-bearing
-    /// platform artifact is published. Null for every non-deferred module.
-    deferred_publication: ?*DeferredPublicationState = null,
-};
-
-/// Complete checker-owned continuation for a module whose checked artifact is
-/// intentionally published during executable finalization.
-pub const DeferredPublicationState = struct {
-    allocator: Allocator,
-    checker: check.Check,
-    /// Stable copy of the imported-env pointer slice needed to render any
-    /// diagnostics produced during deferred compile-time finalization.
-    imported_envs: []const *ModuleEnv,
-    ctfe_options: eval.CompileTimeFinalization.Options,
-    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
-    reported_problem_count: usize,
-
-    pub fn deinit(self: *DeferredPublicationState) void {
-        self.checker.deinit();
-        self.allocator.free(self.imported_envs);
-        self.allocator.destroy(self);
-    }
 };
 
 /// Result when parsing fails (but we still return partial info)
@@ -437,7 +414,6 @@ pub const WorkerResult = union(enum) {
                 r.reports.deinit(gpa);
             },
             .type_checked => |*r| {
-                if (r.deferred_publication) |state| state.deinit();
                 r.semantic.deinit();
                 gpa.destroy(r.semantic);
                 for (r.reports.items) |*rep| rep.deinit();

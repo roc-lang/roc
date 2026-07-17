@@ -336,7 +336,6 @@ pub const SemanticModuleData = struct {
 /// Owned output from type checking before module state takes retained facts.
 pub const TypeCheckOutput = struct {
     checker: Check,
-    checker_owned: bool = true,
     checked_artifact: ?CheckedArtifact.CheckedModuleArtifact = null,
     user_errors_allow_lowering: bool = false,
     /// True when a clean check intentionally skipped publishing a checked
@@ -345,7 +344,7 @@ pub const TypeCheckOutput = struct {
 
     pub fn deinit(self: *TypeCheckOutput) void {
         if (self.checked_artifact) |*artifact| artifact.deinit(artifact.canonical_names.allocator);
-        if (self.checker_owned) self.checker.deinit();
+        self.checker.deinit();
     }
 
     pub fn takeCheckedArtifact(self: *TypeCheckOutput) CheckedArtifact.CheckedModuleArtifact {
@@ -353,12 +352,6 @@ pub const TypeCheckOutput = struct {
             std.debug.panic("compile.typeCheckOutput missing checked artifact", .{});
         self.checked_artifact = null;
         return artifact;
-    }
-
-    pub fn takeChecker(self: *TypeCheckOutput) Check {
-        std.debug.assert(self.checker_owned);
-        self.checker_owned = false;
-        return self.checker;
     }
 };
 
@@ -1963,14 +1956,15 @@ pub const PackageEnv = struct {
             };
         }
 
-        // The platform root of an app build does not publish here: finalization
-        // publishes the relation-bearing platform root once, so a check-time
-        // publish would be immediately superseded. The one exception is a
-        // requires signature that still carries erroneous type content — the
-        // env-derived requirement context a deferred root needs is a canonical
-        // key digest, and erroneous content has no canonical key, so those
-        // shapes keep the check-time publish and its diagnostics.
-        if (defer_publication and !(try checker.requiresTypesContainError())) {
+        // The platform root of an app build checks cleanly here and normally does
+        // not publish: finalization publishes the relation-bearing platform root
+        // once, so a check-time publish would be immediately superseded. Deferral
+        // is only sound when no requires signature references a platform-root-
+        // declared named type (e.g. a for-clause identity alias used by name):
+        // requirement unification copies such a self-origin type into the app's
+        // store, and the app's publication then needs this module's artifact as
+        // the type's owner — those shapes keep the check-time publish.
+        if (defer_publication and !(try requiresSignaturesReferenceLocalNamedTypes(check_alloc, env))) {
             return .{
                 .checker = checker,
                 .checked_artifact = null,
@@ -2012,6 +2006,24 @@ pub const PackageEnv = struct {
             .checked_artifact = checked_artifact,
             .user_errors_allow_lowering = user_errors_allow_lowering,
         };
+    }
+
+    /// True when any of `env`'s requires-clause signature types references a
+    /// named type declared by `env`'s own module. See the deferral decision in
+    /// `typeCheckModule`.
+    fn requiresSignaturesReferenceLocalNamedTypes(
+        allocator: Allocator,
+        env: *const ModuleEnv,
+    ) Allocator.Error!bool {
+        for (env.requires_types.items.items) |required_type| {
+            if (try check.CanonicalTypeKeys.varReferencesModuleLocalNamedType(
+                allocator,
+                &env.types,
+                env,
+                ModuleEnv.varFrom(required_type.type_anno),
+            )) return true;
+        }
+        return false;
     }
 
     pub fn publishCheckedArtifactFromCheckedModule(

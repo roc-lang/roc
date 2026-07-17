@@ -3961,10 +3961,6 @@ fn processDevObjectSnapshot(
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
         return false;
     };
-    if (!build_env.executable_artifacts_finalized) {
-        std.log.err("Compilation did not produce executable artifacts", .{});
-        return false;
-    }
 
     const modules = build_env.getModulesInSerializationOrder(allocator) catch |err| {
         std.log.err("Failed to get compiled modules: {}", .{err});

@@ -1080,22 +1080,6 @@ pub const Store = struct {
         }
     }
 
-    /// Whether `var_` resolves through aliases to a function structure.
-    pub fn varResolvesToFunction(self: *const Self, var_: Var) bool {
-        var current = var_;
-        while (true) {
-            const resolved = self.resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |alias| current = self.getAliasBackingVar(alias),
-                .structure => |flat| return switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => true,
-                    else => false,
-                },
-                .err, .flex, .rigid => return false,
-            }
-        }
-    }
-
     // equivalence //
 
     /// The result of checking for equivalence

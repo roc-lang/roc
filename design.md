@@ -1361,8 +1361,7 @@ between the solver-var digest and the checked-payload digest.
 Finalization and platform-root output are readers of those rows. Building the
 platform/app relation resolves each platform requirement declaration to the
 recorded app export by requires index; the relation-bearing platform root
-output projects the recorded solved roots into its store while preserving each
-source root's identity
+output projects the recorded solved roots into its store by content identity
 and pairs the platform requirement payload's identity nodes with the recorded
 solutions slot by slot. No stage after check completion resolves an app export
 by name, re-checks requirement/provided type compatibility, or re-derives
@@ -1379,12 +1378,6 @@ workspace has no app root. While a paired platform root's output is deferred,
 its requirement surface installs from its checked env and a requirement context
 computed from the same declaration data the output required-declaration table
 hashes, so the checker input and the cache identity cannot disagree.
-Deferral is enabled only when the Coordinator will construct relation-bearing
-checked module data. The retained `Check` owner supplies that construction's
-problem store, selected hoisted roots,
-requirement context, imported diagnostic environments, and CTFE options. A
-checked module cache entry contains both `ModuleEnv` bytes and `CheckedModule`
-bytes; `ModuleEnv` bytes alone cannot stand in for the retained `Check` data.
 
 ### Compile-Time Constants and Hoisted Roots
 
