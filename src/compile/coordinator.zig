@@ -133,45 +133,15 @@ fn destroyCheckedArtifact(artifact: *CheckedModuleArtifact, retain_module_env: b
     allocator.destroy(artifact);
 }
 
-/// Backing storage for a bare `module_env` that was relocated out of an
-/// `env_only` cache entry (a deferred platform root reloaded on a warm build).
-/// Such an env is buffer-backed like a `cached_buffer` artifact env, so it must
-/// be retired with `deinitCachedModule` plus freeing the blob buffer and source,
-/// not the ordinary `deinit`.
-const CachedEnvBacking = struct {
-    buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    source: []const u8,
-};
-
 const OwnedSemanticModuleData = struct {
     module_env: *ModuleEnv,
     checked_artifact: ?*CheckedModuleArtifact = null,
     user_errors_allow_lowering: bool = false,
-    /// Set only when `module_env` is a bare, cache-relocated env (no artifact).
-    cached_env_backing: ?CachedEnvBacking = null,
 
     fn deinit(self: *OwnedSemanticModuleData) void {
         if (self.checked_artifact) |artifact| {
             destroyCheckedArtifact(artifact, false);
             self.checked_artifact = null;
-        }
-    }
-
-    /// Free `module_env` when no artifact owns it, honoring cache-relocated
-    /// backing. Only valid when `checked_artifact == null`.
-    fn freeBareEnv(self: *OwnedSemanticModuleData) void {
-        const env = self.module_env;
-        const env_alloc = env.gpa;
-        if (self.cached_env_backing) |backing| {
-            env.deinitCachedModule();
-            env_alloc.destroy(env);
-            if (backing.source.len > 0) env_alloc.free(@constCast(backing.source));
-            env_alloc.free(backing.buffer);
-        } else {
-            const source = env.common.source;
-            env.deinit();
-            env_alloc.destroy(env);
-            if (source.len > 0) env_alloc.free(@constCast(source));
         }
     }
 };
@@ -211,24 +181,12 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v6";
-const checked_module_entry_version: u32 = 6;
+const checked_module_cache_magic = "roc-mod-cache-v5";
+const checked_module_entry_version: u32 = 5;
 const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersionHash();
-
-/// Cache-entry kind byte. A `full` entry carries both a relocatable env blob and a
-/// relocatable checked-artifact blob. An `env_only` entry carries just the env blob
-/// (artifact length is zero) plus the platform requirement context the env's check
-/// established; it stands in for a platform root whose publication is deferred to
-/// finalization, letting a warm build skip re-checking the platform root.
-const CheckedModuleCacheKind = enum(u8) {
-    full = 0,
-    env_only = 1,
-};
-
-// Header: magic, composite entry-version hash (32), artifact key (32), kind byte (1),
-// requirement context (32, zero for `full`), env-blob length (u64), artifact-blob
-// length (u64). The two length-prefixed bodies (env blob then artifact blob, the
-// latter empty for `env_only`) follow the header. The entry-version hash folds the
+// Header: magic, composite entry-version hash (32), artifact key (32), env-blob
+// length (u64), artifact-blob length (u64). The two length-prefixed bodies (env
+// blob then artifact blob) follow the header. The entry-version hash folds the
 // manual entry-envelope version, the artifact `Serialized` layout hash, and the
 // ModuleEnv `Serialized` layout hash, so a stale env or artifact body is rejected
 // by the same single admission check.
@@ -239,7 +197,7 @@ const CheckedModuleCacheKind = enum(u8) {
 // stale or wrong entries, and relocation bounds-checks every marker against the blob.
 // A corrupt-but-right-length body is the only residue, which for a recomputable local
 // cache does not justify hashing the whole blob on every read and write.
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 1 + 32 + 8 + 8;
+const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8;
 
 fn checkedModuleEntryHashUpdate(state: *u64, bytes: []const u8) void {
     for (bytes) |byte| {
@@ -278,25 +236,20 @@ fn computeCheckedModuleEntryVersionHash() [32]u8 {
     return result;
 }
 
-/// A decoded checked-module cache entry: the entry kind, the requirement context
-/// (meaningful only for `env_only`), and the length-prefixed relocatable bodies
-/// (the env blob and, for `full` entries, the `CheckedModuleArtifact` blob; the
-/// artifact body is empty for `env_only`).
+/// Two length-prefixed cache bodies decoded from a checked-module cache entry:
+/// the relocatable `ModuleEnv` blob and the relocatable
+/// `CheckedModuleArtifact` blob.
 const CheckedModuleCacheBodies = struct {
-    kind: CheckedModuleCacheKind,
-    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
     env_body: []const u8,
     artifact_body: []const u8,
 };
 
 /// Write the fixed-size checked-module cache header into the first
-/// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the
+/// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the two
 /// relocatable bodies (env blob then artifact blob) into `dest` after the header.
 fn writeCheckedModuleCacheHeader(
     dest: []u8,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    kind: CheckedModuleCacheKind,
-    requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
     env_len: usize,
     artifact_len: usize,
 ) void {
@@ -306,10 +259,6 @@ fn writeCheckedModuleCacheHeader(
     @memcpy(dest[offset..][0..32], &checked_module_entry_version_hash);
     offset += 32;
     @memcpy(dest[offset..][0..32], &key.bytes);
-    offset += 32;
-    dest[offset] = @intFromEnum(kind);
-    offset += 1;
-    @memcpy(dest[offset..][0..32], &requirement_context.bytes);
     offset += 32;
     std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
     offset += 8;
@@ -330,15 +279,6 @@ fn decodeCheckedModuleCacheEntry(
     offset += 32;
     if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
     offset += 32;
-    const kind: CheckedModuleCacheKind = switch (bytes[offset]) {
-        @intFromEnum(CheckedModuleCacheKind.full) => .full,
-        @intFromEnum(CheckedModuleCacheKind.env_only) => .env_only,
-        else => return null,
-    };
-    offset += 1;
-    var requirement_context = check.CheckedArtifact.PlatformRequirementContextKey{};
-    @memcpy(&requirement_context.bytes, bytes[offset..][0..32]);
-    offset += 32;
     // Cast the on-disk u64 lengths to usize up front: this both keeps every
     // downstream index/slice in usize (so the cache compiles for 32-bit targets
     // like wasm32) and rejects a corrupt entry whose length cannot fit the host
@@ -358,16 +298,8 @@ fn decodeCheckedModuleCacheEntry(
     const artifact_body = bytes[offset..][0..artifact_len];
 
     if (env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
-    switch (kind) {
-        .full => if (artifact_body.len < @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized)) return null,
-        .env_only => if (artifact_body.len != 0) return null,
-    }
-    return .{
-        .kind = kind,
-        .requirement_context = requirement_context,
-        .env_body = env_body,
-        .artifact_body = artifact_body,
-    };
+    if (artifact_body.len < @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
+    return .{ .env_body = env_body, .artifact_body = artifact_body };
 }
 
 fn checkedModuleCacheTestKey(byte: u8) check.CheckedArtifact.CheckedModuleArtifactKey {
@@ -381,19 +313,14 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     const env_len = @sizeOf(ModuleEnv.Serialized);
     const artifact_len = @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized);
     const total_len = checked_module_cache_header_len + env_len + artifact_len;
-    const kind_offset = checked_module_cache_magic.len + 32 + 32;
-    const env_len_offset = kind_offset + 1 + 32;
+    const env_len_offset = checked_module_cache_magic.len + 32 + 32;
     const artifact_len_offset = env_len_offset + 8;
-
-    var context = check.CheckedArtifact.PlatformRequirementContextKey{};
-    @memset(&context.bytes, 0x5C);
 
     var entry: [total_len]u8 = undefined;
     @memset(&entry, 0);
-    writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], key, .full, context, env_len, artifact_len);
+    writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], key, env_len, artifact_len);
 
     const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(CheckedModuleCacheKind.full, bodies.kind);
     try std.testing.expectEqual(@as(usize, env_len), bodies.env_body.len);
     try std.testing.expectEqual(@as(usize, artifact_len), bodies.artifact_body.len);
 
@@ -408,10 +335,6 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     var bad_key = entry;
     bad_key[checked_module_cache_magic.len + 32] ^= 0xFF;
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &bad_key) == null);
-
-    var bad_kind = entry;
-    bad_kind[kind_offset] = 0x7F;
-    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &bad_kind) == null);
 
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, entry[0 .. checked_module_cache_header_len - 1]) == null);
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, entry[0 .. total_len - 1]) == null);
@@ -428,22 +351,6 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     @memcpy(extra_byte[0..total_len], &entry);
     extra_byte[total_len] = 0;
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) == null);
-
-    // An env-only entry carries just the env blob plus the requirement context.
-    const env_only_len = checked_module_cache_header_len + env_len;
-    var env_only_entry: [env_only_len]u8 = undefined;
-    @memset(&env_only_entry, 0);
-    writeCheckedModuleCacheHeader(env_only_entry[0..checked_module_cache_header_len], key, .env_only, context, env_len, 0);
-    const env_only_bodies = decodeCheckedModuleCacheEntry(key, &env_only_entry) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(CheckedModuleCacheKind.env_only, env_only_bodies.kind);
-    try std.testing.expectEqual(@as(usize, env_len), env_only_bodies.env_body.len);
-    try std.testing.expectEqual(@as(usize, 0), env_only_bodies.artifact_body.len);
-    try std.testing.expectEqualSlices(u8, &context.bytes, &env_only_bodies.requirement_context.bytes);
-
-    // A nonzero artifact length is invalid for an env-only entry.
-    var env_only_bad = env_only_entry;
-    std.mem.writeInt(u64, env_only_bad[artifact_len_offset..][0..8], 1, .little);
-    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &env_only_bad) == null);
 }
 
 /// Maximum scratch arena capacity retained by a worker after each task.
@@ -532,11 +439,6 @@ pub const ModuleState = struct {
     /// Requirement surface exposed once a platform root's check completes
     /// with a published artifact; borrows the platform's checked env.
     platform_requirement_surface: ?PlatformRequirementSurface = null,
-    /// Requirement context computed from a deferred platform root's checked env
-    /// (its publication is deferred to finalization, so no artifact carries it).
-    /// Feeds the requirement surface and lets a warm build install the surface
-    /// from an `env_only` cache entry.
-    deferred_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -596,13 +498,6 @@ pub const ModuleState = struct {
     fn moduleEnvStorage(self: *ModuleState) ?check.CheckedArtifact.ModuleEnvStorage {
         if (self.semantic) |*semantic| {
             if (semantic.checked_artifact) |artifact| return artifact.module_env;
-            if (semantic.cached_env_backing) |backing| {
-                return .{ .cached_buffer = .{
-                    .env = semantic.module_env,
-                    .buffer = backing.buffer,
-                    .source = backing.source,
-                } };
-            }
             return .{ .checked_source = semantic.module_env };
         }
         return null;
@@ -699,13 +594,18 @@ pub const ModuleState = struct {
                 // The checked artifact owns the ModuleEnv after publication.
                 semantic.deinit();
             } else {
+                const env = semantic.module_env;
                 // IMPORTANT: env stores its own allocator (env.gpa) which was used to create it.
                 // We must use env.gpa for cleanup, not the passed-in gpa, because in multi-threaded
                 // mode, env.gpa is smp_allocator while gpa is the coordinator's allocator.
+                const env_alloc = env.gpa;
+                const source = env.common.source;
                 if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
                 }
-                semantic.freeBareEnv();
+                env.deinit();
+                env_alloc.destroy(env);
+                if (source.len > 0) env_alloc.free(@constCast(source));
             }
         }
         for (self.explicit_root_ident_names) |name| gpa.free(name);
@@ -1052,10 +952,6 @@ pub const Coordinator = struct {
     cache_hits: u32,
     cache_misses: u32,
     modules_compiled: u32,
-    /// Count of actual publications of the platform root module (a worker publish
-    /// on a non-deferred check, plus finalization's single publish). A pairing
-    /// cache hit at finalization is a load, not a publication, so it does not count.
-    platform_root_publish_count: u32 = 0,
     /// Module compile time tracking (min/max/sum for computing avg)
     module_time_min_ns: u64,
     module_time_max_ns: u64,
@@ -1914,59 +1810,81 @@ pub const Coordinator = struct {
             return;
         };
 
-        // The app must have a checked artifact to relate against; the platform root
-        // need not (its check-time publication is deferred here). If the app failed
-        // to publish, the user already has those diagnostics and there is nothing
-        // to finalize.
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to finalize; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
         const app_artifact = app_root.mod.checkedArtifact() orelse return;
-        const platform_env = platform_root.mod.moduleEnv() orelse return;
-
-        // A platform root that failed checking neither published an artifact nor
-        // deferred cleanly (which records a requirement context); its diagnostics
-        // already gate the build, so there is nothing to finalize.
-        if (platform_root.mod.checkedArtifact() == null and
-            platform_root.mod.deferred_requirement_context == null) return;
-
-        // Build the platform root's typed module graph ONCE. It feeds both the
-        // platform/app relation (as the platform's typed module) and the single
-        // publication below, and it determines the republished artifact's cache key.
-        const imported_envs = try self.buildTypecheckImportedEnvs(platform_root.pkg, platform_root.mod, self.gpa);
-        defer self.gpa.free(imported_envs);
-        var typed = try CheckedModules.initForRootModule(self.gpa, platform_env, imported_envs);
-        defer typed.modules.deinit();
-        const platform_module = typed.modules.module(typed.module_idx);
 
         var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
             self.gpa,
-            platform_module,
+            platform_declaration_artifact,
+            platform_root.mod.moduleEnv().?,
             app_artifact,
         );
         defer relation_result.deinit(self.gpa);
 
         const relation = switch (relation_result) {
             .relation => |relation| relation,
-            .missing_value => {
+            .type_mismatch, .missing_value => {
                 // With user errors permitted (the `roc run` lowering path from
                 // the error-recovery contract), an app that failed checking can
                 // publish an artifact whose required values never materialized
-                // as exports; the user already has the diagnostics. Publish the
-                // platform root once WITHOUT a relation so the run path still sees
-                // the platform root's provided exports. Without user errors,
-                // checking proved the requirements, so this outcome is a compiler bug.
-                if (allow_user_errors and self.hasUserErrors()) {
-                    try self.republishCheckedArtifact(platform_root.pkg, platform_root.mod, &typed, .{});
-                    return;
+                // as exports; the user already has the diagnostics, so skip the
+                // relation instead of asserting. Without user errors, checking
+                // proved the requirements, so these outcomes are compiler bugs.
+                if (allow_user_errors and self.hasUserErrors()) return;
+                switch (relation_result) {
+                    .type_mismatch => coordinatorInvariant("platform/app relation type mismatch reached executable finalization after checking", .{}),
+                    else => coordinatorInvariant("platform/app relation missing required app value reached executable finalization after checking", .{}),
                 }
-                coordinatorInvariant("platform/app relation missing required app value reached executable finalization after checking", .{});
             },
         };
         const relation_artifacts = [_]check.CheckedArtifact.ImportedModuleView{
             check.CheckedArtifact.importedView(app_artifact),
         };
-        try self.republishCheckedArtifact(platform_root.pkg, platform_root.mod, &typed, .{
+        try self.republishCheckedArtifact(platform_root.pkg, platform_root.mod, .{
             .relation_artifacts = &relation_artifacts,
             .platform_app_relation = relation,
         });
+    }
+
+    pub fn validatePlatformAppRelationsForCheck(self: *Coordinator) compile_package.PublishError!void {
+        // Checking owns all user-facing requirement diagnostics; this pass only
+        // asserts that the published artifacts agree with what checking proved,
+        // so it has no reason to spend time in release builds.
+        if (comptime builtin.mode != .Debug) return;
+        if (self.hasUserErrors()) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.validatePlatformAppRelationsForCheck called after user-facing errors", .{});
+            }
+            unreachable;
+        }
+
+        const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return;
+        const platform_root = self.findRootModule(.platform) orelse return;
+
+        // If the platform module produced no checked artifact (e.g. it had artifact-blocking
+        // diagnostics), there is nothing to validate; the user already has those diagnostics.
+        // Artifact presence is the single authority here, applied uniformly to the platform and
+        // app roots (see the app-artifact guard below).
+        const platform_declaration_artifact = platform_root.mod.checkedArtifact() orelse return;
+        const app_artifact = app_root.mod.checkedArtifact() orelse return;
+
+        var relation_result = try check.CheckedArtifact.buildPlatformAppRelation(
+            self.gpa,
+            platform_declaration_artifact,
+            platform_root.mod.moduleEnv().?,
+            app_artifact,
+        );
+        defer relation_result.deinit(self.gpa);
+
+        switch (relation_result) {
+            .relation => {},
+            .type_mismatch => coordinatorInvariant("platform/app relation type mismatch reached check validation after checking", .{}),
+            .missing_value => coordinatorInvariant("platform/app relation missing required app value reached check validation after checking", .{}),
+        }
     }
 
     pub fn hasUserErrors(self: *const Coordinator) bool {
@@ -2109,15 +2027,22 @@ pub const Coordinator = struct {
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
-        typed: *CheckedModules.RootModules,
         publication: compile_package.ArtifactPublicationInputs,
     ) compile_package.PublishError!void {
+        const env = mod.moduleEnv() orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env for {s}", .{mod.name});
+            }
+            unreachable;
+        };
         const module_env_storage = mod.moduleEnvStorage() orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("compile.coordinator.republishCheckedArtifact missing module env storage for {s}", .{mod.name});
             }
             unreachable;
         };
+        const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, self.gpa);
+        defer self.gpa.free(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, self.gpa);
         defer self.gpa.free(imported_artifacts);
         const available_artifacts = try self.collectTypecheckAvailableArtifactViews(self.gpa, imported_artifacts);
@@ -2125,12 +2050,14 @@ pub const Coordinator = struct {
         const explicit_roots = try buildExplicitRootRequests(mod, self.gpa);
         defer self.gpa.free(explicit_roots);
 
-        // The root module graph was built ONCE by the caller and is reused here: it
-        // both determines the republished artifact's cache key (a hit relocates the
-        // previously-republished root artifact and skips the expensive republish) and,
-        // on a miss, feeds the publish below — so the graph (and its per-env
-        // `prepareRuntimeEnv` pass) is never built twice. A key failure (OOM) just
-        // falls through to a normal republish.
+        // Build the root module graph ONCE. It both determines the republished
+        // artifact's cache key (a hit relocates the previously-republished root artifact
+        // and skips the expensive republish) and, on a miss, feeds the republish below —
+        // so the graph (and its per-env `prepareRuntimeEnv` pass) is never built twice.
+        // A key failure (OOM) just falls through to a normal republish.
+        var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
+        defer typed.modules.deinit();
+
         if (check.CheckedArtifact.checkedModuleKeyFromTypedModule(self.gpa, &typed.modules, typed.module_idx, .{
             .imports = imported_artifacts,
             .explicit_roots = explicit_roots,
@@ -2204,9 +2131,6 @@ pub const Coordinator = struct {
             imported_artifacts,
             publication_with_availability,
         );
-        // This is an actual publication (the pairing-cache probe above missed).
-        // Finalization publishes the platform root exactly once.
-        if (self.moduleIsPlatformRoot(mod)) self.platform_root_publish_count += 1;
         var artifact_owned = true;
         errdefer if (artifact_owned) artifact.deinit(self.gpa);
         const artifact_ptr = try allocateCheckedArtifact(artifact);
@@ -2837,68 +2761,11 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entry);
 
-        writeCheckedModuleCacheHeader(
-            entry[0..checked_module_cache_header_len],
-            artifact.key,
-            .full,
-            .{},
-            env_len,
-            artifact_len,
-        );
+        writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], artifact.key, env_len, artifact_len);
         _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
         _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
 
         manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
-    }
-
-    /// Persist a deferred platform root's checked env under its ordinary
-    /// checked-module key as an `env_only` entry, recording the requirement
-    /// context its check established. A warm app build reloads the env (skipping
-    /// re-checking) and installs the requirement surface from the stored context;
-    /// finalization still performs the single platform-root publication.
-    fn storeCheckedModuleEnvOnlyInCache(
-        self: *Coordinator,
-        cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
-        env: *const ModuleEnv,
-        requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
-    ) void {
-        const manager = self.cache_manager orelse return;
-        if (!manager.config.enabled) return;
-
-        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-        defer manager.allocator.free(entries_dir);
-
-        var arena = base.SingleThreadArena.init(manager.allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        var env_writer = CompactWriter.init();
-        serializeForCache(ModuleEnv, env, &env_writer, arena_alloc) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-
-        const env_len = env_writer.total_bytes;
-        const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len) catch {
-            manager.recordStoreFailure();
-            return;
-        };
-        defer manager.allocator.free(entry);
-
-        writeCheckedModuleCacheHeader(
-            entry[0..checked_module_cache_header_len],
-            cache_key,
-            .env_only,
-            requirement_context,
-            env_len,
-            0,
-        );
-        _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
-
-        manager.storeRawBytes(cache_key.bytes, entry, entries_dir);
     }
 
     fn tryLoadCachedCheckedModule(
@@ -2920,53 +2787,7 @@ pub const Coordinator = struct {
             return false;
         };
 
-        // A deferred platform root (this is the app build's platform root) stores an
-        // `env_only` entry, so accept one here; every other module needs the full
-        // artifact and treats an `env_only` entry as a miss.
-        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env, self.moduleDefersPublication(mod));
-    }
-
-    /// True when `mod` is the registered platform's root module.
-    fn moduleIsPlatformRoot(self: *Coordinator, mod: *ModuleState) bool {
-        const candidate = self.platformRootCandidate() orelse return false;
-        return candidate.mod == mod;
-    }
-
-    /// True when `mod` is the app build's platform root, which MAY defer its
-    /// check-time publication to finalization. The final decision belongs to
-    /// `typeCheckModule` (deferral is skipped when a requires signature
-    /// references a platform-root-declared named type); an `env_only` cache
-    /// entry only ever exists for a shape whose check actually deferred, so
-    /// admitting one under this may-defer condition is sound.
-    fn moduleDefersPublication(self: *Coordinator, mod: *ModuleState) bool {
-        if (self.app_package_name == null) return false;
-        return self.moduleIsPlatformRoot(mod);
-    }
-
-    /// Persist a deferred platform root's checked env as an `env_only` cache entry
-    /// under its ordinary checked-module key, so a warm app build reloads the env
-    /// instead of re-checking. The key is computed exactly as
-    /// `tryLoadCachedCheckedModule` computes it (the platform's own check has no
-    /// platform requirement context). Store failures never poison the build.
-    fn storeDeferredPlatformRootEnvCache(
-        self: *Coordinator,
-        pkg: *PackageState,
-        mod: *ModuleState,
-        env: *ModuleEnv,
-        requirement_context: check.CheckedArtifact.PlatformRequirementContextKey,
-    ) void {
-        const manager = self.cache_manager orelse return;
-        if (!manager.config.enabled) return;
-
-        const imported_envs = self.buildTypecheckImportedEnvs(pkg, mod, self.gpa) catch return;
-        defer self.gpa.free(imported_envs);
-        const imported_artifacts = self.buildTypecheckImportedArtifacts(pkg, mod, self.gpa) catch return;
-        defer self.gpa.free(imported_artifacts);
-        const explicit_roots = buildExplicitRootRequests(mod, self.gpa) catch return;
-        defer self.gpa.free(explicit_roots);
-
-        const cache_key = self.checkedModuleCacheKey(env, imported_envs, imported_artifacts, null, explicit_roots) catch return;
-        self.storeCheckedModuleEnvOnlyInCache(cache_key, env, requirement_context);
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
 
     /// Relocate the cached checked artifact (and its env) stored under `cache_key`
@@ -2983,7 +2804,6 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
         current_env: *ModuleEnv,
-        allow_env_only: bool,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
@@ -3001,14 +2821,6 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         };
-
-        // An `env_only` entry only serves a deferred platform root; any other
-        // consumer needs the full artifact and treats it as a miss (checking then
-        // overwrites the entry with a full one).
-        if (bodies.kind == .env_only and !allow_env_only) {
-            manager.stats.recordMiss();
-            return false;
-        }
 
         const module_alloc = self.getModuleAllocator();
         const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.env_body.len) catch {
@@ -3057,45 +2869,6 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         };
-
-        // An `env_only` entry carries no artifact: install the relocated env as
-        // `mod`'s bare env (recording its cache-relocated backing so it is retired
-        // correctly) and stash the requirement context the entry recorded, so the
-        // requirement surface installs from it. Finalization performs the single
-        // platform-root publication.
-        if (bodies.kind == .env_only) {
-            const semantic = if (mod.semantic) |*semantic| semantic else return false;
-            // A deferred root has no prior artifact; if one somehow exists, this
-            // entry does not apply.
-            if (semantic.checked_artifact != null) {
-                manager.stats.recordMiss();
-                return false;
-            }
-            const old_env = current_env;
-            const old_env_alloc = old_env.gpa;
-            const old_source = old_env.common.source;
-            const old_backing = semantic.cached_env_backing;
-
-            semantic.module_env = cached_env;
-            semantic.cached_env_backing = .{ .buffer = buffer, .source = source };
-            cached_env_owned = false;
-            buffer_owned = false;
-            source_owned = false;
-
-            mod.deferred_requirement_context = bodies.requirement_context;
-
-            if (old_backing) |backing| {
-                old_env.deinitCachedModule();
-                old_env_alloc.destroy(old_env);
-                if (backing.source.len > 0) old_env_alloc.free(@constCast(backing.source));
-                old_env_alloc.free(backing.buffer);
-            } else {
-                old_env.deinit();
-                old_env_alloc.destroy(old_env);
-                if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
-            }
-            return true;
-        }
 
         // Relocate the artifact into its own 16-byte-aligned buffer, injecting the
         // freshly-relocated cached env (transform E). The resulting artifact is
@@ -3153,7 +2926,6 @@ pub const Coordinator = struct {
         const old_env_alloc = old_env.gpa;
         const old_source = old_env.common.source;
         const old_had_artifact = mod.checkedArtifact() != null;
-        const old_backing = if (mod.semantic) |*semantic| semantic.cached_env_backing else null;
 
         self.unregisterCheckedArtifact(mod);
         if (mod.semantic) |*semantic| {
@@ -3169,9 +2941,6 @@ pub const Coordinator = struct {
             }
             semantic.module_env = cached_env;
             semantic.checked_artifact = artifact_ptr;
-            // The relocated artifact owns its env via `.cached_buffer`, so any prior
-            // bare cache-relocated backing no longer applies to this module.
-            semantic.cached_env_backing = null;
         } else {
             destroyCheckedArtifact(artifact_ptr, false);
             return false;
@@ -3181,7 +2950,6 @@ pub const Coordinator = struct {
             if (mod.semantic) |*semantic| {
                 semantic.module_env = old_env;
                 semantic.checked_artifact = null;
-                semantic.cached_env_backing = old_backing;
             }
             destroyCheckedArtifact(artifact_ptr, false);
             manager.stats.recordInvalidation();
@@ -3189,16 +2957,9 @@ pub const Coordinator = struct {
         };
 
         if (!old_had_artifact) {
-            if (old_backing) |backing| {
-                old_env.deinitCachedModule();
-                old_env_alloc.destroy(old_env);
-                if (backing.source.len > 0) old_env_alloc.free(@constCast(backing.source));
-                old_env_alloc.free(backing.buffer);
-            } else {
-                old_env.deinit();
-                old_env_alloc.destroy(old_env);
-                if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
-            }
+            old_env.deinit();
+            old_env_alloc.destroy(old_env);
+            if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
         }
 
         return true;
@@ -3228,7 +2989,7 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
         const current_env = mod.moduleEnv() orelse return false;
-        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env, false);
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
 
     fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
@@ -3267,19 +3028,10 @@ pub const Coordinator = struct {
         const env = mod.moduleEnv() orelse return;
         if (moduleKindTag(env.module_kind) != .platform) return;
         if (env.requires_types.items.items.len == 0) return;
-        // The surface's cache-identity context comes from the published artifact
-        // when one exists, and otherwise from the context the deferred root's
-        // check established (an app build defers the platform root's publication
-        // to finalization). The two are byte-identical by construction.
-        const context = if (mod.checkedArtifact()) |artifact|
-            artifact.platformRequirementContextKey()
-        else if (mod.deferred_requirement_context) |deferred|
-            deferred
-        else
-            return;
+        const artifact = mod.checkedArtifact() orelse return;
         mod.platform_requirement_surface = .{
             .env = env,
-            .context = context,
+            .context = artifact.platformRequirementContextKey(),
             .path = mod.path,
         };
     }
@@ -3615,7 +3367,6 @@ pub const Coordinator = struct {
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
                 .explicit_roots = explicit_roots,
-                .defer_publication = self.moduleDefersPublication(mod),
             },
         });
     }
@@ -3698,22 +3449,6 @@ pub const Coordinator = struct {
             try mod.replaceCheckedArtifact(artifact_ptr, &self.retired_checked_artifacts, self.gpa);
             artifact_ptr_owned = false;
             try self.registerCheckedArtifact(pkg, mod);
-
-            // A non-deferred platform root publishes its runnable artifact here (a
-            // platform-as-workspace-root build with no app pairing).
-            if (self.moduleIsPlatformRoot(mod)) {
-                self.platform_root_publish_count += 1;
-                // The artifact-derived and env-derived requirement contexts must
-                // agree; a deferred root reuses the env-derived one at finalization.
-                if (comptime builtin.mode == .Debug) {
-                    const env = mod.moduleEnv().?;
-                    if (env.requires_types.items.items.len > 0) {
-                        const env_context = check.CheckedArtifact.platformRequirementContextKeyFromEnv(self.gpa, env) catch artifact_ptr.platformRequirementContextKey();
-                        std.debug.assert(std.mem.eql(u8, &env_context.bytes, &artifact_ptr.platformRequirementContextKey().bytes));
-                    }
-                }
-            }
-
             // Only cache a fully diagnostic-free module. A relocate-on-load cache hit
             // skips the compile-time finalizer, so it cannot reproduce the finalizer's
             // non-fatal diagnostics (e.g. `comptime_unused_branch`); caching only clean
@@ -3724,28 +3459,6 @@ pub const Coordinator = struct {
                 if (mod.checkedArtifact()) |cached_artifact| {
                     self.storeCheckedModuleInCache(cached_artifact);
                 }
-            }
-        } else if (result.publication_deferred) {
-            // The app build's platform root checked cleanly but did not publish:
-            // finalization publishes it once against the platform/app relation.
-            // Record the requirement context its checked env establishes so the
-            // requirement surface installs from it, and persist an env-only cache
-            // entry so a warm build skips re-checking the platform root.
-            self.unregisterCheckedArtifact(mod);
-            if (mod.semantic) |*semantic| {
-                if (semantic.checked_artifact) |existing| {
-                    try self.retired_checked_artifacts.append(self.gpa, .{
-                        .artifact = existing,
-                        .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(semantic.module_env),
-                    });
-                }
-                semantic.checked_artifact = null;
-            }
-            const env = mod.moduleEnv().?;
-            const context = try check.CheckedArtifact.platformRequirementContextKeyFromEnv(self.gpa, env);
-            mod.deferred_requirement_context = context;
-            if (mod.reports.items.len == 0 and result.reports.items.len == 0) {
-                self.storeDeferredPlatformRootEnvCache(pkg, mod, env, context);
             }
         } else if (mod.semantic) |*semantic| {
             self.unregisterCheckedArtifact(mod);
@@ -4607,7 +4320,6 @@ pub const Coordinator = struct {
             if (task.platform_requirements) |surface| surface.context else null,
             task.explicit_roots,
             compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx),
-            task.defer_publication,
         );
         defer typecheck_output.deinit();
 
@@ -4661,7 +4373,6 @@ pub const Coordinator = struct {
                 .reports = reports,
                 .type_check_ns = type_check_ns,
                 .check_diagnostics_ns = diagnostics_ns,
-                .publication_deferred = typecheck_output.publication_deferred,
             },
         };
     }
@@ -4847,38 +4558,7 @@ const AppRootIdentity = struct {
     artifact_key: [32]u8,
     module_identity_hash: [32]u8,
     cache_hits: u32,
-    platform_root_publish_count: u32,
-    /// The executable root artifact serialized exactly as the checked-module
-    /// cache stores it, so tests assert byte identity between fresh and
-    /// cache-relocated publications rather than key identity alone.
-    executable_root_bytes: []u8,
-    /// The app root artifact serialized the same way: the recorded platform/app
-    /// requirement solutions it carries must be a pure function of the artifacts
-    /// they relate.
-    app_root_bytes: []u8,
-
-    fn deinit(self: *AppRootIdentity, allocator: Allocator) void {
-        allocator.free(self.app_root_bytes);
-        allocator.free(self.executable_root_bytes);
-        self.* = undefined;
-    }
 };
-
-/// Serialize a checked artifact into caller-owned bytes, exactly as the
-/// checked-module cache stores it.
-fn serializedCheckedArtifactBytes(
-    allocator: Allocator,
-    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-) Allocator.Error![]u8 {
-    var arena_impl = base.SingleThreadArena.init(allocator);
-    defer arena_impl.deinit();
-    var writer = CompactWriter.init();
-    try Coordinator.serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, artifact, &writer, arena_impl.allocator());
-    const bytes = try allocator.alloc(u8, writer.total_bytes);
-    errdefer allocator.free(bytes);
-    _ = writer.writeToBuffer(bytes) catch unreachable;
-    return bytes;
-}
 
 /// Compile an app workspace and return the executable root artifact's
 /// content-addressed key and module identity hash, plus checked-cache hits.
@@ -4921,17 +4601,10 @@ fn compileAppRootIdentity(
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = coord.executableRootCheckedArtifact();
-    const executable_root_bytes = try serializedCheckedArtifactBytes(allocator, root);
-    errdefer allocator.free(executable_root_bytes);
-    const app_root_bytes = try serializedCheckedArtifactBytes(allocator, coord.appRootCheckedArtifact());
-    errdefer allocator.free(app_root_bytes);
     return .{
         .artifact_key = root.key.bytes,
         .module_identity_hash = root.module_identity.stable_hash,
         .cache_hits = coord.getBuildStats().cache_hits,
-        .platform_root_publish_count = coord.platform_root_publish_count,
-        .executable_root_bytes = executable_root_bytes,
-        .app_root_bytes = app_root_bytes,
     };
 }
 
@@ -5067,10 +4740,8 @@ test "cache-key purity: identical workspaces in different directories produce bi
     const second_app = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "second/app/main.roc", allocator);
     defer allocator.free(second_app);
 
-    var first = try compileAppRootIdentity(allocator, cache_dir, first_app);
-    defer first.deinit(allocator);
-    var second = try compileAppRootIdentity(allocator, cache_dir, second_app);
-    defer second.deinit(allocator);
+    const first = try compileAppRootIdentity(allocator, cache_dir, first_app);
+    const second = try compileAppRootIdentity(allocator, cache_dir, second_app);
 
     // Identity bytes and content-addressed cache keys are pure functions of
     // module content: no coordinator-assigned display strings and no paths
@@ -5080,225 +4751,6 @@ test "cache-key purity: identical workspaces in different directories produce bi
     // ...and the second build gets checked-cache hits from the first build's
     // entries even though it ran in a different directory.
     try std.testing.expect(second.cache_hits > 0);
-    // A key match implies byte-identical relocatable artifacts.
-    try std.testing.expectEqualSlices(u8, first.executable_root_bytes, second.executable_root_bytes);
-    try std.testing.expectEqualSlices(u8, first.app_root_bytes, second.app_root_bytes);
-}
-
-test "warm build reloads the deferred platform root without republishing" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
-    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
-    defer allocator.free(cache_dir);
-
-    try writeCacheKeyPurityFixture(&tmp_dir, "warm");
-    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "warm/app/main.roc", allocator);
-    defer allocator.free(app_path);
-
-    // The cold build defers the platform root's check-time publication, so
-    // finalization is the platform root's single publication.
-    var cold = try compileAppRootIdentity(allocator, cache_dir, app_path);
-    defer cold.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 1), cold.platform_root_publish_count);
-
-    // The warm build reloads the platform root's env from its env-only cache
-    // entry and relocates the previously-republished root from the pairing cache,
-    // so it performs no platform-root publication at all.
-    var warm = try compileAppRootIdentity(allocator, cache_dir, app_path);
-    defer warm.deinit(allocator);
-    try std.testing.expectEqual(@as(u32, 0), warm.platform_root_publish_count);
-    try std.testing.expect(warm.cache_hits > 0);
-
-    // The republished executable root is content-addressed, so both runs produce
-    // a byte-identical key — and byte-identical artifacts: the cache-relocated
-    // relation-bearing platform root serializes exactly as the fresh publication
-    // did, and the cached app artifact carries the same recorded requirement
-    // solutions as a fresh check (the relation is a pure function of the
-    // artifacts it relates).
-    try std.testing.expectEqualSlices(u8, &cold.artifact_key, &warm.artifact_key);
-    try std.testing.expectEqualSlices(u8, cold.executable_root_bytes, warm.executable_root_bytes);
-    try std.testing.expectEqualSlices(u8, cold.app_root_bytes, warm.app_root_bytes);
-}
-
-fn writeRequirementSolutionFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
-    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_state_platform");
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/main.roc",
-        .data =
-        \\app [prog] { pf: platform "./.roc_state_platform/main.roc" }
-        \\
-        \\Model : { count : U64 }
-        \\
-        \\prog : { init : {} -> Model, tick : Model -> Model }
-        \\prog = { init: |_| { count: 0 }, tick: |m| m }
-        ,
-    });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/.roc_state_platform/main.roc",
-        .data =
-        \\platform ""
-        \\    requires { [Model : model] for prog : { init : {} -> model, tick : model -> model } }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_entry": entry }
-        \\
-        \\entry : {} -> Model
-        \\entry = |_| (prog.init)({})
-        ,
-    });
-}
-
-test "app artifact records platform requirement solutions from checking" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    try writeRequirementSolutionFixture(&tmp_dir);
-    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
-    defer allocator.free(app_path);
-
-    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
-    defer builtin_modules.deinit();
-
-    var coord = try Coordinator.init(
-        allocator,
-        .single_threaded,
-        1,
-        roc_target.RocTarget.detectNative(),
-        &builtin_modules,
-        build_options.compiler_version,
-        null,
-        roc_ctx,
-    );
-    defer coord.deinit();
-    coord.enable_hosted_transform = true;
-
-    var arena_impl = base.SingleThreadArena.init(allocator);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    try coord.start();
-    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
-    try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
-
-    const app_artifact = coord.appRootCheckedArtifact();
-    const table = &app_artifact.platform_requirement_solutions;
-
-    // One requirement (`prog`), a record of functions, so a const value.
-    try std.testing.expectEqual(@as(usize, 1), table.solutions.len);
-    const solution = table.solutions[0];
-    try std.testing.expectEqual(@as(u32, 0), solution.requires_idx);
-    try std.testing.expectEqual(check.CheckedArtifact.PlatformRequiredValueKind.const_value, solution.value_kind);
-
-    // The recorded export id resolves to the app's exported `prog` value —
-    // the correspondence is id-keyed, and the ids must agree with the app's
-    // own published top-level value table.
-    const top_level = app_artifact.top_level_values.lookupByDef(solution.def) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(solution.pattern, top_level.pattern);
-    try std.testing.expectEqualStrings("prog", app_artifact.canonical_names.exportNameText(top_level.source_name));
-
-    // The solved requirement type is the record the app provided.
-    const solved_payload = app_artifact.checked_types.payload(solution.solved_root);
-    try std.testing.expect(solved_payload == .record or solved_payload == .record_unbound);
-
-    // Exactly one identity variable (the for-clause `model`), solved to the
-    // app's `Model` alias.
-    try std.testing.expectEqual(@as(u32, 1), solution.identity_len);
-    const identity_root = table.identitySlice(solution)[0];
-    const identity_payload = app_artifact.checked_types.payload(identity_root);
-    try std.testing.expect(identity_payload == .alias);
-    try std.testing.expectEqualStrings(
-        "Model",
-        app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
-    );
-}
-
-fn writeAliasBackingRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
-    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_state_platform");
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/main.roc",
-        .data =
-        \\app [prog] { pf: platform "./.roc_state_platform/main.roc" }
-        \\
-        \\Model : { pins : {} }
-        \\
-        \\prog : { init : {} -> Model, tick : Model -> Model }
-        \\prog = { init: |_| { pins: {} }, tick: |m| m }
-        ,
-    });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "app/.roc_state_platform/main.roc",
-        .data =
-        \\platform ""
-        \\    requires { [Model : model] for prog : { init : {} -> model, tick : model -> model } }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_entry": entry }
-        \\
-        \\entry : {} -> Model
-        \\entry = |_| (prog.init)({})
-        ,
-    });
-}
-
-test "platform requirement relation specializes identity reached through app alias and backing" {
-    const allocator = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    try writeAliasBackingRequirementFixture(&tmp_dir);
-    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
-    defer allocator.free(app_path);
-
-    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
-    defer builtin_modules.deinit();
-
-    var coord = try Coordinator.init(
-        allocator,
-        .single_threaded,
-        1,
-        roc_target.RocTarget.detectNative(),
-        &builtin_modules,
-        build_options.compiler_version,
-        null,
-        roc_ctx,
-    );
-    defer coord.deinit();
-    coord.enable_hosted_transform = true;
-
-    var arena_impl = base.SingleThreadArena.init(allocator);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    try coord.start();
-    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
-    try coord.coordinatorLoop();
-    try std.testing.expect(!coord.hasUserErrors());
-
-    // Finalization builds the platform/app relation from the app's recorded
-    // requirement solutions and republishes the platform root; the requirement
-    // identity is reached through the app-side `Model` alias and its backing
-    // record, so this exercises the recorded-fact path end to end.
-    try coord.finalizeExecutableArtifacts();
-    try std.testing.expect(!coord.hasUserErrors());
-
-    // On this cold build the platform root's check-time publication is deferred, so
-    // finalization is the platform root's single publication.
-    try std.testing.expectEqual(@as(u32, 1), coord.platform_root_publish_count);
-
-    const platform_artifact = coord.executableRootCheckedArtifact();
-    const relations = platform_artifact.platform_requirement_relations.relations;
-    try std.testing.expectEqual(@as(usize, 1), relations.len);
-
-    const relation = relations[0];
-    const payload = platform_artifact.checked_types.payload(relation.requested_source_ty_payload);
-    try std.testing.expect(payload != .pending);
 }
 
 fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {

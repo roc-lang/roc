@@ -52,26 +52,6 @@ pub fn fromVarInfo(
     };
 }
 
-/// Public `identityVarsFromVar` function.
-///
-/// The identity variables (flex/rigid) reachable from `var_`, in the exact
-/// first-encounter order the canonical key digest assigns them slots
-/// (`writeIdentityVariable`). The index in the returned slice IS the identity
-/// slot embedded in the key bytes, so two representations of the same type
-/// (solver vars here, checked payloads in a `CheckedTypeStore`) enumerate
-/// identities in the same order. Caller owns the returned slice.
-pub fn identityVarsFromVar(
-    allocator: Allocator,
-    store: *const TypeStore,
-    env: *const ModuleEnv,
-    var_: Var,
-) Allocator.Error![]types.Var {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    try builder.writeVar(var_);
-    return try allocator.dupe(types.Var, builder.identity_variables.items);
-}
-
 /// Public `fromConcreteVar` function.
 pub fn fromConcreteVar(
     allocator: Allocator,
@@ -104,30 +84,6 @@ pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
     return .{ .bytes = hasher.finalResult() };
 }
 
-/// True when the type reachable from `var_` references a named type (alias or
-/// nominal) declared by `env`'s own module. Drives the platform root's
-/// publication deferral decision: when a `requires` signature names a
-/// platform-root-declared type (e.g. a for-clause identity alias used by name),
-/// requirement unification copies that self-origin named type into the app's
-/// store, so the app's checked-module output needs the platform root's checked
-/// module as the type's owner — the platform root must then produce its checked
-/// module at check time rather than deferring to finalization. Erroneous type
-/// content conservatively counts as a reference for this probe, while ordinary
-/// key construction records it explicitly.
-pub fn varReferencesModuleLocalNamedType(
-    allocator: Allocator,
-    store: *const TypeStore,
-    env: *const ModuleEnv,
-    var_: Var,
-) Allocator.Error!bool {
-    var builder = Builder.init(allocator, store, env);
-    defer builder.deinit();
-    builder.local_named_type_probe = true;
-    builder.writeTag("module_local_named_type_probe");
-    try builder.writeVar(var_);
-    return builder.references_module_local_named_type;
-}
-
 /// Public `schemeFromVar` function.
 pub fn schemeFromVar(
     allocator: Allocator,
@@ -152,12 +108,6 @@ const Builder = struct {
     identity_variables: std.ArrayList(Var),
     require_concrete: bool = false,
     contains_identity_variables: bool = false,
-    /// Probe mode for `varReferencesModuleLocalNamedType`: tolerate erroneous
-    /// content (recording it as a conservative reference) instead of treating
-    /// it as an invariant violation, since the probe may run over types whose
-    /// diagnostics are still owned by the surrounding check.
-    local_named_type_probe: bool = false,
-    references_module_local_named_type: bool = false,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
@@ -245,13 +195,7 @@ const Builder = struct {
 
     fn writeContent(self: *Builder, content: types.Content) Allocator.Error!void {
         switch (content) {
-            .err => {
-                if (self.local_named_type_probe) {
-                    self.references_module_local_named_type = true;
-                    return;
-                }
-                self.writeTag("err");
-            },
+            .err => self.writeTag("err"),
             .flex => |flex| {
                 if (self.require_concrete) {
                     if (self.flexLiteralDefaultKind(flex)) |kind| {
@@ -632,9 +576,6 @@ const Builder = struct {
     /// in the module component, so the digest never depends on coordinator
     /// naming or build directories.
     fn writeNamedSourceIdentity(self: *Builder, origin_module: base.ModuleIdentity.Idx, ident: Ident.Idx, source_decl: ?u32) void {
-        if (!self.env.self_module_identity.isNone() and origin_module == self.env.self_module_identity) {
-            self.references_module_local_named_type = true;
-        }
         self.writeBytes(self.env.moduleIdentityHash(origin_module));
         self.writeOptionalU32(source_decl);
         if (source_decl == null) {

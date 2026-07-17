@@ -1346,39 +1346,6 @@ checked module address. If a checked type mentions an owner checked module id
 that is not present in lowering visibility, the checked module producer is
 incomplete.
 
-### Platform/App Relation
-
-The app↔platform correspondence is assigned once, at check time, and carried
-as checked data. When an app root is checked against a platform's requirement
-surface, the app's checked module records one requirement solution per
-platform requirement, keyed by requires-clause index: the exported app value
-that satisfies it as a checked export id (def and checked pattern, never a
-name), the requirement type as solved in the app's env, and the solved types
-of the requirement's identity variables in identity-slot order — the
-first-encounter order the type key digest assigns, shared byte-for-byte
-between the solver-var digest and the checked-payload digest.
-
-Finalization and platform-root output are readers of those rows. Building the
-platform/app relation resolves each platform requirement declaration to the
-recorded app export by requires index; the relation-bearing platform root
-output projects the recorded solved roots into its store by content identity
-and pairs the platform requirement payload's identity nodes with the recorded
-solutions slot by slot. No stage after check completion resolves an app export
-by name, re-checks requirement/provided type compatibility, or re-derives
-identity bindings by structurally matching platform types against app types. A
-requirement/app mismatch is only ever a check-time diagnostic; a missing
-solution row is the record of an app-side check failure and is consumed only by
-flows that permit user errors, which output the platform root without a
-relation.
-
-The platform root's checked module is output exactly once per build:
-relation-bearing at finalization when an app root is paired (keyed by the
-platform/app relation identity), or relation-less at check completion when the
-workspace has no app root. While a paired platform root's output is deferred,
-its requirement surface installs from its checked env and a requirement context
-computed from the same declaration data the output required-declaration table
-hashes, so the checker input and the cache identity cannot disagree.
-
 ### Compile-Time Constants and Hoisted Roots
 
 Compile-time constants are checked roots. A compile-time constant root may be an

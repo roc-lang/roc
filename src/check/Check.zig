@@ -12,9 +12,7 @@ const literal_defaulting = types_mod.literal_defaulting;
 const exact_numeral = types_mod.numeral;
 const can = @import("can");
 
-const canonical_type_keys = @import("canonical_type_keys.zig");
 const copy_import = @import("copy_import.zig");
-const requirement_solution = @import("requirement_solution.zig");
 const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
@@ -90,13 +88,6 @@ const PlatformRequiredDef = struct {
     required_ident: Ident.Idx,
     /// Where the platform's requires clause declares this requirement.
     platform_region: Region,
-};
-
-/// A platform requirement type instantiated into this module's store, plus
-/// its identity variables in canonical slot order (checker-owned slice).
-const InstantiatedRequirement = struct {
-    expected_var: Var,
-    identity_vars: []Var,
 };
 
 gpa: std.mem.Allocator,
@@ -205,12 +196,6 @@ top_level_ptrns: std.ArrayListUnmanaged(?DefProcessed),
 platform_requirements: ?PlatformRequirementInput,
 /// App defs constrained by platform requirements before their bodies are checked.
 platform_required_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef),
-/// One row per platform requirement that resolved to an exported app def, in
-/// requires-clause order. The solved correspondence (requirement type and its
-/// identity bindings, as vars in this module's store) that publication
-/// materializes into the app artifact's `PlatformRequirementSolutionTable`.
-/// Each row's `identity_vars` slice is checker-owned.
-platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.SolutionInput),
 /// Local block-statement (`s_decl`) function patterns whose body is currently
 /// being type-checked. Used to detect self-recursion (and references to an
 /// enclosing in-flight def) of LOCAL function defs: an unannotated in-flight
@@ -1462,7 +1447,6 @@ fn initAssumePrepared(
         .top_level_ptrns = try initNodeSlots(?DefProcessed, gpa, node_count, null),
         .platform_requirements = null,
         .platform_required_defs = .{},
-        .platform_requirement_solutions = .empty,
         .enclosing_func_name = null,
         .def_group = try initNodeSlots(u32, gpa, node_count, no_def_group),
         .predeclared_scheme_vars = try initNodeSlots(?Var, gpa, node_count, null),
@@ -1601,10 +1585,6 @@ pub fn deinit(self: *Self) void {
     self.reported_effectful_expect.deinit();
     self.top_level_ptrns.deinit(self.gpa);
     self.platform_required_defs.deinit(self.gpa);
-    for (self.platform_requirement_solutions.items) |solution| {
-        self.gpa.free(@constCast(solution.identity_vars));
-    }
-    self.platform_requirement_solutions.deinit(self.gpa);
     self.local_processing_ptrns.deinit(self.gpa);
     self.local_binding_roots.deinit(self.gpa);
     self.type_writer.deinit();
@@ -8381,11 +8361,9 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
         else => return,
     }
 
-    for (input.env.requires_types.items.items, 0..) |required_type, requires_idx| {
+    for (input.env.requires_types.items.items) |required_type| {
         const required_ident = try self.copyPlatformIdent(input.env, required_type.ident);
-        const instantiated = (try self.instantiatePlatformRequiredType(input, required_type, env)) orelse continue;
-        var identity_vars_owned = true;
-        defer if (identity_vars_owned) self.gpa.free(instantiated.identity_vars);
+        const expected_var = (try self.instantiatePlatformRequiredType(input, required_type, env)) orelse continue;
 
         const def_idx = self.exposedAppDefByIdent(required_ident) orelse {
             const top_level_def = self.topLevelDefByIdent(required_ident);
@@ -8402,61 +8380,11 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
             continue;
         };
 
-        const map_entry = try self.platform_required_defs.getOrPut(self.gpa, def_idx);
-        if (map_entry.found_existing) {
-            // One def satisfying several requirements (a platform declaring one
-            // name twice): the def unifies against the retained entry, so tie
-            // this requirement's instance to that entry to enforce both.
-            _ = try self.unifyInContext(
-                map_entry.value_ptr.expected_var,
-                instantiated.expected_var,
-                env,
-                .{ .platform_requirement = .{ .required_ident = required_ident, .platform_region = required_type.region } },
-            );
-        } else {
-            map_entry.value_ptr.* = .{
-                .expected_var = instantiated.expected_var,
-                .required_ident = required_ident,
-                .platform_region = required_type.region,
-            };
-        }
-
-        try self.platform_requirement_solutions.append(self.gpa, .{
-            .requires_idx = @intCast(requires_idx),
-            .def = def_idx,
-            .solved_var = instantiated.expected_var,
-            .is_function = requiredPlatformVarIsFunction(&input.env.types, ModuleEnv.varFrom(required_type.type_anno)),
-            .identity_vars = instantiated.identity_vars,
+        try self.platform_required_defs.put(self.gpa, def_idx, .{
+            .expected_var = expected_var,
+            .required_ident = required_ident,
+            .platform_region = required_type.region,
         });
-        identity_vars_owned = false;
-    }
-}
-
-/// The platform requirement solutions recorded while checking this app root,
-/// in requires-clause order. The rows and their identity slices are
-/// checker-owned and remain valid until `deinit`.
-pub fn platformRequirementSolutions(self: *const Self) []const requirement_solution.SolutionInput {
-    return self.platform_requirement_solutions.items;
-}
-
-/// Whether the platform declares a requirement at a function type, resolving
-/// through aliases in the platform's own store (the requirement's declared
-/// shape, independent of how the app solved it).
-fn requiredPlatformVarIsFunction(store: *const types_mod.Store, var_: Var) bool {
-    var current = var_;
-    while (true) {
-        const resolved = store.resolveVar(current);
-        switch (resolved.desc.content) {
-            .alias => |alias| {
-                current = store.getAliasBackingVar(alias);
-                continue;
-            },
-            .structure => |flat| return switch (flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => true,
-                else => false,
-            },
-            .err, .flex, .rigid => return false,
-        }
     }
 }
 
@@ -8465,7 +8393,7 @@ fn instantiatePlatformRequiredType(
     input: PlatformRequirementInput,
     required_type: ModuleEnv.RequiredType,
     env: *Env,
-) std.mem.Allocator.Error!?InstantiatedRequirement {
+) std.mem.Allocator.Error!?Var {
     self.rigid_var_substitutions.clearRetainingCapacity();
     defer self.rigid_var_substitutions.clearRetainingCapacity();
 
@@ -8490,48 +8418,13 @@ fn instantiatePlatformRequiredType(
         try self.rigid_var_substitutions.put(self.gpa, rigid_ident, app_type_var);
     }
 
-    // Enumerate the requirement type's identity variables (flex/rigid) in the
-    // platform's store, in canonical slot order — the same first-encounter
-    // order the platform's published requirement payload assigns them.
-    const platform_identity_vars = try canonical_type_keys.identityVarsFromVar(
-        self.gpa,
-        &input.env.types,
-        input.env,
-        ModuleEnv.varFrom(required_type.type_anno),
-    );
-    defer self.gpa.free(platform_identity_vars);
-
     const copied = try self.copyVar(ModuleEnv.varFrom(required_type.type_anno), input.env, required_type.region);
-
-    // `copyVar` keyed `var_map` by the platform store's resolved vars — the
-    // same roots the identity enumeration returned — so each identity slot
-    // maps to its copied var here, then to its instantiated var below.
-    const identity_vars = try self.gpa.alloc(Var, platform_identity_vars.len);
-    errdefer self.gpa.free(identity_vars);
-    for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
-        slot_var.* = self.var_map.get(platform_var) orelse {
-            if (builtin.mode == .Debug) {
-                std.debug.panic("platform requirement identity var was not copied into the app store", .{});
-            }
-            unreachable;
-        };
-    }
-
-    const expected_var = try self.instantiateVarWithPartialSubs(
+    return try self.instantiateVarWithPartialSubs(
         copied,
         &self.rigid_var_substitutions,
         env,
         .{ .explicit = required_type.region },
     );
-
-    // `instantiateVarWithPartialSubs` keyed `var_map` by the copied store's
-    // resolved vars; a var it never instantiated resolves to itself.
-    for (identity_vars) |*slot_var| {
-        const resolved = self.types.resolveVar(slot_var.*).var_;
-        slot_var.* = self.var_map.get(resolved) orelse resolved;
-    }
-
-    return .{ .expected_var = expected_var, .identity_vars = identity_vars };
 }
 
 fn copyPlatformIdent(self: *Self, platform_env: *const ModuleEnv, ident: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
@@ -8956,10 +8849,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         } });
         try self.unifyWith(expr_var, .err, env);
     }
-    // A platform requirement is the def's explicit expected type even when the
-    // source has no annotation. Only truly unconstrained crashing defs default
-    // to unit; otherwise this would overwrite the requirement type with `{}`.
-    if (def.annotation == null and platform_required == null and self.exprAlwaysCrashes(def.expr)) {
+    if (def.annotation == null and self.exprAlwaysCrashes(def.expr)) {
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
     }
     if (def.annotation == null and self.erroneous_value_exprs.contains(def.expr)) {

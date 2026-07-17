@@ -123,10 +123,6 @@ pub const TypeCheckTask = struct {
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
-    /// True when this module is the platform root of an app build: its
-    /// check-time publication is skipped so finalization publishes the
-    /// relation-bearing platform root exactly once.
-    defer_publication: bool = false,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -260,10 +256,6 @@ pub const TypeCheckedResult = struct {
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
-    /// True when a clean check produced no artifact because publication was
-    /// deferred to finalization (the platform root of an app build); lets the
-    /// coordinator distinguish deferral from an artifact-blocking failure.
-    publication_deferred: bool = false,
 };
 
 /// Result when parsing fails (but we still return partial info)

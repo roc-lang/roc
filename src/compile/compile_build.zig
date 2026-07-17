@@ -136,8 +136,9 @@ const PathUtils = struct {
 pub const PostCheckPublicationMode = enum {
     /// No post-check work (diagnostics only).
     none,
-    /// Publish the relation-bearing platform root once at finalization (for
-    /// `roc check` and `roc build`).
+    /// Validate platform/app type-level relations (for `roc check`).
+    platform_relations,
+    /// Full executable artifact publication including MIR/LIR lowering (for `roc build`).
     executable_artifacts,
     /// Executable artifact publication that tolerates user errors when every
     /// erroring module still permits lowering (checked runtime-error nodes
@@ -197,12 +198,11 @@ pub const BuildEnv = struct {
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
     ///
-    /// Checking is not complete until the platform/app relation output completes,
-    /// so `roc check` and `roc build` both finalize the relation-bearing platform
-    /// root once (`.executable_artifacts`): finalization builds the platform/app
-    /// relation and publishes the platform root, which also resolves the platform
-    /// target config constants both flows depend on. `.none` runs no post-check
-    /// work, for diagnostic-only embeddings that never link an executable.
+    /// Executable builds need the full platform/app relation because post-check
+    /// lowering consumes it as input. `roc check` needs the type-level
+    /// platform/app validation, but must not republish runnable platform roots;
+    /// diagnostic-only checking must not force post-check lowering of
+    /// declarations that are not part of a valid executable program.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
     /// Whether executable artifacts were published for this build AND every
@@ -979,6 +979,10 @@ pub const BuildEnv = struct {
         if (!coord.hasUserErrors()) {
             switch (self.post_check_publication_mode) {
                 .none => {},
+                .platform_relations => coord.validatePlatformAppRelationsForCheck() catch |err| {
+                    self.emitAccumulatedReportsForError();
+                    return err;
+                },
                 .executable_artifacts, .executable_artifacts_allow_user_errors => {
                     coord.finalizeExecutableArtifacts() catch |err| {
                         self.emitAccumulatedReportsForError();

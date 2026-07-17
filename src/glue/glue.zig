@@ -74,6 +74,7 @@ pub const GlueError = error{
     ParseFailed,
     PlatformPathResolution,
     TempDirCreation,
+    SyntheticAppWrite,
     BuildEnvInit,
     CompilationFailed,
     DevBackendUnavailable,
@@ -96,6 +97,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.ParseFailed => stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}),
             error.PlatformPathResolution => stderr.print("Error: Could not resolve platform path\n", .{}),
             error.TempDirCreation => stderr.print("Error: Could not create temp directory\n", .{}),
+            error.SyntheticAppWrite => stderr.print("Error: Could not write synthetic app\n", .{}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host. Use `roc glue --opt=interpreter ...`.\n", .{}),
@@ -107,7 +109,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
     };
 }
 
-fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, _: []const u8, std_io: std.Io) GlueError!void {
+fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
 
     // 0. Validate glue spec file exists
     std.Io.Dir.cwd().access(std_io, args.glue_spec, .{}) catch {
@@ -127,12 +129,66 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer platform_info.deinit(gpa);
 
-    // 2. Compile the platform root relation-less. Glue consumes its declared
-    // checked surface directly; it does not need app values satisfying `requires`.
+    // 2. Compile platform using BuildEnv by creating a synthetic app.
+    // BuildEnv publishes checked artifacts for both the synthetic app and the platform.
     const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.platform_path, gpa) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
+
+    var app_source = std.ArrayList(u8).empty;
+    defer app_source.deinit(gpa);
+    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &app_source);
+    const w = &aw.writer;
+
+    try w.print("app [", .{});
+
+    for (platform_info.type_aliases, 0..) |alias_name, i| {
+        if (i > 0) try w.print(", ", .{});
+        try w.print("{s}", .{alias_name});
+    }
+
+    for (platform_info.requires_entries, 0..) |entry, i| {
+        if (platform_info.type_aliases.len > 0 or i > 0) {
+            try w.print(", ", .{});
+        }
+        try w.print("{s}", .{entry.name});
+    }
+
+    try w.print("] {{ pf: platform \"", .{});
+    for (platform_abs_path) |ch| {
+        if (ch == '\\') {
+            try w.print("\\\\", .{});
+        } else {
+            try w.print("{c}", .{ch});
+        }
+    }
+    try w.print("\" }}\n\n", .{});
+
+    for (platform_info.type_aliases) |alias_name| {
+        try w.print("{s} : {{}}\n", .{alias_name});
+    }
+    if (platform_info.type_aliases.len > 0) {
+        try w.print("\n", .{});
+    }
+
+    for (platform_info.requires_entries) |entry| {
+        try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
+    }
+
+    // Sync the writer back to app_source
+    app_source = aw.toArrayList();
+    const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
+        return error.OutOfMemory;
+    };
+    defer gpa.free(synthetic_app_path);
+
+    std.Io.Dir.cwd().writeFile(std_io, .{
+        .sub_path = synthetic_app_path,
+        .data = app_source.items,
+    }) catch {
+        return error.SyntheticAppWrite;
+    };
 
     const cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
         return error.BuildEnvInit;
@@ -142,12 +198,13 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
+    build_env.setSyntheticRootPackageIdentity();
     // Glue caches by default like every other pipeline; --no-cache opts out.
     if (!args.no_cache) build_env.enableDefaultCacheManager(false) catch {
         return error.BuildEnvInit;
     };
 
-    build_env.build(platform_abs_path) catch {
+    build_env.build(synthetic_app_path) catch {
         _ = try build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
@@ -296,9 +353,6 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.CompilationFailed;
     };
     _ = try glue_build_env.renderDiagnostics(stderr);
-    if (!glue_build_env.executable_artifacts_finalized) {
-        return error.CompilationFailed;
-    }
 
     const root_artifact = glue_build_env.executableRootCheckedArtifact();
     const imported_artifacts = glue_build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
@@ -782,9 +836,12 @@ fn argLayoutsForProc(
 pub const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
     hosted_entries: []HostedEntry,
+    type_aliases: [][]const u8,
 
     pub const RequiresEntry = struct {
         name: []const u8,
+        type_str: []const u8,
+        stub_expr: []const u8,
     };
 
     pub const HostedEntry = struct {
@@ -800,12 +857,15 @@ pub const PlatformHeaderInfo = struct {
     pub fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
         deinitPlatformRequiresEntries(gpa, self.requires_entries);
         deinitPlatformHostedEntries(gpa, self.hosted_entries);
+        deinitPlatformTypeAliases(gpa, self.type_aliases);
     }
 };
 
 fn deinitPlatformRequiresEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.RequiresEntry) void {
     for (entries) |entry| {
         gpa.free(entry.name);
+        gpa.free(entry.type_str);
+        gpa.free(entry.stub_expr);
     }
     gpa.free(entries);
 }
@@ -816,6 +876,13 @@ fn deinitPlatformHostedEntries(gpa: std.mem.Allocator, entries: []const Platform
         gpa.free(entry.ffi_symbol);
     }
     gpa.free(entries);
+}
+
+fn deinitPlatformTypeAliases(gpa: std.mem.Allocator, aliases: []const []const u8) void {
+    for (aliases) |alias_name| {
+        gpa.free(alias_name);
+    }
+    gpa.free(aliases);
 }
 
 fn hostedEntryLocalNameAlloc(
@@ -899,6 +966,8 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
             errdefer {
                 for (requires_entries.items) |entry| {
                     gpa.free(entry.name);
+                    gpa.free(entry.type_str);
+                    gpa.free(entry.stub_expr);
                 }
                 requires_entries.deinit(gpa);
             }
@@ -930,25 +999,72 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
                 };
             }
 
+            // Use a hash set to deduplicate type aliases across requires entries
+            var type_alias_set = std.StringHashMap(void).init(gpa);
+            defer type_alias_set.deinit();
+
             for (requires_entries_ast) |entry_idx| {
                 const entry = parse_ast.store.getRequiresEntry(entry_idx);
 
+                // Extract type aliases from for-clause
+                const type_aliases_ast = parse_ast.store.forClauseTypeAliasSlice(entry.type_aliases);
+                for (type_aliases_ast) |alias_idx| {
+                    const alias = parse_ast.store.getForClauseTypeAlias(alias_idx);
+                    if (parse_ast.tokens.resolveIdentifier(alias.alias_name)) |ident_idx| {
+                        const alias_name = env.common.getIdent(ident_idx);
+                        if (!type_alias_set.contains(alias_name)) {
+                            try type_alias_set.put(try gpa.dupe(u8, alias_name), {});
+                        }
+                    }
+                }
+
                 if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
                     const name = env.common.getIdent(ident_idx);
+
+                    // Format type annotation to string
+                    var type_buf = std.ArrayList(u8).empty;
+                    defer type_buf.deinit(gpa);
+
+                    try printTypeAnnoToBuf(gpa, &env, parse_ast, entry.type_anno, &type_buf);
+
+                    // Generate stub expression from type annotation
+                    var stub_buf = std.ArrayList(u8).empty;
+                    defer stub_buf.deinit(gpa);
+
+                    try generateStubExprFromTypeAnno(gpa, &env, parse_ast, entry.type_anno, &stub_buf);
+
                     try requires_entries.append(gpa, .{
                         .name = try gpa.dupe(u8, name),
+                        .type_str = try type_buf.toOwnedSlice(gpa),
+                        .stub_expr = try stub_buf.toOwnedSlice(gpa),
                     });
                 }
+            }
+
+            // Convert type alias set to owned slice
+            var type_aliases = std.ArrayList([]const u8).empty;
+            errdefer {
+                for (type_aliases.items) |alias_name| {
+                    gpa.free(alias_name);
+                }
+                type_aliases.deinit(gpa);
+            }
+            var alias_iter = type_alias_set.keyIterator();
+            while (alias_iter.next()) |key| {
+                try type_aliases.append(gpa, key.*);
             }
 
             const requires_entries_owned = try requires_entries.toOwnedSlice(gpa);
             errdefer deinitPlatformRequiresEntries(gpa, requires_entries_owned);
             const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
             errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
+            const type_aliases_owned = try type_aliases.toOwnedSlice(gpa);
+            errdefer deinitPlatformTypeAliases(gpa, type_aliases_owned);
 
             return PlatformHeaderInfo{
                 .requires_entries = requires_entries_owned,
                 .hosted_entries = hosted_entries_owned,
+                .type_aliases = type_aliases_owned,
             };
         },
         else => return error.NotPlatformFile,
@@ -1994,44 +2110,6 @@ const TypeTable = struct {
         return idx;
     }
 
-    /// Insert the ABI representation of a function stored inside another
-    /// value. Such a field is an opaque callable pointer; its source-level
-    /// argument and return graph does not participate in the containing value's
-    /// memory layout and may legitimately mention for-clause rigids.
-    fn insertOpaqueCallable(
-        self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) TypeTableError!u64 {
-        const unit_id = try self.insertUnit();
-        const arg_ids = try self.gpa.alloc(u64, 0);
-        errdefer self.gpa.free(arg_ids);
-        const idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{
-            .repr = .{ .function = .{
-                .arg_ids = arg_ids,
-                .ret_id = unit_id,
-                .layout = try self.layoutFactsForCheckedType(artifact, checked_type),
-            } },
-            .source = .{ .artifact = artifact, .checked_type = checked_type },
-        });
-        return idx;
-    }
-
-    fn checkedTypeResolvesToFunction(
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) bool {
-        var current = checked_type;
-        while (true) {
-            switch (checkedTypePayload(artifact, current)) {
-                .alias => |alias| current = alias.backing,
-                .function => return true,
-                else => return false,
-            }
-        }
-    }
-
     fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) Allocator.Error!void {
         var artifacts = std.ArrayList(*const CheckedArtifact.CheckedModuleArtifact).empty;
         defer artifacts.deinit(self.gpa);
@@ -2788,10 +2866,7 @@ const TypeTable = struct {
         const field_type_ids = try self.gpa.alloc(u64, fields.len);
         defer self.gpa.free(field_type_ids);
         for (fields, 0..) |field, i| {
-            field_type_ids[i] = if (checkedTypeResolvesToFunction(artifact, field.ty))
-                try self.insertOpaqueCallable(artifact, field.ty)
-            else
-                try self.getOrInsert(artifact, field.ty);
+            field_type_ids[i] = try self.getOrInsert(artifact, field.ty);
         }
 
         const record_layout_value = self.layouts.getLayout(record_layout.layout_idx);
@@ -4154,4 +4229,182 @@ fn moduleLocalMemberName(
     if (source_name.len == module_name.len) return try allocator.dupe(u8, source_name);
     if (source_name[module_name.len] != '.') return try allocator.dupe(u8, source_name);
     return try allocator.dupe(u8, source_name[module_name.len + 1 ..]);
+}
+
+/// Print a type annotation to a buffer (for requires entries which use AST types)
+fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) Allocator.Error!void {
+    const type_anno = ast.store.getTypeAnno(type_anno_idx);
+
+    switch (type_anno) {
+        .@"fn" => |f| {
+            const arrow = if (f.effectful) "=>" else "->";
+            const args = ast.store.typeAnnoSlice(f.args);
+            if (args.len == 0) {
+                try buf.appendSlice(gpa, "()");
+            } else {
+                for (args, 0..) |arg_idx, i| {
+                    if (i > 0) try buf.appendSlice(gpa, ", ");
+                    try printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
+                }
+            }
+            try buf.appendSlice(gpa, " ");
+            try buf.appendSlice(gpa, arrow);
+            try buf.appendSlice(gpa, " ");
+            try printTypeAnnoToBuf(gpa, env, ast, f.ret, buf);
+        },
+        .ty => |t| {
+            // Print qualified type name
+            const qualifiers = ast.store.tokenSlice(t.qualifiers);
+            for (qualifiers) |qual_tok_idx| {
+                const qual_tok: parse.tokenize.Token.Idx = @intCast(qual_tok_idx);
+                if (ast.tokens.resolveIdentifier(qual_tok)) |ident_idx| {
+                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+                    try buf.append(gpa, '.');
+                }
+            }
+            if (ast.tokens.resolveIdentifier(t.token)) |ident_idx| {
+                try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+            }
+        },
+        .ty_var => |tv| {
+            if (ast.tokens.resolveIdentifier(tv.tok)) |ident_idx| {
+                try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+            }
+        },
+        .record => |r| {
+            try buf.appendSlice(gpa, "{ ");
+            const fields = ast.store.annoRecordFieldSlice(r.fields);
+            for (fields, 0..) |field_idx, i| {
+                if (i > 0) try buf.appendSlice(gpa, ", ");
+                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
+                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
+                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+                    try buf.appendSlice(gpa, " : ");
+                }
+                try printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
+            }
+            switch (r.ext) {
+                .closed => {},
+                .open => try buf.appendSlice(gpa, ", .."),
+                .named => |named| {
+                    try buf.appendSlice(gpa, ", ..");
+                    try printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
+                },
+            }
+            try buf.appendSlice(gpa, " }");
+        },
+        .tag_union => |tu| {
+            try buf.append(gpa, '[');
+            const tags = ast.store.typeAnnoSlice(tu.tags);
+            for (tags, 0..) |tag_idx, i| {
+                if (i > 0) try buf.appendSlice(gpa, ", ");
+                try printTypeAnnoToBuf(gpa, env, ast, tag_idx, buf);
+            }
+            switch (tu.ext) {
+                .closed => {},
+                .open => try buf.appendSlice(gpa, ", .."),
+                .named => |named| {
+                    try buf.appendSlice(gpa, ", ..");
+                    try printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
+                },
+            }
+            try buf.append(gpa, ']');
+        },
+        .tuple => |t| {
+            try buf.append(gpa, '(');
+            const annos = ast.store.typeAnnoSlice(t.annos);
+            for (annos, 0..) |anno_idx, i| {
+                if (i > 0) try buf.appendSlice(gpa, ", ");
+                try printTypeAnnoToBuf(gpa, env, ast, anno_idx, buf);
+            }
+            try buf.append(gpa, ')');
+        },
+        .apply => |a| {
+            const args = ast.store.typeAnnoSlice(a.args);
+            if (args.len > 0) {
+                try printTypeAnnoToBuf(gpa, env, ast, args[0], buf);
+                if (args.len > 1) {
+                    try buf.append(gpa, ' ');
+                    for (args[1..], 0..) |arg_idx, i| {
+                        if (i > 0) try buf.append(gpa, ' ');
+                        try printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
+                    }
+                }
+            }
+        },
+        .parens => |p| {
+            try buf.append(gpa, '(');
+            try printTypeAnnoToBuf(gpa, env, ast, p.anno, buf);
+            try buf.append(gpa, ')');
+        },
+        .underscore => {
+            try buf.append(gpa, '_');
+        },
+        .underscore_type_var => {
+            try buf.append(gpa, '_');
+        },
+        .malformed => {
+            try buf.appendSlice(gpa, "<malformed>");
+        },
+    }
+}
+
+/// Generate a stub expression from a type annotation.
+/// This produces valid Roc expressions that will crash at runtime rather than compile-time.
+/// Uses `...` inside lambdas to defer the crash to runtime.
+fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) Allocator.Error!void {
+    const type_anno = ast.store.getTypeAnno(type_anno_idx);
+
+    switch (type_anno) {
+        .@"fn" => |f| {
+            // Generate lambda stub
+            const args = ast.store.typeAnnoSlice(f.args);
+            if (args.len == 0) {
+                // No args: || body
+                try buf.appendSlice(gpa, "|| ");
+            } else {
+                // Has args: |_, _, ...| body
+                try buf.append(gpa, '|');
+                for (0..args.len) |i| {
+                    if (i > 0) try buf.appendSlice(gpa, ", ");
+                    try buf.append(gpa, '_');
+                }
+                try buf.appendSlice(gpa, "| ");
+            }
+
+            // Check if return type is unit {}
+            const ret_anno = ast.store.getTypeAnno(f.ret);
+            if (ret_anno == .record) {
+                const record = ret_anno.record;
+                const fields = ast.store.annoRecordFieldSlice(record.fields);
+                if (fields.len == 0 and record.ext == .closed) {
+                    // Return type is {} (unit) - return empty record
+                    try buf.appendSlice(gpa, "{}");
+                    return;
+                }
+            }
+
+            // Non-unit return type - use { ... } to crash at runtime (not compile-time)
+            // The block syntax is required for single-line lambdas
+            try buf.appendSlice(gpa, "{ ... }");
+        },
+        .record => |r| {
+            try buf.appendSlice(gpa, "{ ");
+            const fields = ast.store.annoRecordFieldSlice(r.fields);
+            for (fields, 0..) |field_idx, i| {
+                if (i > 0) try buf.appendSlice(gpa, ", ");
+                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
+                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
+                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
+                    try buf.appendSlice(gpa, ": ");
+                }
+                try generateStubExprFromTypeAnno(gpa, env, ast, field.ty, buf);
+            }
+            try buf.appendSlice(gpa, " }");
+        },
+        else => {
+            // For all other types, use { ... } to crash at runtime
+            try buf.appendSlice(gpa, "{ ... }");
+        },
+    }
 }
