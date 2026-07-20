@@ -715,7 +715,6 @@ const windows = if (is_windows) struct {
 } else struct {};
 
 const Allocator = std.mem.Allocator;
-const ColorPalette = reporting.ColorPalette;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
@@ -1003,16 +1002,20 @@ var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_opti
 };
 
 fn renderValidationError(
-    allocator: std.mem.Allocator,
+    ctx: *CliCtx,
     result: platform_validation.ValidationResult,
-    stderr: anytype,
 ) void {
-    const rendered = platform_validation.renderValidationError(allocator, result, stderr);
+    const rendered = platform_validation.renderValidationError(
+        ctx.gpa,
+        result,
+        ctx.io.stderr(),
+        ctx.reportConfig(.stderr),
+    );
     if (rendered) {} else {}
 }
 
-fn renderDiagnostics(build_env: *BuildEnv, stderr: anytype) Allocator.Error!void {
-    const diag = try build_env.renderDiagnostics(stderr);
+fn renderDiagnostics(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!void {
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     if (diag.errors > 0) {} else {}
 }
 
@@ -1157,7 +1160,8 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         return rocInternalHotReloadDev(&ctx, args[2..]);
     }
 
-    const parsed_args = try cli_args.parse(arena, std_io, args[1..]);
+    const parsed = try cli_args.parseWithGlobalOptions(arena, std_io, args[1..]);
+    const parsed_args = parsed.command;
     if (parsedArgsStartBackgroundCleanup(parsed_args)) {
         startBackgroundCacheCleanup(gpa, arena, std_io);
     }
@@ -1178,6 +1182,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
 
     // Create CLI context at the top level - this is passed to all command handlers
     var ctx = CliCtx.init(gpa, arena, &io, command);
+    ctx.setNoColor(parsed.no_color);
     ctx.initIo(); // Must be called after ctx is at its final stack location
     defer ctx.deinit(); // deinit flushes I/O
 
@@ -1439,6 +1444,7 @@ fn generatePlatformHostShimFromLirData(
         .output_path = object_path,
         .optimization = .speed,
         .target = target,
+        .report_config = ctx.reportConfig(.stderr),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = debug, // Use the debug flag passed from caller
@@ -2536,7 +2542,13 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     var link_spec: ?roc_target.TargetLinkSpec = null;
     var targets_config: ?roc_target.TargetsConfig = null;
     if (platform_paths.platform_source_path) |platform_source| {
-        if (platform_validation.validatePlatformHeader(ctx.arena, ctx.io.std_io, platform_source)) |validation| {
+        if (platform_validation.validatePlatformHeader(
+            ctx.arena,
+            ctx.io.std_io,
+            platform_source,
+            ctx.io.stderr(),
+            ctx.reportConfig(.stderr),
+        )) |validation| {
             targets_config = validation.config;
 
             const selected = try selectRunPlatformTarget(ctx, validation.config, platform_source, args.target);
@@ -3170,7 +3182,7 @@ fn finishCompiledRun(
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = sig_num },
             };
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
             ctx.io.flush();
             std.process.exit(128 +| @as(u8, @truncate(sig_num)));
         },
@@ -3765,12 +3777,12 @@ fn runWithWindowsHandleInheritance(
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = true },
             };
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
         } else if (exit_code >= 0xC0000000) { // NT status codes for exceptions
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_crashed = .{ .exit_code = exit_code, .is_access_violation = false },
             };
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
         }
         // Propagate the exit code (truncated to u8 for compatibility)
         std.process.exit(@truncate(exit_code));
@@ -3877,7 +3889,7 @@ fn runWithPosixFdInheritance(
             const result = platform_validation.targets_validator.ValidationResult{
                 .process_signaled = .{ .signal = sig_num },
             };
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
             // Standard POSIX convention: exit with 128 + signal number
             std.process.exit(128 +| @as(u8, @truncate(sig_num)));
         },
@@ -4106,6 +4118,7 @@ fn buildHotReloadChildArgv(
     }
     if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
     if (args.no_cache) try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-cache={}", .{@as(u8, 1)});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--no-color={}", .{if (ctx.no_color) @as(u8, 1) else @as(u8, 0)});
     try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
 
     return .{
@@ -4811,6 +4824,7 @@ test "hot reload worker args require append offset" {
         "--shm-size=8192",
         "--expected-host=" ++ zero_host,
         "--watch-inputs-file=watch-inputs",
+        "--no-color=1",
     });
 
     try std.testing.expectEqual(@as(u64, 2), parsed.generation);
@@ -4820,6 +4834,7 @@ test "hot reload worker args require append offset" {
     try std.testing.expectEqual(@as(usize, 3072), parsed.region_end);
     try std.testing.expectEqual(@as(usize, 4096), parsed.append_offset);
     try std.testing.expectEqual(true, parsed.preserve_descriptor_refs);
+    try std.testing.expect(parsed.no_color);
     try std.testing.expectError(error.InvalidArguments, parseHotReloadDevWorkerArgs(&.{
         "--path=app.roc",
         "--target=x64linux",
@@ -5237,7 +5252,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
                 .warning => counts.warnings += 1,
             }
             if (!builtin.is_test) {
-                reporting.renderReportToTerminal(report, ctx.io.stderr(), ColorPalette.ANSI, report_config) catch {};
+                reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch {};
             }
         }
     }
@@ -5343,6 +5358,7 @@ const HotReloadDevWorkerArgs = struct {
     source_dir_override: ?[]const u8,
     max_threads: ?usize,
     no_cache: bool,
+    no_color: bool,
     resolve_limits: cli_args.ResolveLimitArgs,
 };
 
@@ -5389,6 +5405,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
     var source_dir_override: ?[]const u8 = null;
     var max_threads: ?usize = null;
     var no_cache: bool = false;
+    var no_color: bool = false;
     var resolve_limits = cli_args.ResolveLimitArgs{};
 
     for (args) |arg| {
@@ -5428,6 +5445,8 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
             max_threads = std.fmt.parseInt(usize, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--no-cache")) |value| {
             no_cache = try parseHotReloadBool(value);
+        } else if (hotReloadFlagValue(arg, "--no-color")) |value| {
+            no_color = try parseHotReloadBool(value);
         } else if (hotReloadFlagValue(arg, "--max-package-mb")) |value| {
             resolve_limits.max_package_mb = std.fmt.parseInt(u32, value, 10) catch return error.InvalidArguments;
         } else if (hotReloadFlagValue(arg, "--max-transitive-mb")) |value| {
@@ -5456,6 +5475,7 @@ fn parseHotReloadDevWorkerArgs(args: []const []const u8) error{InvalidArguments}
         .source_dir_override = source_dir_override,
         .max_threads = max_threads,
         .no_cache = no_cache,
+        .no_color = no_color,
         .resolve_limits = resolve_limits,
     };
 }
@@ -5465,6 +5485,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         try ctx.io.stderr().print("Error: invalid internal hot-reload compiler arguments: {}\n", .{err});
         return err;
     };
+    ctx.setNoColor(args.no_color);
 
     const selected_target = RocTarget.fromString(args.target) orelse {
         try ctx.io.stderr().print("Error: invalid internal hot-reload target: {s}\n", .{args.target});
@@ -6611,7 +6632,15 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
             try ctx.io.stdout().print("Building {s} glue plugin with --opt=speed ...\n", .{args.shorthand});
             ctx.io.flush();
 
-            try glue.buildGlueSpecDylibFile(ctx.gpa, ctx.io.stderr(), staging.main_roc_path, staging.glue_dylib_path, .speed, ctx.io.std_io);
+            try glue.buildGlueSpecDylibFile(
+                ctx.gpa,
+                ctx.io.stderr(),
+                staging.main_roc_path,
+                staging.glue_dylib_path,
+                .speed,
+                ctx.reportConfig(.stderr),
+                ctx.io.std_io,
+            );
         },
     }
 
@@ -6836,7 +6865,7 @@ fn discoverAndAddBundleModules(
         if (build_env.getPlatformTargetsConfig()) |tc| {
             const pf_dir = std.fs.path.dirname(pf) orelse ".";
             if (platform_validation.validateAllTargetFilesExist(ctx.arena, ctx.io.std_io, tc, pf_dir)) |result| {
-                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr);
+                _ = platform_validation.renderValidationError(ctx.gpa, result, stderr, ctx.reportConfig(.stderr));
                 return switch (result) {
                     .missing_target_file => error.MissingTargetFile,
                     .missing_files_directory => error.MissingFilesDirectory,
@@ -7426,7 +7455,7 @@ fn selectBuildPlatformTarget(
     return switch (target_selection.selectBuildTarget(targets_config, target_arg)) {
         .selected => |selected| selected,
         .invalid_target => |target_str| {
-            renderValidationError(ctx.gpa, .{ .invalid_target = .{ .target_str = target_str } }, ctx.io.stderr());
+            renderValidationError(ctx, .{ .invalid_target = .{ .target_str = target_str } });
             return error.InvalidTarget;
         },
         .unsupported_target => |target| {
@@ -7435,15 +7464,15 @@ fn selectBuildPlatformTarget(
                 target,
                 targets_config,
             );
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
             return error.UnsupportedTarget;
         },
         .requires_executable => unreachable,
         .no_default => {
             if (targets_config.targets.len == 0) {
-                renderValidationError(ctx.gpa, .{
+                renderValidationError(ctx, .{
                     .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
-                }, ctx.io.stderr());
+                });
                 return error.UnsupportedTarget;
             }
             const native_target = RocTarget.detectNative();
@@ -7469,7 +7498,7 @@ fn selectRunPlatformTarget(
             const result = platform_validation.targets_validator.ValidationResult{
                 .invalid_target = .{ .target_str = target_str },
             };
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
             return error.InvalidTarget;
         },
         .unsupported_target => |target| {
@@ -7478,7 +7507,7 @@ fn selectRunPlatformTarget(
                 target,
                 targets_config,
             );
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
             return error.UnsupportedTarget;
         },
         .requires_executable => |selected| {
@@ -7487,9 +7516,9 @@ fn selectRunPlatformTarget(
         },
         .no_default => {
             if (targets_config.targets.len == 0) {
-                renderValidationError(ctx.gpa, .{
+                renderValidationError(ctx, .{
                     .empty_targets = .{ .platform_path = platform_source orelse "<unknown>" },
-                }, ctx.io.stderr());
+                });
                 return error.UnsupportedTarget;
             }
             const native_target = RocTarget.detectNative();
@@ -7498,7 +7527,7 @@ fn selectRunPlatformTarget(
                 native_target,
                 targets_config,
             );
-            renderValidationError(ctx.gpa, result, ctx.io.stderr());
+            renderValidationError(ctx, result);
             return error.UnsupportedTarget;
         },
         .not_runnable_on_host => |target| {
@@ -7683,12 +7712,12 @@ fn collectPlatformLinkInputs(
             .file_path => |path| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, path });
                 std.Io.Dir.cwd().access(ctx.io.std_io, full_path, .{}) catch {
-                    renderValidationError(ctx.gpa, .{ .missing_target_file = .{
+                    renderValidationError(ctx, .{ .missing_target_file = .{
                         .target = target,
                         .output = link_type,
                         .file_path = path,
                         .expected_full_path = full_path,
-                    } }, ctx.io.stderr());
+                    } });
                     return error.MissingTargetFile;
                 };
                 if (!hit_app) {
@@ -8427,6 +8456,7 @@ fn compileLlvmAppObject(
         .output_path = object_path,
         .optimization = llvmOptimizationLevel(args.opt),
         .target = target,
+        .report_config = ctx.reportConfig(.stderr),
         .cpu = llvm_cpu,
         .features = llvm_features,
         .debug = args.debug,
@@ -8706,7 +8736,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
         reporter.fail();
-        try renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(ctx, &build_env);
         return err;
     };
     reporter.end();
@@ -8728,12 +8758,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const link_type = selected.output;
 
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
-        renderValidationError(ctx.gpa, .{
+        renderValidationError(ctx, .{
             .unsupported_glibc_cross = .{
                 .target = target,
                 .host_os = @tagName(builtin.target.os.tag),
             },
-        }, ctx.io.stderr());
+        });
         return error.UnsupportedCrossCompilation;
     }
 
@@ -8774,12 +8804,12 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         reporter.fail();
-        try renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(ctx, &build_env);
         return err;
     };
     reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     var total_warning_count = diag.warnings;
     total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
@@ -9022,7 +9052,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
         reporter.fail();
-        try renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(ctx, &build_env);
         return err;
     };
     reporter.end();
@@ -9050,12 +9080,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
-        renderValidationError(ctx.gpa, .{
+        renderValidationError(ctx, .{
             .unsupported_glibc_cross = .{
                 .target = target,
                 .host_os = @tagName(builtin.target.os.tag),
             },
-        }, ctx.io.stderr());
+        });
         return error.UnsupportedCrossCompilation;
     }
 
@@ -9082,12 +9112,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         reporter.fail();
-        try renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(ctx, &build_env);
         return err;
     };
     reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     var total_warning_count = diag.warnings;
     total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
@@ -9347,7 +9377,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     reporter.begin("Resolving Dependencies");
     build_env.discoverDependencies(args.path) catch |err| {
         reporter.fail();
-        try renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(ctx, &build_env);
         return err;
     };
     reporter.end();
@@ -9395,12 +9425,12 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     reporter.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         reporter.fail();
-        try renderDiagnostics(&build_env, ctx.io.stderr());
+        try renderDiagnostics(ctx, &build_env);
         return err;
     };
     reporter.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr());
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     var total_warning_count = diag.warnings;
     total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
@@ -10323,7 +10353,11 @@ fn optimizedDbgWarningsForBuild(
     opt: cli_args.OptLevel,
 ) Allocator.Error!usize {
     return switch (opt) {
-        .size, .speed => try build_env.renderOptimizedDbgWarnings(ctx.io.stderr(), @tagName(opt)),
+        .size, .speed => try build_env.renderOptimizedDbgWarnings(
+            ctx.io.stderr(),
+            @tagName(opt),
+            ctx.reportConfig(.stderr),
+        ),
         .dev, .interpreter => 0,
     };
 }
@@ -12191,6 +12225,7 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
     }
 
     try argv.append(ctx.gpa, arg0);
+    if (ctx.no_color) try argv.append(ctx.gpa, "--no-color");
 
     switch (command) {
         .check => |args| {
@@ -12238,6 +12273,24 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
         .argv = try argv.toOwnedSlice(ctx.gpa),
         .owned = try owned.toOwnedSlice(ctx.gpa),
     };
+}
+
+test "watch child argv propagates no-color" {
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, std.testing.allocator, &io, .check);
+    ctx.setNoColor(true);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var child_argv = try buildWatchChildArgv(
+        &ctx,
+        "roc",
+        .{ .check = .{ .path = "app.roc", .main = null } },
+        "watch-inputs",
+    );
+    defer child_argv.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("--no-color", child_argv.argv[1]);
 }
 
 fn spawnWatchChild(ctx: *CliCtx, argv: []const []const u8) WatchSpawnChildError!*WatchChild {
@@ -12411,7 +12464,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
 
     if (args.main) |main_path| {
         build_env.buildWithMain(args.path, main_path) catch |err| {
-            _ = try build_env.renderDiagnostics(stderr);
+            _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
             if (args.watch_inputs_file) |file_path| {
                 try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
             }
@@ -12419,14 +12472,14 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         };
     } else {
         build_env.discoverDependencies(args.path) catch |err| {
-            _ = try build_env.renderDiagnostics(stderr);
+            _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
             if (args.watch_inputs_file) |file_path| {
                 try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
             }
             return err;
         };
         build_env.compileDiscovered() catch |err| {
-            _ = try build_env.renderDiagnostics(stderr);
+            _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
             if (args.watch_inputs_file) |file_path| {
                 try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
             }
@@ -12434,7 +12487,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         };
     }
 
-    const diag = try build_env.renderDiagnostics(stderr);
+    const diag = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
     if (args.watch_inputs_file) |file_path| {
         try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
     }
@@ -13469,9 +13522,8 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     const stdin_is_tty = stdin.isTty(ctx.io.std_io) catch false;
     const stdout_is_tty = std.Io.File.stdout().isTty(ctx.io.std_io) catch false;
     const mode: ReplMode = if (stdin_is_tty and stdout_is_tty) .interactive else .batch;
-    const report_config = replReportingConfig(ctx, repl_args, mode);
-
-    const use_color = mode == .interactive and !repl_args.no_color and ctx.usesColor(.stdout);
+    const report_config = replReportingConfig(ctx, mode);
+    const use_color = mode == .interactive and ctx.usesColor(.stdout);
 
     // The line editor handles Ctrl-C itself (press twice in a row to quit).
     // Ignore SIGINT at the process level so a Ctrl-C while the terminal is
@@ -13594,10 +13646,10 @@ fn processReplInput(
     return false;
 }
 
-fn replReportingConfig(ctx: *CliCtx, repl_args: cli_args.ReplArgs, mode: ReplMode) reporting.ReportingConfig {
+fn replReportingConfig(ctx: *CliCtx, mode: ReplMode) reporting.ReportingConfig {
     const policy = ctx.colorPolicy();
     var config = ctx.reportConfig(.stderr);
-    if (repl_args.no_color or (mode == .batch and policy.mode != .always)) {
+    if (mode == .batch and policy.mode != .always) {
         config.color_preference = .never;
     }
     return config;
@@ -13636,6 +13688,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
         .glue_spec = glue_spec,
         .output_dir = args.output_dir,
         .platform_path = platform_path,
+        .report_config = ctx.reportConfig(.stderr),
         .no_cache = args.no_cache,
         .installed_dylib_path = installed_dylib_path,
         .opt = switch (args.opt) {
@@ -13741,7 +13794,7 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
         .writer = ctx.io.stderr(),
         .op_label = op_label,
         .timings_flag = timings_flag,
-        .is_tty = is_tty,
+        .is_tty = is_tty and ctx.colorPolicy().mode != .never,
     });
 }
 
@@ -14344,7 +14397,7 @@ fn finishRocCheck(
 
     for (check_result.reports) |module| {
         for (module.reports) |*report| {
-            try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, stderr_report_config);
+            try reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(stderr_report_config), stderr_report_config);
         }
     }
 
@@ -15043,7 +15096,7 @@ fn bumpCheckSide(
 
     for (result.check_result.reports) |module| {
         for (module.reports) |*report| {
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, report_config) catch {};
+            reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch {};
         }
     }
     if (result.check_result.error_count > 0) {
@@ -15301,7 +15354,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         for (module.reports) |*report| {
 
             // Render the diagnostic report to stderr
-            reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, report_config) catch |render_err| {
+            reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch |render_err| {
                 stderr.print("Error rendering diagnostic report: {}", .{render_err}) catch {};
                 // Fallback to just printing the title
                 stderr.print("  {s}", .{report.title}) catch {};

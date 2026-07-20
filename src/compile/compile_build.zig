@@ -3217,12 +3217,17 @@ pub const BuildEnv = struct {
 
     /// Drain reports and render them to a writer. Returns error/warning counts.
     /// Replaces the repeated drain → iterate → render boilerplate pattern.
-    pub fn renderDiagnostics(self: *BuildEnv, writer: anytype) Allocator.Error!RenderDiagnosticsResult {
+    pub fn renderDiagnostics(
+        self: *BuildEnv,
+        writer: anytype,
+        config: reporting.ReportingConfig,
+    ) Allocator.Error!RenderDiagnosticsResult {
         const drained = try self.drainReports();
         defer self.freeDrainedReports(drained);
 
         var total_error_count: usize = 0;
         var total_warning_count: usize = 0;
+        const palette = reporting.ColorUtils.getPaletteForConfig(config);
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
@@ -3231,8 +3236,6 @@ pub const BuildEnv = struct {
                     .runtime_error, .fatal => total_error_count += 1,
                     .warning => total_warning_count += 1,
                 }
-                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                const config = reporting.ReportingConfig.initColorTerminal();
                 reporting.renderReportToTerminal(report, writer, palette, config) catch {};
             }
         }
@@ -3246,7 +3249,12 @@ pub const BuildEnv = struct {
     /// Render one warning for each `dbg` that remains in an optimized build.
     /// Optimized builds intentionally keep `dbg` so users can debug performance
     /// problems, but release artifacts should make those call sites visible.
-    pub fn renderOptimizedDbgWarnings(self: *BuildEnv, writer: anytype, opt_name: []const u8) Allocator.Error!usize {
+    pub fn renderOptimizedDbgWarnings(
+        self: *BuildEnv,
+        writer: anytype,
+        opt_name: []const u8,
+        config: reporting.ReportingConfig,
+    ) Allocator.Error!usize {
         const modules = try self.getCompiledModules(self.gpa);
         defer self.gpa.free(modules);
 
@@ -3257,7 +3265,7 @@ pub const BuildEnv = struct {
 
             try collectDbgRegionsInModule(self.gpa, mod.semantic.env, &regions);
             for (regions.items) |region| {
-                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region);
+                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region, config);
                 total += 1;
             }
         }
@@ -3271,6 +3279,7 @@ pub const BuildEnv = struct {
         path: []const u8,
         opt_name: []const u8,
         region: base.Region,
+        config: reporting.ReportingConfig,
     ) Allocator.Error!void {
         var report = try Report.init(self.gpa, "`dbg` in Optimized Build", "", .warning);
         defer report.deinit();
@@ -3293,8 +3302,7 @@ pub const BuildEnv = struct {
         try report.document.addInlineCode("dbg");
         try report.document.addReflowingText(" is intended for debugging.");
 
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
+        const palette = reporting.ColorUtils.getPaletteForConfig(config);
         reporting.renderReportToTerminal(&report, writer, palette, config) catch {};
     }
 
