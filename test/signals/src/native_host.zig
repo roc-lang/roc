@@ -110,7 +110,6 @@ const HostSignalCacheSlot = engine.HostSignalCacheSlot;
 
 const HostNodeScopeSiteKind = engine.HostNodeScopeSiteKind;
 const HostBinderToken = engine.HostBinderToken;
-const HostSignalToken = engine.HostSignalToken;
 const HostBinderBinding = engine.HostBinderBinding;
 
 const HostSignalRecordPayload = engine.HostSignalRecordPayload;

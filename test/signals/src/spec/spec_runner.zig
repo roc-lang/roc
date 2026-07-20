@@ -5,8 +5,6 @@ const engine = signals.engine;
 const render = signals.render;
 const spec_parser = @import("spec_parser.zig");
 
-const EventPayloadAccessor = render.EventPayloadAccessor;
-const EventPayloadKind = render.EventPayloadKind;
 const RuntimeMetrics = engine.RuntimeMetrics;
 const SpecCommand = spec_parser.SpecCommand;
 const SpecCommandType = spec_parser.SpecCommandType;

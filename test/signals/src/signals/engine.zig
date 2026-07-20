@@ -94,13 +94,9 @@ pub const retainHostCallable = retained_values.retainHostCallable;
 const retainHostValueCapability = retained_values.retainHostValueCapability;
 const releaseHostValueCapability = retained_values.releaseHostValueCapability;
 const assertHostValueCapabilitiesMatch = retained_values.assertHostValueCapabilitiesMatch;
-const retainHostTextRead = retained_values.retainHostTextRead;
 const releaseHostTextRead = retained_values.releaseHostTextRead;
-const retainHostBoolRead = retained_values.retainHostBoolRead;
 const releaseHostBoolRead = retained_values.releaseHostBoolRead;
-const retainHostEventReducer = retained_values.retainHostEventReducer;
 const releaseHostEventReducer = retained_values.releaseHostEventReducer;
-const retainHostEachOps = retained_values.retainHostEachOps;
 const releaseHostEachOps = retained_values.releaseHostEachOps;
 pub const HostSignalCacheSlot = signal_records.CacheSlot;
 pub const HostSignalEvalResult = signal_records.EvalResult;
@@ -128,13 +124,6 @@ fn u64SliceContains(items: []const u64, target: u64) bool {
 pub fn appendUniqueU64(allocator: std.mem.Allocator, values: *std.ArrayListUnmanaged(u64), value: u64) void {
     if (u64SliceContains(values.items, value)) return;
     values.append(allocator, value) catch @panic("out of memory");
-}
-
-fn renderNodeSliceContainsElem(items: []const HostRenderNode, elem_id: u64) bool {
-    for (items) |item| {
-        if (item.elem_id == elem_id) return true;
-    }
-    return false;
 }
 
 pub const HostEachRowScopeStep = scope_runtime.EachRowScopeStep;
