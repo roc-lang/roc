@@ -21,40 +21,44 @@ TOO FEW ARGS - type_apply_bare_parameterized_too_few_args.md:5:26:5:33
 TOO FEW ARGS - type_apply_bare_parameterized_too_few_args.md:8:13:8:17
 TOO FEW ARGS - type_apply_bare_parameterized_too_few_args.md:8:21:8:25
 # PROBLEMS
-**TOO FEW ARGS**
-The type _Wrapper_ expects 1 argument, but got 0 instead.
-**type_apply_bare_parameterized_too_few_args.md:5:15:5:22:**
-```roc
-use_nominal : Wrapper -> Wrapper
-```
-              ^^^^^^^
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type Wrapper expects 1 argument, but got 0 instead. ────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  use_nominal : Wrapper -> Wrapper                                          │
+ │                ‾‾‾‾‾‾‾                                                     │
+ └──────────────────────── type_apply_bare_parameterized_too_few_args.md:5:15 ┘
 
 
-**TOO FEW ARGS**
-The type _Wrapper_ expects 1 argument, but got 0 instead.
-**type_apply_bare_parameterized_too_few_args.md:5:26:5:33:**
-```roc
-use_nominal : Wrapper -> Wrapper
-```
-                         ^^^^^^^
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type Wrapper expects 1 argument, but got 0 instead. ────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  use_nominal : Wrapper -> Wrapper                                          │
+ │                           ‾‾‾‾‾‾‾                                          │
+ └──────────────────────── type_apply_bare_parameterized_too_few_args.md:5:26 ┘
 
 
-**TOO FEW ARGS**
-The type _Pair_ expects 1 argument, but got 0 instead.
-**type_apply_bare_parameterized_too_few_args.md:8:13:8:17:**
-```roc
-use_alias : Pair -> Pair
-```
-            ^^^^
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type Pair expects 1 argument, but got 0 instead. ───────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  use_alias : Pair -> Pair                                                  │
+ │              ‾‾‾‾                                                          │
+ └──────────────────────── type_apply_bare_parameterized_too_few_args.md:8:13 ┘
 
 
-**TOO FEW ARGS**
-The type _Pair_ expects 1 argument, but got 0 instead.
-**type_apply_bare_parameterized_too_few_args.md:8:21:8:25:**
-```roc
-use_alias : Pair -> Pair
-```
-                    ^^^^
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type Pair expects 1 argument, but got 0 instead. ───────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  use_alias : Pair -> Pair                                                  │
+ │                      ‾‾‾‾                                                  │
+ └──────────────────────── type_apply_bare_parameterized_too_few_args.md:8:21 ┘
 
 
 # TOKENS

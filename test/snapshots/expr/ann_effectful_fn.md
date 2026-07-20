@@ -13,10 +13,21 @@ type=expr
 }
 ~~~
 # EXPECTED
+TOO FEW ARGS - ann_effectful_fn.md:2:28:2:31
 DECLARATION HAS NO VALUE - ann_effectful_fn.md:2:5:2:31
 TYPE MISMATCH - ann_effectful_fn.md:2:32:2:36
 TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
 # PROBLEMS
+
+┌──────────────┐
+│ TOO FEW ARGS ├─ The type Try expects 2 arguments, but got 0 instead. ───────┐
+└┬─────────────┘                                                              │
+ │                                                                            │
+ │  launchTheNukes : {} => Try Bool LaunchNukeErr                             │
+ │                         ‾‾‾                                                │
+ └────────────────────────────────────────────────── ann_effectful_fn.md:2:28 ┘
+
+
 
 ┌──────────────────────────┐
 │ DECLARATION HAS NO VALUE ├─ This declaration has a type annotation but no ──┐
