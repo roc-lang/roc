@@ -187,15 +187,14 @@ Ui := [].{
 			cap = Capability.new({})
 				initial : {} -> HostValue
 				initial = |_| Capability.store(Box.box(init), cap)
-				token : Box(U64)
-				token = Node.new_token({})
+				initial_box = Box.box(initial)
 			handle : State(a)
-			handle = { ref: Node.BinderRef.BinderRef(token), cap }
+			handle = { ref: Node.BinderRef.BinderRef(initial_box), cap }
 		child = body(handle)
 		Elem.State(
 			{
 				binder: handle.ref,
-				initial: Box.box(initial),
+				initial: initial_box,
 				cap: Capability.handle(cap),
 				child: Box.box(child),
 			},
@@ -280,14 +279,13 @@ Ui := [].{
 			key = Box.unbox(Capability.get(key_hv, key_cap))
 			row_item : {} -> HostValue
 			row_item = |_| HostValue.clone(item_hv)
-			row_signal_token : Box(U64)
-			row_signal_token = Node.new_token({})
+			row_item_box = Box.box(row_item)
 			row(
 				key,
 				Signal.from_expr(
 					Node.SignalExpr.ConstValue(
-						row_signal_token,
-						Box.box(row_item),
+						row_item_box,
+						row_item_box,
 						Capability.handle(item_cap),
 					),
 					item_cap,

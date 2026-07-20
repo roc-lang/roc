@@ -61,10 +61,9 @@ pub const ActiveCapabilityStack = struct {
 /// uses it for debug type assertions; the browser host ignores it.
 pub const ValueKind = enum { unit, str, bool, i64, u8_list };
 
-/// Signals represents signal tokens and binder tokens as boxed `U64` payloads
-/// in Roc. On wasm32 their payload alignment is 8 while pointer width is 4, so
-/// releasing them must not use the pointer-aligned `decrefBox` convenience
-/// helper.
+/// Release a boxed `U64` payload whose allocation used 8-byte payload
+/// alignment. On wasm32, releasing one of these through pointer-aligned
+/// `decrefBox` would read the wrong header word.
 pub fn releaseU64Box(box: anytype, roc_host: *abi.RocHost) void {
     abi.decrefBoxWith(@ptrCast(box), @alignOf(u64), false, null, roc_host);
 }

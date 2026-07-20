@@ -78,8 +78,8 @@ pub const CleanupDesc = struct {
     name: []const u8,
 };
 
-/// Identity token interned per `Ui.state` binder.
-pub const BinderToken = *u64;
+/// Boxed state initializer shared by `Ui.state` and its references.
+pub const BinderToken = retained.HostSignalToken;
 
 /// Binds a state binder token to the node id it resolves to within a scope.
 pub const BinderBinding = struct {

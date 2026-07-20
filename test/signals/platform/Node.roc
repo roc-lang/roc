@@ -1,24 +1,21 @@
 import HostValue exposing [HostValue]
 
 ## Pure UI descriptor tree produced by `build`. This is the explicit data the
-## host ingests. Identity is NOT threaded in Roc: the tree is immutable and pure,
-## and the host assigns construction-order identity by a deterministic pre-order
-## walk. Only identity-bearing nodes (state binders, `when` sites, `each` sites)
-## advance the per-scope ordinal in that walk; ordinary markup does not.
+## host ingests. Structural UI identity comes from a deterministic pre-order host
+## walk. Signal graph identity comes from boxed initializer/transform thunks that
+## already exist to evaluate signal records, so signal construction does not need
+## a separate token allocation.
 ##
 ## A `Signal` is an expression that references state/source binders by a binder
 ## ref (a path-relative index assigned during the host walk). Declaration of a
 ## binder (via `Ui.state`) mints identity; a use (`map`, sink) does not.
 	Node := [].{
 
-		new_token : {} -> Box(U64)
-		new_token = |_| Box.box(0)
-
-		## Reference to a state/source binder. The token is minted by `Ui.state` and
-	## copied into both the state declaration and all signal/message references to
-	## that declaration. The host maps tokens to construction-order node ids during
-	## the active descriptor walk; the token is not the state identity.
-	BinderRef := [BinderRef(Box(U64))]
+	## Reference to a state/source binder. The boxed initializer thunk is
+	## shared by the state declaration and all signal/message references to that
+	## declaration. The host maps this pointer to the construction-order node id
+	## during the active descriptor walk; the pointer is not the state identity.
+	BinderRef := [BinderRef(Box(({} -> HostValue)))]
 
 	## A reducer message: applies `transform` to the bound source's current value.
 	## The host routes a fired event to the referenced binder and applies the
@@ -31,16 +28,15 @@ import HostValue exposing [HostValue]
 		payload_reducer : HostValue.EventReducerHandle,
 	}
 
-	## Signal expression. `Ref` reads a binder's current value. Other variants
-	## carry a copied token allocated at the typed signal construction site, so the
-	## host can identify shared derived nodes from explicit data. `ConstValue`
-	## carries a boxed value initializer plus output equality. `Map`/`Map2`/
-	## `Combine` are derived nodes carrying boxed typed transforms (confined
-	## erasure) and a boxed `is_eq` thunk for change pruning. `TaskSource` and
-	## `IntervalSource` are host-owned effect sources whose results enter the
-	## same signal graph.
+	## Signal expression. `Ref` reads a binder's current value. Other variants are
+	## identified by their existing boxed initializer or transform thunk, so no
+	## separate identity allocation is required. `ConstValue` carries a boxed value
+	## initializer plus output capability. `Map`/`Map2`/`Combine` are derived nodes
+	## carrying boxed typed transforms (confined erasure) and an output capability
+	## for change pruning. `TaskSource` and `IntervalSource` are host-owned effect
+	## sources whose results enter the same signal graph.
 	TaskSource : {
-		token : Box(U64),
+		token : Box(({} -> HostValue)),
 		name : Str,
 		cap : HostValue.CapabilityHandle,
 		payload_cap : HostValue.CapabilityHandle,
@@ -51,7 +47,7 @@ import HostValue exposing [HostValue]
 	}
 
 	IntervalSource : {
-		token : Box(U64),
+		token : Box(({} -> HostValue)),
 		period_ms : U64,
 		cap : HostValue.CapabilityHandle,
 		initial : Box(({} -> HostValue)),
@@ -60,10 +56,10 @@ import HostValue exposing [HostValue]
 
 	SignalExpr := [
 		Ref(BinderRef),
-		ConstValue(Box(U64), Box(({} -> HostValue)), HostValue.CapabilityHandle),
-		Map(Box(U64), Box(SignalExpr), Box((HostValue -> HostValue)), HostValue.CapabilityHandle),
-		Map2(Box(U64), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), HostValue.CapabilityHandle),
-		Combine(Box(U64), List(SignalExpr), Box((List(HostValue) -> HostValue)), HostValue.CapabilityHandle),
+		ConstValue(Box(({} -> HostValue)), Box(({} -> HostValue)), HostValue.CapabilityHandle),
+		Map(Box((HostValue -> HostValue)), Box(SignalExpr), Box((HostValue -> HostValue)), HostValue.CapabilityHandle),
+		Map2(Box((HostValue, HostValue -> HostValue)), Box(SignalExpr), Box(SignalExpr), Box((HostValue, HostValue -> HostValue)), HostValue.CapabilityHandle),
+		Combine(Box((List(HostValue) -> HostValue)), List(SignalExpr), Box((List(HostValue) -> HostValue)), HostValue.CapabilityHandle),
 		TaskSource(TaskSource),
 		IntervalSource(IntervalSource),
 	]
@@ -71,7 +67,7 @@ import HostValue exposing [HostValue]
 	Cmd := [
 		StartTask(
 			{
-				task_token : Box(U64),
+				task_token : Box(({} -> HostValue)),
 				task_name : Str,
 				request_init : Box(({} -> HostValue)),
 				request_read : HostValue.TaskRequestReadHandle,

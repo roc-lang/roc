@@ -51,8 +51,8 @@ pub fn deinitCleanupEvents(allocator: std.mem.Allocator, events: *CleanupEvents)
 pub fn activeTaskRecordByToken(active_signal_graph: anytype, token: HostSignalToken) ?*HostSignalRecord {
     for (active_signal_graph) |node| {
         switch (node.record.payload) {
-            .task_source => |payload| {
-                if (payload.token == token) return node.record;
+            .task_source => {
+                if (node.record.token().? == token) return node.record;
             },
             .ref, .const_value, .map, .map2, .combine, .interval_source => {},
         }
@@ -92,8 +92,8 @@ pub fn activeIntervalRecordByToken(active_signal_graph: anytype, source_token: H
     var found: ?*HostSignalRecord = null;
     for (active_signal_graph) |node| {
         switch (node.record.payload) {
-            .interval_source => |payload| {
-                if (payload.token != source_token) continue;
+            .interval_source => {
+                if (node.record.token().? != source_token) continue;
                 if (found != null) @panic("interval token matched more than one active interval source");
                 found = node.record;
             },
@@ -408,7 +408,7 @@ pub fn syncActiveIntervalsFromGraph(
         switch (node.record.payload) {
             .interval_source => |payload| {
                 const host = roc_host orelse @panic("active interval cannot retain token without a Roc host");
-                ensureActiveInterval(Ctx, ctx, allocator, intervals, next_interval_token, host, payload.token, payload.period_ms);
+                ensureActiveInterval(Ctx, ctx, allocator, intervals, next_interval_token, host, node.record.token().?, payload.period_ms);
             },
             .ref, .const_value, .map, .map2, .combine, .task_source => {},
         }
@@ -459,10 +459,9 @@ fn testTaskRecord(token: HostSignalToken, name: []const u8) HostSignalRecord {
     return .{
         .ref_count = 1,
         .payload = .{ .task_source = .{
-            .token = token,
             .name = name,
             .payload_cap = undefined,
-            .initial = undefined,
+            .initial = token,
             .done = undefined,
             .failed = undefined,
             .cap = undefined,
@@ -475,9 +474,8 @@ fn testIntervalRecord(token: HostSignalToken, period_ms: u64) HostSignalRecord {
     return .{
         .ref_count = 1,
         .payload = .{ .interval_source = .{
-            .token = token,
             .period_ms = period_ms,
-            .initial = undefined,
+            .initial = token,
             .tick = undefined,
             .cap = undefined,
         } },
@@ -485,15 +483,17 @@ fn testIntervalRecord(token: HostSignalToken, period_ms: u64) HostSignalRecord {
 }
 
 test "effects runtime finds and removes pending tasks" {
-    var first_token: u64 = 0;
-    var second_token: u64 = 0;
+    var first_token_storage = [_]u8{0};
+    var second_token_storage = [_]u8{0};
+    const first_token = first_token_storage[0..].ptr;
+    const second_token = second_token_storage[0..].ptr;
     var tasks: std.ArrayListUnmanaged(PendingTask) = .empty;
     defer tasks.deinit(std.testing.allocator);
 
     tasks.append(std.testing.allocator, .{
         .request_id = 1,
         .owner_scope_id = 10,
-        .task_token = &first_token,
+        .task_token = first_token,
         .task_name = "load",
         .request = "a",
         .active = true,
@@ -501,7 +501,7 @@ test "effects runtime finds and removes pending tasks" {
     tasks.append(std.testing.allocator, .{
         .request_id = 2,
         .owner_scope_id = 11,
-        .task_token = &second_token,
+        .task_token = second_token,
         .task_name = "save",
         .request = "b",
         .active = true,
@@ -515,12 +515,15 @@ test "effects runtime finds and removes pending tasks" {
 }
 
 test "effects runtime finds active effect source records" {
-    var task_token: u64 = 0;
-    var first_interval_token: u64 = 0;
-    var second_interval_token: u64 = 0;
-    var task_record = testTaskRecord(&task_token, "load");
-    var first_interval_record = testIntervalRecord(&first_interval_token, 250);
-    var second_interval_record = testIntervalRecord(&second_interval_token, 500);
+    var task_token_storage = [_]u8{0};
+    var first_interval_token_storage = [_]u8{0};
+    var second_interval_token_storage = [_]u8{0};
+    const task_token = task_token_storage[0..].ptr;
+    const first_interval_token = first_interval_token_storage[0..].ptr;
+    const second_interval_token = second_interval_token_storage[0..].ptr;
+    var task_record = testTaskRecord(task_token, "load");
+    var first_interval_record = testIntervalRecord(first_interval_token, 250);
+    var second_interval_record = testIntervalRecord(second_interval_token, 500);
     var ref_record = HostSignalRecord{
         .ref_count = 1,
         .payload = .{ .ref = 42 },
@@ -532,10 +535,10 @@ test "effects runtime finds active effect source records" {
         .{ .record = &second_interval_record },
     };
 
-    try std.testing.expectEqual(@as(?*HostSignalRecord, &task_record), activeTaskRecordByToken(active_nodes[0..], &task_token));
+    try std.testing.expectEqual(@as(?*HostSignalRecord, &task_record), activeTaskRecordByToken(active_nodes[0..], task_token));
     try std.testing.expectEqual(@as(?*HostSignalRecord, &task_record), activeTaskRecordByName(active_nodes[0..], "load"));
     try std.testing.expectEqual(@as(u64, 1), activeIntervalRecordCountByPeriod(active_nodes[0..], 250));
-    try std.testing.expectEqual(@as(?*HostSignalRecord, &first_interval_record), activeIntervalRecordByToken(active_nodes[0..], &first_interval_token));
+    try std.testing.expectEqual(@as(?*HostSignalRecord, &first_interval_record), activeIntervalRecordByToken(active_nodes[0..], first_interval_token));
     try std.testing.expectEqual(@as(?*HostSignalRecord, &second_interval_record), activeIntervalRecordByPeriod(active_nodes[0..], 500));
     try std.testing.expectEqual(@as(?*HostSignalRecord, null), activeTaskRecordByName(active_nodes[0..], "missing"));
 }
@@ -554,15 +557,17 @@ test "effects runtime owns cleanup event storage" {
 }
 
 test "effects runtime indexes pending tasks" {
-    var first_token: u64 = 0;
-    var second_token: u64 = 0;
+    var first_token_storage = [_]u8{0};
+    var second_token_storage = [_]u8{0};
+    const first_token = first_token_storage[0..].ptr;
+    const second_token = second_token_storage[0..].ptr;
     var tasks: std.ArrayListUnmanaged(PendingTask) = .empty;
     defer tasks.deinit(std.testing.allocator);
 
     tasks.append(std.testing.allocator, .{
         .request_id = 10,
         .owner_scope_id = 1,
-        .task_token = &first_token,
+        .task_token = first_token,
         .task_name = "load",
         .request = "a",
         .active = true,
@@ -570,7 +575,7 @@ test "effects runtime indexes pending tasks" {
     tasks.append(std.testing.allocator, .{
         .request_id = 11,
         .owner_scope_id = 2,
-        .task_token = &second_token,
+        .task_token = second_token,
         .task_name = "load",
         .request = "b",
         .active = false,
@@ -582,28 +587,30 @@ test "effects runtime indexes pending tasks" {
 }
 
 test "effects runtime updates active interval table" {
-    var first_token: u64 = 0;
-    var second_token: u64 = 0;
+    var first_token_storage = [_]u8{0};
+    var second_token_storage = [_]u8{0};
+    const first_token = first_token_storage[0..].ptr;
+    const second_token = second_token_storage[0..].ptr;
     var intervals: std.ArrayListUnmanaged(ActiveInterval) = .empty;
     defer intervals.deinit(std.testing.allocator);
 
     intervals.append(std.testing.allocator, .{
         .token = 10,
-        .source_token = &first_token,
+        .source_token = first_token,
         .period_ms = 100,
         .active = true,
     }) catch @panic("out of memory");
     intervals.append(std.testing.allocator, .{
         .token = 11,
-        .source_token = &second_token,
+        .source_token = second_token,
         .period_ms = 200,
         .active = true,
     }) catch @panic("out of memory");
 
-    try std.testing.expectEqual(@as(?HostSignalToken, &first_token), activeIntervalSourceTokenByRuntimeToken(intervals.items, 10));
+    try std.testing.expectEqual(@as(?HostSignalToken, first_token), activeIntervalSourceTokenByRuntimeToken(intervals.items, 10));
     markActiveIntervalsInactive(intervals.items);
     try std.testing.expect(!intervals.items[0].active);
-    try std.testing.expectEqual(@as(?*ActiveInterval, &intervals.items[1]), activeIntervalBySourceToken(intervals.items, &second_token));
+    try std.testing.expectEqual(@as(?*ActiveInterval, &intervals.items[1]), activeIntervalBySourceToken(intervals.items, second_token));
     const removed = removeActiveIntervalAt(&intervals, 0);
     try std.testing.expectEqual(@as(u64, 10), removed.token);
     try std.testing.expectEqual(@as(usize, 1), intervals.items.len);
@@ -611,8 +618,9 @@ test "effects runtime updates active interval table" {
 }
 
 test "effects runtime syncs existing active intervals from graph" {
-    var source_token: u64 = 0;
-    var interval_record = testIntervalRecord(&source_token, 250);
+    var source_token_storage = [_]u8{0};
+    const source_token = source_token_storage[0..].ptr;
+    var interval_record = testIntervalRecord(source_token, 250);
     const active_nodes = [_]TestActiveNode{
         .{ .record = &interval_record },
     };
@@ -621,7 +629,7 @@ test "effects runtime syncs existing active intervals from graph" {
     defer intervals.deinit(std.testing.allocator);
     intervals.append(std.testing.allocator, .{
         .token = 10,
-        .source_token = &source_token,
+        .source_token = source_token,
         .period_ms = 250,
         .active = true,
     }) catch @panic("out of memory");

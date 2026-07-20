@@ -91,7 +91,6 @@ pub const HostEachOps = retained_values.HostEachOps;
 pub const HostSignalToken = retained_values.HostSignalToken;
 pub const HostValueCell = retained_values.HostValueCell;
 pub const retainHostCallable = retained_values.retainHostCallable;
-pub const retainHostSignalToken = retained_values.retainHostSignalToken;
 const retainHostValueCapability = retained_values.retainHostValueCapability;
 const releaseHostValueCapability = retained_values.releaseHostValueCapability;
 const assertHostValueCapabilitiesMatch = retained_values.assertHostValueCapabilitiesMatch;
@@ -1257,18 +1256,17 @@ pub fn Engine(comptime Ctx: type) type {
         pub fn bindNodeSignalExpr(self: *Self, allocator: std.mem.Allocator, stream: *HostNodeDescriptorStream, expr: abi.NodeSignalExpr, binder_stack: []const HostBinderBinding) *HostSignalRecord {
             return switch (expr.tag) {
                 .Ref => blk: {
-                    const node_id = resolveNodeBinderRef(binder_stack, expr.payload_ref());
+                    const node_id = resolveNodeBinderRef(binder_stack, retained_values.hostSignalTokenFromCallable(expr.payload_ref()));
                     break :blk HostSignalRecord.init(allocator, .{ .ref = node_id });
                 },
                 .ConstValue => blk: {
                     const payload = expr.payload_const_value();
-                    const token = payload._0;
+                    const token = retained_values.hostSignalTokenFromCallable(payload._0);
                     if (self.retainExistingSignalRecordForStream(allocator, stream, token, .const_value)) |record| {
                         break :blk record;
                     }
 
                     const record = HostSignalRecord.init(allocator, .{ .const_value = .{
-                        .token = retainHostSignalToken(token),
                         .init = retainHostCallable(payload._1, &self.pending_roc_metrics),
                         .cap = retainHostValueCapability(payload._2, &self.pending_roc_metrics),
                     } });
@@ -1277,14 +1275,13 @@ pub fn Engine(comptime Ctx: type) type {
                 },
                 .Map => blk: {
                     const payload = expr.payload_map();
-                    const token = payload._0;
+                    const token = retained_values.hostSignalTokenFromCallable(payload._0);
                     if (self.retainExistingSignalRecordForStream(allocator, stream, token, .map)) |record| {
                         break :blk record;
                     }
 
                     const input = self.bindNodeSignalExpr(allocator, stream, payload._1.*, binder_stack);
                     const record = HostSignalRecord.init(allocator, .{ .map = .{
-                        .token = retainHostSignalToken(token),
                         .input = input,
                         .transform = retainHostCallable(payload._2, &self.pending_roc_metrics),
                         .cap = retainHostValueCapability(payload._3, &self.pending_roc_metrics),
@@ -1294,7 +1291,7 @@ pub fn Engine(comptime Ctx: type) type {
                 },
                 .Map2 => blk: {
                     const payload = expr.payload_map2();
-                    const token = payload._0;
+                    const token = retained_values.hostSignalTokenFromCallable(payload._0);
                     if (self.retainExistingSignalRecordForStream(allocator, stream, token, .map2)) |record| {
                         break :blk record;
                     }
@@ -1302,7 +1299,6 @@ pub fn Engine(comptime Ctx: type) type {
                     const left = self.bindNodeSignalExpr(allocator, stream, payload._1.*, binder_stack);
                     const right = self.bindNodeSignalExpr(allocator, stream, payload._2.*, binder_stack);
                     const record = HostSignalRecord.init(allocator, .{ .map2 = .{
-                        .token = retainHostSignalToken(token),
                         .left = left,
                         .right = right,
                         .transform = retainHostCallable(payload._3, &self.pending_roc_metrics),
@@ -1313,7 +1309,7 @@ pub fn Engine(comptime Ctx: type) type {
                 },
                 .Combine => blk: {
                     const payload = expr.payload_combine();
-                    const token = payload._0;
+                    const token = retained_values.hostSignalTokenFromCallable(payload._0);
                     if (self.retainExistingSignalRecordForStream(allocator, stream, token, .combine)) |record| {
                         break :blk record;
                     }
@@ -1324,7 +1320,6 @@ pub fn Engine(comptime Ctx: type) type {
                         dest.* = self.bindNodeSignalExpr(allocator, stream, child, binder_stack);
                     }
                     const record = HostSignalRecord.init(allocator, .{ .combine = .{
-                        .token = retainHostSignalToken(token),
                         .children = children,
                         .transform = retainHostCallable(payload._2, &self.pending_roc_metrics),
                         .cap = retainHostValueCapability(payload._3, &self.pending_roc_metrics),
@@ -1334,13 +1329,12 @@ pub fn Engine(comptime Ctx: type) type {
                 },
                 .TaskSource => blk: {
                     const payload = expr.payload_task_source();
-                    const token = payload.token;
+                    const token = retained_values.hostSignalTokenFromCallable(payload.token);
                     if (self.retainExistingSignalRecordForStream(allocator, stream, token, .task_source)) |record| {
                         break :blk record;
                     }
 
                     const record = HostSignalRecord.init(allocator, .{ .task_source = .{
-                        .token = retainHostSignalToken(token),
                         .name = allocator.dupe(u8, payload.name.asSlice()) catch @panic("out of memory"),
                         .payload_cap = retainHostValueCapability(payload.payload_cap, &self.pending_roc_metrics),
                         .initial = retainHostCallable(payload.initial, &self.pending_roc_metrics),
@@ -1354,13 +1348,12 @@ pub fn Engine(comptime Ctx: type) type {
                 },
                 .IntervalSource => blk: {
                     const payload = expr.payload_interval_source();
-                    const token = payload.token;
+                    const token = retained_values.hostSignalTokenFromCallable(payload.token);
                     if (self.retainExistingSignalRecordForStream(allocator, stream, token, .interval_source)) |record| {
                         break :blk record;
                     }
 
                     const record = HostSignalRecord.init(allocator, .{ .interval_source = .{
-                        .token = retainHostSignalToken(token),
                         .period_ms = payload.period_ms,
                         .initial = retainHostCallable(payload.initial, &self.pending_roc_metrics),
                         .tick = retainHostCallable(payload.tick, &self.pending_roc_metrics),
@@ -1705,16 +1698,18 @@ pub fn Engine(comptime Ctx: type) type {
                     const kind = renderEventKindFromAbi(payload.kind);
                     const payload_kind = eventPayloadKindFromAbi(msg.payload_kind);
                     const payload_accessor = eventPayloadAccessorFromAbi(msg.payload_accessor);
-                    const target_node_id = resolveNodeBinderRef(binder_stack, msg.binder);
-                    stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, msg.binder, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
+                    const binder_token = retained_values.hostSignalTokenFromCallable(msg.binder);
+                    const target_node_id = resolveNodeBinderRef(binder_stack, binder_token);
+                    stream.appendEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, kind, binder_token, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
                 },
                 .OnNamedEvent => {
                     const payload = attr.payload_on_named_event();
                     const msg = payload.msg;
                     const payload_kind = eventPayloadKindFromAbi(msg.payload_kind);
                     const payload_accessor = eventPayloadAccessorFromAbi(msg.payload_accessor);
-                    const target_node_id = resolveNodeBinderRef(binder_stack, msg.binder);
-                    stream.appendNamedEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, payload.name.asSlice(), payload.options, msg.binder, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
+                    const binder_token = retained_values.hostSignalTokenFromCallable(msg.binder);
+                    const target_node_id = resolveNodeBinderRef(binder_stack, binder_token);
+                    stream.appendNamedEvent(allocator, roc_host, &self.pending_roc_metrics, elem_id, payload.name.asSlice(), payload.options, binder_token, target_node_id, payload_kind, payload_accessor, msg.payload_reducer);
                 },
             }
         }
@@ -1838,7 +1833,7 @@ pub fn Engine(comptime Ctx: type) type {
                     const state = elem.payload_state();
                     stream.appendState(allocator, roc_host, &self.pending_roc_metrics, node_id, state.initial, state.cap);
                     self.ensureStateFromDesc(ctx, roc_host, stream.states.items[stream.states.items.len - 1]);
-                    binder_stack.append(allocator, .{ .token = state.binder, .node_id = node_id }) catch @panic("out of memory");
+                    binder_stack.append(allocator, .{ .token = retained_values.hostSignalTokenFromCallable(state.binder), .node_id = node_id }) catch @panic("out of memory");
                     self.collectActiveElemDescriptors(ctx, roc_host, stream, state.child.*, scope_id, parent_elem_id, ordinal, dom_ordinal, binder_stack, scope_created, dirty_source_node_ids);
                     _ = binder_stack.pop() orelse unreachable;
                 },
@@ -3738,7 +3733,7 @@ pub fn Engine(comptime Ctx: type) type {
             desc.run_on_mount = false;
 
             const cmd = erased_calls.callUnitToStartTaskCmd(roc_host, desc.to_cmd);
-            defer abi.decref__AnonStruct85(cmd, roc_host);
+            defer abi.decref__AnonStruct84(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 
@@ -4623,7 +4618,8 @@ pub fn Engine(comptime Ctx: type) type {
         }
 
         pub fn startTaskCommand(self: *Self, ctx: Ctx.Handle, roc_host: *abi.RocHost, owner_scope_id: u64, cmd: erased_calls.StartTaskCmd) render.Counts {
-            const record = self.activeTaskRecordByToken(cmd.task_token) orelse @panic("StartTask referenced a task source that is not active");
+            const task_token = retained_values.hostSignalTokenFromCallable(cmd.task_token);
+            const record = self.activeTaskRecordByToken(task_token) orelse @panic("StartTask referenced a task source that is not active");
             const task_payload = switch (record.payload) {
                 .task_source => |payload| payload,
                 .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
@@ -4637,8 +4633,8 @@ pub fn Engine(comptime Ctx: type) type {
             const request = callHostValueToStrWithCapability(ctx, roc_host, cmd.request_read.capability, cmd.request_read.read, request_value);
             defer request.decref(roc_host);
 
-            self.cancelPendingTasksByTaskToken(ctx, cmd.task_token);
-            _ = effects_runtime.appendAndStartPendingTask(Ctx, ctx, Ctx.allocator(ctx), &self.pending_tasks, &self.next_task_request_id, self.roc_host.?, owner_scope_id, cmd.task_token, cmd.task_name.asSlice(), request.asSlice());
+            self.cancelPendingTasksByTaskToken(ctx, task_token);
+            _ = effects_runtime.appendAndStartPendingTask(Ctx, ctx, Ctx.allocator(ctx), &self.pending_tasks, &self.next_task_request_id, self.roc_host.?, owner_scope_id, task_token, cmd.task_name.asSlice(), request.asSlice());
 
             if (task_payload.reset_on_start) {
                 const loading = erased_calls.callValueInitThunk(roc_host, task_payload.initial);
@@ -4685,7 +4681,7 @@ pub fn Engine(comptime Ctx: type) type {
             if (!self.updateDirtySignalCache(ctx, roc_host, &desc.cached_value, result.value, cap)) return .{};
 
             const cmd = callHostValueToStartTaskCmdWithCapability(ctx, roc_host, cap, desc.to_cmd, result.value);
-            defer abi.decref__AnonStruct85(cmd, roc_host);
+            defer abi.decref__AnonStruct84(cmd, roc_host);
             return self.startTaskCommand(ctx, roc_host, desc.scope_id, cmd);
         }
 

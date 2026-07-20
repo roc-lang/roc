@@ -1373,7 +1373,7 @@ fn resolvePendingTask(host: *HostEnv, roc_host: *abi.RocHost, name: []const u8, 
         .task_source => |payload| payload,
         .ref, .const_value, .map, .map2, .combine, .interval_source => unreachable,
     };
-    if (task_payload.token != pending.task_token) {
+    if (record.token().? != pending.task_token) {
         failHost("fake task result matched a pending request for a different task source");
     }
 
@@ -2968,7 +2968,7 @@ fn testCapabilityCloneOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callco
 fn testBinderCaptureOnDrop(capture_ptr: ?[*]u8, roc_host: *abi.RocHost) callconv(.c) void {
     test_erased_callable_drop_count += 1;
     const capture = testCapturePtrAs(TestErasedBinderCapture, capture_ptr);
-    hv.releaseU64Box(capture.condition_binder, roc_host);
+    abi.decrefErasedCallable(capture.condition_binder, roc_host);
     hv.releaseHostValueCapability(capture.condition_cap, roc_host);
 }
 
@@ -3048,17 +3048,17 @@ fn makeTestConsumingTaskSourceRecord(host: *HostEnv, roc_host: *abi.RocHost, nam
     const allocator = host.hostAllocator();
     const payload_cap = testHostValueCapability(roc_host);
     const capture = TestTaskPayloadCapture{ .payload_cap = payload_cap };
+    const initial = writeTestErasedCallable(
+        TestErasedI64Capture,
+        roc_host,
+        &testStableStrHostValueCallable,
+        null,
+        .{ .amount = 0 },
+    );
     return HostSignalRecord.init(allocator, .{ .task_source = .{
-        .token = newTestSignalToken(roc_host),
         .name = allocator.dupe(u8, name) catch @panic("out of memory"),
         .payload_cap = payload_cap,
-        .initial = writeTestErasedCallable(
-            TestErasedI64Capture,
-            roc_host,
-            &testStableStrHostValueCallable,
-            null,
-            .{ .amount = 0 },
-        ),
+        .initial = initial,
         .done = writeTestErasedCallable(
             TestTaskPayloadCapture,
             roc_host,
@@ -3187,19 +3187,13 @@ test "signals host task result callbacks consume heap string payloads" {
     }
 
     const success_payload = "successful task payload that is intentionally longer than the Roc small string limit";
-    _ = host.engine.appendPendingTask(&host, 0, switch (record.payload) {
-        .task_source => |payload| payload.token,
-        else => unreachable,
-    }, "lookup", "/api/test");
+    _ = host.engine.appendPendingTask(&host, 0, record.token().?, "lookup", "/api/test");
     _ = resolvePendingTask(&host, &roc_host, "lookup", success_payload, false);
     try expectCachedTaskSourceText(&roc_host, record, success_payload);
     try std.testing.expectEqual(@as(usize, 0), host.engine.pending_tasks.items.len);
 
     const failed_payload = "failed task payload that is intentionally longer than the Roc small string limit";
-    _ = host.engine.appendPendingTask(&host, 0, switch (record.payload) {
-        .task_source => |payload| payload.token,
-        else => unreachable,
-    }, "lookup", "/api/test");
+    _ = host.engine.appendPendingTask(&host, 0, record.token().?, "lookup", "/api/test");
     _ = resolvePendingTask(&host, &roc_host, "lookup", failed_payload, true);
     try expectCachedTaskSourceText(&roc_host, record, failed_payload);
     try std.testing.expectEqual(@as(usize, 0), host.engine.pending_tasks.items.len);
@@ -4362,28 +4356,22 @@ fn boxTestNodeSignalExpr(roc_host: *abi.RocHost, expr: abi.NodeSignalExpr) *abi.
 }
 
 fn newTestBinderToken(roc_host: *abi.RocHost) HostBinderToken {
-    const token: *u64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, roc_host)));
-    token.* = 0;
-    return token;
+    return testHostValueInitialThunk(roc_host, testHostValueI64(0)) orelse @panic("test binder initializer was null");
 }
 
 fn cloneTestBinderToken(token: HostBinderToken) HostBinderToken {
-    abi.increfBox(@ptrCast(token), 1);
-    return token;
-}
-
-fn newTestSignalToken(roc_host: *abi.RocHost) HostSignalToken {
-    const token: *u64 = @ptrCast(@alignCast(abi.allocateBox(@sizeOf(u64), @alignOf(u64), false, roc_host)));
-    token.* = 0;
+    abi.increfErasedCallable(token, 1);
     return token;
 }
 
 fn testNodeConstExpr(roc_host: *abi.RocHost, value: HostValue) abi.NodeSignalExpr {
     const cap = testHostValueCapability(roc_host);
+    const init = testHostValueInitialThunk(roc_host, value);
+    abi.increfErasedCallable(init, 1);
     return .{
         .payload = .{ .const_value = .{
-            ._0 = newTestSignalToken(roc_host),
-            ._1 = testHostValueInitialThunk(roc_host, value),
+            ._0 = init,
+            ._1 = init,
             ._2 = cap,
         } },
         .tag = .ConstValue,
@@ -4436,10 +4424,11 @@ fn testNodeMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) abi.NodeSi
         .{ .amount = 1 },
     );
     const cap = testHostValueCapability(roc_host);
+    abi.increfErasedCallable(transform, 1);
     return .{
         .payload = .{
             .map = .{
-                ._0 = newTestSignalToken(roc_host),
+                ._0 = transform,
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = cap,
@@ -4458,10 +4447,11 @@ fn testNodeStableStrMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) a
         .{ .amount = 0 },
     );
     const cap = testHostValueCapability(roc_host);
+    abi.increfErasedCallable(transform, 1);
     return .{
         .payload = .{
             .map = .{
-                ._0 = newTestSignalToken(roc_host),
+                ._0 = transform,
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = cap,
@@ -4480,10 +4470,11 @@ fn testNodeStableI64MapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr, v
         .{ .amount = value },
     );
     const cap = testHostValueCapability(roc_host);
+    abi.increfErasedCallable(transform, 1);
     return .{
         .payload = .{
             .map = .{
-                ._0 = newTestSignalToken(roc_host),
+                ._0 = transform,
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = cap,
@@ -4502,10 +4493,11 @@ fn testNodeStableBoolMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr) 
         .{ .amount = 0 },
     );
     const cap = testHostValueCapability(roc_host);
+    abi.increfErasedCallable(transform, 1);
     return .{
         .payload = .{
             .map = .{
-                ._0 = newTestSignalToken(roc_host),
+                ._0 = transform,
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = cap,
@@ -4524,10 +4516,11 @@ fn testNodeBoolIdentityMapExpr(roc_host: *abi.RocHost, input: abi.NodeSignalExpr
         .{ .amount = 0 },
     );
     const cap = testHostValueCapability(roc_host);
+    abi.increfErasedCallable(transform, 1);
     return .{
         .payload = .{
             .map = .{
-                ._0 = newTestSignalToken(roc_host),
+                ._0 = transform,
                 ._1 = boxTestNodeSignalExpr(roc_host, input),
                 ._2 = transform,
                 ._3 = cap,
@@ -4546,10 +4539,11 @@ fn testNodeCombineExpr(roc_host: *abi.RocHost, children: []const abi.NodeSignalE
         .{ .amount = 0 },
     );
     const cap = testHostValueCapabilityWithEq(roc_host, &testAlwaysEqualHostValueCallable);
+    abi.increfErasedCallable(transform, 1);
     return .{
         .payload = .{
             .combine = .{
-                ._0 = newTestSignalToken(roc_host),
+                ._0 = transform,
                 ._1 = abi.RocList(abi.NodeSignalExpr).fromSlice(children, roc_host),
                 ._2 = transform,
                 ._3 = cap,
@@ -5348,7 +5342,7 @@ test "signals host preserves explicit signal tokens across cloned descriptors" {
     try std.testing.expect(first == second);
     try std.testing.expectEqual(@as(std.meta.Tag(HostSignalRecordPayload), .map), std.meta.activeTag(first.payload));
     try std.testing.expectEqual(@as(std.meta.Tag(HostSignalRecordPayload), .map), std.meta.activeTag(second.payload));
-    try std.testing.expect(first.payload.map.token == second.payload.map.token);
+    try std.testing.expect(first.token().? == second.token().?);
 }
 
 test "signals host retains state equality outside descriptor stream" {

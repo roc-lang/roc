@@ -8,8 +8,8 @@ pub const HostTextRead = abi.HostValueTextReadHandle;
 pub const HostBoolRead = abi.HostValueBoolReadHandle;
 pub const HostEventReducer = abi.HostValueEventReducerHandle;
 pub const HostTaskRequestRead = abi.HostValueTaskRequestReadHandle;
-pub const HostEachOps = abi.__AnonStruct58;
-pub const HostSignalToken = *u64;
+pub const HostEachOps = abi.__AnonStruct57;
+pub const HostSignalToken = [*]u8;
 pub const HostValueList = abi.RocListWith(HostValue, false);
 
 /// A retained Roc value plus the capability that owns its equality/drop
@@ -82,12 +82,16 @@ pub fn retainHostCallable(callable: abi.RocErasedCallable, metrics: anytype) abi
 }
 
 pub fn retainHostSignalToken(token: HostSignalToken) HostSignalToken {
-    abi.increfBox(@ptrCast(token), 1);
+    abi.increfErasedCallable(token, 1);
     return token;
 }
 
 pub fn releaseHostSignalToken(token: HostSignalToken, roc_host: *abi.RocHost) void {
-    hv.releaseU64Box(token, roc_host);
+    abi.decrefErasedCallable(token, roc_host);
+}
+
+pub fn hostSignalTokenFromCallable(callable: abi.RocErasedCallable) HostSignalToken {
+    return callable orelse @panic("signal identity callable was null");
 }
 
 pub fn retainHostValueCapability(capability: HostValueCapability, metrics: anytype) HostValueCapability {
