@@ -527,6 +527,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Cross-module recursive nominal types with pattern matching",
     },
     .{
+        .roc_file = "test/fx/nested_recursive_opaque_bug.roc",
+        .io_spec = "0<hello|1>Div (correct)",
+        .description = "Nested recursive opaque imports preserve tag identity during pattern matching",
+    },
+    .{
         .roc_file = "test/fx/transitive_import_nominal_equality/main.roc",
         .io_spec = "1>True",
         .description = "Regression test: transitive imports preserve nominal method owner environments for equality",

@@ -4,10 +4,11 @@ app [main!] {
 }
 
 import pf.Stdout
+import pf.Stdin
 import pkg.Outer
 
 main! = || {
-    tree = Outer.div([Outer.text("hello")])
+    tree = Outer.div([Outer.text(Stdin.line!())])
 
     match tree {
         Div(_) => Stdout.line!("Div (correct)")
