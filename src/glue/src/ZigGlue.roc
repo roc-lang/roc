@@ -104,10 +104,41 @@ zig_record_field_decl = |type_table, duplicate_tag_names, field| {
 	"    ${field_name}: ${zig_type},\n"
 }
 
+zig_field_decl_x86_32 = |type_table, duplicate_tag_names, field_name, type_id| {
+	zig_type = type_id_to_zig(type_table, duplicate_tag_names, type_id)
+	field_layout = type_layout_32(type_table, type_id)
+	alignment = if field_layout.alignment > 4 {
+		" align(${U64.to_str(field_layout.alignment)})"
+	} else {
+		""
+	}
+	"    ${field_name}: ${zig_type}${alignment},\n"
+}
+
+## On 32-bit x86, Zig's natural C ABI gives u64/i64/f64 4-byte alignment,
+## while Roc's 32-bit layout model gives them 8-byte alignment. Emit explicit
+## field alignment in the x86-32 branch so generated Zig structs match Roc.
+zig_record_field_decl_x86_32 = |type_table, duplicate_tag_names, field| {
+	field_name = name_to_zig_quoted_ident(field.name)
+	if field.is_padding {
+		"    ${field_name}: [${U64.to_str(field.size)}]u8,\n"
+	} else {
+		zig_field_decl_x86_32(type_table, duplicate_tag_names, field_name, field.type_id)
+	}
+}
+
 zig_record_fields_decl = |type_table, duplicate_tag_names, fields| {
 	var $field_strs = ""
 	for field in fields {
 		$field_strs = Str.concat($field_strs, zig_record_field_decl(type_table, duplicate_tag_names, field))
+	}
+	$field_strs
+}
+
+zig_record_fields_decl_x86_32 = |type_table, duplicate_tag_names, fields| {
+	var $field_strs = ""
+	for field in fields {
+		$field_strs = Str.concat($field_strs, zig_record_field_decl_x86_32(type_table, duplicate_tag_names, field))
 	}
 	$field_strs
 }
@@ -760,6 +791,7 @@ generate_element_type_structs = |type_table, duplicate_tag_names| {
 							rec.fields
 						}
 						wasm32_field_strs = zig_record_fields_decl(type_table, duplicate_tag_names, wasm32_fields)
+						x86_32_field_strs = zig_record_fields_decl_x86_32(type_table, duplicate_tag_names, wasm32_fields)
 
 						# Comptime size/alignment assertions (guarded by pointer width)
 						layout = record_layout_from_fields(type_table, rec.fields)
@@ -771,7 +803,9 @@ generate_element_type_structs = |type_table, duplicate_tag_names| {
 						}
 
 						struct_decl = if rec.anonymous {
-							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
+							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4 and builtin.target.cpu.arch == .x86) extern struct {\n${x86_32_field_strs}} else if (@sizeOf(usize) == 4) extern struct {\n${wasm32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
+						} else if record_layout_from_fields_32(type_table, rec.fields).alignment > 4 {
+							"/// Element type for ${rec.name}\npub const ${struct_name} = if (@sizeOf(usize) == 4 and builtin.target.cpu.arch == .x86) extern struct {\n${x86_32_field_strs}} else extern struct {\n${native_field_strs}};\n\n"
 						} else {
 							"/// Element type for ${rec.name}\npub const ${struct_name} = extern struct {\n${native_field_strs}};\n\n"
 						}
@@ -884,13 +918,21 @@ generate_single_tag_union = |type_table, duplicate_tag_names, type_id, tu| {
 			if tag.payload_size > 0 and List.len(tag.payload) > 1 {
 				tuple_name = "${struct_name}${capitalize_first(tag.name)}Payload"
 				var $tuple_fields = ""
+				var $tuple_fields_x86_32 = ""
 				var $ti = 0
 				for pid in tag.payload {
 					zig_type = type_id_to_zig(type_table, duplicate_tag_names, pid)
 					$tuple_fields = Str.concat($tuple_fields, "    _${U64.to_str($ti)}: ${zig_type},\n")
+					$tuple_fields_x86_32 = Str.concat($tuple_fields_x86_32, zig_field_decl_x86_32(type_table, duplicate_tag_names, "_${U64.to_str($ti)}", pid))
 					$ti = $ti + 1
 				}
-				$tuple_structs = Str.concat($tuple_structs, "/// Payload struct for ${tag.name} variant.\npub const ${tuple_name} = extern struct {\n${$tuple_fields}};\n\n")
+				payload_layout_32 = tag_payload_layout_32(type_table, tag.payload)
+				tuple_decl = if payload_layout_32.alignment > 4 {
+					"/// Payload struct for ${tag.name} variant.\npub const ${tuple_name} = if (@sizeOf(usize) == 4 and builtin.target.cpu.arch == .x86) extern struct {\n${$tuple_fields_x86_32}} else extern struct {\n${$tuple_fields}};\n\n"
+				} else {
+					"/// Payload struct for ${tag.name} variant.\npub const ${tuple_name} = extern struct {\n${$tuple_fields}};\n\n"
+				}
+				$tuple_structs = Str.concat($tuple_structs, tuple_decl)
 			}
 		}
 
@@ -1248,7 +1290,7 @@ generate_box_payload_decref_helpers = |type_table, duplicate_tag_names| {
 }
 
 generate_refcount_helpers = |type_table, duplicate_tag_names| {
-	var $helpers = "// =============================================================================\n// Generated Refcount Helpers\n//\n// These helpers recursively retain or release Roc-owned fields using the explicit\n// TypeRepr layout supplied to glue generation. For RocList(T), element release\n// only runs when the list allocation is uniquely owned, immediately before the\n// outer list allocation is decremented and potentially freed.\n// =============================================================================\n\n"
+	var $helpers = "// Generated Refcount Helpers\n//\n// These helpers recursively retain or release Roc-owned fields using the explicit\n// TypeRepr layout supplied to glue generation. For RocList(T), element release\n// only runs when the list allocation is uniquely owned, immediately before the\n// outer list allocation is decremented and potentially freed.\n\n"
 	var $seen_names = []
 	var $type_id = 0
 
@@ -1941,11 +1983,9 @@ direct_hosted_param_list = |type_table, duplicate_tag_names, func| {
 ## Generate direct extern declarations for the fixed runtime symbols every host defines.
 generate_runtime_symbol_externs : Str
 generate_runtime_symbol_externs =
-	\\// =============================================================================
 	\\// Runtime Symbols
 	\\//
 	\\// The host defines these linker symbols. Compiled Roc code calls them directly.
-	\\// =============================================================================
 	\\
 	\\pub extern fn roc_alloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque;
 	\\pub extern fn roc_dealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void;
@@ -1961,7 +2001,7 @@ generate_hosted_symbol_externs = |hosted_functions, type_table, duplicate_tag_na
 		return ""
 	}
 
-	var $result = "// =============================================================================\n// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n// =============================================================================\n\n"
+	var $result = "// Hosted Symbols\n//\n// The platform host must export these symbols with the exact direct C ABI signatures.\n// Refcounted arguments are owned by the hosted function.\n\n"
 
 	for func in hosted_functions {
 		params = direct_hosted_param_list(type_table, duplicate_tag_names, func)
@@ -2179,7 +2219,7 @@ generate_entrypoint_externs = |provides_list, type_table, duplicate_tag_names| {
 		return ""
 	}
 
-	var $result = "// =============================================================================\n// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n// =============================================================================\n\n"
+	var $result = "// Provided Symbols\n//\n// Roc exports these symbols from the app with their natural C ABI signatures.\n\n"
 
 	for entry in provides_list {
 		type_repr = TypeTable.get(TypeTable.from_list(type_table), entry.type_id)
