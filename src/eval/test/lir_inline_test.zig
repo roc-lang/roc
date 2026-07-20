@@ -886,6 +886,43 @@ test "issue 10153 nested loops do not multiply SpecConstr callable functions" {
     try std.testing.expect(nested_loop.lifted.exprCount() <= single_loop.lifted.exprCount() * 2);
 }
 
+test "issue 10165 higher-order decoder widens propagated error row" {
+    const allocator = std.testing.allocator;
+    // Repro for https://github.com/roc-lang/roc/issues/10165. A decoder that
+    // propagates a leaf error with `?` may add its own error tag, and the
+    // resulting higher-order callable must lower with that wider error row.
+    const source =
+        \\Stmt : {}
+        \\
+        \\str_dec : Str -> (List(Str) -> (Stmt -> Try(Str, [NoSuchField(Str), ..])))
+        \\str_dec = |_name| |_cols| |_stmt| Ok("todo")
+        \\
+        \\main : {} -> Try({}, _)
+        \\main = |_args| {
+        \\    dec = decode_row(["status"])
+        \\    row = dec({})?
+        \\    _ = row
+        \\    Ok({})
+        \\}
+        \\
+        \\decode_row = |cols|
+        \\    |stmt| {
+        \\        status_str = str_dec("status")(cols)(stmt)?
+        \\        match status_str {
+        \\            "todo" => Ok(Todo)
+        \\            _ => Err(ParseError("unknown status"))
+        \\        }
+        \\    }
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    var run = try runLoweredWithHostEvents(allocator, &lowered.lowered);
+    defer run.deinit(allocator);
+    try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+}
+
 fn expectInlinePlanDecision(
     source: []const u8,
     fn_name: []const u8,
@@ -5688,4 +5725,29 @@ test "compiler-generated dispatch classes lower via checked evidence" {
     const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
     defer allocator.free(output);
     try std.testing.expectEqualStrings("True", output);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10253: the recursive call
+// must carry the current position, 1, into the next iteration's `prev_len`.
+test "issue 10253 optimized tail recursion preserves the previous scalar argument" {
+    try expectOptimizedDbgEvents(
+        \\go : U64, List(U64), U64, Bool -> U64
+        \\go = |pos, heads, prev_len, _pending| {
+        \\    heads2 = heads.set(0, 7) ?? []
+        \\    cur = if pos != 0 { pos } else { 0 }
+        \\    if prev_len != 0 {
+        \\        prev_len
+        \\    } else {
+        \\        go(pos + 1, heads2, cur, Bool.False)
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> {}
+        \\main = |zero| {
+        \\    dbg go(zero + 1, [], 0, Bool.False)
+        \\    {}
+        \\}
+    ,
+        &.{"1"},
+    );
 }

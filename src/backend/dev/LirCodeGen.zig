@@ -11706,7 +11706,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const piece_off = slot_off + @as(i32, @intCast(piece.offset));
                             switch (piece.class) {
                                 .integer => try builder.addMemArg(frame_ptr, piece_off),
-                                .float => try builder.addFloatMemArg(frame_ptr, piece_off, piece.size == 8),
+                                .float => try builder.addFloatMemArg(frame_ptr, piece_off, piece.size),
                             }
                         }
                     },
@@ -11745,7 +11745,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 gp_i += 1;
                             },
                             .float => {
-                                try self.emitHostedFloatResultStore(dst_off, sse_i, piece.size == 8);
+                                try self.emitHostedFloatResultStore(dst_off, sse_i, piece.size);
                                 sse_i += 1;
                             },
                         }
@@ -11768,20 +11768,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store hosted-call float result register `index` (0 or 1) into the return slot.
-        fn emitHostedFloatResultStore(self: *Self, dst_off: i32, index: usize, is_f64: bool) Allocator.Error!void {
+        fn emitHostedFloatResultStore(self: *Self, dst_off: i32, index: usize, size: u8) Allocator.Error!void {
             const freg0: FloatReg = if (arch == .x86_64) .XMM0 else .V0;
             const freg1: FloatReg = if (arch == .x86_64) .XMM1 else .V1;
             const freg = if (index == 0) freg0 else freg1;
             if (comptime target.toCpuArch() == .aarch64) {
-                if (is_f64) {
-                    try self.codegen.emitStoreStackF64(dst_off, freg);
-                } else {
-                    try self.codegen.emitStoreStackF32(dst_off, freg);
+                switch (size) {
+                    4 => try self.codegen.emitStoreStackF32(dst_off, freg),
+                    8 => try self.codegen.emitStoreStackF64(dst_off, freg),
+                    else => unreachable,
                 }
-            } else if (is_f64) {
-                try self.codegen.emit.movsdMemReg(frame_ptr, dst_off, freg);
             } else {
-                try self.codegen.emit.movssMemReg(frame_ptr, dst_off, freg);
+                switch (size) {
+                    4 => try self.codegen.emit.movssMemReg(frame_ptr, dst_off, freg),
+                    8 => try self.codegen.emit.movsdMemReg(frame_ptr, dst_off, freg),
+                    16 => try self.codegen.emit.movdquMemReg(frame_ptr, dst_off, freg),
+                    else => unreachable,
+                }
             }
         }
 
@@ -17371,7 +17374,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     }
                                 },
                                 .float => {
-                                    const width: u8 = if (piece.size == 8) 8 else 4;
+                                    const width = piece.size;
                                     const pos = if (shared_arg_positions) blk: {
                                         const taken = int_idx;
                                         int_idx += 1;
@@ -17468,7 +17471,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (reg_captures.items) |cap| {
                 if (cap.is_float) {
                     const freg = float_param_regs[cap.reg_index];
-                    try self.emitEntryFloatStore(cap.dest_off, freg, cap.width == 8);
+                    try self.emitEntryFloatStore(cap.dest_off, freg, cap.width);
                 } else {
                     const reg = int_param_regs[cap.reg_index];
                     if (cap.width <= 4) {
@@ -17556,7 +17559,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                             },
                             .float => {
-                                try self.emitEntryFloatLoad(src_off, fp_i, piece.size == 8);
+                                try self.emitEntryFloatLoad(src_off, fp_i, piece.size);
                                 fp_i += 1;
                             },
                         }
@@ -17566,38 +17569,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Store an incoming float argument register into the frame.
-        fn emitEntryFloatStore(self: *Self, dest_off: i32, freg: FloatReg, is_f64: bool) Allocator.Error!void {
+        fn emitEntryFloatStore(self: *Self, dest_off: i32, freg: FloatReg, size: u8) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
-                if (is_f64) {
-                    try self.codegen.emitStoreStackF64(dest_off, freg);
-                } else {
-                    try self.codegen.emitStoreStackF32(dest_off, freg);
+                switch (size) {
+                    4 => try self.codegen.emitStoreStackF32(dest_off, freg),
+                    8 => try self.codegen.emitStoreStackF64(dest_off, freg),
+                    else => unreachable,
                 }
-            } else if (is_f64) {
-                try self.codegen.emit.movsdMemReg(frame_ptr, dest_off, freg);
             } else {
-                try self.codegen.emit.movssMemReg(frame_ptr, dest_off, freg);
+                switch (size) {
+                    4 => try self.codegen.emit.movssMemReg(frame_ptr, dest_off, freg),
+                    8 => try self.codegen.emit.movsdMemReg(frame_ptr, dest_off, freg),
+                    16 => try self.codegen.emit.movdquMemReg(frame_ptr, dest_off, freg),
+                    else => unreachable,
+                }
             }
         }
 
         /// Load C-ABI float return piece `index` from the frame into the
         /// float return register sequence (V0..V3 / XMM0..XMM1).
-        fn emitEntryFloatLoad(self: *Self, src_off: i32, index: usize, is_f64: bool) Allocator.Error!void {
+        fn emitEntryFloatLoad(self: *Self, src_off: i32, index: usize, size: u8) Allocator.Error!void {
             if (comptime target.toCpuArch() == .aarch64) {
                 const fregs = [_]FloatReg{ .V0, .V1, .V2, .V3 };
                 const freg = fregs[index];
-                if (is_f64) {
-                    try self.codegen.emitLoadStackF64(freg, src_off);
-                } else {
-                    try self.codegen.emitLoadStackF32(freg, src_off);
+                switch (size) {
+                    4 => try self.codegen.emitLoadStackF32(freg, src_off),
+                    8 => try self.codegen.emitLoadStackF64(freg, src_off),
+                    else => unreachable,
                 }
             } else {
                 const fregs = [_]FloatReg{ .XMM0, .XMM1 };
                 const freg = fregs[index];
-                if (is_f64) {
-                    try self.codegen.emit.movsdRegMem(freg, frame_ptr, src_off);
-                } else {
-                    try self.codegen.emit.movssRegMem(freg, frame_ptr, src_off);
+                switch (size) {
+                    4 => try self.codegen.emit.movssRegMem(freg, frame_ptr, src_off),
+                    8 => try self.codegen.emit.movsdRegMem(freg, frame_ptr, src_off),
+                    16 => try self.codegen.emit.movdquRegMem(freg, frame_ptr, src_off),
+                    else => unreachable,
                 }
             }
         }

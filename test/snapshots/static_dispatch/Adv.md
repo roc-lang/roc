@@ -455,12 +455,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 650)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 647)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 652)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 649)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

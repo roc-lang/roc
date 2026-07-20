@@ -796,12 +796,14 @@ fn shimDefaultMain(argc: usize, argv: [*][*:0]const u8) callconv(.c) usize {
     };
 
     var result: u8 align(16) = 0;
+    shim_host_abi.resetInlineExpectFailed();
     evaluateEntrypoint(0, ops, &result, &cli_args_list) catch |err| switch (err) {
         error.ImageUnavailable,
         error.InvalidEntrypoint,
         error.OutOfMemory,
         => return 1,
     };
+    if (result == 0 and shim_host_abi.takeInlineExpectFailed()) return 1;
     return result;
 }
 

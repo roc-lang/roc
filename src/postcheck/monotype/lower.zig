@@ -25172,7 +25172,10 @@ const BodyContext = struct {
         path: []const static_dispatch.EvidencePathStep,
     ) Allocator.Error!?Type.TypeId {
         var ty = start_ty;
-        for (path) |path_step| {
+        var path_index: usize = 0;
+        while (path_index < path.len) {
+            const path_step = path[path_index];
+            path_index += 1;
             const content = self.builder.program.types.get(ty);
             switch (path_step.stepKind()) {
                 .fn_arg => switch (content) {
@@ -25235,8 +25238,15 @@ const BodyContext = struct {
                             const tag = GuardedList.at(tags, index);
                             if (tag.name == label) break tag;
                         } else return null;
-                        // The next step must be the payload index.
-                        return try self.walkTagPayloadPath(view, tag, path[1..]);
+
+                        if (path_index >= path.len) return null;
+                        const payload_step = path[path_index];
+                        if (payload_step.stepKind() != .tag_payload_index) return null;
+                        path_index += 1;
+
+                        const payloads = self.builder.program.types.span(tag.payloads);
+                        if (payload_step.data >= payloads.len) return null;
+                        ty = GuardedList.at(payloads, payload_step.data);
                     },
                     else => return null,
                 },
@@ -25245,19 +25255,6 @@ const BodyContext = struct {
             }
         }
         return ty;
-    }
-
-    fn walkTagPayloadPath(
-        self: *BodyContext,
-        view: ModuleView,
-        tag: Type.Tag,
-        rest: []const static_dispatch.EvidencePathStep,
-    ) Allocator.Error!?Type.TypeId {
-        if (rest.len == 0) return null;
-        if (rest[0].stepKind() != .tag_payload_index) return null;
-        const payloads = self.builder.program.types.span(tag.payloads);
-        if (rest[0].data >= payloads.len) return null;
-        return try self.walkEvidencePath(view, GuardedList.at(payloads, rest[0].data), rest[1..]);
     }
 
     /// Graph-native counterpart of `walkEvidencePath`, used while a callable
@@ -25330,7 +25327,6 @@ const BodyContext = struct {
         }
         return node;
     }
-
     fn methodTargetCalleeWithMono(
         self: *BodyContext,
         lookup: MethodLookup,

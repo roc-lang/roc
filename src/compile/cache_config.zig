@@ -52,7 +52,8 @@ pub const Constants = struct {
     /// 26: ModuleEnv scheme instantiation evidence was renamed to scheme-use evidence.
     /// 27: Empty-row provenance and checked iterator-step topology changed serialized state.
     /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
-    pub const CACHE_VERSION = 29;
+    /// 29: String interpolation constraint metadata moved into the type store.
+    pub const CACHE_VERSION = 30;
 };
 
 /// Configuration for the Roc cache system.

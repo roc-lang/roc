@@ -432,11 +432,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add a float argument by loading from memory.
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         /// System V / AAPCS64: Uses a separate float register pool.
-        pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
+        pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, size: u8) Allocator.Error!void {
             if (comptime uses_position_based_float_args) {
                 // Windows x64: float args use same position as int args
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
-                    try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index], base_reg, offset, is_f64);
+                    try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.int_arg_index], base_reg, offset, size);
                     self.int_arg_index += 1;
                 } else {
                     // TODO: Implement stack float args for Windows CallBuilder.
@@ -445,7 +445,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             } else {
                 // System V / AAPCS64: separate float register pool
                 if (self.float_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
-                    try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index], base_reg, offset, is_f64);
+                    try self.emitFloatLoad(CC_EMIT.FLOAT_PARAM_REGS[self.float_arg_index], base_reg, offset, size);
                     self.float_arg_index += 1;
                 } else {
                     // TODO: Implement stack float args for System V CallBuilder.
@@ -455,34 +455,37 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Load a float from memory into a float register, dispatching to the target's emit.
-        fn emitFloatLoad(self: *Self, dst: FloatReg, base_reg: GeneralReg, offset: i32, is_f64: bool) Allocator.Error!void {
+        fn emitFloatLoad(self: *Self, dst: FloatReg, base_reg: GeneralReg, offset: i32, size: u8) Allocator.Error!void {
             if (comptime @hasDecl(EmitType, "fldrRegMemSoff")) {
-                if (is_f64) {
-                    try self.emit.fldrRegMemSoff(.double, dst, base_reg, offset);
-                } else {
-                    try self.emit.fldrRegMemSoff(.single, dst, base_reg, offset);
+                switch (size) {
+                    4 => try self.emit.fldrRegMemSoff(.single, dst, base_reg, offset),
+                    8 => try self.emit.fldrRegMemSoff(.double, dst, base_reg, offset),
+                    else => unreachable,
                 }
             } else if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
-                if (is_f64) {
-                    try self.emit.fldrRegMemUoff(.double, dst, base_reg, @intCast(offset));
-                } else {
-                    try self.emit.fldrRegMemUoff(.single, dst, base_reg, @intCast(offset));
+                switch (size) {
+                    4 => try self.emit.fldrRegMemUoff(.single, dst, base_reg, @intCast(offset)),
+                    8 => try self.emit.fldrRegMemUoff(.double, dst, base_reg, @intCast(offset)),
+                    else => unreachable,
                 }
-            } else if (is_f64) {
-                try self.emit.movsdRegMem(dst, base_reg, offset);
             } else {
-                try self.emit.movssRegMem(dst, base_reg, offset);
+                switch (size) {
+                    4 => try self.emit.movssRegMem(dst, base_reg, offset),
+                    8 => try self.emit.movsdRegMem(dst, base_reg, offset),
+                    16 => try self.emit.movdquRegMem(dst, base_reg, offset),
+                    else => unreachable,
+                }
             }
         }
 
         /// Add a f64 float argument by loading from memory (convenience wrapper).
         pub fn addF64MemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
-            try self.addFloatMemArg(base_reg, offset, true);
+            try self.addFloatMemArg(base_reg, offset, 8);
         }
 
         /// Add a f32 float argument by loading from memory (convenience wrapper).
         pub fn addF32MemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
-            try self.addFloatMemArg(base_reg, offset, false);
+            try self.addFloatMemArg(base_reg, offset, 4);
         }
 
         /// Get the number of float argument registers available

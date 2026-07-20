@@ -61,6 +61,7 @@ const ConstStrDataSite = struct {
     data: u32,
 };
 
+/// Options controlling which checked constants become static data exports.
 pub const BuildOptions = struct {
     /// Include host-visible provided constants as well as internal LIR values.
     include_provided_exports: bool = false,

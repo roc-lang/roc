@@ -338,7 +338,7 @@ sub check_iterator_lowering_uses_explicit_ids {
         ++$line_no;
         chomp $line;
 
-        if (!defined $current_fn && $line =~ /^\s+fn\s+([A-Za-z0-9_]*[Ii]terator[A-Za-z0-9_]*)\b/) {
+        if (!defined $current_fn && $line =~ /^\s+fn\s+([A-Za-z0-9_]*(?:iterator|Iterator)[A-Za-z0-9_]*)\b/) {
             $current_fn = $1;
             $fn_started = 0;
             $fn_depth = 0;

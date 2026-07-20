@@ -4683,20 +4683,13 @@ fn findLocalTypeDeclByNameInSpan(
     return null;
 }
 
-fn unifyTypedLiteralWithExplicitType(
+fn unifyLiteralWithSuffixTarget(
     self: *Self,
     flex_var: Var,
-    expr_idx: CIR.Expr.Idx,
-    expr_region: Region,
+    suffix_target: ModuleEnv.NumericSuffixTarget,
+    region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("typed numeric literal reached checking without a canonicalized suffix target", .{});
-        }
-        unreachable;
-    };
-
     switch (suffix_target.target()) {
         .builtin => |num_kind| {
             try self.unifyWith(flex_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind), env);
@@ -4706,7 +4699,7 @@ fn unifyTypedLiteralWithExplicitType(
             const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
                 local_decl_var
             else
-                try self.instantiateVar(local_decl_var, env, .{ .explicit = expr_region });
+                try self.instantiateVar(local_decl_var, env, .{ .explicit = region });
 
             _ = try self.unify(flex_var, resolved_var, env);
         },
@@ -4715,7 +4708,7 @@ fn unifyTypedLiteralWithExplicitType(
                 const instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,
                     env,
-                    .{ .explicit = expr_region },
+                    .{ .explicit = region },
                 );
                 _ = try self.unify(flex_var, instantiated_var, env);
             } else {
@@ -4736,46 +4729,8 @@ fn explicitTypeSuffixVar(
 ) Allocator.Error!?Var {
     const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return null;
     const suffix_var = try self.fresh(env, expr_region);
-
-    switch (suffix_target.target()) {
-        .builtin => |num_kind| {
-            try self.unifyWith(suffix_var, try self.mkBuiltinNumberTypeContentFromKind(num_kind), env);
-        },
-        .local => |stmt_idx| {
-            const local_decl_var = ModuleEnv.varFrom(stmt_idx);
-            const resolved_var = if (self.isForClauseAliasStatement(stmt_idx))
-                local_decl_var
-            else
-                try self.instantiateVar(local_decl_var, env, .{ .explicit = expr_region });
-
-            _ = try self.unify(suffix_var, resolved_var, env);
-        },
-        .external => |external| {
-            if (try self.resolveVarFromExternal(external.import_idx, external.target_node_idx)) |ext_ref| {
-                const instantiated_var = try self.instantiateVar(
-                    ext_ref.local_var,
-                    env,
-                    .{ .explicit = expr_region },
-                );
-                _ = try self.unify(suffix_var, instantiated_var, env);
-            } else {
-                try self.unifyWith(suffix_var, .err, env);
-            }
-        },
-        .invalid => {
-            try self.unifyWith(suffix_var, .err, env);
-        },
-    }
-
+    try self.unifyLiteralWithSuffixTarget(suffix_var, suffix_target, expr_region, env);
     return suffix_var;
-}
-
-fn typedLiteralTargetsBuiltin(self: *const Self, expr_idx: CIR.Expr.Idx, num_kind: CIR.NumKind) bool {
-    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return false;
-    return switch (suffix_target.target()) {
-        .builtin => |target_kind| target_kind == num_kind,
-        .local, .external, .invalid => false,
-    };
 }
 
 fn recordOpenLiteralVar(
@@ -4971,32 +4926,13 @@ fn mkFlexWithFromQuoteConstraint(
     return flex_var;
 }
 
-fn recordedNumeralLiteralForExpr(self: *const Self, expr_idx: CIR.Expr.Idx) ModuleEnv.NumeralLiteral {
-    return self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
+fn recordedNumeralLiteralForNode(self: *const Self, node_idx: CIR.Node.Idx) ModuleEnv.NumeralLiteral {
+    return self.cir.numeralLiteralForNode(node_idx) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("missing recorded exact numeral for expression {}", .{@intFromEnum(expr_idx)});
+            std.debug.panic("missing recorded exact numeral for source node {}", .{@intFromEnum(node_idx)});
         }
         unreachable;
     };
-}
-
-/// Build the constraint-carried value facts for a literal expression from its
-/// recorded exact digits: the ONLY construction path for `NumeralInfo`, so
-/// compact and exact literals cannot disagree about fit answers.
-fn exactNumeralInfoForExpr(self: *const Self, expr_idx: CIR.Expr.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
-    const literal = self.recordedNumeralLiteralForExpr(expr_idx);
-    return self.exactNumeralInfoForLiteral(literal, region);
-}
-
-/// Pattern-node counterpart of `exactNumeralInfoForExpr`.
-fn exactNumeralInfoForPattern(self: *const Self, pattern_idx: CIR.Pattern.Idx, region: Region) Allocator.Error!types_mod.NumeralInfo {
-    const literal = self.cir.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(pattern_idx)) orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("missing recorded exact numeral for pattern {}", .{@intFromEnum(pattern_idx)});
-        }
-        unreachable;
-    };
-    return self.exactNumeralInfoForLiteral(literal, region);
 }
 
 fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiteral, region: Region) Allocator.Error!types_mod.NumeralInfo {
@@ -5012,38 +4948,40 @@ fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiter
     return types_mod.NumeralInfo.fromExact(exact, fit_set, literal.isMaterialized(), region);
 }
 
-/// Bind an unsuffixed (open) numeral literal expression: a fresh flex var
-/// carrying the literal's `from_numeral` constraint, unified with the
-/// expression var.
-fn checkOpenNumeralLiteralExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var, expr_region: Region, env: *Env) Allocator.Error!void {
-    const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
-    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
-    _ = try self.unify(expr_var, flex_var, env);
-}
+const NumeralOccurrence = enum { expression, pattern };
 
-/// Bind a suffix-typed numeral literal expression (`123.U64`, `3.14.Dec`, or
-/// a custom-type suffix): the `from_numeral` flex var unifies with the
-/// explicit type, with Dec range validated eagerly when the suffix names Dec.
-fn checkSuffixedNumeralLiteralExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var, expr_region: Region, env: *Env) Allocator.Error!void {
-    var num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
-    num_literal_info.explicit_suffix = true;
-    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(expr_idx), num_literal_info, env);
+/// Check one exact numeric source occurrence. Exact digits and the optional
+/// resolved suffix target are producer-owned node data shared by expressions
+/// and patterns; patterns add only the equality requirement needed for matching.
+fn checkNumeralLiteral(
+    self: *Self,
+    node_idx: CIR.Node.Idx,
+    occurrence_var: Var,
+    region: Region,
+    comptime occurrence: NumeralOccurrence,
+    env: *Env,
+) Allocator.Error!void {
+    const suffix_target = self.cir.numericSuffixTargetForNode(node_idx);
+    const literal = self.recordedNumeralLiteralForNode(node_idx);
+    var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
+    num_literal_info.explicit_suffix = suffix_target != null;
+    const flex_var = try self.mkFlexWithFromNumeralConstraint(node_idx, num_literal_info, env);
 
-    try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
-    if (self.typedLiteralTargetsBuiltin(expr_idx, .dec)) {
-        _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+    if (suffix_target) |target| {
+        try self.unifyLiteralWithSuffixTarget(flex_var, target, region, env);
+        const targets_dec = switch (target.target()) {
+            .builtin => |kind| kind == .dec,
+            .local, .external, .invalid => false,
+        };
+        if (targets_dec) {
+            _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
+        }
     }
 
-    _ = try self.unify(expr_var, flex_var, env);
-}
-
-/// Pattern flavor of `checkOpenNumeralLiteralExpr`, adding the pattern's
-/// value-equality obligation.
-fn checkOpenNumeralLiteralPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, pattern_var: Var, pattern_region: Region, env: *Env) Allocator.Error!void {
-    const num_literal_info = try self.exactNumeralInfoForPattern(pattern_idx, pattern_region);
-    const flex_var = try self.mkFlexWithFromNumeralConstraint(ModuleEnv.nodeIdxFrom(pattern_idx), num_literal_info, env);
-    _ = try self.unify(pattern_var, flex_var, env);
-    try self.mkPatternLiteralEqConstraint(pattern_var, env, pattern_region);
+    _ = try self.unify(occurrence_var, flex_var, env);
+    if (occurrence == .pattern) {
+        try self.mkPatternLiteralEqConstraint(occurrence_var, env, region);
+    }
 }
 
 /// Create a nominal Box type with the given element type
@@ -11502,12 +11440,12 @@ fn checkPatternHelp(
         },
         // nums //
         .num_from_numeral_literal => {
-            try self.checkOpenNumeralLiteralPattern(pattern_idx, pattern_var, pattern_region, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env);
         },
         .num_literal => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkOpenNumeralLiteralPattern(pattern_idx, pattern_var, pattern_region, env),
+                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env),
                 // Phase 5: For explicitly typed literals, use nominal types from Builtin
                 else => try self.unifyWith(pattern_var, try self.mkNumberTypeContent(num.kind), env),
             }
@@ -11525,7 +11463,7 @@ fn checkPatternHelp(
                 // Explicit suffix like `3.14dec` - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkOpenNumeralLiteralPattern(pattern_idx, pattern_var, pattern_region, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env);
             }
         },
         .small_dec_literal => |dec| {
@@ -11533,7 +11471,7 @@ fn checkPatternHelp(
                 // Explicit suffix - use nominal Dec type
                 try self.unifyWith(pattern_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkOpenNumeralLiteralPattern(pattern_idx, pattern_var, pattern_region, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(pattern_idx), pattern_var, pattern_region, .pattern, env);
             }
         },
         .runtime_error => {
@@ -12228,9 +12166,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 // A plain literal converts to its target type through from_quote,
                 // defaulting to Str if nothing pins it.
                 const flex_var = try self.mkFlexWithFromQuoteConstraint(ModuleEnv.nodeIdxFrom(expr_idx), expr_region, env);
-                if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null) {
+                if (self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx))) |suffix_target| {
                     // Explicit type suffix, e.g. `"foo".MyType`.
-                    try self.unifyTypedLiteralWithExplicitType(flex_var, expr_idx, expr_region, env);
+                    try self.unifyLiteralWithSuffixTarget(flex_var, suffix_target, expr_region, env);
                 }
                 _ = try self.unify(expr_var, flex_var, env);
             }
@@ -12239,55 +12177,57 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_num => |num| {
             switch (num.kind) {
                 // For unannotated literals, create a flex var with from_numeral constraint
-                .num_unbound, .int_unbound => try self.checkOpenNumeralLiteralExpr(expr_idx, expr_var, expr_region, env),
+                .num_unbound, .int_unbound => try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env),
                 else => try self.unifyWith(expr_var, try self.mkNumberTypeContent(num.kind), env),
             }
         },
         .e_num_from_numeral => {
-            try self.checkOpenNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
         },
         .e_frac_f32 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f32), env);
             } else {
-                try self.checkOpenNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
             }
         },
         .e_frac_f64 => |frac| {
             if (frac.has_suffix) {
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.f64), env);
             } else {
-                try self.checkOpenNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
             }
         },
         .e_dec => |frac| {
             if (frac.has_suffix) {
-                const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                const literal = self.recordedNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx));
+                const num_literal_info = try self.exactNumeralInfoForLiteral(literal, expr_region);
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkOpenNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
             }
         },
         .e_dec_small => |frac| {
             if (frac.has_suffix) {
-                const num_literal_info = try self.exactNumeralInfoForExpr(expr_idx, expr_region);
+                const literal = self.recordedNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx));
+                const num_literal_info = try self.exactNumeralInfoForLiteral(literal, expr_region);
                 _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
                 try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
             } else {
-                try self.checkOpenNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
             }
         },
         .e_typed_int => {
             // Typed integer literal like 123.U64
-            try self.checkSuffixedNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
         },
         .e_typed_frac => {
             // Typed fractional literal like 3.14.Dec
-            try self.checkSuffixedNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
         },
         .e_typed_num_from_numeral => {
-            try self.checkSuffixedNumeralLiteralExpr(expr_idx, expr_var, expr_region, env);
+            try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, env);
         },
         // list //
         .e_empty_list => {

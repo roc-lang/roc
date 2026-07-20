@@ -149,7 +149,7 @@ NO CHANGE
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 323)
+			(e-dispatch-call (method "plus") (constraint-fn-var 322)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "sum_"))))

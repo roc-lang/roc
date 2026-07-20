@@ -1673,7 +1673,7 @@ THE RECEIVER HAS A FUNCTION-VALUED FIELD NAMED `field` BUT NO METHOD NAMED
 `field`, `value.field(arg)` MUST REPORT A MISSING METHOD. THE EXISTENCE OR TYPE
 OF THE RECORD FIELD IS IRRELEVANT TO THAT METHOD LOOKUP.
 
-THE CANONICAL SPELLING HAS NO WHITESPACE BETWEEN THE RECEIVER AND DOT, BETWEEN
+THE DOT-CALL SPELLING HAS NO WHITESPACE BETWEEN THE RECEIVER AND DOT, BETWEEN
 THE DOT AND NAME, OR BETWEEN A METHOD NAME AND ITS OPENING PARENTHESIS. TRIVIA
 RECOVERY AND FORMAT NORMALIZATION MUST NEVER BE USED AS A SIGNAL FOR CHOOSING
 FIELD ACCESS VERSUS METHOD DISPATCH.
@@ -2091,12 +2091,31 @@ mode. SpecConstr improves optimized loop and call shape so later lowering and
 LLVM see scalar state and direct operations.
 
 SpecConstr preserves shared control explicitly. When a rewrite would move one
-continuation under multiple `match` or `if` arms, it introduces one typed lifted
-join point and replaces each arm result with a jump that supplies the result as
-an argument. It must never copy the continuation into the arms. This makes the
-amount of stored continuation code independent of branch count and nesting;
-later specialization may inspect the jump arguments without destroying that
-sharing.
+continuation under multiple `match` or `if` arms, it introduces typed lifted
+join points and replaces each arm result with a jump. It must never copy
+continuation code into more than one arm, which keeps the amount of stored
+continuation code independent of branch count and nesting. Within that rule the
+rewrite preserves the arms' statically known value structure: it declines
+entirely when an arm's result is opaque (an ordinary let binding keeps
+downstream tail-call and loop-shape recognition intact); a continuation that
+immediately matches the bound value gets one join per continuation branch, and
+only the small dispatching match is copied into the arms, where it folds
+against each arm's known constructor into a direct jump; a join's parameters
+are the decomposed leaves of the values its jump sites supply whenever those
+values agree on one structure skeleton, so specialization inside the shared
+body still sees the shape; and a join with exactly one jump site is not shared
+control at all — its body is cloned directly at that site against the site's
+full symbolic values.
+
+Every SpecConstr clone is hygienic. A retained pattern, loop parameter, join
+parameter, try-sequence local, or other runtime binder receives a fresh lifted
+local identity in each emitted copy, and every occurrence in that binder's
+lexical scope is rewritten to the fresh identity. A binder whose uses were
+fully replaced by a known value still receives a fresh identity in the emitted
+pattern, but that unused output identity does not replace the known-value
+substitution. Cloning never relies on later lowering to reconstruct lexical
+scope from reused local ids: distinct emitted binders are distinct explicit
+identities before Lambda Solved or LIR lowering consumes them.
 
 #### Constant Storage
 

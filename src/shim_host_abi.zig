@@ -38,7 +38,10 @@ fn shimDbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     extern_host.roc_dbg(bytes, len);
 }
 
+var inline_expect_failed = false;
+
 fn shimExpectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
+    inline_expect_failed = true;
     extern_host.roc_expect_failed(bytes, len);
 }
 
@@ -73,6 +76,19 @@ pub fn getOps() *RocOps {
 /// Return the RocOps value as an opaque pointer for the C ABI export.
 pub fn getOpsOpaque() *anyopaque {
     return @ptrCast(getOps());
+}
+
+/// Clear the default-run inline expect status before entering Roc code.
+pub fn resetInlineExpectFailed() void {
+    inline_expect_failed = false;
+}
+
+/// Return and clear whether the current default-run invocation failed an inline
+/// expect through this shim's RocOps.
+pub fn takeInlineExpectFailed() bool {
+    const failed = inline_expect_failed;
+    inline_expect_failed = false;
+    return failed;
 }
 
 /// Build the default platform's `List(Str)` CLI argument value.

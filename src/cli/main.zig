@@ -14575,51 +14575,19 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         }
     }
 
-    // The exposed module list comes from the root module's header.
-    const root_env = build_env.schedulers.get(root_name) orelse return error.Internal;
-    const root_mod_env: *ModuleEnv = root_blk: {
-        for (root_env.modules.items) |*module_state| {
-            if (module_state.moduleEnv()) |mod_env| {
-                if (mod_env.module_kind == .package or mod_env.module_kind == .platform) {
-                    break :root_blk mod_env;
-                }
-            }
-        }
-        return error.Internal;
-    };
+    const public_modules = try build_env.getPublicRootModules(ctx.gpa);
+    defer ctx.gpa.free(public_modules);
 
     var inputs = std.ArrayListUnmanaged(bump.extract.ModuleInput).empty;
     defer inputs.deinit(ctx.gpa);
 
-    var exposed_iter = root_mod_env.common.exposed_items.iterator();
-    while (exposed_iter.next()) |entry| {
-        const exposed_name = root_mod_env.getIdentText(@bitCast(entry.ident_idx));
-        var found = false;
-        for (root_env.modules.items) |*module_state| {
-            const data = module_state.semanticData() orelse continue;
-            if (!std.mem.eql(u8, data.env.module_name, exposed_name)) continue;
-            const artifact = data.checked_artifact orelse return error.Internal;
-            try inputs.append(ctx.gpa, .{
-                .exposed_name = exposed_name,
-                .module_env = data.env,
-                .artifact = artifact,
-            });
-            found = true;
-            break;
-        }
-        // Platform headers put their `provides` value idents in the exposed
-        // scope alongside exposed modules; those have no matching module and
-        // are not part of the comparison (provides/requires are out of scope).
-        if (!found and root_pkg.kind == .package) {
-            return ctx.fail(.{ .bump_failed = .{
-                .title = "Missing Exposed Module",
-                .message = try std.fmt.allocPrint(
-                    ctx.arena,
-                    "The {s} package header exposes `{s}`, but no module with that name was compiled.",
-                    .{ side, exposed_name },
-                ),
-            } });
-        }
+    for (public_modules) |module| {
+        const artifact = module.semantic.checked_artifact orelse return error.Internal;
+        try inputs.append(ctx.gpa, .{
+            .exposed_name = module.name,
+            .module_env = module.semantic.env,
+            .artifact = artifact,
+        });
     }
 
     if (inputs.items.len == 0) {

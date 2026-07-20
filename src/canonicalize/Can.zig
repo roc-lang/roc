@@ -3396,6 +3396,7 @@ fn registerNestedTypeDecl(
     parent_name: Ident.Idx,
     relative_name_idx: ?Ident.Idx,
     type_name: Ident.Idx,
+    owner_is_module_visible: bool,
     nested_type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
 ) std.mem.Allocator.Error!?NestedTypeDeclRegistration {
     const nested_header = self.parse_ir.store.getTypeHeader(nested_type_decl.header) catch return null;
@@ -3415,8 +3416,10 @@ fn registerNestedTypeDecl(
         self.env.getIdent(nested_type_ident),
     );
 
-    const node_idx_u32: u32 = @intFromEnum(nested_type_decl_idx);
-    try self.env.setExposedTypeNodeIndexById(nested_qualified_idx, node_idx_u32);
+    if (owner_is_module_visible) {
+        const node_idx_u32: u32 = @intFromEnum(nested_type_decl_idx);
+        try self.env.setExposedTypeNodeIndexById(nested_qualified_idx, node_idx_u32);
+    }
 
     const current_scope_idx = self.scopes.items.len - 1;
     try self.introduceAssociatedTypeAliasInScope(current_scope_idx, nested_type_ident, nested_type_decl_idx);
@@ -3427,9 +3430,7 @@ fn registerNestedTypeDecl(
     );
     try self.introduceAssociatedTypeAliasInScope(current_scope_idx, user_qualified_ident_idx, nested_type_decl_idx);
 
-    const parser_path = self.parserTypePathForAstStatement(ast_stmt_idx);
-    const root_scope = if (parser_path) |path| self.typePathRootScope(path) else null;
-    if (root_scope == self.moduleParserScopeIdx()) {
+    if (owner_is_module_visible) {
         // Also publish the user-facing qualified name (e.g. `Test.MyBool`)
         // at the module scope so references from outside the associated
         // block — like `x = Test.MyBool.method(...)` at top level —
@@ -3609,7 +3610,14 @@ fn canonicalizeAssociatedItems(
                 // Fill this declaration at its source-order position so later
                 // stages see declaration roots in the same order as the source
                 // walk.
-                const nested_registration = (try self.registerNestedTypeDecl(stmt_idx, parent_name, relative_name_idx, type_name, nested_type_decl)) orelse continue;
+                const nested_registration = (try self.registerNestedTypeDecl(
+                    stmt_idx,
+                    parent_name,
+                    relative_name_idx,
+                    type_name,
+                    owner_is_module_visible,
+                    nested_type_decl,
+                )) orelse continue;
                 const nested_type_decl_idx = nested_registration.stmt_idx;
 
                 const nested_qualified_idx = try self.insertQualifiedIdent(
@@ -5451,46 +5459,41 @@ fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.Exter
     return CIR.Import.isCompilerBuiltinImportName(self.env.common.getString(import_name_idx));
 }
 
-/// Record, for an explicitly-suffixed numeric literal (e.g. `123.U8` or
-/// `5.Foo`), what its suffix target resolves to in the current scope. The type
-/// checker consumes this so it can unify the literal against the right concrete
-/// type without re-running scope resolution. The caller has already verified
-/// `type_ident` names a type binding in scope.
-fn recordTypedNumericSuffix(self: *Self, expr_idx: Expr.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
-    const node_idx = ModuleEnv.nodeIdxFrom(expr_idx);
+/// Resolve a literal suffix once, while the canonicalizer still owns scope
+/// information. A null result means the suffix does not name a type in scope;
+/// `.invalid` means it names an incomplete external binding already diagnosed
+/// by import canonicalization.
+fn resolveNumericSuffixTarget(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Error!?ModuleEnv.NumericSuffixTarget.Target {
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
         if (self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-            try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
-        } else {
-            try self.env.recordNumericSuffixTarget(node_idx, .invalid);
+            return .{ .builtin = num_kind };
         }
-        return;
+        return null;
     };
-    switch (binding_location.binding.*) {
-        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| {
-            try self.env.recordNumericSuffixTarget(node_idx, .{ .local = stmt_idx });
-        },
-        .external_nominal => |external| {
+    return switch (binding_location.binding.*) {
+        .local_nominal, .local_alias, .associated_nominal => |stmt_idx| .{ .local = stmt_idx },
+        .external_nominal => |external| blk: {
             if (self.externalTypeBindingIsCompilerBuiltin(external)) {
                 if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-                    try self.env.recordNumericSuffixTarget(node_idx, .{ .builtin = num_kind });
-                    return;
+                    break :blk .{ .builtin = num_kind };
                 }
             }
-            const import_idx = external.import_idx orelse {
-                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
-                return;
-            };
-            const target_node_idx = external.target_node_idx orelse {
-                try self.env.recordNumericSuffixTarget(node_idx, .invalid);
-                return;
-            };
-            try self.env.recordNumericSuffixTarget(node_idx, .{ .external = .{
+            const import_idx = external.import_idx orelse break :blk .invalid;
+            const target_node_idx = external.target_node_idx orelse break :blk .invalid;
+            break :blk .{ .external = .{
                 .import_idx = import_idx,
                 .target_node_idx = target_node_idx,
-            } });
+            } };
         },
-    }
+    };
+}
+
+/// Record a literal suffix target for syntax paths that preserve an unresolved
+/// target as `.invalid`. Exact numeral canonicalization calls the resolver
+/// directly so validation and recording share one lookup.
+fn recordTypedNumericSuffix(self: *Self, node_idx: Node.Idx, type_ident: Ident.Idx) std.mem.Allocator.Error!void {
+    const target = (try self.resolveNumericSuffixTarget(type_ident)) orelse .invalid;
+    try self.env.recordNumericSuffixTarget(node_idx, target);
 }
 
 fn populateExports(self: *Self) std.mem.Allocator.Error!void {
@@ -6879,15 +6882,15 @@ fn cirSmallDec(value: NumericLiteral.SmallDecValue) CIR.SmallDecValue {
 }
 
 /// Record the exact base-256 digits of a parsed numeric literal against the
-/// CIR expression node we just emitted. Check.zig reads this when classifying
-/// numerics (via `recordedNumeralLiteralForExpr`).
-fn recordNumeralLiteralForExpr(
+/// CIR expression or pattern node we just emitted. Checking consumes these
+/// facts through the same occurrence-generic numeral path.
+fn recordNumeralLiteralForNode(
     self: *Self,
-    expr_idx: Expr.Idx,
+    node_idx: Node.Idx,
     literal: NumericLiteral.Stored,
 ) std.mem.Allocator.Error!void {
     try self.env.recordNumeralLiteral(
-        ModuleEnv.nodeIdxFrom(expr_idx),
+        node_idx,
         self.parse_ir.store.numericDigitsBefore(literal),
         self.parse_ir.store.numericDigitsAfter(literal),
         literal.after_decimal_digit_count,
@@ -6898,24 +6901,48 @@ fn recordNumeralLiteralForExpr(
     );
 }
 
-/// Record the exact base-256 digits of a parsed numeric literal against the
-/// CIR pattern node we just emitted, so literal patterns can dispatch through
-/// `from_numeral` when matched against a non-builtin number type.
-fn recordNumeralLiteralForPattern(
+/// Canonicalize one numeric literal pattern while keeping its exact parser-owned
+/// digits and optional resolved suffix target as node data. Checking consumes
+/// those data identically for compact and large literals.
+fn canonicalizeNumeralPattern(
     self: *Self,
-    pattern_idx: Pattern.Idx,
     literal: NumericLiteral.Stored,
-) std.mem.Allocator.Error!void {
-    try self.env.recordNumeralLiteral(
-        ModuleEnv.nodeIdxFrom(pattern_idx),
-        self.parse_ir.store.numericDigitsBefore(literal),
-        self.parse_ir.store.numericDigitsAfter(literal),
-        literal.after_decimal_digit_count,
-        literal.isNegative(),
-        literal.kind == .frac,
-        literal.flags.had_decimal_point,
-        literal.isMaterialized(),
-    );
+    region: Region,
+    type_ident: ?Ident.Idx,
+) std.mem.Allocator.Error!Pattern.Idx {
+    const suffix_target = if (type_ident) |ident|
+        (try self.resolveNumericSuffixTarget(ident)) orelse {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .undeclared_type = .{
+                .name = ident,
+                .region = region,
+            } });
+        }
+    else
+        null;
+
+    const pattern: Pattern = switch (literal.compact) {
+        .int => |value| .{ .num_literal = .{
+            .value = cirIntValue(value),
+            .kind = .num_unbound,
+        } },
+        .small_dec => |value| .{ .small_dec_literal = .{
+            .value = cirSmallDec(value),
+            .has_suffix = false,
+        } },
+        .dec => |value| .{ .dec_literal = .{
+            .value = builtins.dec.RocDec{ .num = value },
+            .has_suffix = false,
+        } },
+        .exact => .{ .num_from_numeral_literal = .{} },
+        else => return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
+    };
+
+    const pattern_idx = try self.env.addPattern(pattern, region);
+    try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(pattern_idx), literal);
+    if (suffix_target) |target| {
+        try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(pattern_idx), target);
+    }
+    return pattern_idx;
 }
 
 /// Canonicalize an expression.
@@ -9702,7 +9729,7 @@ fn runExprKernel(
                         },
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
-                    try self.recordNumeralLiteralForExpr(expr_idx, literal);
+                    try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .frac => |e| {
@@ -9725,7 +9752,7 @@ fn runExprKernel(
                         },
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
-                    try self.recordNumeralLiteralForExpr(expr_idx, literal);
+                    try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .typed_int => |e| {
@@ -9733,14 +9760,14 @@ fn runExprKernel(
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
                     const type_ident = e.type_ident;
 
-                    if ((try self.scopeLookupOrPrepareTypeBinding(type_ident)) == null) {
+                    const suffix_target = (try self.resolveNumericSuffixTarget(type_ident)) orelse {
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
                             .name = type_ident,
                             .region = region,
                         } });
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                         continue :expr_kernel_loop .dispatch;
-                    }
+                    };
 
                     const numeric_expr: CIR.Expr = switch (literal.compact) {
                         .int => |value| CIR.Expr{ .e_typed_int = .{
@@ -9755,8 +9782,8 @@ fn runExprKernel(
                         },
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
-                    try self.recordNumeralLiteralForExpr(expr_idx, literal);
-                    try self.recordTypedNumericSuffix(expr_idx, type_ident);
+                    try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix_target);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .typed_frac => |e| {
@@ -9764,14 +9791,14 @@ fn runExprKernel(
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
                     const type_ident = e.type_ident;
 
-                    if ((try self.scopeLookupOrPrepareTypeBinding(type_ident)) == null) {
+                    const suffix_target = (try self.resolveNumericSuffixTarget(type_ident)) orelse {
                         const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
                             .name = type_ident,
                             .region = region,
                         } });
                         try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                         continue :expr_kernel_loop .dispatch;
-                    }
+                    };
 
                     const numeric_expr: CIR.Expr = switch (literal.compact) {
                         .small_dec => |value| blk: {
@@ -9795,8 +9822,8 @@ fn runExprKernel(
                         },
                     };
                     const expr_idx = try self.env.addExpr(numeric_expr, region);
-                    try self.recordNumeralLiteralForExpr(expr_idx, literal);
-                    try self.recordTypedNumericSuffix(expr_idx, type_ident);
+                    try self.recordNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx), literal);
+                    try self.env.recordNumericSuffixTarget(ModuleEnv.nodeIdxFrom(expr_idx), suffix_target);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
@@ -11474,7 +11501,7 @@ fn runExprKernel(
                     .span = can_str_span,
                 } }, state.region);
                 if (state.type_ident) |type_ident| {
-                    try self.recordTypedNumericSuffix(str_idx, type_ident);
+                    try self.recordTypedNumericSuffix(ModuleEnv.nodeIdxFrom(str_idx), type_ident);
                 }
                 break :blk str_idx;
             } else try self.desugarInterpolatedString(can_str_span, state.region, state.type_ident);
@@ -14502,7 +14529,7 @@ fn desugarInterpolatedString(
                 .region = region,
             } });
         }
-        try self.recordTypedNumericSuffix(final_idx, suffix_ident);
+        try self.recordTypedNumericSuffix(ModuleEnv.nodeIdxFrom(final_idx), suffix_ident);
     }
 
     return try self.env.addExpr(CIR.Expr{ .e_block = .{
@@ -16419,13 +16446,13 @@ pub fn canonicalizePattern(
                 },
                 .typed_int => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-                    const feature = try self.env.insertString("typed_int pattern");
-                    last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{ .feature = feature, .region = region } });
+                    const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, e.type_ident);
                 },
                 .typed_frac => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
-                    const feature = try self.env.insertString("typed_frac pattern");
-                    last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{ .feature = feature, .region = region } });
+                    const literal = self.parse_ir.store.getNumericLiteral(e.literal);
+                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, e.type_ident);
                 },
                 .var_ident => |e| {
                     // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
@@ -16476,50 +16503,12 @@ pub fn canonicalizePattern(
                 .int => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
-                    last_pattern = switch (literal.compact) {
-                        .int => |value| blk: {
-                            const pat_idx = try self.env.addPattern(Pattern{ .num_literal = .{
-                                .value = cirIntValue(value),
-                                .kind = .num_unbound,
-                            } }, region);
-                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
-                            break :blk pat_idx;
-                        },
-                        .exact => blk: {
-                            const pat_idx = try self.env.addPattern(Pattern{ .num_from_numeral_literal = .{} }, region);
-                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
-                            break :blk pat_idx;
-                        },
-                        else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
-                    };
+                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, null);
                 },
                 .frac => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const literal = self.parse_ir.store.getNumericLiteral(e.literal);
-                    last_pattern = switch (literal.compact) {
-                        .small_dec => |value| blk: {
-                            const pat_idx = try self.env.addPattern(Pattern{ .small_dec_literal = .{
-                                .value = cirSmallDec(value),
-                                .has_suffix = false,
-                            } }, region);
-                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
-                            break :blk pat_idx;
-                        },
-                        .dec => |value| blk: {
-                            const pat_idx = try self.env.addPattern(Pattern{ .dec_literal = .{
-                                .value = builtins.dec.RocDec{ .num = value },
-                                .has_suffix = false,
-                            } }, region);
-                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
-                            break :blk pat_idx;
-                        },
-                        .exact => blk: {
-                            const pat_idx = try self.env.addPattern(Pattern{ .num_from_numeral_literal = .{} }, region);
-                            try self.recordNumeralLiteralForPattern(pat_idx, literal);
-                            break :blk pat_idx;
-                        },
-                        else => try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } }),
-                    };
+                    last_pattern = try self.canonicalizeNumeralPattern(literal, region, null);
                 },
                 .string => |e| {
                     last_pattern = try self.canonicalizeStringPattern(e);

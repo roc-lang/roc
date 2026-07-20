@@ -5687,7 +5687,11 @@ test "literal dispatch plans are retired with their owning nodes" {
     );
     try testing.expectEqual(@as(usize, 2), store.literalDispatchPlans().len);
 
-    store.replaceExprWithRuntimeError(quote_expr, @enumFromInt(0));
+    const runtime_error_diagnostic = try store.addDiagnosticUnregistered(.{ .erroneous_value_expr = .{
+        .region = Region.zero(),
+    } });
+
+    store.replaceExprWithRuntimeError(quote_expr, runtime_error_diagnostic);
     try testing.expect(store.literalDispatchPlanForNode(@enumFromInt(@intFromEnum(quote_expr))) == null);
     try testing.expectEqual(@as(usize, 1), store.literalDispatchPlans().len);
 
@@ -5696,7 +5700,7 @@ test "literal dispatch plans are retired with their owning nodes" {
     try testing.expectEqual(@as(u32, 3), numeral_plan.target_var);
     try testing.expectEqual(@as(u32, 4), numeral_plan.fn_var);
 
-    store.replaceExprWithRuntimeError(numeral_expr, @enumFromInt(0));
+    store.replaceExprWithRuntimeError(numeral_expr, runtime_error_diagnostic);
     try testing.expectEqual(@as(usize, 0), store.literalDispatchPlans().len);
 }
 

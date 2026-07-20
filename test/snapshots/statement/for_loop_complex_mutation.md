@@ -170,7 +170,7 @@ NO CHANGE
 						(if-else
 							(e-block
 								(e-empty_record))))))
-			(e-dispatch-call (method "times") (constraint-fn-var 392)
+			(e-dispatch-call (method "times") (constraint-fn-var 391)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "count_"))))

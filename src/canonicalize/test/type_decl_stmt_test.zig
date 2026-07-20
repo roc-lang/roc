@@ -542,6 +542,25 @@ test "block-local associated value does not leak after owner scope exits" {
     }.check);
 }
 
+test "issue 10142: nested type under a block-local nominal is not exposed" {
+    // Repro for https://github.com/roc-lang/roc/issues/10142.
+    const source =
+        \\value = {
+        \\    A := {}.{
+        \\        Z : A()
+        \\        n = 0
+        \\    }
+        \\}
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(env: *ModuleEnv, _: []const CIR.Diagnostic) TypeDeclTestError!void {
+            const nested_type = try env.insertIdent(Ident.for_text("A.Z"));
+            try testing.expect(env.getExposedTypeNodeIndexById(nested_type) == null);
+        }
+    }.check);
+}
+
 test "canonicalization has no separate nested associated item alias traversal" {
     const can_source = @embedFile("../Can.zig");
 

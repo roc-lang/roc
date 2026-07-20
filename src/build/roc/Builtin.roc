@@ -4523,6 +4523,149 @@ Builtin :: [].{
 			Ok(ok) => Ok(ok)
 		}
 
+		## Transforms whichever value this result holds, by running one conversion
+		## function on an `Ok` and a different one on an `Err`. Only the function
+		## matching the variant is run. Use [Try.map_ok] or [Try.map_err] to transform
+		## just one variant, and [Try.catch] when both should produce the same type.
+		## ```roc
+		## expect {
+		## 	ok : Try(I64, Str)
+		## 	ok = Ok(12)
+		## 	ok.map_both(|n| -n, |_| Failed) == Ok(-12)
+		## }
+		##
+		## expect {
+		## 	err : Try(I64, Str)
+		## 	err = Err("uh oh")
+		## 	err.map_both(|n| -n, |_| Failed) == Err(Failed)
+		## }
+		## ```
+		map_both : Try(a, b), (a -> c), (b -> d) -> Try(c, d)
+		map_both = |try, ok_transform, err_transform| match try {
+			Err(b) => Err(err_transform(b))
+			Ok(a) => Ok(ok_transform(a))
+		}
+
+		## Like [Try.map_both], but the transform functions are effectful. Only the
+		## effect matching the variant this result holds is run; the other is not.
+		## ```roc
+		## request.map_both!(|ok| Log.info!("succeeded: ${ok}"), |e| Log.warn!("failed: ${e}"))
+		## ```
+		map_both! : Try(a, b), (a => c), (b => d) => Try(c, d)
+		map_both! = |try, ok_transform!, err_transform!| match try {
+			Err(b) => Err(err_transform!(b))
+			Ok(a) => Ok(ok_transform!(a))
+		}
+
+		## Combines two results by running a function on both `Ok` values. If either
+		## is an `Err`, that `Err` is returned instead and the function is not run.
+		## When both are `Err`, the first one wins.
+		## ```roc
+		## expect Try.map2(Try.Ok(2.I64), Try.Ok(3), |a, b| a * b) == Ok(6)
+		##
+		## expect {
+		## 	err : Try(I64, Str)
+		## 	err = Err("uh oh")
+		## 	Try.map2(Try.Ok(2), err, |a, b| a * b) == Err("uh oh")
+		## }
+		## ```
+		map2 : Try(a, err), Try(b, err), (a, b -> c) -> Try(c, err)
+		map2 = |first, second, transform| match (first, second) {
+			(Err(err), _) => Err(err)
+			(_, Err(err)) => Err(err)
+			(Ok(a), Ok(b)) => Ok(transform(a, b))
+		}
+
+		## Like [Try.map2], but the combining function is effectful. It runs only when
+		## both arguments are `Ok`.
+		## ```roc
+		## Try.map2!(user_try, album_try, |u, a| SQL.execute!("INSERT INTO plays (user, album) VALUES (?, ?)", [u.id, a.id]))
+		## ```
+		map2! : Try(a, err), Try(b, err), (a, b => c) => Try(c, err)
+		map2! = |first, second, transform!| match (first, second) {
+			(Err(err), _) => Err(err)
+			(_, Err(err)) => Err(err)
+			(Ok(a), Ok(b)) => Ok(transform!(a, b))
+		}
+
+		## If the result is `Err`, runs a recovery function on the value it holds. That
+		## function returns a new result, so recovering can itself fail — with a
+		## different error type if you like. If the result is `Ok`, this has no effect.
+		## Use [Try.map_err] when you only want to transform the error without
+		## recovering from it.
+		## ```roc
+		## expect {
+		## 	err : Try(I64, Str)
+		## 	err = Err("uh oh")
+		## 	err.on_err(|_| Ok(0)) == Ok(0)
+		## }
+		##
+		## expect {
+		## 	ok : Try(I64, Str)
+		## 	ok = Ok(7)
+		## 	ok.on_err(|_| Ok(0)) == Ok(7)
+		## }
+		## ```
+		on_err : Try(ok, a), (a -> Try(ok, b)) -> Try(ok, b)
+		on_err = |try, recover| match try {
+			Err(a) => recover(a)
+			Ok(ok) => Ok(ok)
+		}
+
+		## Like [Try.on_err], but the recovery function is effectful. It runs only when
+		## the result is an `Err`.
+		## ```roc
+		## config_try.on_err!(|_| Http.get!("https://example.com/fallback-config"))
+		## ```
+		on_err! : Try(ok, a), (a => Try(ok, b)) => Try(ok, b)
+		on_err! = |try, recover!| match try {
+			Err(a) => recover!(a)
+			Ok(ok) => Ok(ok)
+		}
+
+		## Collapses the result into a plain value by converting whichever variant it
+		## holds into a common type: `err_transform` runs on an `Err`, `ok_transform`
+		## on an `Ok`. Unlike [Try.map_both], both functions return the same type, so
+		## the answer is a plain value rather than another result.
+		## ```roc
+		## expect Try.Ok(12.I64).catch(|_| 0, |n| n * 2) == 24
+		##
+		## expect {
+		## 	err : Try(I64, Str)
+		## 	err = Err("uh oh")
+		## 	err.catch(|_| 0, |n| n * 2) == 0
+		## }
+		## ```
+		catch : Try(ok, err), (err -> a), (ok -> a) -> a
+		catch = |try, err_transform, ok_transform| match try {
+			Err(err) => err_transform(err)
+			Ok(ok) => ok_transform(ok)
+		}
+
+		## Like [Try.catch], but the conversion functions are effectful. Only the
+		## effect matching the variant this result holds is run.
+		## ```roc
+		## response.catch!(|e| Log.error!("request failed: ${e}"), |body| Log.info!("got ${body}"))
+		## ```
+		catch! : Try(ok, err), (err => a), (ok => a) => a
+		catch! = |try, err_transform!, ok_transform!| match try {
+			Err(err) => err_transform!(err)
+			Ok(ok) => ok_transform!(ok)
+		}
+
+		## Returns whichever value this result holds, for a result whose `Ok` and `Err`
+		## hold the same type. This is [Try.catch] with two identity functions.
+		## ```roc
+		## expect Try.Ok(5.I64).collapse() == 5
+		##
+		## expect Try.Err(7.I64).collapse() == 7
+		## ```
+		collapse : Try(a, a) -> a
+		collapse = |try| match try {
+			Err(a) => a
+			Ok(a) => a
+		}
+
 		## Returns `Bool.True` if the two `Try` values are the same variant (`Ok` or `Err`) and their contents are pairwise equal. Otherwise, returns `Bool.False`.
 		is_eq : Try(ok, err), Try(ok, err) -> Bool
 			where [
