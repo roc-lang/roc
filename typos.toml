@@ -31,6 +31,7 @@ caf = "caf" # Part of the word "café"
 clos = "clos" # Closure
 ful = "ful" # Suffix, as in "effectful"
 rela = "rela" # Relative
+Rin = "Rin" # Name used in the signals kanban app fixture
 SEH = "SEH" # Structured Exception Handling
 ser = "ser" # Part of the word "serializing"
 sigfault = "sigfault"
