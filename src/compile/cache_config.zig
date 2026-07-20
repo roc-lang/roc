@@ -50,8 +50,9 @@ pub const Constants = struct {
     /// 24: CommonIdents carries the range_exclusive/range_inclusive method idents.
     /// 25: Canonical node storage records where-clause rigid ownership.
     /// 26: ModuleEnv scheme instantiation evidence was renamed to scheme-use evidence.
-    /// 27: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
-    pub const CACHE_VERSION = 28;
+    /// 27: Empty-row provenance and checked iterator-step topology changed serialized state.
+    /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
+    pub const CACHE_VERSION = 29;
 };
 
 /// Configuration for the Roc cache system.

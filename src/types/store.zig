@@ -553,6 +553,18 @@ pub const Store = struct {
         const resolved = self.resolveVar(target_var);
         var desc = resolved.desc;
         desc.content = content;
+        desc.empty_tag_union_is_default = false;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
+    /// Close an otherwise-unresolved variable to the empty tag union while
+    /// retaining the checker's authoritative defaulting decision.
+    pub fn setVarToEmptyTagUnionDefault(self: *Self, target_var: Var) Allocator.Error!void {
+        std.debug.assert(@intFromEnum(target_var) < self.len());
+        const resolved = self.resolveVar(target_var);
+        var desc = resolved.desc;
+        desc.content = .{ .structure = .empty_tag_union };
+        desc.empty_tag_union_is_default = true;
         try self.setDesc(resolved.desc_idx, desc);
     }
 
@@ -1214,10 +1226,31 @@ pub const Store = struct {
     // * The elm compiler sets b to redirect to a
     // * The roc compiler sets a to redirect to b
     pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) Allocator.Error!void {
+        const a_data = self.resolveVarAndCompressPath(a_var);
         const b_data = self.resolveVarAndCompressPath(b_var);
 
+        var merged_desc = new_desc;
+        const merged_is_empty_tag_union = switch (merged_desc.content) {
+            .structure => |flat| flat == .empty_tag_union,
+            else => false,
+        };
+        if (merged_is_empty_tag_union) {
+            const a_is_explicit_empty = switch (a_data.desc.content) {
+                .structure => |flat| flat == .empty_tag_union and !a_data.desc.empty_tag_union_is_default,
+                else => false,
+            };
+            const b_is_explicit_empty = switch (b_data.desc.content) {
+                .structure => |flat| flat == .empty_tag_union and !b_data.desc.empty_tag_union_is_default,
+                else => false,
+            };
+            merged_desc.empty_tag_union_is_default = !a_is_explicit_empty and !b_is_explicit_empty and
+                (a_data.desc.empty_tag_union_is_default or b_data.desc.empty_tag_union_is_default);
+        } else {
+            merged_desc.empty_tag_union_is_default = false;
+        }
+
         // Update b to be the new desc
-        try self.setDesc(b_data.desc_idx, new_desc);
+        try self.setDesc(b_data.desc_idx, merged_desc);
 
         // Update a to point to b
         try self.setSlot(Self.varToSlotIdx(a_var), .{ .redirect = b_var });

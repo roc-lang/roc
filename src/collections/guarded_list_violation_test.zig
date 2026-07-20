@@ -287,7 +287,13 @@ fn monoTypeFields() ViolationError!void {
 fn lambdaMonoExprIds() ViolationError!void {
     var move_allocator = MoveAllocator{};
     const allocator = move_allocator.allocator();
-    var program = LambdaMono.Ast.Program.init(allocator, check.CheckedNames.NameStore.init(allocator), .empty);
+    var program = LambdaMono.Ast.Program.init(
+        allocator,
+        check.CheckedNames.NameStore.init(allocator),
+        .empty,
+        .empty,
+        .empty,
+    );
     defer program.deinit();
 
     const ty = try program.types.add(.zst);
@@ -322,6 +328,8 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         allocator,
         check.CheckedNames.NameStore.init(allocator),
         Mono.Type.Store.init(allocator),
+        .empty,
+        .empty,
         .empty,
         .empty,
         .empty,

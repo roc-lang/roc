@@ -90,6 +90,7 @@ pub const Content = union(enum) {
         backing: ?struct {
             ty: TypeId,
             use: MonoType.BackingUse,
+            authority: MonoType.BackingAuthority = .checked_public,
         } = null,
         /// Declared field order for a nominal/opaque record backing; empty
         /// otherwise.

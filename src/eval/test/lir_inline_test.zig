@@ -1178,6 +1178,163 @@ fn reachableProcShape(
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
 }
 
+fn markReachableLiftedExpr(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    expr_id: postcheck.MonotypeLifted.Ast.ExprId,
+    reachable: []bool,
+) void {
+    const index = @intFromEnum(expr_id);
+    if (reachable[index]) return;
+    reachable[index] = true;
+
+    switch (program.getExprAt(index).data) {
+        .@"unreachable",
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        => {},
+        .fn_ref => |fn_ref| {
+            const operands = program.captureOperandSpan(fn_ref.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
+            }
+        },
+        .list,
+        .tuple,
+        => |items| {
+            const children = program.exprSpan(items);
+            for (0..children.len) |i| markReachableLiftedExpr(program, GuardedList.at(children, i), reachable);
+        },
+        .record => |fields| {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |i| {
+                const field = GuardedList.at(field_exprs, i);
+                markReachableLiftedExpr(program, field.value, reachable);
+            }
+        },
+        .tag => |tag| {
+            const payloads = program.exprSpan(tag.payloads);
+            for (0..payloads.len) |i| markReachableLiftedExpr(program, GuardedList.at(payloads, i), reachable);
+        },
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| markReachableLiftedExpr(program, child, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
+        .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
+        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
+        .if_initialized_payload => |switch_| {
+            markReachableLiftedExpr(program, switch_.cond, reachable);
+            markReachableLiftedExpr(program, switch_.initialized, reachable);
+            markReachableLiftedExpr(program, switch_.uninitialized, reachable);
+        },
+        .try_sequence => |sequence| {
+            markReachableLiftedExpr(program, sequence.try_expr, reachable);
+            markReachableLiftedExpr(program, sequence.ok_body, reachable);
+        },
+        .try_record_sequence => |sequence| {
+            markReachableLiftedExpr(program, sequence.try_expr, reachable);
+            markReachableLiftedExpr(program, sequence.ok_body, reachable);
+        },
+        .let_ => |let_| {
+            markReachableLiftedExpr(program, let_.value, reachable);
+            markReachableLiftedExpr(program, let_.rest, reachable);
+        },
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => {},
+        .call_value => |call| {
+            markReachableLiftedExpr(program, call.callee, reachable);
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+        },
+        .call_proc => |call| {
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+            const operands = program.captureOperandSpan(call.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
+            }
+        },
+        .low_level => |call| {
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+        },
+        .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
+        .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
+        .structural_eq => |eq| {
+            markReachableLiftedExpr(program, eq.lhs, reachable);
+            markReachableLiftedExpr(program, eq.rhs, reachable);
+        },
+        .structural_hash => |h| {
+            markReachableLiftedExpr(program, h.value, reachable);
+            markReachableLiftedExpr(program, h.hasher, reachable);
+        },
+        .match_ => |match| {
+            markReachableLiftedExpr(program, match.scrutinee, reachable);
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
+                if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
+                markReachableLiftedExpr(program, branch.body, reachable);
+            }
+        },
+        .if_ => |if_| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
+                markReachableLiftedExpr(program, branch.cond, reachable);
+                markReachableLiftedExpr(program, branch.body, reachable);
+            }
+            markReachableLiftedExpr(program, if_.final_else, reachable);
+        },
+        .block => |block| {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |i| markReachableLiftedStmt(program, GuardedList.at(statements, i), reachable);
+            markReachableLiftedExpr(program, block.final_expr, reachable);
+        },
+        .loop_ => |loop| {
+            const initial_values = program.exprSpan(loop.initial_values);
+            for (0..initial_values.len) |i| markReachableLiftedExpr(program, GuardedList.at(initial_values, i), reachable);
+            markReachableLiftedExpr(program, loop.body, reachable);
+        },
+        .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
+        .continue_ => |continue_| {
+            const values = program.exprSpan(continue_.values);
+            for (0..values.len) |i| markReachableLiftedExpr(program, GuardedList.at(values, i), reachable);
+        },
+    }
+}
+
+fn markReachableLiftedStmt(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
+    reachable: []bool,
+) void {
+    switch (program.getStmt(stmt_id)) {
+        .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
+        .crash => {},
+        .uninitialized => {},
+    }
+}
+
 fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
         shape.self_call_count == 0 and
@@ -1512,23 +1669,21 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     const counters = try monotypeCountersForModule(allocator, source);
 
     try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
-        .template_requests = 53,
-        .template_hits = 22,
-        .template_misses = 5,
-        .nested_requests = 8,
-        .nested_hits = 0,
+        .template_requests = 27,
+        .template_hits = 0,
+        .template_misses = 27,
+        .nested_requests = 16,
+        .nested_hits = 8,
         .nested_misses = 8,
         .template_lookup_candidates = 22,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 74,
-        .specialization_type_digest_cache_hits = 139,
-        .specialization_type_digest_cache_misses = 128,
-        .specialization_type_digest_nodes_visited = 128,
-        .exact_type_checks = 22,
+        .specialization_type_digest_requests = 83,
+        .specialization_type_digest_cache_hits = 145,
+        .specialization_type_digest_cache_misses = 94,
+        .specialization_type_digest_nodes_visited = 94,
+        .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 73,
-        .evidence_walks = 708,
-        .evidence_walk_memo_hits = 514,
+        .nominal_backing_instantiations = 162,
     }, counters);
 }
 
@@ -1562,23 +1717,21 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
     const counters = try monotypeCountersForModule(allocator, source);
 
     try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
-        .template_requests = 29,
-        .template_hits = 5,
-        .template_misses = 10,
-        .nested_requests = 6,
-        .nested_hits = 0,
+        .template_requests = 15,
+        .template_hits = 0,
+        .template_misses = 15,
+        .nested_requests = 12,
+        .nested_hits = 6,
         .nested_misses = 6,
         .template_lookup_candidates = 5,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 51,
-        .specialization_type_digest_cache_hits = 244,
-        .specialization_type_digest_cache_misses = 290,
-        .specialization_type_digest_nodes_visited = 290,
-        .exact_type_checks = 5,
+        .specialization_type_digest_requests = 58,
+        .specialization_type_digest_cache_hits = 164,
+        .specialization_type_digest_cache_misses = 146,
+        .specialization_type_digest_nodes_visited = 146,
+        .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 101,
-        .evidence_walks = 820,
-        .evidence_walk_memo_hits = 566,
+        .nominal_backing_instantiations = 195,
     }, counters);
 }
 
@@ -1732,6 +1885,9 @@ test "monotype specialization cache read reuses loaded hits and lowers fresh mis
         .shard_id = @enumFromInt(1),
         .types = loaded_types.view,
         .specs = &loaded_specs,
+        .fns = loaded_program_view.fns,
+        .const_fn_evidence = loaded_program_view.const_fn_evidence,
+        .const_fn_evidence_frames = loaded_program_view.const_fn_evidence_frames,
     }};
 
     var no_cache = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{

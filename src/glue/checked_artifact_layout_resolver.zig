@@ -392,6 +392,9 @@ pub const Resolver = struct {
             .fields,
             .field,
             => .{ .canonical = .zst },
+            // `Try` is declaration-backed. Its concrete arguments must be
+            // substituted while opening that declaration's tag-union backing.
+            .try_ => null,
             .dict,
             .set,
             .crypto_sha256_digest,

@@ -25,6 +25,8 @@ pub fn run(
     var types = owned.types;
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
     var imported_fns = owned.imported_fns.takeArrayList();
+    var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
+    var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
     var exprs = owned.exprs.takeArrayList();
     var pats = owned.pats.takeArrayList();
     var stmts = owned.stmts.takeArrayList();
@@ -35,8 +37,6 @@ pub fn run(
     var stmt_ids = owned.stmt_ids.takeArrayList();
     var field_exprs = owned.field_exprs.takeArrayList();
     var fn_def_captures = owned.fn_def_captures.takeArrayList();
-    var const_evidence_pool = owned.const_evidence_pool.takeArrayList();
-    var const_evidence_chain_pool = owned.const_evidence_chain_pool.takeArrayList();
     var record_destructs = owned.record_destructs.takeArrayList();
     var str_pattern_steps = owned.str_pattern_steps.takeArrayList();
     var branches = owned.branches.takeArrayList();
@@ -59,6 +59,8 @@ pub fn run(
         name_store,
         types,
         imported_fns,
+        const_fn_evidence,
+        const_fn_evidence_frames,
         exprs,
         pats,
         stmts,
@@ -88,6 +90,8 @@ pub fn run(
     name_store = undefined;
     types = undefined;
     imported_fns = undefined;
+    const_fn_evidence = undefined;
+    const_fn_evidence_frames = undefined;
     exprs = undefined;
     pats = undefined;
     stmts = undefined;
@@ -114,10 +118,6 @@ pub fn run(
     comptime_sites = undefined;
     program.runtime_schema_requests = Ast.ProgramList(Ast.RuntimeSchemaRequest, "runtime_schema_requests").fromArrayList(runtime_schema_requests);
     runtime_schema_requests = undefined;
-    program.const_evidence_pool = Ast.ProgramList(@import("check").ConstStore.ConstEvidence, "const_evidence_pool").fromArrayList(const_evidence_pool);
-    const_evidence_pool = undefined;
-    program.const_evidence_chain_pool = Ast.ProgramList(@import("check").ConstStore.ConstRange, "const_evidence_chain_pool").fromArrayList(const_evidence_chain_pool);
-    const_evidence_chain_pool = undefined;
     errdefer program.deinit();
 
     const source_view = movedMonoView(&owned, &program);
@@ -145,6 +145,8 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .specs = source_view.specs,
         .imported_fns = source_view.imported_fns,
         .fns = source_view.fns,
+        .const_fn_evidence = moved_view.const_fn_evidence,
+        .const_fn_evidence_frames = moved_view.const_fn_evidence_frames,
         .defs = source_view.defs,
         .nested_defs = source_view.nested_defs,
         .exprs = moved_view.exprs,
@@ -157,8 +159,6 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .stmt_ids = moved_view.stmt_ids,
         .field_exprs = moved_view.field_exprs,
         .fn_def_captures = moved_view.fn_def_captures,
-        .const_evidence_pool = moved_view.const_evidence_pool,
-        .const_evidence_chain_pool = moved_view.const_evidence_chain_pool,
         .capture_operands = moved_view.capture_operands,
         .record_destructs = moved_view.record_destructs,
         .str_pattern_steps = moved_view.str_pattern_steps,
@@ -580,6 +580,7 @@ const Lifter = struct {
 
         const expr = self.output.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -1214,6 +1215,7 @@ const CaptureSet = struct {
         const expr = input.getExpr(expr_id);
         switch (expr.data) {
             .local => |local| try self.addIfFree(local, bound),
+            .@"unreachable",
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -2156,6 +2158,7 @@ const CaptureGraphBuilder = struct {
         switch (expr.data) {
             .local => |local| try self.addDirect(node, local),
             .unit,
+            .@"unreachable",
             .int_lit,
             .frac_f32_lit,
             .frac_f64_lit,
@@ -2426,6 +2429,8 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts

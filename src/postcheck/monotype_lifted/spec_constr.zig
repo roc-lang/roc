@@ -743,6 +743,7 @@ const Pass = struct {
     fn markArgUsesInExpr(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) Allocator.Error!void {
         const expr = self.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -945,6 +946,7 @@ const Pass = struct {
     fn collectCallPatternsInExpr(self: *Pass, owner: Ast.FnId, expr_id: Ast.ExprId) Allocator.Error!void {
         const expr = self.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -2771,6 +2773,7 @@ const Pass = struct {
 
         const expr = self.program.getExprAt(index);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -3331,6 +3334,7 @@ const Cloner = struct {
     fn collectCallPatternsInExpr(self: *Cloner, owner: Ast.FnId, expr_id: Ast.ExprId) Common.LowerError!void {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -3591,6 +3595,7 @@ const Cloner = struct {
     fn rewriteCallsWithValuesInExpr(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!void {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -4326,6 +4331,7 @@ const Cloner = struct {
 
         const expr = self.pass.program.getExpr(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
+            .@"unreachable" => .@"unreachable",
             .local => |local| .{ .local = local },
             .unit => .unit,
             .uninitialized => .uninitialized,
@@ -4808,9 +4814,10 @@ const Cloner = struct {
             defer new_initials.deinit(self.pass.allocator);
 
             const split_start = self.changes.items.len;
-            for (params, shapes, values) |param, shape, value| {
+            for (params, shapes, values, initial_values) |param, shape, value, initial| {
                 const param_value = try self.valueFromShapeArgs(shape, &new_params);
                 try self.putSubst(param.local, param_value);
+                try self.bindInitialCarriedBinder(initial, param_value);
                 try self.appendExprsFromValue(shape, value, &new_initials);
             }
 
@@ -4840,7 +4847,11 @@ const Cloner = struct {
         for (params, 0..) |param, index| whole_shapes[index] = .{ .any = param.ty };
 
         const initial_span = try self.valuesToExprSpan(values);
-        for (params) |param| try self.shadowLocal(param.local);
+        for (params, initial_values) |param, initial| {
+            try self.shadowLocal(param.local);
+            const current = try self.addExpr(.{ .ty = param.ty, .data = .{ .local = param.local } });
+            try self.bindInitialCarriedBinder(initial, .{ .expr = current });
+        }
         try self.loop_stack.append(self.pass.allocator, .{ .values = whole_shapes, .any_demoted = false });
         const body = try self.cloneExpr(loop.body);
         if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
@@ -4863,6 +4874,16 @@ const Cloner = struct {
             .previous = previous,
         });
         _ = self.binder_subst.remove(identity);
+    }
+
+    /// Rebind the checked identity carried into a loop to the slot value for
+    /// this fixed-point attempt. Reassigned source versions share the initial
+    /// binder identity; without this relation they clone as unrelated free
+    /// locals instead of reading the current back-edge value.
+    fn bindInitialCarriedBinder(self: *Cloner, initial: Ast.ExprId, current: Value) Allocator.Error!void {
+        const source = localExpr(self.pass.program, initial) orelse return;
+        const identity = self.binderIdentityOf(source) orelse return;
+        try self.putBinderSubst(identity, current);
     }
 
     /// A block whose statements all dissolve — each binds a substitutable
@@ -6982,7 +7003,16 @@ const Cloner = struct {
                 .ty = source_capture.ty,
                 .data = .{ .local = source_capture.local },
             });
-            try self.putSubst(source_capture.local, .{ .expr = local_expr });
+            const capture_value: Value = .{ .expr = local_expr };
+            try self.putSubst(source_capture.local, capture_value);
+            // Different Monotype specializations of one lexical capture can
+            // leave distinct local ids with the same binder and monomorphic
+            // type in a callable template. A shared callable worker has one
+            // dynamic slot for that identity, so clone every equivalent use
+            // through the selected source capture local.
+            if (self.binderIdentityOf(source_capture.local)) |identity| {
+                try self.putBinderSubst(identity, capture_value);
+            }
         }
         for (source_args, args) |source_arg, arg| {
             const arg_expr = try self.addExpr(.{
@@ -7076,13 +7106,17 @@ const Cloner = struct {
             => false,
         };
         if (subst_binder) if (self.binderIdentityOf(local)) |identity| {
-            const previous_binder = self.binder_subst.get(identity);
-            try self.changes.append(self.pass.allocator, .{
-                .key = .{ .binder = identity },
-                .previous = previous_binder,
-            });
-            try self.binder_subst.put(identity, value);
+            try self.putBinderSubst(identity, value);
         };
+    }
+
+    fn putBinderSubst(self: *Cloner, identity: BinderIdentity, value: Value) Allocator.Error!void {
+        const previous = self.binder_subst.get(identity);
+        try self.changes.append(self.pass.allocator, .{
+            .key = .{ .binder = identity },
+            .previous = previous,
+        });
+        try self.binder_subst.put(identity, value);
     }
 
     /// Identity a local's binder-scoped substitution is keyed by: the pattern
@@ -7181,7 +7215,7 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
 
 fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId) bool {
     return switch (program.getExpr(expr_id).data) {
-        .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
+        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
         .fn_ref => |fn_ref| captureOperandSpanCallsFn(program, fn_ref.captures, fn_id),
         .list, .tuple => |items| exprSpanCallsFn(program, items, fn_id),
         .record => |fields| blk: {
@@ -7280,6 +7314,7 @@ fn exprMayCrash(program: *const Ast.Program, fn_may_crash: []const bool, expr_id
         .crash, .comptime_exhaustiveness_failed => true,
         .local,
         .unit,
+        .@"unreachable",
         .int_lit,
         .frac_f32_lit,
         .frac_f64_lit,
@@ -7408,6 +7443,7 @@ fn stmtMayCrash(program: *const Ast.Program, fn_may_crash: []const bool, stmt_id
 
 fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     return switch (program.getExpr(expr_id).data) {
+        .@"unreachable",
         .local,
         .unit,
         .int_lit,
@@ -7529,6 +7565,7 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
 
 fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) usize {
     return switch (program.getExpr(expr_id).data) {
+        .@"unreachable" => 0,
         .local => |seen| if (seen == local) 1 else 0,
         .unit,
         .int_lit,
@@ -7684,6 +7721,7 @@ const LocalUseScan = struct {
 fn exprHasNoObservableEffect(program: *const Ast.Program, fn_effect_free: []const bool, expr_id: Ast.ExprId, allow_control: bool) bool {
     const expr = program.getExpr(expr_id);
     return switch (expr.data) {
+        .@"unreachable",
         .local,
         .unit,
         .int_lit,
@@ -7825,6 +7863,7 @@ fn localUseBeforeEffect(program: *const Ast.Program, local: Ast.LocalId, expr_id
 fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId, scan: *LocalUseScan) void {
     const expr = program.getExpr(expr_id);
     switch (expr.data) {
+        .@"unreachable" => {},
         .local => |seen| {
             if (seen == local) {
                 if (scan.seen_effect) {

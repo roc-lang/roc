@@ -2663,22 +2663,39 @@ instantiation model makes the intended data flow explicit, so the first
 constraint and every later constraint meet in the same graph node before the
 final Monotype body is emitted.
 
-An unconstrained checked type variable that remains open after checking lowers
-to the empty tag union in Monotype. This is not a default choice. It records the
-invariant that no runtime value can be constructed at that type. Values such as `[]`
-can still be represented as `List([ ])` because they contain no elements, and
-code that would need an actual element value must have constrained the element
-type earlier or must be unreachable at runtime.
+During active Monotype specialization, unresolved checked variables and row
+extensions remain instantiation graph nodes. They are not represented by
+durable Monotype `TypeId`s.
+
+The only time an unresolved checked variable with an empty-tag-union row
+default may become durable `tag_union []` is final graph sealing, after every
+checked relation and specialization demand for that body has been applied.
+After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
+still be represented as `List(tag_union [])` because they contain no elements,
+and code that would need an actual element value must have constrained the
+element type earlier or must be unreachable at runtime.
+
+Expression lowering is demand-aware. A runtime-value demand requires a
+constructible monomorphic value. If a checked generic value remains
+unconstrained and no runtime value can exist at its final type, lowering it
+under a runtime-value demand is a compiler invariant violation.
+
+An inspect-only demand may render results determined by type or callable
+identity without lowering a runtime value into Monotype IR. For example,
+inspecting a standalone function value may produce `<function>` without
+lowering the function body. A subsequent call, export, dispatch target, or
+other body-specialization demand must request a concrete body specialization
+with sufficient type evidence.
 
 During Monotype construction, an open checked variable is an unresolved graph
 node carrying the variable's numeric and row defaults. Unification resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
-type relations provide concrete evidence; defaults apply only at
-materialization. While solving is still active, users hold instantiation graph
-nodes rather than final Monotype type ids. Materialization turns solved graph
-nodes into immutable interned Monotype type nodes. Recursive groups may reserve
-their ids inside the type interner while the group is being sealed, but no type
-id that is visible in Monotype IR is later refilled or changed. This is
+type relations provide concrete evidence; defaults apply only during final
+graph sealing. While solving is still active, users hold instantiation graph
+nodes rather than final Monotype type ids. Final graph sealing turns solved
+graph nodes into immutable interned Monotype type nodes. Recursive groups may
+reserve their ids inside the type interner while the group is being sealed, but
+no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 

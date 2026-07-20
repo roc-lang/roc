@@ -549,17 +549,27 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
-/// Checked dispatch metadata for one source `for` loop.
-///
-/// Checking writes this when it creates the loop's required `iter` and `next`
-/// static-dispatch constraints. Checked artifact publication consumes it to
-/// publish an explicit iterator-for plan for mono lowering.
+/// Exact checker-owned shape of an iterator step result.
+pub const IteratorStepTopology = extern struct {
+    done_tag_ident: u32,
+    one_tag_ident: u32,
+    skip_tag_ident: u32,
+    item_field_ident: u32,
+    rest_field_ident: u32,
+    one_payload_var: u32,
+    skip_payload_var: u32,
+};
+
+/// Checked dispatch and topology metadata for one source `for` loop.
+/// Later stages consume these exact identities instead of inferring the
+/// iterator protocol from names or row shapes.
 pub const ForLoopDispatchPlan = extern struct {
     node_idx: u32,
     pattern_idx: u32,
     iterable_idx: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
+    step_topology: IteratorStepTopology,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -598,6 +608,16 @@ pub const NumeralLiteral = extern struct {
     pub fn isMaterialized(self: NumeralLiteral) bool {
         return (self.flags & materialized_flag) != 0;
     }
+};
+
+/// Checked dispatch metadata for a numeric literal that must call
+/// `from_numeral` at runtime.
+pub const NumeralDispatchPlan = extern struct {
+    node_idx: u32,
+    target_var: u32,
+    fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
@@ -804,6 +824,12 @@ for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
 numeral_digit_bytes: collections.SafeList(u8),
 /// Exact numeric literals attached to source expression and pattern nodes.
 numeral_literals: NumeralLiteral.SafeList,
+/// `from_numeral` dispatch plans attached by checking to source expression nodes.
+numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
+/// `from_quote` dispatch plans attached by checking to source string literal
+/// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
+/// node plus the constraint's target and function type vars.
+quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
@@ -997,6 +1023,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
+        .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
+        .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
@@ -1022,6 +1050,8 @@ pub fn deinit(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
+    self.numeral_dispatch_plans.deinit(self.gpa);
+    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
@@ -1063,6 +1093,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
+    self.numeral_dispatch_plans.deinit(self.gpa);
+    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
@@ -3254,6 +3286,8 @@ pub const Serialized = extern struct {
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
+    numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
+    quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
@@ -3353,6 +3387,8 @@ pub const Serialized = extern struct {
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
+        try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
+        try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
@@ -3412,6 +3448,8 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
@@ -3471,6 +3509,8 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
+            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
+            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
@@ -3532,6 +3572,8 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
+            .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
+            .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
@@ -3559,6 +3601,7 @@ pub fn recordForLoopDispatchPlan(
     iterable_idx: Node.Idx,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
+    step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
     const raw_pattern: u32 = @intFromEnum(pattern_idx);
@@ -3571,6 +3614,7 @@ pub fn recordForLoopDispatchPlan(
             .iterable_idx = raw_iterable,
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
+            .step_topology = step_topology,
         };
         return;
     }
@@ -3580,6 +3624,7 @@ pub fn recordForLoopDispatchPlan(
         .iterable_idx = raw_iterable,
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
+        .step_topology = step_topology,
     });
 }
 
@@ -3710,13 +3755,16 @@ pub fn recordNumeralDispatchPlan(
     target_var: TypeVar,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .numeral, target_var, fn_var);
+    try upsertSortedByNode(NumeralDispatchPlan, &self.numeral_dispatch_plans, self.gpa, .{
+        .node_idx = @intFromEnum(node_idx),
+        .target_var = @intFromEnum(target_var),
+        .fn_var = @intFromEnum(fn_var),
+    });
 }
 
 /// Return the checked `from_numeral` function for a numeric expression.
-pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
-    const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
-    return if (plan.dispatchKind() == .numeral) plan else null;
+pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
+    return findSortedByNode(NumeralDispatchPlan, self.numeral_dispatch_plans.items.items, @intFromEnum(node_idx));
 }
 
 /// Record the checked `from_quote` function for a string literal node.
@@ -3726,7 +3774,11 @@ pub fn recordQuoteDispatchPlan(
     target_var: TypeVar,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
-    try self.store.recordLiteralDispatchPlan(node_idx, .quote, target_var, fn_var);
+    try upsertSortedByNode(NumeralDispatchPlan, &self.quote_dispatch_plans, self.gpa, .{
+        .node_idx = @intFromEnum(node_idx),
+        .target_var = @intFromEnum(target_var),
+        .fn_var = @intFromEnum(fn_var),
+    });
 }
 
 /// Record a constrained-scheme use for static-dispatch evidence.
@@ -3755,9 +3807,8 @@ pub fn recordSchemeUse(
 }
 
 /// Return the checked `from_quote` function for a string literal node.
-pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
-    const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
-    return if (plan.dispatchKind() == .quote) plan else null;
+pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
+    return findSortedByNode(NumeralDispatchPlan, self.quote_dispatch_plans.items.items, @intFromEnum(node_idx));
 }
 
 /// Record the scope-resolved type target for an explicit numeric suffix.
