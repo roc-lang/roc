@@ -8394,6 +8394,7 @@ fn constFnDefFromMono(fn_def: Mono.FnDef) check.ConstStore.FnDef {
             .owner = nested.owner,
             .site = nested.site,
             .context_fn_key = nested.context_fn_key,
+            .local_proc_context_digest = nested.local_proc_context_digest,
         } },
         .local_hosted => |hosted| .{ .local_hosted = hosted.template },
         .imported_hosted => |hosted| .{ .imported_hosted = hosted.template },

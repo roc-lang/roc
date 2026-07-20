@@ -704,8 +704,22 @@ const LocalProcContext = struct {
     lexical_owner: DraftOwner,
     owner_template: names.ProcTemplate,
     base_key: names.TypeDigest,
+    /// Stable specialization identity supplied directly when ConstStore
+    /// restoration replaces source locals with newly materialized captures.
+    /// Ordinary source contexts derive identity from `base_key` and entries.
+    restored_specialization_key: ?names.TypeDigest = null,
     entries: []LexicalBinderEntry,
     evidence: EvidenceChain,
+};
+
+/// Producer-authored lexical context retained by a ConstStore closure. The
+/// checked use supplies the exact local-procedure declaration; this scope
+/// supplies the declaration context that existed before the closure body's
+/// own arguments were bound.
+const RestoredLocalProcScope = struct {
+    source_context_digest: names.TypeDigest,
+    base_key: names.TypeDigest,
+    entries: []const LexicalBinderEntry,
 };
 
 const StoredConstFnEvidence = struct {
@@ -3413,6 +3427,9 @@ const Builder = struct {
                     .nested => |value| value,
                     else => unreachable,
                 };
+                fn_ctx.current_fn_key = nested.context_fn_key;
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 const fn_target = try self.lowerDraftNestedFromContext(
                     &fn_ctx,
                     checkedLambdaExprIdForConstFn(fn_view, fn_template.fn_def),
@@ -3471,6 +3488,7 @@ const Builder = struct {
         owner: names.ProcTemplate,
         expr_id: checked.CheckedExprId,
         context_fn_key: names.TypeDigest,
+        local_proc_context_digest: ?names.TypeDigest,
     ) Allocator.Error!Ast.NestedFn {
         const address = NestedSiteAddress.from(view.key, owner, expr_id);
         const site = if (self.nested_site_cache.get(address)) |cached|
@@ -3488,6 +3506,7 @@ const Builder = struct {
             .owner = owner,
             .site = site,
             .context_fn_key = context_fn_key,
+            .local_proc_context_digest = local_proc_context_digest,
         };
     }
 
@@ -4855,6 +4874,7 @@ const Builder = struct {
                     .owner = nested.owner,
                     .site = nested.site,
                     .context_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key),
+                    .local_proc_context_digest = nested.local_proc_context_digest,
                 } };
             },
             else => Common.invariant("capturing stored function had no nested function identity"),
@@ -4866,7 +4886,12 @@ const Builder = struct {
         return switch (fn_def) {
             .local_template => |template| .{ .local_template = template },
             .imported_template => |template| .{ .imported_template = template },
-            .nested => |nested| .{ .nested = .{ .owner = nested.owner, .site = nested.site, .context_fn_key = nested.context_fn_key } },
+            .nested => |nested| .{ .nested = .{
+                .owner = nested.owner,
+                .site = nested.site,
+                .context_fn_key = nested.context_fn_key,
+                .local_proc_context_digest = nested.local_proc_context_digest,
+            } },
             .local_hosted => |template| .{ .local_hosted = self.hostedFn(template) },
             .imported_hosted => |template| .{ .imported_hosted = self.hostedFn(template) },
             .checked_generated => |template| .{ .checked_generated = template },
@@ -5546,11 +5571,14 @@ const Builder = struct {
                     .owner = nested.owner,
                     .site = nested.site,
                     .context_fn_key = try fn_ctx.lexicalContextKey(),
+                    .local_proc_context_digest = nested.local_proc_context_digest,
                 } };
                 break :blk template.fn_def.nested;
             },
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, fn_ctx.current_fn_key);
+        defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
         defer {
             var index = initialized;
             while (index > 0) {
@@ -9237,6 +9265,7 @@ const BodyContext = struct {
     binders: BinderMap,
     typed_binders: TypedBinders,
     local_proc_contexts: std.AutoHashMap(DraftLocalProcAddress, DraftLocalProcContextId),
+    restored_local_proc_scope: ?RestoredLocalProcScope = null,
     /// This specialization's type solver, shared by every instantiation
     /// context created while lowering the same specialization.
     graph: *InstGraph,
@@ -10638,7 +10667,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(&self.builder.program.types, value_ty) orelse return null;
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "to_inspect") orelse return null);
+        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "to_inspect") orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -10671,7 +10700,7 @@ const BodyContext = struct {
                 }
                 if (self.methodOwnerFromNode(node)) |owner| {
                     if (self.builder.lookupMethodTargetByName(owner, "to_inspect")) |raw_lookup| {
-                        const lookup = self.withLocalProcContext(raw_lookup);
+                        const lookup = try self.withLocalProcContext(raw_lookup);
                         for (self.draft.prepared_inspect_methods.items) |prepared| {
                             if (self.graph.sameClass(prepared.value_node, node)) return false;
                         }
@@ -10986,6 +11015,7 @@ const BodyContext = struct {
         child.current_entry_root = self.current_entry_root;
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
+        child.restored_local_proc_scope = self.restored_local_proc_scope;
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -11029,12 +11059,31 @@ const BodyContext = struct {
         return lexicalContextKeyFromEntries(self.current_fn_key, entries);
     }
 
+    fn enterRestoredLocalProcScope(
+        self: *BodyContext,
+        nested: Ast.NestedFn,
+        base_key: names.TypeDigest,
+    ) Allocator.Error!?[]LexicalBinderEntry {
+        const digest = nested.local_proc_context_digest orelse {
+            self.restored_local_proc_scope = null;
+            return null;
+        };
+        const entries = try self.captureLexicalBinderEntries();
+        self.restored_local_proc_scope = .{
+            .source_context_digest = digest,
+            .base_key = base_key,
+            .entries = entries,
+        };
+        return entries;
+    }
+
     fn cloneLocalProcContext(self: *BodyContext, context: LocalProcContext) Allocator.Error!LocalProcContext {
         return .{
             .declaration = context.declaration,
             .lexical_owner = context.lexical_owner,
             .owner_template = context.owner_template,
             .base_key = context.base_key,
+            .restored_specialization_key = context.restored_specialization_key,
             .entries = try self.allocator.dupe(LexicalBinderEntry, context.entries),
             .evidence = context.evidence,
         };
@@ -11122,6 +11171,7 @@ const BodyContext = struct {
             .lexical_owner = self.draft.current_owner,
             .owner_template = self.owner_template,
             .base_key = self.current_fn_key,
+            .restored_specialization_key = null,
             .entries = try self.captureLexicalBinderEntries(),
             .evidence = self.evidence,
         };
@@ -11132,6 +11182,7 @@ const BodyContext = struct {
     }
 
     fn localProcUseContextKey(self: *BodyContext, context: LocalProcContext) Allocator.Error!names.TypeDigest {
+        if (context.restored_specialization_key) |key| return key;
         const entries = try self.allocator.dupe(LexicalBinderEntry, context.entries);
         defer self.allocator.free(entries);
 
@@ -11157,6 +11208,58 @@ const BodyContext = struct {
         }
 
         return lexicalContextKeyFromEntries(context.base_key, entries);
+    }
+
+    /// Digest the exact source declaration contexts visible at a nested
+    /// callable boundary. ConstStore retains this producer-authored identity
+    /// so restoration never infers lexical provenance from a finished type or
+    /// from whichever binders happen to be live at the use site.
+    fn localProcContextsDigest(self: *BodyContext) Allocator.Error!?names.TypeDigest {
+        if (self.local_proc_contexts.count() == 0) return null;
+
+        const addresses = try self.allocator.alloc(DraftLocalProcAddress, self.local_proc_contexts.count());
+        defer self.allocator.free(addresses);
+        var index: usize = 0;
+        var iter = self.local_proc_contexts.keyIterator();
+        while (iter.next()) |address| : (index += 1) addresses[index] = address.*;
+        std.mem.sort(DraftLocalProcAddress, addresses, {}, struct {
+            fn lessThan(_: void, left: DraftLocalProcAddress, right: DraftLocalProcAddress) bool {
+                const module_order = std.mem.order(u8, &left.module, &right.module);
+                if (module_order != .eq) return module_order == .lt;
+                if (left.binder != right.binder) return @intFromEnum(left.binder) < @intFromEnum(right.binder);
+                return @intFromEnum(left.expr) < @intFromEnum(right.expr);
+            }
+        }.lessThan);
+
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("roc.monotype.local_proc_contexts.v2");
+        for (addresses) |address| {
+            const context_id = self.local_proc_contexts.get(address) orelse
+                Common.invariant("local procedure context disappeared while its digest was produced");
+            const context = self.validateLocalProcContext(context_id, address.module, address.binder, address.expr, null);
+            hasher.update(&address.module);
+            hashU32(&hasher, @intFromEnum(address.binder));
+            hashU32(&hasher, @intFromEnum(address.expr));
+            if (context.declaration.context_anchor) |anchor| {
+                hasher.update(&.{1});
+                hashU32(&hasher, @intFromEnum(anchor));
+            } else hasher.update(&.{0});
+            hasher.update(&names.procTemplateModuleDigest(context.owner_template).bytes);
+            hashU32(&hasher, @intFromEnum(context.owner_template.proc_base));
+            hashU32(&hasher, @intFromEnum(context.owner_template.template));
+            hasher.update(&context.base_key.bytes);
+            if (context.restored_specialization_key) |key| {
+                hasher.update(&.{1});
+                hasher.update(&key.bytes);
+            } else hasher.update(&.{0});
+            for (context.entries) |entry| {
+                hasher.update(&.{entry.kind});
+                hashU32(&hasher, entry.binder);
+                hasher.update(&entry.type_digest.bytes);
+                hashU32(&hasher, entry.local);
+            }
+        }
+        return .{ .bytes = hasher.finalResult() };
     }
 
     const InstalledLocalProcContext = struct {
@@ -11292,6 +11395,7 @@ const BodyContext = struct {
         if (!std.meta.eql(left.lexical_owner, right.lexical_owner)) return false;
         if (!names.procedureTemplateRefEql(left.owner_template, right.owner_template)) return false;
         if (!std.mem.eql(u8, left.base_key.bytes[0..], right.base_key.bytes[0..])) return false;
+        if (!std.meta.eql(left.restored_specialization_key, right.restored_specialization_key)) return false;
         if (!evidenceChainEql(left.evidence, right.evidence)) return false;
         if (left.entries.len != right.entries.len) return false;
         for (left.entries, right.entries) |a, b| {
@@ -13516,7 +13620,7 @@ const BodyContext = struct {
                         .{ .fn_def = .{ .fn_id = try self.lowerDraftLocalProcAtNode(
                             local,
                             self.view,
-                            self.localProcContextId(self.view, local.binder, local.expr),
+                            try self.localProcContextId(self.view, local.binder, local.expr),
                             expr.ty,
                             self.view.types.rootKey(expr.ty),
                             request_fn_node,
@@ -15866,7 +15970,7 @@ const BodyContext = struct {
             else
                 selected.tag_text;
 
-        const parse_lookup = self.methodLookupForTypeName(encoding_ty, method_name);
+        const parse_lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
         const state_arg_index: usize = if (Ident.textEql(selected.tag_text, "TagUnion")) 2 else 1;
         const parse_mono_ty = try self.methodTargetMonoTypeFromArgAtIndexAndRet(parse_lookup, state_arg_index, state_ty, ret_ty);
         const parse_fn = self.builder.functionShape(parse_mono_ty, "parser target method was not a function");
@@ -15989,7 +16093,7 @@ const BodyContext = struct {
             .payload_tys = payload_tys,
         };
 
-        const parse_lookup = self.methodLookupForTypeName(encoding_ty, "parse_record_field");
+        const parse_lookup = try self.methodLookupForTypeName(encoding_ty, "parse_record_field");
         const generic_callable_ty = try self.methodTargetMonoTypeFromArgAtIndexIsolated(parse_lookup, 2, state_ty);
         const generic_parse_fn = self.builder.functionShape(generic_callable_ty, "parse_record_field target method was not a function");
         const generic_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(generic_parse_fn.args));
@@ -16691,7 +16795,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const skip_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
-        const lookup = self.methodLookupForTypeName(encoding_ty, "skip_record_field");
+        const lookup = try self.methodLookupForTypeName(encoding_ty, "skip_record_field");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, state_ty }, skip_try_ty);
         const skip_fn = self.builder.functionShape(callable_mono_ty, "skip_record_field target method was not a function");
         const arg_tys = self.builder.program.types.span(skip_fn.args);
@@ -16893,8 +16997,16 @@ const BodyContext = struct {
             .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
             else => {},
         }
-        if (self.customParserLookup(shape_ty)) |lookup| {
-            return try self.lowerCustomParserFromState(lookup, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty);
+        if (self.customParserLookup(shape_ty)) |raw_lookup| {
+            return try self.lowerCustomParserFromState(
+                try self.withLocalProcContext(raw_lookup),
+                shape_ty,
+                encoding_expr,
+                encoding_ty,
+                state_expr,
+                state_ty,
+                ret_ty,
+            );
         }
         return try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
     }
@@ -17780,7 +17892,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const null_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
-        const parse_null_lookup = self.methodLookupForTypeName(encoding_ty, "parse_null");
+        const parse_null_lookup = try self.methodLookupForTypeName(encoding_ty, "parse_null");
         const parse_null_mono_ty = try self.methodTargetMonoTypeFromArgs(parse_null_lookup, &.{ encoding_ty, state_ty }, null_try_ty);
         const parse_null_fn = self.builder.functionShape(parse_null_mono_ty, "parse_null target method was not a function");
         const parse_null_arg_tys = self.builder.program.types.span(parse_null_fn.args);
@@ -18724,7 +18836,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const field_text = self.builder.program.names.recordFieldLabelText(field.name);
         const field_expr = try self.stringExpr(field_text, str_ty);
-        const lookup = self.methodLookupForTypeName(encoding_ty, "rename_field");
+        const lookup = try self.methodLookupForTypeName(encoding_ty, "rename_field");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, str_ty }, str_ty);
         const rename_fn = self.builder.functionShape(callable_mono_ty, "rename_field target method was not a function");
         const arg_tys = self.builder.program.types.span(rename_fn.args);
@@ -19658,7 +19770,7 @@ const BodyContext = struct {
             .local_proc => |local| .{ .local = try self.lowerDraftLocalProcAtNode(
                 local,
                 self.view,
-                self.localProcContextId(self.view, local.binder, local.expr),
+                try self.localProcContextId(self.view, local.binder, local.expr),
                 source_fn_ty,
                 source_fn_key,
                 request_fn_node,
@@ -19774,7 +19886,13 @@ const BodyContext = struct {
         self.owner_template = context.owner_template;
         defer self.owner_template = previous_owner_template;
         const context_fn_key = try self.localProcUseContextKey(context);
-        const nested = try self.builder.nestedFnForExpr(self.view, context.owner_template, local.expr, context_fn_key);
+        const nested = try self.builder.nestedFnForExpr(
+            self.view,
+            context.owner_template,
+            local.expr,
+            context_fn_key,
+            try self.localProcContextsDigest(),
+        );
         const requested_evidence = if (local.dispatch_scope) |scope|
             try enterEvidenceScope(self.builder, context.evidence, scope, local.expr, evidence)
         else blk: {
@@ -19963,7 +20081,7 @@ const BodyContext = struct {
                     .{ .fn_def = .{ .fn_id = try self.lowerDraftLocalProcAtNode(
                         local,
                         self.view,
-                        self.localProcContextId(self.view, local.binder, local.expr),
+                        try self.localProcContextId(self.view, local.binder, local.expr),
                         checked_ty,
                         self.view.types.rootKey(checked_ty),
                         request_fn_node,
@@ -20050,7 +20168,7 @@ const BodyContext = struct {
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
                     self.view,
-                    self.localProcContextId(self.view, local.binder, local.expr),
+                    try self.localProcContextId(self.view, local.binder, local.expr),
                     checked_ty,
                     self.view.types.rootKey(checked_ty),
                     expected_node,
@@ -21147,6 +21265,9 @@ const BodyContext = struct {
                 fn_ctx.evidence = retained_evidence;
                 defer fn_ctx.deinit();
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+                fn_ctx.current_fn_key = nested.context_fn_key;
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
@@ -21262,9 +21383,12 @@ const BodyContext = struct {
                 .owner = nested.owner,
                 .site = nested.site,
                 .context_fn_key = try fn_ctx.lexicalContextKey(),
+                .local_proc_context_digest = nested.local_proc_context_digest,
             },
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
+        defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
 
         defer {
             var index = initialized;
@@ -21363,6 +21487,9 @@ const BodyContext = struct {
                 fn_ctx.evidence = retained_evidence;
                 defer fn_ctx.deinit();
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
+                fn_ctx.current_fn_key = nested.context_fn_key;
+                const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
+                defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
@@ -21466,11 +21593,14 @@ const BodyContext = struct {
                     .owner = nested.owner,
                     .site = nested.site,
                     .context_fn_key = try fn_ctx.lexicalContextKey(),
+                    .local_proc_context_digest = nested.local_proc_context_digest,
                 } };
                 break :blk capture_template.fn_def.nested;
             },
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
+        const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
+        defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
 
         defer {
             var index = initialized;
@@ -23317,6 +23447,7 @@ const BodyContext = struct {
                 self.owner_template,
                 expr_id,
                 try self.lexicalContextKey(),
+                try self.localProcContextsDigest(),
             ),
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
@@ -23437,6 +23568,7 @@ const BodyContext = struct {
             self.owner_template,
             expr_id,
             try self.lexicalContextKey(),
+            try self.localProcContextsDigest(),
         );
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
@@ -24119,7 +24251,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         list_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(set_ty, "from_list");
+        const lookup = try self.methodLookupForTypeName(set_ty, "from_list");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{list_ty}, set_ty);
         const from_list_fn = self.builder.functionShape(callable_mono_ty, "Set.from_list target method was not a function");
         const arg_tys = self.builder.program.types.span(from_list_fn.args);
@@ -24142,7 +24274,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         set_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(set_ty, "to_list");
+        const lookup = try self.methodLookupForTypeName(set_ty, "to_list");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{set_ty}, list_ty);
         const to_list_fn = self.builder.functionShape(callable_mono_ty, "Set.to_list target method was not a function");
         const arg_tys = self.builder.program.types.span(to_list_fn.args);
@@ -24165,7 +24297,7 @@ const BodyContext = struct {
         capacity_expr: DraftExprId,
         capacity_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(dict_ty, "with_capacity");
+        const lookup = try self.methodLookupForTypeName(dict_ty, "with_capacity");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{capacity_ty}, dict_ty);
         const with_capacity_fn = self.builder.functionShape(callable_mono_ty, "Dict.with_capacity target method was not a function");
         const arg_tys = self.builder.program.types.span(with_capacity_fn.args);
@@ -24191,7 +24323,7 @@ const BodyContext = struct {
         key_expr: DraftExprId,
         value_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(dict_ty, "insert");
+        const lookup = try self.methodLookupForTypeName(dict_ty, "insert");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ dict_ty, key_ty, value_ty }, dict_ty);
         const insert_fn = self.builder.functionShape(callable_mono_ty, "Dict.insert target method was not a function");
         const arg_tys = self.builder.program.types.span(insert_fn.args);
@@ -24216,7 +24348,7 @@ const BodyContext = struct {
         list_ty: Type.TypeId,
         dict_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(dict_ty, "to_list");
+        const lookup = try self.methodLookupForTypeName(dict_ty, "to_list");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{dict_ty}, list_ty);
         const to_list_fn = self.builder.functionShape(callable_mono_ty, "Dict.to_list target method was not a function");
         const arg_tys = self.builder.program.types.span(to_list_fn.args);
@@ -24412,7 +24544,7 @@ const BodyContext = struct {
     fn materializeEvidenceTarget(self: *BodyContext, node: static_dispatch.EvidenceNode) Allocator.Error!*const SpecEvidenceTarget {
         const arena = self.builder.evidence_arena.allocator();
         const out = try arena.create(SpecEvidenceTarget);
-        const lookup = self.withLocalProcContext(self.methodLookupForResolvedTarget(node.target));
+        const lookup = try self.withLocalProcContext(self.methodLookupForResolvedTarget(node.target));
         out.* = .{
             .view = lookup.view,
             .target = node.target,
@@ -24541,7 +24673,7 @@ const BodyContext = struct {
                         .local_proc_context = switch (target.method.kind) {
                             .local_proc => |local| blk_context: {
                                 const context_view = self.builder.moduleForDigest(target.view);
-                                const context_id = self.localProcContextId(context_view, local.binder, local.expr);
+                                const context_id = try self.localProcContextId(context_view, local.binder, local.expr);
                                 _ = self.validateLocalProcContext(
                                     context_id,
                                     self.builder.moduleForDigest(target.view).key.bytes,
@@ -24878,19 +25010,19 @@ const BodyContext = struct {
         self: *BodyContext,
         owner_ty: Type.TypeId,
         method_name: []const u8,
-    ) MethodLookup {
+    ) Allocator.Error!MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, owner_ty) orelse
             Common.invariant("parser format type did not have a method owner");
-        return self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, method_name) orelse
+        return try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, method_name) orelse
             Common.invariant("checked method registry is missing parser format method"));
     }
 
-    fn withLocalProcContext(self: *BodyContext, lookup: MethodLookup) MethodLookup {
+    fn withLocalProcContext(self: *BodyContext, lookup: MethodLookup) Allocator.Error!MethodLookup {
         var contextual = lookup;
         switch (lookup.target.kind) {
             .local_proc => |local| {
                 const context_id = lookup.local_proc_context orelse
-                    self.localProcContextId(lookup.view, local.binder, local.expr);
+                    try self.localProcContextId(lookup.view, local.binder, local.expr);
                 _ = self.validateLocalProcContext(
                     context_id,
                     lookup.view.key.bytes,
@@ -25062,9 +25194,12 @@ const BodyContext = struct {
     ) Allocator.Error!SpecEvidence {
         if (self.methodOwnerFromNode(component_node)) |owner| {
             if (self.builder.lookupMethodTarget(owner, view, method)) |found| {
+                if (found.target.kind == .structural) {
+                    return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
+                }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
-                const lookup = self.withLocalProcContext(found);
+                const lookup = try self.withLocalProcContext(found);
                 target.* = .{
                     .view = lookup.view,
                     .target = lookup.target,
@@ -25132,9 +25267,12 @@ const BodyContext = struct {
     ) Allocator.Error!SpecEvidence {
         if (methodOwnerFromType(&self.builder.program.types, component_ty)) |owner| {
             if (self.builder.lookupMethodTarget(owner, view, method)) |found| {
+                if (found.target.kind == .structural) {
+                    return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
+                }
                 const arena = self.builder.evidence_arena.allocator();
                 const target = try arena.create(SpecEvidenceTarget);
-                const lookup = self.withLocalProcContext(found);
+                const lookup = try self.withLocalProcContext(found);
                 target.* = .{
                     .view = lookup.view,
                     .target = lookup.target,
@@ -25519,7 +25657,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         evidence_vector: SpecEvidenceVector,
     ) Allocator.Error!DraftFnSlot {
-        const lookup = self.withLocalProcContext(raw_lookup);
+        const lookup = try self.withLocalProcContext(raw_lookup);
         if (try self.preparedCodecCalleeAtNode(lookup, request_fn_node)) |prepared| return prepared;
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
@@ -26163,8 +26301,17 @@ const BodyContext = struct {
             },
             else => {},
         }
-        if (self.customEncoderForLookup(shape_ty)) |lookup| {
-            return try self.lowerCustomEncoderForState(lookup, shape_ty, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty);
+        if (self.customEncoderForLookup(shape_ty)) |raw_lookup| {
+            return try self.lowerCustomEncoderForState(
+                try self.withLocalProcContext(raw_lookup),
+                shape_ty,
+                value_expr,
+                encoding_expr,
+                encoding_ty,
+                state_expr,
+                state_ty,
+                ret_ty,
+            );
         }
         if (self.jsonEncodeScalarMethodName(shape_ty)) |method_name| {
             return try self.lowerEncodeFormatMethod(method_name, &.{ value_expr, state_expr }, &.{ shape_ty, state_ty }, encoding_ty, ret_ty);
@@ -27632,7 +27779,7 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(encoding_ty, method_name);
+        const lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, arg_tys, ret_ty);
         const encode_fn = self.builder.functionShape(callable_mono_ty, "encoder_for target method was not a function");
         const actual_arg_tys = self.builder.program.types.span(encode_fn.args);
@@ -27660,7 +27807,7 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(encoding_ty, method_name);
+        const lookup = try self.methodLookupForTypeName(encoding_ty, method_name);
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, arg_tys, ret_ty);
         const parse_fn = self.builder.functionShape(callable_mono_ty, "parser_for target method was not a function");
         const actual_arg_tys = self.builder.program.types.span(parse_fn.args);
@@ -28144,8 +28291,8 @@ const BodyContext = struct {
         }
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
             Common.invariant("custom named parser type had no method owner");
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parser_for") orelse
-            Common.invariant("checked method registry is missing custom parser_for target"));
+        const lookup = self.builder.lookupMethodTargetByName(owner, "parser_for") orelse
+            Common.invariant("checked method registry is missing custom parser_for target");
         return switch (lookup.target.kind) {
             .structural => |kind| if (kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
             .procedure, .local_proc => lookup,
@@ -28172,7 +28319,7 @@ const BodyContext = struct {
             .parser => "parser_for",
             .encoder => "encoder_for",
         };
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, method_name) orelse return null);
+        const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse return null;
         return switch (lookup.target.kind) {
             .structural => |structural_kind| switch (kind) {
                 .parser => if (structural_kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
@@ -28503,7 +28650,7 @@ const BodyContext = struct {
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parse_record_field") orelse
+        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parse_record_field") orelse
             Common.invariant("checked parser encoding registry was missing parse_record_field"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
@@ -28594,7 +28741,7 @@ const BodyContext = struct {
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "skip_record_field") orelse
+        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "skip_record_field") orelse
             Common.invariant("checked parser encoding registry was missing skip_record_field"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
@@ -28638,7 +28785,7 @@ const BodyContext = struct {
 
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parse_tag_union") orelse
+        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parse_tag_union") orelse
             Common.invariant("checked parser encoding registry was missing parse_tag_union"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
@@ -28865,8 +29012,14 @@ const BodyContext = struct {
         const seen_entry = try seen.getOrPut(shape_node);
         if (seen_entry.found_existing) return false;
 
-        if (self.customCodecLookupAtNode(shape_node, kind)) |lookup| {
-            return try self.prepareCustomCodecCall(boundary_expr, kind, shape_node, boundary_callable_node, lookup);
+        if (self.customCodecLookupAtNode(shape_node, kind)) |raw_lookup| {
+            return try self.prepareCustomCodecCall(
+                boundary_expr,
+                kind,
+                shape_node,
+                boundary_callable_node,
+                try self.withLocalProcContext(raw_lookup),
+            );
         }
 
         if (kind == .parser and self.graphNodeIsBuiltinTry(shape_node)) {
@@ -28951,8 +29104,8 @@ const BodyContext = struct {
         }
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
             Common.invariant("custom named encoder_for type had no method owner");
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "encoder_for") orelse
-            Common.invariant("checked method registry is missing custom encoder_for target"));
+        const lookup = self.builder.lookupMethodTargetByName(owner, "encoder_for") orelse
+            Common.invariant("checked method registry is missing custom encoder_for target");
         return switch (lookup.target.kind) {
             .structural => |kind| if (kind == .encoder) null else Common.invariant("encoder_for lookup resolved to a different structural target"),
             .procedure, .local_proc => lookup,
@@ -29114,7 +29267,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         err_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const lookup = self.methodLookupForTypeName(encoding_ty, "invalid_value");
+        const lookup = try self.methodLookupForTypeName(encoding_ty, "invalid_value");
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{ encoding_ty, state_ty }, err_ty);
         const invalid_fn = self.builder.functionShape(callable_mono_ty, "invalid_value target method was not a function");
         const arg_tys = self.builder.program.types.span(invalid_fn.args);
@@ -29330,7 +29483,7 @@ const BodyContext = struct {
                     if (planned.boundary != boundary_index) continue;
                     if (self.graph.sameClass(planned.node, raw_node)) return;
                 }
-                const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(
+                const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(
                     .{ .builtin = .list },
                     "is_eq",
                 ) orelse Common.invariant("checked method registry is missing owned equality target"));
@@ -29563,7 +29716,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
             Common.invariant(D.owned_missing_owner_msg);
-        const lookup = self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, ctx.method_name) orelse
+        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, ctx.method_name) orelse
             Common.invariant(D.owned_missing_target_msg));
 
         const callee = if (comptime D == EqDeriver) planned: {
@@ -33694,9 +33847,87 @@ const BodyContext = struct {
         view: ModuleView,
         binder: checked.PatternBinderId,
         expr: checked.CheckedExprId,
-    ) DraftLocalProcContextId {
-        return self.local_proc_contexts.get(.{ .module = view.key.bytes, .binder = binder, .expr = expr }) orelse
+    ) Allocator.Error!DraftLocalProcContextId {
+        const address = DraftLocalProcAddress{ .module = view.key.bytes, .binder = binder, .expr = expr };
+        if (self.local_proc_contexts.get(address)) |context| return context;
+
+        const restored = self.restored_local_proc_scope orelse
             Common.invariant("local procedure use reached Monotype before its declaration context");
+        var context_anchor: ?checked.CheckedStatementId = null;
+        for (view.method_registry.entries) |entry| switch (entry.target.kind) {
+            .local_proc => |local| {
+                if (local.binder != binder or local.expr != expr) continue;
+                if (context_anchor) |existing| {
+                    if (existing != local.context_anchor) {
+                        Common.invariant("restored local procedure had conflicting checked declaration anchors");
+                    }
+                } else context_anchor = local.context_anchor;
+            },
+            .procedure, .structural => {},
+        };
+
+        const declaration = DraftLocalProcDeclaration{
+            .module = view.key.bytes,
+            .binder = binder,
+            .expr = expr,
+            .context_anchor = context_anchor,
+        };
+        const context_id: DraftLocalProcContextId = @enumFromInt(@as(u32, @intCast(self.draft.local_proc_contexts.items.len)));
+        const entries = try self.allocator.dupe(LexicalBinderEntry, restored.entries);
+        self.draft.local_proc_contexts.append(self.allocator, .{
+            .declaration = declaration,
+            .lexical_owner = self.draft.current_owner,
+            .owner_template = self.owner_template,
+            .base_key = restored.base_key,
+            .restored_specialization_key = restoredLocalProcUseContextKey(restored.base_key, restored.source_context_digest, binder),
+            .entries = entries,
+            .evidence = self.restoredLocalProcDeclarationEvidence(view, expr),
+        }) catch |err| {
+            self.allocator.free(entries);
+            return err;
+        };
+        try self.local_proc_contexts.put(address, context_id);
+        return context_id;
+    }
+
+    fn restoredLocalProcDeclarationEvidence(
+        self: *BodyContext,
+        view: ModuleView,
+        expr: checked.CheckedExprId,
+    ) EvidenceChain {
+        var site: ?checked.NestedProcSite = null;
+        for (view.nested_proc_sites.sites) |candidate| {
+            if (candidate.checked_expr == null or candidate.checked_expr.? != expr) continue;
+            if (!names.procedureTemplateRefEql(candidate.owner_template, self.owner_template)) continue;
+            if (site != null) Common.invariant("restored local procedure matched multiple checked nested sites");
+            site = candidate;
+        }
+        const nested_site = site orelse
+            Common.invariant("restored local procedure had no checked nested site");
+        const wanted: LexicalDispatchScope = switch (nested_site.lexical_scope) {
+            .root => .root,
+            .generalized => |scope_id| blk: {
+                const raw_scope = @intFromEnum(scope_id);
+                if (raw_scope >= view.templates.dispatch_scopes.len) {
+                    Common.invariant("restored local procedure nested site named an unknown evidence scope");
+                }
+                const scope = view.templates.dispatch_scopes[raw_scope];
+                break :blk if (scope.checked_expr == expr)
+                    (if (scope.parent) |parent| .{ .generalized = parent } else .root)
+                else
+                    .{ .generalized = scope_id };
+            },
+        };
+
+        var chain: ?*const EvidenceChain = &self.evidence;
+        while (chain) |frame| : (chain = frame.parent) {
+            if (names.procedureTemplateRefEql(frame.scope.owner, self.owner_template) and
+                std.meta.eql(frame.scope.lexical, wanted))
+            {
+                return frame.*;
+            }
+        }
+        Common.invariant("restored local procedure evidence omitted its checked lexical parent");
     }
 
     fn localProcBinder(self: *BodyContext, pattern_id: checked.CheckedPatternId) checked.PatternBinderId {
@@ -34423,7 +34654,7 @@ const BodyContext = struct {
         const expected = try self.lowerExpr(conversion);
         if (methodOwnerFromType(&self.builder.program.types, entry.ty)) |owner| {
             if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
-                const lookup = self.withLocalProcContext(raw_lookup);
+                const lookup = try self.withLocalProcContext(raw_lookup);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_fn = target_ctx.checkedFunctionType(lookup.target.callable_ty);
@@ -35383,6 +35614,19 @@ fn restoredConstFnContextKey(
     hasher.update(&source_fn_key.bytes);
     var fn_id_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_id));
     hasher.update(std.mem.asBytes(&fn_id_bytes));
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn restoredLocalProcUseContextKey(
+    restored_fn_key: names.TypeDigest,
+    source_contexts: names.TypeDigest,
+    binder: checked.PatternBinderId,
+) names.TypeDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update("roc.monotype.restored_local_proc_context");
+    hasher.update(&restored_fn_key.bytes);
+    hasher.update(&source_contexts.bytes);
+    hashU32(&hasher, @intFromEnum(binder));
     return .{ .bytes = hasher.finalResult() };
 }
 

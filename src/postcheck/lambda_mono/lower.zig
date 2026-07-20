@@ -940,9 +940,14 @@ const Lowerer = struct {
     ) Allocator.Error!Ast.ExprId {
         const captures = self.solved.types.captureSpan(capture_span);
         const fields = switch (self.program.types.get(capture_ty)) {
-            .capture_record => |fields| self.program.types.captureFieldSpan(fields),
+            .capture_record => |field_span| try GuardedList.dupe(
+                self.allocator,
+                Type.CaptureField,
+                self.program.types.captureFieldSpan(field_span),
+            ),
             else => Common.invariant("callable capture payload was not a capture record"),
         };
+        defer self.allocator.free(fields);
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
         if (captures.len != capture_operands.len) {
             Common.invariant("function reference capture operand count differed from lifted function captures");
@@ -954,7 +959,7 @@ const Lowerer = struct {
         defer self.allocator.free(values);
         for (0..captures.len) |i| {
             const capture = captures[i];
-            const field = GuardedList.at(fields, i);
+            const field = fields[i];
             const operand = GuardedList.at(capture_operands, i);
             if (capture.capture_id != field.capture_id) {
                 Common.invariant("callable capture payload fields differed from captured locals");
