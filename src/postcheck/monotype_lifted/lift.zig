@@ -2356,6 +2356,8 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -2501,6 +2503,8 @@ test "capture finalization supplies the caller's active binder local" {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts

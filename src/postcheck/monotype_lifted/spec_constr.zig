@@ -9136,6 +9136,8 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
