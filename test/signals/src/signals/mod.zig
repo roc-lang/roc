@@ -14,6 +14,7 @@ pub const effects_runtime = @import("effects_runtime.zig");
 pub const engine = @import("engine.zig");
 pub const engine_contract = @import("engine_contract.zig");
 pub const engine_metrics = @import("engine_metrics.zig");
+pub const engine_scratch = @import("engine_scratch.zig");
 pub const erased_calls = @import("erased_calls.zig");
 pub const host_value_registry = @import("host_value_registry.zig");
 pub const host_values = @import("host_values.zig");
@@ -36,6 +37,7 @@ test {
     std.testing.refAllDecls(engine);
     std.testing.refAllDecls(engine_contract);
     std.testing.refAllDecls(engine_metrics);
+    std.testing.refAllDecls(engine_scratch);
     std.testing.refAllDecls(host_value_registry);
     std.testing.refAllDecls(identity_table);
     std.testing.refAllDecls(render);
