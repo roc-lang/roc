@@ -286,6 +286,95 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: boolean true", .source = "True", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: boolean false", .source = "False", .expected = .{ .inspect_str = "False" } },
     .{ .name = "inspect: string literal", .source = "\"hello\"", .expected = .{ .inspect_str = "\"hello\"" } },
+    .{ .name = "inspect: standalone callable syntax", .source = "|value| value", .expected = .{ .inspect_str = "<function>" } },
+    .{
+        .name = "inspect: divergent method equality operand preserves producer sequencing",
+        .source = "({ value: { crash \"method equality operand must run\" } }).value == 0",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "inspect: divergent type dispatch argument preserves producer sequencing",
+        .source = "List.len({ crash \"type dispatch argument must run\" })",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "inspect: pure record field callable may elide construction",
+        .source =
+        \\{
+        \\    identity : I64 -> I64
+        \\    identity = |value| value
+        \\    { callable: identity }.callable
+        \\}
+        ,
+        .expected = .{ .inspect_str = "<function>" },
+    },
+    .{
+        .name = "inspect: effectful record field callable evaluates field",
+        .source =
+        \\{
+        \\    identity : I64 -> I64
+        \\    identity = |value| value
+        \\    { callable: {
+        \\        crash "record callable field must be evaluated"
+        \\        identity
+        \\    } }.callable
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "inspect: pure block returning callable is evaluated",
+        .source =
+        \\{
+        \\    identity : I64 -> I64
+        \\    identity = |value| value
+        \\    {}
+        \\    identity
+        \\}
+        ,
+        .expected = .{ .inspect_str = "<function>" },
+    },
+    .{
+        .name = "inspect: block returning callable still evaluates effects",
+        .source =
+        \\{
+        \\    identity : I64 -> I64
+        \\    identity = |value| value
+        \\    crash "callable-producing block must be evaluated"
+        \\    identity
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "inspect: pure call returning callable is evaluated",
+        .source =
+        \\{
+        \\    identity : I64 -> I64
+        \\    identity = |value| value
+        \\    make : () -> (I64 -> I64)
+        \\    make = || identity
+        \\    make()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "<function>" },
+    },
+    .{
+        .name = "inspect: call returning callable is not skipped",
+        .source =
+        \\{
+        \\    identity : I64 -> I64
+        \\    identity = |value| value
+        \\    make : () -> (I64 -> I64)
+        \\    make = || {
+        \\        crash "callable-producing call must be evaluated"
+        \\        identity
+        \\    }
+        \\    make()
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
     .{ .name = "inspect: empty string literal", .source = "\"\"", .expected = .{ .inspect_str = "\"\"" } },
     .{
         .name = "inspect: top-level callable result from compile-time evaluation",
@@ -381,6 +470,36 @@ const core_tests = [_]TestCase{
         \\main = add_one(10) + (table.f)(20) + (table.nested.g)(9)
         ,
         .expected = .{ .inspect_str = "42.0" },
+    },
+    .{
+        .name = "inspect: noncapturing compile-time callable restores dispatch evidence",
+        .source_kind = .module,
+        .source =
+        \\make_same = |_| |x| x == x
+        \\
+        \\same = make_same({})
+        \\
+        \\main = same({ value: 42 })
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "inspect: noncapturing compile-time callable restores attached-method target",
+        .source_kind = .module,
+        .source =
+        \\Container(a) := [Value(a)].{
+        \\    add1 = |container| container.map(|value| value + 1.I64)
+        \\
+        \\    map : Container(a), (a -> b) -> Container(b)
+        \\    map = |Value(value), transform| Value(transform(value))
+        \\}
+        \\
+        \\make_increment = |_| |container| container.add1()
+        \\increment = make_increment({})
+        \\
+        \\main = increment(Container.Value(41.I64))
+        ,
+        .expected = .{ .inspect_str = "Value(42)" },
     },
     .{
         .name = "inspect: numeric default specialization remains replaceable until constrained",
@@ -1424,6 +1543,16 @@ const core_tests = [_]TestCase{
     .{ .name = "inspect: record with list inequality unequal length regression", .source = "{ a: [1] } != { a: [1, 2] }", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: record with list equality equal singleton regression", .source = "{ a: [1] } == { a: [1] }", .expected = .{ .inspect_str = "True" } },
     .{ .name = "inspect: record with list equality equal empty regression", .source = "{ a: [] } == { a: [] }", .expected = .{ .inspect_str = "True" } },
+    .{
+        .name = "inspect: unresolved local empty list equality regression",
+        .source =
+        \\{
+        \\    xs = []
+        \\    xs == []
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
 
     // Typed lambdas and captures from the old eval suite
     .{ .name = "inspect: typed simple lambda increment", .source = "(|x| x + 1.I64)(5.I64)", .expected = .{ .inspect_str = "6" } },
@@ -2476,6 +2605,45 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        .name = "inspect: branch state merge before early return",
+        .source =
+        \\{
+        \\    f = |flag| {
+        \\        var $prefix = "before"
+        \\        suffix = if flag {
+        \\            $prefix = "changed"
+        \\            return "early"
+        \\            "unreachable"
+        \\        } else {
+        \\            "late"
+        \\        }
+        \\        Str.concat($prefix, suffix)
+        \\    }
+        \\    f(True)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"early\"" },
+    },
+    .{
+        .name = "inspect: infinite loop has no synthetic false return path",
+        .source =
+        \\{
+        \\    f = |flag| {
+        \\        var $state = "initial"
+        \\        while True {
+        \\            if flag {
+        \\                return "done"
+        \\            } else {
+        \\                $state = Str.concat($state, "x")
+        \\            }
+        \\        }
+        \\    }
+        \\    f(True)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"done\"" },
+    },
+    .{
         .name = "inspect: lambda list param calling List.len",
         .source =
         \\{
@@ -3231,6 +3399,27 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"42\"" },
+    },
+    .{
+        .name = "inspect: polymorphic wrapper reserves nominal to_inspect before freeze",
+        .source_kind = .module,
+        .source =
+        \\Color := [Red, Green].{
+        \\    to_inspect : Color -> Str
+        \\    to_inspect = |color| match color {
+        \\        Red => "Color::Red"
+        \\        Green => "Color::Green"
+        \\    }
+        \\}
+        \\
+        \\main = {
+        \\    show = |x| Str.inspect(x)
+        \\    red : Color
+        \\    red = Red
+        \\    show(red)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Color::Red\"" },
     },
     .{
         .name = "inspect: polymorphic additional specialization via List.append",
@@ -4584,6 +4773,23 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(5, 108)" },
     },
     .{
+        .name = "inspect: generic dispatch preserves each capturing local method context",
+        .source_kind = .module,
+        .source =
+        \\make = |offset| {
+        \\    Local := [Local(U64)].{
+        \\        get : Local -> U64
+        \\        get = |Local.Local(n)| n + offset
+        \\    }
+        \\    read = |value| value.get()
+        \\    read(Local.Local(5))
+        \\}
+        \\
+        \\main = (make(10), make(20))
+        ,
+        .expected = .{ .inspect_str = "(15, 25)" },
+    },
+    .{
         .name = "inspect: same-named block-local attached methods keep distinct nominal owners",
         .source_kind = .module,
         .source =
@@ -4938,6 +5144,25 @@ const core_tests = [_]TestCase{
         \\        }
         \\        $sum = $sum + $i
         \\        $i = $i + 1
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "6.0" },
+    },
+    .{
+        .name = "inspect: final conditional break preserves while continuation",
+        .source =
+        \\{
+        \\    var $i = 1
+        \\    var $sum = 0
+        \\    while $i <= 5 {
+        \\        if $i == 4 {
+        \\            break
+        \\        } else {
+        \\            $sum = $sum + $i
+        \\            $i = $i + 1
+        \\        }
         \\    }
         \\    $sum
         \\}

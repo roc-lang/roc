@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Issue 10077: package docs hide private modules and private type declarations
+description=Issue 10077: package docs hide private mods and private type declarations
 type=docs
 ~~~
 # SOURCE
@@ -32,10 +32,10 @@ Util :: {}
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "Date")
-    (package "module")
-    (kind type_module)
+    (package "mod")
+    (kind type_mod)
     (entry
       (name "Date")
       (kind opaque)
@@ -43,10 +43,10 @@ Util :: {}
       (doc "A calendar date.")
     )
   )
-  (module
+  (mod
     (name "Time")
-    (package "module")
-    (kind type_module)
+    (package "mod")
+    (kind type_mod)
     (doc "A time of day.")
     (entry
       (name "Time")
