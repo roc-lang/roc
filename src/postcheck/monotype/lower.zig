@@ -38531,20 +38531,18 @@ test "body draft core ownership distinguishes sibling materializations" {
     var draft = BodyDraftStore.init(allocator);
     defer draft.deinit();
 
-    const ty: DraftTypeCell = .{ .sealed = @enumFromInt(0) };
-    var symbols = Common.SymbolGen{};
     const first_scope = try draft.enterOwner(.{ .draft_fn = first_fn });
-    const first_local = try draft.addLocal(symbols.fresh(), ty, null, null);
-    try std.testing.expect(draft.currentOwnerOwnsCore(.locals, @intFromEnum(first_local)));
+    const first_literal = try draft.addStringLiteral("first");
+    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(first_literal)));
 
     const second_scope = try draft.enterOwner(.{ .draft_fn = second_fn });
-    try std.testing.expect(!draft.currentOwnerOwnsCore(.locals, @intFromEnum(first_local)));
-    const second_local = try draft.addLocal(symbols.fresh(), ty, null, null);
-    try std.testing.expect(draft.currentOwnerOwnsCore(.locals, @intFromEnum(second_local)));
+    try std.testing.expect(!draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(first_literal)));
+    const second_literal = try draft.addStringLiteral("second");
+    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(second_literal)));
     second_scope.leave();
 
-    try std.testing.expect(draft.currentOwnerOwnsCore(.locals, @intFromEnum(first_local)));
-    try std.testing.expect(!draft.currentOwnerOwnsCore(.locals, @intFromEnum(second_local)));
+    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(first_literal)));
+    try std.testing.expect(!draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(second_literal)));
     first_scope.leave();
 }
 
