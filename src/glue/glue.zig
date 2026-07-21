@@ -2458,7 +2458,7 @@ const TypeTable = struct {
                 // Preserve the nominal application and open its declaration
                 // below so the generated representation retains its backing
                 // tag union instantiated with these arguments.
-                .try_ => {},
+                .try_, .iter => {},
                 .dict,
                 .set,
                 .crypto_sha256_digest,

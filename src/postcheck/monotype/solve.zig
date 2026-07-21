@@ -115,10 +115,30 @@ pub const InstNamed = struct {
     builtin_owner: ?static_dispatch.BuiltinOwner,
     args: []NodeId,
     backing: ?InstBacking,
+    /// Graph-owned provenance for an iterator representation minted while
+    /// relations are still being produced. Its durable `generated` digest is
+    /// computed only when this graph is sealed, from the final component
+    /// types. Imported finished Monotypes have this null and already carry
+    /// their producer digest in `def.generated`.
+    generated_iterator: ?InstGeneratedIterator = null,
     /// Declared field order for a nominal/opaque record backing (empty
     /// otherwise). Padding field types are graph nodes so sealing maps them to
     /// immutable type ids with the rest of the named type.
     declared_order: []const InstDeclaredField = &.{},
+};
+
+pub const InstGeneratedIterator = struct {
+    callable_evidence: ?names.TypeDigest,
+    public_source: InstIteratorPublicSource,
+};
+
+pub const InstIteratorPublicSource = struct {
+    named_type: Type.NamedType,
+    def: Type.TypeDef,
+    kind: Type.NamedKind,
+    builtin_owner: static_dispatch.BuiltinOwner,
+    backing: InstBacking,
+    declared_order: []const InstDeclaredField,
 };
 
 /// Content of an instantiation-graph node. Rows carry explicit extension
@@ -370,6 +390,47 @@ pub const InstGraph = struct {
         return self.find(source_fn);
     }
 
+    pub fn findGeneratedIterator(
+        self: *InstGraph,
+        public_node: NodeId,
+        kind: Type.IteratorKind,
+        components: []const NodeId,
+        callable_evidence: ?names.TypeDigest,
+    ) ?NodeId {
+        const public_named = switch (self.content(public_node)) {
+            .named => |named| named,
+            else => return null,
+        };
+        if (public_named.args.len == 0) return null;
+        for (self.nodes.items, 0..) |node_content, raw_index| {
+            const candidate = switch (node_content) {
+                .named => |named| named,
+                else => continue,
+            };
+            const provenance = candidate.generated_iterator orelse continue;
+            if (candidate.def.iterator_kind != kind or
+                !optionalInstDigestEql(provenance.callable_evidence, callable_evidence) or
+                candidate.kind != public_named.kind or
+                candidate.def.module != public_named.def.module or
+                candidate.def.type_name != public_named.def.type_name or
+                candidate.def.source_decl != public_named.def.source_decl or
+                candidate.args.len != components.len + 1 or
+                self.find(candidate.args[0]) != self.find(public_named.args[0]))
+            {
+                continue;
+            }
+            var matches = true;
+            for (components, candidate.args[1..]) |component, stored| {
+                if (self.find(component) != self.find(stored)) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) return self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
+        }
+        return null;
+    }
+
     fn acceptsRelationMutation(self: *const InstGraph) bool {
         return self.relation_state == .producing;
     }
@@ -392,6 +453,54 @@ pub const InstGraph = struct {
         self.requireRelationProduction();
         try self.drainDirty();
         self.relation_state = .frozen;
+    }
+
+    /// Seal producer identities for graph-owned iterator representations only
+    /// after all type relations have been applied. Active TypeIds are used as
+    /// transient final views here; they remain graph-owned and never enter
+    /// completed Monotype output. All digests are computed before any node is
+    /// stamped, so dependency order cannot affect identity.
+    pub fn finalizeGeneratedIteratorIdentities(self: *InstGraph) Allocator.Error!void {
+        self.requireRelationProduction();
+        try self.drainDirty();
+        const Pending = struct { node: NodeId, digest: names.TypeDigest };
+        var pending = std.ArrayList(Pending).empty;
+        defer pending.deinit(self.allocator);
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+
+        for (self.nodes.items, 0..) |_, raw_index| {
+            const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            const named = switch (self.content(node)) {
+                .named => |named| named,
+                else => continue,
+            };
+            const provenance = named.generated_iterator orelse continue;
+            const active = try self.activeTypeViewForNode(node);
+            const shape = self.types.typeDigest(self.name_store, active);
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            hasher.update("roc.generated_iterator.final_identity");
+            hasher.update(&shape.bytes);
+            if (provenance.callable_evidence) |evidence| {
+                hasher.update("callable_evidence");
+                hasher.update(&evidence.bytes);
+            }
+            try pending.append(self.allocator, .{
+                .node = node,
+                .digest = .{ .bytes = hasher.finalResult() },
+            });
+        }
+        for (pending.items) |item| {
+            var named = switch (self.content(item.node)) {
+                .named => |named| named,
+                else => Common.invariant("generated iterator identity target stopped being named"),
+            };
+            named.def.generated = item.digest;
+            try self.setContent(item.node, .{ .named = named });
+        }
+        try self.drainDirty();
     }
 
     pub fn finalizesAsClosedEmptyTagUnion(self: *InstGraph, raw_node: NodeId) bool {
@@ -508,6 +617,19 @@ pub const InstGraph = struct {
         try self.class_member_tail.append(self.allocator, id);
         try self.registerRowParent(id, node_content);
         return id;
+    }
+
+    /// Reserve a graph node before constructing content that recursively
+    /// refers to it. The placeholder is graph-only and must be filled before
+    /// relation production can complete.
+    pub fn addRecursiveNode(
+        self: *InstGraph,
+        context: anytype,
+        comptime fill: fn (@TypeOf(context), NodeId) Allocator.Error!InstNode,
+    ) Allocator.Error!NodeId {
+        const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
+        try self.setContent(reserved, try fill(context, reserved));
+        return reserved;
     }
 
     pub fn nominalBackingNode(
@@ -1168,6 +1290,20 @@ pub const InstGraph = struct {
             .named => |named| named,
             else => Common.invariant("opaque public interface relation received a non-named public node"),
         };
+        if (Type.iteratorRelation(public_named, private_named) == .public_minted) {
+            const public_backing = public_named.backing orelse
+                Common.invariant("iterator interface relation received a public type without backing");
+            const private_backing = private_named.backing orelse
+                Common.invariant("iterator interface relation received a private type without backing");
+            if (public_backing.authority != .checked_public or private_backing.authority != .generated_private) {
+                Common.invariant("iterator interface relation received incorrect backing authority");
+            }
+            if (public_named.args.len == 0 or private_named.args.len == 0) {
+                Common.invariant("iterator interface relation received no public item argument");
+            }
+            try self.relateOpaqueChild(public_named.args[0], private_named.args[0], pending);
+            return;
+        }
         if (public_named.kind != .@"opaque" or private_named.kind != .@"opaque" or
             !std.meta.eql(public_named.def, private_named.def))
         {
@@ -1697,7 +1833,7 @@ pub const InstGraph = struct {
                         try self.unifyThroughBacking(right, right_content, left, pending);
                         return;
                     }
-                    switch (Type.iteratorRelation(left_named, right_named)) {
+                    switch (self.iteratorRelation(left_named, right_named)) {
                         .ordinary => {},
                         .public_minted => {
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
@@ -1816,6 +1952,33 @@ pub const InstGraph = struct {
                 else => Common.invariant("instantiation unified a zero-sized type with an incompatible type"),
             },
         }
+    }
+
+    fn iteratorRelation(self: *InstGraph, left: InstNamed, right: InstNamed) Type.IteratorRelation {
+        const base_relation = Type.iteratorRelation(left, right);
+        if (base_relation != .ordinary) return base_relation;
+        if (left.def.iterator_representation != .minted or right.def.iterator_representation != .minted) {
+            return .ordinary;
+        }
+        if (left.kind != right.kind or
+            left.def.module != right.def.module or
+            left.def.type_name != right.def.type_name or
+            left.def.source_decl != right.def.source_decl or
+            !instIteratorOwnerPair(left.builtin_owner, right.builtin_owner))
+        {
+            return .ordinary;
+        }
+        if (left.generated_iterator != null or right.generated_iterator != null) {
+            if (left.generated_iterator == null or right.generated_iterator == null) return .minted_join;
+            if (!optionalInstDigestEql(
+                left.generated_iterator.?.callable_evidence,
+                right.generated_iterator.?.callable_evidence,
+            )) return .minted_join;
+            if (left.def.iterator_kind != right.def.iterator_kind or
+                !self.sameNamedArgs(left.args, right.args)) return .minted_join;
+            return .ordinary;
+        }
+        return Type.iteratorRelation(left, right);
     }
 
     /// A named type met a structurally different type. Aliases are transparent
@@ -3096,6 +3259,25 @@ pub const GraphTypeFinals = struct {
         return try self.graph.types.addDeclaredFields(sealed);
     }
 };
+
+fn instIteratorOwnerPair(
+    left: ?static_dispatch.BuiltinOwner,
+    right: ?static_dispatch.BuiltinOwner,
+) bool {
+    const owner = left orelse right orelse return false;
+    if (!static_dispatch.isIteratorOwner(owner)) return false;
+    if (left) |left_owner| if (left_owner != owner) return false;
+    if (right) |right_owner| if (right_owner != owner) return false;
+    return true;
+}
+
+fn optionalInstDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
+    if (left) |left_digest| {
+        const right_digest = right orelse return false;
+        return std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes);
+    }
+    return right == null;
+}
 
 fn materializeUnresolved(variable: InstVariable) Type.Content {
     if (variable.numeric_default_phase) |phase| {

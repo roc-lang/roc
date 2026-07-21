@@ -131,6 +131,7 @@ pub fn isIteratorOwner(owner: BuiltinOwner) bool {
 /// Semantic identity assigned to compiler-owned iterator procedures while
 /// checking still has the defining builtin declaration in hand.
 pub const IteratorProcedureId = enum(u8) {
+    iter_iter,
     iter_next,
     iter_custom,
     iter_single,
@@ -161,6 +162,7 @@ pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?I
     const text = module.getIdent(ident);
 
     const exact = [_]struct { []const u8, IteratorProcedureId }{
+        .{ "Builtin.Iter.iter", .iter_iter },
         .{ "Builtin.Iter.next", .iter_next },
         .{ "Builtin.Iter.custom", .iter_custom },
         .{ "Builtin.Iter.single", .iter_single },
@@ -717,6 +719,7 @@ fn builtinOwnerForRegistryEntry(
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
     if (type_ident.eql(common.dict) or type_ident.eql(common.builtin_dict)) return .dict;
     if (type_ident.eql(common.set) or type_ident.eql(common.builtin_set)) return .set;
+    if (type_ident.eql(common.iter) or type_ident.eql(common.builtin_iter)) return .iter;
     if (type_ident.eql(common.builtin_encoding_field_names)) return .fields;
     if (type_ident.eql(common.builtin_encoding_field_name)) return .field;
     if (type_ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
@@ -1928,6 +1931,7 @@ pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .box => .box,
         .dict => .dict,
         .set => .set,
+        .iter => .iter,
         .fields => .fields,
         .field => .field,
         .parse_tag_union_spec => .parse_tag_union_spec,

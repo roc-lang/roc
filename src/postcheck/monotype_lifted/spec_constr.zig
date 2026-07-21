@@ -810,7 +810,7 @@ const Pass = struct {
                 const payloads = self.program.exprSpan(tag.payloads);
                 for (0..payloads.len) |index| try self.markArgUsesInExpr(fn_id, GuardedList.at(payloads, index), changed);
             },
-            .static_data_candidate => |candidate| try self.markArgUsesInExpr(fn_id, candidate.runtime_expr, changed),
+            .static_data_candidate => {},
             .nominal,
             .dbg,
             .expect,
@@ -1001,7 +1001,7 @@ const Pass = struct {
             => |items| try self.collectCallPatternsInExprSpan(owner, items),
             .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
-            .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.runtime_expr),
+            .static_data_candidate => {},
             .nominal,
             .dbg,
             .expect,
@@ -2459,7 +2459,7 @@ const Pass = struct {
             } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
-                .runtime_expr = (try self.cloneExprFresh(candidate.runtime_expr, renames)) orelse return null,
+                .runtime_expr = candidate.runtime_expr,
             } },
             .nominal => |backing| .{ .nominal = (try self.cloneExprFresh(backing, renames)) orelse return null },
             .fn_ref => |fn_ref| .{ .fn_ref = .{
@@ -2828,7 +2828,7 @@ const Pass = struct {
             => |items| try self.rewriteCallsInExprSpan(items, done),
             .record => |fields| try self.rewriteCallsInFieldExprSpan(fields, done),
             .tag => |tag| try self.rewriteCallsInExprSpan(tag.payloads, done),
-            .static_data_candidate => |candidate| try self.rewriteCallsInExpr(candidate.runtime_expr, done),
+            .static_data_candidate => {},
             .nominal,
             .dbg,
             .expect,
@@ -3407,7 +3407,7 @@ const Cloner = struct {
             => |items| try self.collectCallPatternsInExprSpan(owner, items),
             .record => |fields| try self.collectCallPatternsInFieldExprSpan(owner, fields),
             .tag => |tag| try self.collectCallPatternsInExprSpan(owner, tag.payloads),
-            .static_data_candidate => |candidate| try self.collectCallPatternsInExpr(owner, candidate.runtime_expr),
+            .static_data_candidate => {},
             .nominal,
             .dbg,
             .expect,
@@ -3668,7 +3668,7 @@ const Cloner = struct {
             => |items| try self.rewriteCallsWithValuesInExprSpan(items),
             .record => |fields| try self.rewriteCallsWithValuesInFieldExprSpan(fields),
             .tag => |tag| try self.rewriteCallsWithValuesInExprSpan(tag.payloads),
-            .static_data_candidate => |candidate| try self.rewriteCallsWithValuesInExpr(candidate.runtime_expr),
+            .static_data_candidate => {},
             .nominal,
             .dbg,
             .expect,
@@ -4058,13 +4058,10 @@ const Cloner = struct {
             },
             .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref),
             .static_data_candidate => |candidate| {
-                const runtime = try self.pass.arena.allocator().create(Value);
-                runtime.* = try self.cloneExprValueDemandingShape(candidate.runtime_expr);
-                return .{ .static_data_candidate = .{
-                    .ty = expr.ty,
+                return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .static_data_candidate = .{
                     .static_data = candidate.static_data,
-                    .runtime = runtime,
-                } };
+                    .runtime_expr = candidate.runtime_expr,
+                } } }) };
             },
             .tag => |tag| {
                 assertStructuralConstructionType(self.pass.program, expr.ty);
@@ -4410,7 +4407,7 @@ const Cloner = struct {
             } },
             .static_data_candidate => |candidate| .{ .static_data_candidate = .{
                 .static_data = candidate.static_data,
-                .runtime_expr = try self.cloneExpr(candidate.runtime_expr),
+                .runtime_expr = candidate.runtime_expr,
             } },
             .nominal => |backing| .{ .nominal = try self.cloneExpr(backing) },
             .let_ => |let_| try self.cloneLet(let_),

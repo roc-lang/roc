@@ -1627,6 +1627,7 @@ fn checkedTypeIsConcreteCompileTimeRootInner(
                     => break :blk true,
                     .bool_tag_union,
                     .try_nominal,
+                    .iterator,
                     .crypto_sha256_digest,
                     .crypto_sha256_hasher,
                     .crypto_blake3_digest,
@@ -2604,6 +2605,7 @@ pub const CheckedBuiltinNominal = enum {
     box,
     dict,
     set,
+    iter,
     parse_tag_union_spec,
     fields,
     field,
@@ -2641,6 +2643,7 @@ pub const CheckedBuiltinRuntimeEncoding = union(enum) {
     box,
     dict,
     set,
+    iterator,
     parse_tag_union_spec,
     fields,
     field,
@@ -2673,6 +2676,7 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
         .box => .box,
         .dict => .dict,
         .set => .set,
+        .iter => .iterator,
         .parse_tag_union_spec => .parse_tag_union_spec,
         .fields => .fields,
         .field => .field,
@@ -2782,6 +2786,7 @@ fn builtinNominalHasDeclarationBacking(builtin_nominal: CheckedBuiltinNominal) b
         => false,
         .bool_tag_union,
         .try_nominal,
+        .iterator,
         .crypto_sha256_digest,
         .crypto_sha256_hasher,
         .crypto_blake3_digest,
@@ -6893,6 +6898,7 @@ fn checkedBuiltinNominalForIdent(module_env: *const ModuleEnv, ident: base.Ident
     if (ident.eql(common.box) or ident.eql(common.builtin_box)) return .box;
     if (ident.eql(common.dict) or ident.eql(common.builtin_dict)) return .dict;
     if (ident.eql(common.set) or ident.eql(common.builtin_set)) return .set;
+    if (ident.eql(common.iter) or ident.eql(common.builtin_iter)) return .iter;
     if (ident.eql(common.builtin_encoding_parse_tag_union_spec)) return .parse_tag_union_spec;
     if (ident.eql(common.builtin_encoding_field_names)) return .fields;
     if (ident.eql(common.builtin_encoding_field_name)) return .field;
@@ -19064,6 +19070,10 @@ fn checkedTypeHasNoReachableCallableSlotsInner(
                         if (nominal.args.len != 2) checkedArtifactInvariant("builtin Dict nominal had non-binary args", .{});
                         if (!try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[0], active)) break :blk false;
                         break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, nominal.args[1], active);
+                    },
+                    .iter => {
+                        const backing = checked_types.nominalBackingTemplateForPayload(nominal) orelse break :blk true;
+                        break :blk try checkedTypeHasNoReachableCallableSlotsInner(checked_types, backing, active);
                     },
                 }
             }

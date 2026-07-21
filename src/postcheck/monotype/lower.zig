@@ -15,10 +15,12 @@ const solve = @import("solve.zig");
 const serialize = @import("serialize.zig");
 
 const InstGraph = solve.InstGraph;
+const InstNode = solve.InstNode;
 const NodeId = solve.NodeId;
 const InstTag = solve.InstTag;
 const InstField = solve.InstField;
 const InstBacking = solve.InstBacking;
+const InstNamed = solve.InstNamed;
 const InstDeclaredField = solve.InstDeclaredField;
 const InstVariable = solve.InstVariable;
 const GraphTypeFinals = solve.GraphTypeFinals;
@@ -347,7 +349,13 @@ fn enterEvidenceScope(
 
 fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_fn: NodeId) Allocator.Error!void {
     if (try graph.containsGeneratedPrivate(private_fn)) {
-        try graph.relateOpaqueInterface(public_fn, private_fn);
+        if (try graph.containsGeneratedPrivate(public_fn)) {
+            // Two exact generated requests join through normal graph
+            // unification, including the explicit minted-iterator relation.
+            try graph.unify(public_fn, private_fn);
+        } else {
+            try graph.relateOpaqueInterface(public_fn, private_fn);
+        }
     } else {
         try graph.unify(public_fn, private_fn);
     }
@@ -1012,7 +1020,6 @@ const Builder = struct {
     target_usize: base.target.TargetUsize,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
-    generated_iter_types: std.AutoHashMap([32]u8, Type.TypeId),
     spec_store: specialize.SpecBuilder,
     lowered_templates: std.AutoHashMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -1063,7 +1070,6 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
-            .generated_iter_types = std.AutoHashMap([32]u8, Type.TypeId).init(allocator),
             .spec_store = spec_store,
             .lowered_templates = std.AutoHashMap(Ast.FnId, LoweredTemplate).init(allocator),
             .lowered_nested_by_fn = std.AutoHashMap(Ast.FnId, Ast.SpecId).init(allocator),
@@ -1141,7 +1147,6 @@ const Builder = struct {
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
         self.spec_store.deinit();
-        self.generated_iter_types.deinit();
         self.type_cache.deinit();
         self.evidence_arena.deinit();
     }
@@ -2685,6 +2690,7 @@ const Builder = struct {
                             break :blk .{ .box = try self.lowerType(view, nominal.args[0]) };
                         },
                         .try_nominal,
+                        .iterator,
                         .parse_tag_union_spec,
                         .fields,
                         .field,
@@ -4772,6 +4778,7 @@ const Builder = struct {
         try self.prepareDraftDeferredExprs(body_draft, graph);
         try prepareDraftHostedBoundaries(body_draft, graph);
         try graph.drainDirty();
+        try graph.finalizeGeneratedIteratorIdentities();
         try graph.freezeRelations();
         var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
         defer impossibility_evaluator.deinit(self.allocator);
@@ -12176,6 +12183,7 @@ const BodyContext = struct {
                     return try self.graph.newNode(.{ .box = try self.instNode(nominal.args[0]) });
                 },
                 .try_nominal,
+                .iterator,
                 .parse_tag_union_spec,
                 .fields,
                 .field,
@@ -13645,7 +13653,12 @@ const BodyContext = struct {
         const ret_node = try lowered.ret_ty.toGraphNode(self.graph);
         const checked_ret_node = try self.lowerExprTypeNode(checked_expr_id);
         if (!self.graph.sameClass(ret_node, checked_ret_node)) {
-            Common.invariant("lowered call result cell differed from its checked expression graph class");
+            if (try self.graph.containsGeneratedPrivate(ret_node)) {
+                try self.graph.relateOpaqueInterface(checked_ret_node, ret_node);
+                try self.graph.drainDirty();
+            } else {
+                Common.invariant("lowered call result cell differed from its checked expression graph class");
+            }
         }
         const expr = try self.addExprWithTypeCell(lowered.ret_ty, lowered.data);
         return expr;
@@ -13927,6 +13940,35 @@ const BodyContext = struct {
             => |proc| proc.intrinsic == .str_inspect,
             .platform_required_proc => |proc| proc.procedure.intrinsic == .str_inspect,
             else => false,
+        };
+    }
+
+    fn iteratorProcedureForResolvedTarget(
+        self: *BodyContext,
+        target: checked.ResolvedValueId,
+    ) ?checked.IteratorProcedureId {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        return switch (self.view.resolved_refs.records[raw].ref) {
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            => |proc| proc.iterator_procedure,
+            .platform_required_proc => |proc| proc.procedure.iterator_procedure,
+            else => null,
+        };
+    }
+
+    fn iteratorProcedureForMethodTarget(
+        _: *BodyContext,
+        target: static_dispatch.MethodTarget,
+    ) ?checked.IteratorProcedureId {
+        return switch (target.kind) {
+            .procedure => |procedure| procedure.iterator_procedure,
+            .local_proc, .structural => null,
         };
     }
 
@@ -14712,6 +14754,460 @@ const BodyContext = struct {
 
     fn typeContainsGeneratedOpaqueEvidence(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
         return self.graph.containsGeneratedPrivate(try self.graph.importMono(ty));
+    }
+
+    fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .named => |named| switch (named.def.iterator_representation) {
+                .minted, .forced_dynamic => if (named.builtin_owner) |owner|
+                    static_dispatch.isIteratorOwner(owner)
+                else
+                    false,
+                .none => false,
+            },
+            else => false,
+        };
+    }
+
+    fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .named => |named| named.def.iterator_representation == .forced_dynamic,
+            else => false,
+        };
+    }
+
+    /// Build an exact iterator procedure request entirely in the active
+    /// instantiation graph. No durable Monotype TypeId is created until the
+    /// graph has received all evidence and is sealed.
+    fn generatedIteratorFunctionNode(
+        self: *BodyContext,
+        procedure: checked.IteratorProcedureId,
+        public_fn_node: NodeId,
+        request_fn_node: NodeId,
+        checked_args: []const checked.CheckedExprId,
+    ) Allocator.Error!?NodeId {
+        const public_fn = try self.graph.functionNodes(public_fn_node);
+        const request_fn = try self.graph.functionNodes(request_fn_node);
+        if (public_fn.args.len != request_fn.args.len) {
+            Common.invariant("iterator public/request function arity differed");
+        }
+        const expected_ret = if (self.isGeneratedIteratorEvidenceNode(request_fn.ret)) request_fn.ret else null;
+
+        if (expected_ret) |expected| switch (procedure) {
+            .iter_from_step => return try self.generatedIteratorConstructorFunctionNode(expected),
+            .range_done => return try self.graphFunctionNode(request_fn.args, expected),
+            else => {},
+        };
+
+        switch (procedure) {
+            .iter_iter => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("Iter.iter reached Monotype with an unexpected arity");
+                }
+                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
+                    return try self.graphFunctionNode(&.{request_fn.args[0]}, request_fn.args[0]);
+                }
+            },
+            .iter_next => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("Iter.next reached Monotype with an unexpected arity");
+                }
+                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0])) {
+                    return try self.graphFunctionNode(
+                        &.{request_fn.args[0]},
+                        try self.generatedIteratorStepReturnNode(request_fn.args[0]),
+                    );
+                }
+            },
+            .iter_custom => {
+                if (checked_args.len != 3 or request_fn.args.len != 3) {
+                    Common.invariant("Iter.custom reached Monotype with an unexpected arity");
+                }
+                if (self.expectedGeneratedIteratorProducerNode(expected_ret, .custom)) |expected| {
+                    if (self.isForcedDynamicIteratorNode(expected)) {
+                        return try self.graphFunctionNode(request_fn.args, expected);
+                    }
+                    const components = self.generatedIteratorComponentNodes(expected, 2);
+                    return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
+                }
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(
+                        .custom,
+                        public_fn.ret,
+                        &.{ request_fn.args[0], request_fn.args[2] },
+                        try self.callableArgumentEvidenceDigest(checked_args[2]),
+                    ),
+                );
+            },
+            .list_iter => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("List.iter reached Monotype with an unexpected arity");
+                }
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.list, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.list, public_fn.ret, &.{request_fn.args[0]}, null),
+                );
+            },
+            .iter_single => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("Iter.single reached Monotype with an unexpected arity");
+                }
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.single, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.single, public_fn.ret, &.{request_fn.args[0]}, null),
+                );
+            },
+            .iter_exclusive_range, .numeric_range_exclusive => {
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.range_exclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.range_exclusive, public_fn.ret, &.{}, null),
+                );
+            },
+            .iter_inclusive_range, .numeric_range_inclusive => {
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.range_inclusive, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.range_inclusive, public_fn.ret, &.{}, null),
+                );
+            },
+            .iter_map => return try self.generatedIteratorAdapterFunctionNode(.map, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
+            .iter_keep_if => return try self.generatedIteratorAdapterFunctionNode(.keep_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
+            .iter_drop_if => return try self.generatedIteratorAdapterFunctionNode(.drop_if, public_fn.ret, request_fn.args, checked_args, expected_ret, 1),
+            .iter_take_first => return try self.generatedIteratorAdapterFunctionNode(.take_first, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_drop_first => return try self.generatedIteratorAdapterFunctionNode(.drop_first, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_concat => {
+                if (checked_args.len != 2 or request_fn.args.len != 2) {
+                    Common.invariant("Iter.concat reached Monotype with an unexpected arity");
+                }
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.concat, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                if (self.isGeneratedIteratorEvidenceNode(request_fn.args[0]) or
+                    self.isGeneratedIteratorEvidenceNode(request_fn.args[1]))
+                {
+                    return try self.graphFunctionNode(
+                        request_fn.args,
+                        try self.generatedIteratorNode(.concat, public_fn.ret, request_fn.args, null),
+                    );
+                }
+            },
+            .iter_append => return try self.generatedIteratorAdapterFunctionNode(.append, public_fn.ret, request_fn.args, checked_args, expected_ret, null),
+            .iter_from_step, .range_done => {},
+        }
+        return null;
+    }
+
+    fn generatedIteratorAdapterFunctionNode(
+        self: *BodyContext,
+        kind: Type.IteratorKind,
+        public_ret: NodeId,
+        args: []const NodeId,
+        checked_args: []const checked.CheckedExprId,
+        expected_ret: ?NodeId,
+        callable_index: ?usize,
+    ) Allocator.Error!?NodeId {
+        if (checked_args.len != 2 or args.len != 2) {
+            Common.invariant("iterator adapter reached Monotype with an unexpected arity");
+        }
+        if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
+        if (!self.isGeneratedIteratorEvidenceNode(args[0])) return null;
+        const callable_evidence = if (callable_index) |index|
+            try self.callableArgumentEvidenceDigest(checked_args[index])
+        else
+            null;
+        return try self.graphFunctionNode(
+            args,
+            try self.generatedIteratorNode(kind, public_ret, args, callable_evidence),
+        );
+    }
+
+    fn expectedGeneratedIteratorProducerNode(
+        self: *BodyContext,
+        expected_ret: ?NodeId,
+        kind: Type.IteratorKind,
+    ) ?NodeId {
+        const expected = expected_ret orelse return null;
+        if (!self.isGeneratedIteratorEvidenceNode(expected)) return null;
+        if (self.isForcedDynamicIteratorNode(expected)) return expected;
+        const named = self.graph.content(expected).named;
+        return if (named.def.iterator_kind == kind) expected else null;
+    }
+
+    fn generatedIteratorExpectedProducerFunctionNode(
+        self: *BodyContext,
+        kind: Type.IteratorKind,
+        args: []const NodeId,
+        expected_ret: ?NodeId,
+    ) Allocator.Error!?NodeId {
+        const expected = self.expectedGeneratedIteratorProducerNode(expected_ret, kind) orelse return null;
+        if (self.isForcedDynamicIteratorNode(expected)) return try self.graphFunctionNode(args, expected);
+        return try self.graphFunctionNode(self.generatedIteratorComponentNodes(expected, args.len), expected);
+    }
+
+    fn generatedIteratorComponentNodes(
+        self: *BodyContext,
+        iterator: NodeId,
+        expected_components: usize,
+    ) []const NodeId {
+        const named = switch (self.graph.content(iterator)) {
+            .named => |named| named,
+            else => Common.invariant("generated iterator component nodes requested for a non-named type"),
+        };
+        if (named.args.len != expected_components + 1) {
+            Common.invariant("generated iterator producer did not contain its component count");
+        }
+        return named.args[1..];
+    }
+
+    fn generatedIteratorConstructorFunctionNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
+        const named = self.graph.content(iterator).named;
+        const backing = named.backing orelse
+            Common.invariant("generated iterator constructor requested a type without backing");
+        const len_name = try self.builder.program.names.internRecordFieldLabel("len_if_known");
+        const step_name = try self.builder.program.names.internRecordFieldLabel("step");
+        return try self.graphFunctionNode(&.{
+            try self.graph.recordFieldNode(backing.node, len_name),
+            try self.graph.recordFieldNode(backing.node, step_name),
+        }, iterator);
+    }
+
+    fn generatedIteratorStepReturnNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
+        const named = self.graph.content(iterator).named;
+        const backing = named.backing orelse
+            Common.invariant("generated iterator next requested a type without backing");
+        const step_name = try self.builder.program.names.internRecordFieldLabel("step");
+        const step = try self.graph.functionNodes(try self.graph.recordFieldNode(backing.node, step_name));
+        return step.ret;
+    }
+
+    fn generatedIteratorNode(
+        self: *BodyContext,
+        kind: Type.IteratorKind,
+        public_iterator: NodeId,
+        components: []const NodeId,
+        callable_evidence: ?names.TypeDigest,
+    ) Allocator.Error!NodeId {
+        const public_named = switch (self.graph.content(public_iterator)) {
+            .named => |named| named,
+            else => Common.invariant("generated iterator requested a non-named public type"),
+        };
+        const owner = public_named.builtin_owner orelse
+            Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
+        if (!static_dispatch.isIteratorOwner(owner) or public_named.args.len == 0) {
+            Common.invariant("generated iterator requested a non-public Iter source type");
+        }
+        const public_source: solve.InstIteratorPublicSource = if (public_named.generated_iterator) |generated|
+            generated.public_source
+        else blk: {
+            if (public_named.def.iterator_representation != .none or public_named.args.len != 1) {
+                Common.invariant("generated iterator source lacked its producer-owned public contract");
+            }
+            const public_backing = public_named.backing orelse
+                Common.invariant("generated iterator requested a public Iter without backing");
+            if (public_backing.authority != .checked_public) {
+                Common.invariant("generated iterator public source had private backing authority");
+            }
+            break :blk .{
+                .named_type = public_named.named_type,
+                .def = public_named.def,
+                .kind = public_named.kind,
+                .builtin_owner = owner,
+                .backing = public_backing,
+                .declared_order = public_named.declared_order,
+            };
+        };
+        if (self.graph.findGeneratedIterator(public_iterator, kind, components, callable_evidence)) |existing| {
+            return existing;
+        }
+
+        const Context = struct {
+            body: *BodyContext,
+            public_source: solve.InstIteratorPublicSource,
+            item_node: NodeId,
+            components: []const NodeId,
+            callable_evidence: ?names.TypeDigest,
+            kind: Type.IteratorKind,
+
+            fn fill(ctx: @This(), self_node: NodeId) Allocator.Error!InstNode {
+                const args = try ctx.body.graph.arena().alloc(NodeId, ctx.components.len + 1);
+                args[0] = ctx.item_node;
+                @memcpy(args[1..], ctx.components);
+                var def = ctx.public_source.def;
+                def.generated = null;
+                def.iterator_representation = .minted;
+                def.iterator_kind = ctx.kind;
+                def.iterator_depth = 0;
+                return .{ .named = .{
+                    .named_type = ctx.public_source.named_type,
+                    .def = def,
+                    .kind = ctx.public_source.kind,
+                    .builtin_owner = ctx.public_source.builtin_owner,
+                    .args = args,
+                    .backing = .{
+                        .node = try ctx.body.generatedIteratorBackingNode(
+                            ctx.public_source.backing.node,
+                            self_node,
+                            ctx.item_node,
+                        ),
+                        .use = ctx.public_source.backing.use,
+                        .authority = .generated_private,
+                    },
+                    .generated_iterator = .{
+                        .callable_evidence = ctx.callable_evidence,
+                        .public_source = ctx.public_source,
+                    },
+                    .declared_order = ctx.public_source.declared_order,
+                } };
+            }
+        };
+        return try self.graph.addRecursiveNode(Context{
+            .body = self,
+            .public_source = public_source,
+            .item_node = public_named.args[0],
+            .components = try self.graph.arena().dupe(NodeId, components),
+            .callable_evidence = callable_evidence,
+            .kind = kind,
+        }, Context.fill);
+    }
+
+    fn generatedIteratorBackingNode(
+        self: *BodyContext,
+        public_backing: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const public_fields = (try self.graph.recordNodes(public_backing)).fields;
+        const fields = try self.graph.arena().alloc(InstField, public_fields.len);
+        for (public_fields, fields) |field, *out| {
+            const text = self.builder.program.names.recordFieldLabelText(field.name);
+            out.* = .{
+                .name = field.name,
+                .ty = if (Ident.textEql(text, "step"))
+                    try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
+                else
+                    field.ty,
+            };
+        }
+        return try self.graph.newNode(.{ .record = .{
+            .fields = fields,
+            .ext = try self.graph.newNode(.empty_record),
+        } });
+    }
+
+    fn generatedIteratorStepFunctionNode(
+        self: *BodyContext,
+        public_step: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const step = try self.graph.functionNodes(public_step);
+        return try self.graphFunctionNode(
+            step.args,
+            try self.generatedIteratorStepResultNode(step.ret, self_node, item_node),
+        );
+    }
+
+    fn generatedIteratorStepResultNode(
+        self: *BodyContext,
+        public_result: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const public_tags = (try self.graph.tagRowNodes(public_result)).tags;
+        const tags = try self.graph.arena().alloc(InstTag, public_tags.len);
+        for (public_tags, tags) |tag, *out| {
+            const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
+            for (tag.payloads, payloads) |payload, *payload_out| {
+                payload_out.* = try self.generatedIteratorStepPayloadNode(tag.name, payload, self_node, item_node);
+            }
+            out.* = .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = payloads,
+            };
+        }
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
+    }
+
+    fn generatedIteratorStepPayloadNode(
+        self: *BodyContext,
+        tag_name: names.TagNameId,
+        public_payload: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+    ) Allocator.Error!NodeId {
+        const tag_text = self.builder.program.names.tagLabelText(tag_name);
+        if (!Ident.textEql(tag_text, "One") and !Ident.textEql(tag_text, "Skip")) return public_payload;
+        const public_fields = (try self.graph.recordNodes(public_payload)).fields;
+        const fields = try self.graph.arena().alloc(InstField, public_fields.len);
+        for (public_fields, fields) |field, *out| {
+            const field_text = self.builder.program.names.recordFieldLabelText(field.name);
+            out.* = .{
+                .name = field.name,
+                .ty = if (Ident.textEql(field_text, "rest"))
+                    self_node
+                else if (Ident.textEql(field_text, "item"))
+                    item_node
+                else
+                    field.ty,
+            };
+        }
+        return try self.graph.newNode(.{ .record = .{
+            .fields = fields,
+            .ext = try self.graph.newNode(.empty_record),
+        } });
+    }
+
+    fn callableArgumentEvidenceDigest(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+    ) Allocator.Error!?names.TypeDigest {
+        const expr = self.view.bodies.expr(expr_id);
+        return switch (expr.data) {
+            .closure => |closure| try self.closureArgumentEvidenceDigest(expr_id, closure),
+            .lambda => |lambda| self.lambdaArgumentEvidenceDigest(expr_id, lambda.args.len),
+            else => null,
+        };
+    }
+
+    fn lambdaArgumentEvidenceDigest(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        arg_count: usize,
+    ) names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("roc.generated_iterator.callable.lambda");
+        hasher.update(self.view.key.bytes[0..]);
+        hashU32(&hasher, @intFromEnum(expr_id));
+        hashU32(&hasher, @intCast(arg_count));
+        hashU32(&hasher, 0);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    fn closureArgumentEvidenceDigest(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        closure: anytype,
+    ) Allocator.Error!names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("roc.generated_iterator.callable.closure");
+        hasher.update(self.view.key.bytes[0..]);
+        hashU32(&hasher, @intFromEnum(expr_id));
+        hashU32(&hasher, @intFromEnum(closure.lambda));
+        hashU32(&hasher, @intCast(closure.captures.len));
+        for (closure.captures) |capture| {
+            hashU32(&hasher, @intFromEnum(capture.capture_id));
+            hashU32(&hasher, capture.scope_depth);
+            const binder = checkedCaptureBinder(self.view, capture.pattern);
+            const checked_type_key = self.view.types.rootKey(checkedBinderType(self.view, binder));
+            hasher.update(&checked_type_key.bytes);
+        }
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn relateCheckedTypeToMono(
@@ -19070,10 +19566,23 @@ const BodyContext = struct {
             call_ctx.current_entry_root = self.current_entry_root;
 
             const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
-            const fn_node = try call_ctx.instantiateCallNodeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
+            var fn_node = try call_ctx.instantiateCallNodeFromCallerAtType(source_fn_ty, self, checked_ret_ty, call.args, expected_ret_ty);
+            const iterator_procedure = self.iteratorProcedureForResolvedTarget(target);
+            if (iterator_procedure) |procedure| {
+                const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
+                if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                    try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
+                    try self.graph.unify(fn_node, private_fn_node);
+                    try self.graph.drainDirty();
+                    fn_node = private_fn_node;
+                }
+            }
             const fn_nodes = try self.graph.functionNodes(fn_node);
             try self.prepareExprSpanAtNodes(call.args, fn_nodes.args);
             if (try self.lowerDirectCallWithUninhabitedArgument(call.args, fn_nodes)) |lowered| return lowered;
+            if (iterator_procedure) |procedure| {
+                if (try self.lowerGeneratedIteratorNextCall(procedure, call.args, fn_nodes)) |lowered| return lowered;
+            }
             const source_fn_key = call_ctx.view.types.rootKey(source_fn_ty);
             if (self.resolvedTargetIsStrInspect(target)) {
                 const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
@@ -19138,6 +19647,51 @@ const BodyContext = struct {
                 .args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args),
             } },
         };
+    }
+
+    fn lowerGeneratedIteratorNextCall(
+        self: *BodyContext,
+        procedure: checked.IteratorProcedureId,
+        checked_args: []const checked.CheckedExprId,
+        fn_nodes: FunctionNodes,
+    ) Allocator.Error!?LoweredCall {
+        if (procedure != .iter_next) return null;
+        if (checked_args.len != 1 or fn_nodes.args.len != 1) {
+            Common.invariant("Iter.next reached Monotype with an unexpected arity");
+        }
+        const iterator_node = fn_nodes.args[0];
+        if (!self.isGeneratedIteratorEvidenceNode(iterator_node)) return null;
+
+        const iterator = try self.lowerExprAtTypeCell(
+            checked_args[0],
+            DraftTypeCell.fromGraphNode(iterator_node),
+        );
+        return .{
+            .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
+            .data = try self.lowerGeneratedIteratorNextData(iterator, iterator_node),
+        };
+    }
+
+    fn lowerGeneratedIteratorNextData(
+        self: *BodyContext,
+        iterator: DraftExprId,
+        iterator_node: NodeId,
+    ) Allocator.Error!BodyExprData {
+        const backing = self.graph.namedNodes(iterator_node).backing orelse
+            Common.invariant("generated iterator next requested a type without backing");
+        const step_name = try self.builder.program.names.internRecordFieldLabel("step");
+        const step_node = try self.graph.opaqueDefinitionFieldNode(backing.node, step_name);
+        const step = try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(step_node),
+            .{ .field_access = .{
+                .receiver = iterator,
+                .field = step_name,
+            } },
+        );
+        return .{ .call_value = .{
+            .callee = step,
+            .args = .empty(),
+        } };
     }
 
     fn lowerDirectCallWithUninhabitedArgument(
@@ -20812,7 +21366,13 @@ const BodyContext = struct {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
-        const runtime_expr = try self.restoreConstNodeAtNode(store_view, type_view, node, request_node);
+        const runtime_expr = try self.restoreConstNodeAtNodeWithStaticRoot(
+            store_view,
+            type_view,
+            node,
+            request_node,
+            const_locator,
+        );
         if (self.builder.static_data_literals and
             try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
             self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
@@ -20838,22 +21398,51 @@ const BodyContext = struct {
         node: checked.ConstNodeId,
         request_node: NodeId,
     ) Allocator.Error!DraftExprId {
+        return try self.restoreConstNodeAtNodeWithStaticRoot(
+            store_view,
+            type_view,
+            node,
+            request_node,
+            null,
+        );
+    }
+
+    fn restoreConstNodeAtNodeWithStaticRoot(
+        self: *BodyContext,
+        store_view: ModuleView,
+        type_view: ModuleView,
+        node: checked.ConstNodeId,
+        request_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
         const value = store_view.const_store.get(node);
         return switch (value) {
-            .fn_value => |fn_id| try self.restoreConstFnAtNode(store_view, fn_id, request_node),
+            .fn_value => |fn_id| try self.restoreConstFnAtNodeWithStaticRoot(
+                store_view,
+                fn_id,
+                request_node,
+                static_data_const_locator,
+            ),
             .tag, .record, .tuple => try self.addConstructorExprAtNode(
                 request_node,
-                try self.restoreConstDataAtNode(store_view, type_view, value, request_node),
+                try self.restoreConstDataAtNode(
+                    store_view,
+                    type_view,
+                    value,
+                    request_node,
+                    static_data_const_locator,
+                ),
             ),
             .nominal => |nominal| blk: {
                 const named = self.graph.namedNodes(request_node);
                 const backing = named.backing orelse
                     Common.invariant("ConstStore nominal restored with a named graph node that had no backing");
-                const backing_expr = try self.restoreConstNodeAtNode(
+                const backing_expr = try self.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     type_view,
                     nominal.backing,
                     backing.node,
+                    static_data_const_locator,
                 );
                 break :blk try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(request_node),
@@ -20862,7 +21451,13 @@ const BodyContext = struct {
             },
             else => try self.addExprWithTypeCell(
                 DraftTypeCell.fromGraphNode(request_node),
-                try self.restoreConstDataAtNode(store_view, type_view, value, request_node),
+                try self.restoreConstDataAtNode(
+                    store_view,
+                    type_view,
+                    value,
+                    request_node,
+                    static_data_const_locator,
+                ),
             ),
         };
     }
@@ -20873,6 +21468,7 @@ const BodyContext = struct {
         type_view: ModuleView,
         value: checked.ConstValue,
         request_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!BodyExprData {
         return switch (value) {
             .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
@@ -20893,13 +21489,15 @@ const BodyContext = struct {
                 type_view,
                 request_node,
                 items,
+                static_data_const_locator,
             ) },
             .box => |payload| blk: {
-                const child = try self.restoreConstNodeAtNode(
+                const child = try self.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     type_view,
                     payload,
                     try self.graph.boxElementNode(request_node),
+                    static_data_const_locator,
                 );
                 break :blk .{ .low_level = .{
                     .op = .box_box,
@@ -20911,12 +21509,14 @@ const BodyContext = struct {
                 type_view,
                 request_node,
                 items,
+                static_data_const_locator,
             ) },
             .record => |items| .{ .record = try self.restoreConstRecordAtNode(
                 store_view,
                 type_view,
                 request_node,
                 items,
+                static_data_const_locator,
             ) },
             .tag => |tag| .{ .tag = .{
                 .name = try self.builder.program.names.internTagLabel(tag.tag_name),
@@ -20925,6 +21525,7 @@ const BodyContext = struct {
                     type_view,
                     request_node,
                     tag,
+                    static_data_const_locator,
                 ),
             } },
             .nominal => Common.invariant("ConstStore nominal must be restored as an expression"),
@@ -20938,16 +21539,18 @@ const BodyContext = struct {
         type_view: ModuleView,
         request_node: NodeId,
         items: []const checked.ConstNodeId,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         const element_node = try self.graph.listElementNode(request_node);
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, 0..) |item, index| {
-            lowered[index] = try self.restoreConstNodeAtNode(
+            lowered[index] = try self.restoreConstNodeAtNodeWithStaticRoot(
                 store_view,
                 type_view,
                 item,
                 element_node,
+                static_data_const_locator,
             );
         }
         return try self.addExprSpan(lowered);
@@ -20959,17 +21562,19 @@ const BodyContext = struct {
         type_view: ModuleView,
         request_node: NodeId,
         items: []const checked.ConstNodeId,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         const item_nodes = try self.graph.tupleItemNodes(request_node);
         if (item_nodes.len != items.len) Common.invariant("ConstStore tuple length differs from checked graph type");
         const lowered = try self.allocator.alloc(DraftExprId, items.len);
         defer self.allocator.free(lowered);
         for (items, item_nodes, 0..) |item, item_node, index| {
-            lowered[index] = try self.restoreConstNodeAtNode(
+            lowered[index] = try self.restoreConstNodeAtNodeWithStaticRoot(
                 store_view,
                 type_view,
                 item,
                 item_node,
+                static_data_const_locator,
             );
         }
         return try self.addExprSpan(lowered);
@@ -20981,6 +21586,7 @@ const BodyContext = struct {
         type_view: ModuleView,
         request_node: NodeId,
         items: []const checked.ConstNodeId,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftSpan(DraftFieldExpr) {
         // ConstStore record children follow the lexicographic Monotype field
         // order used to build the LIR const plan, not the checked constructor's
@@ -21006,11 +21612,12 @@ const BodyContext = struct {
         for (items, fields, 0..) |item, field, index| {
             lowered[index] = .{
                 .name = field.name,
-                .value = try self.restoreConstNodeAtNode(
+                .value = try self.restoreConstNodeAtNodeWithStaticRoot(
                     store_view,
                     type_view,
                     item,
                     field.ty,
+                    static_data_const_locator,
                 ),
             };
         }
@@ -21023,16 +21630,18 @@ const BodyContext = struct {
         type_view: ModuleView,
         request_node: NodeId,
         tag: anytype,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftSpan(DraftExprId) {
         const mono_tag_name = try self.builder.program.names.internTagLabel(tag.tag_name);
         const lowered = try self.allocator.alloc(DraftExprId, tag.payloads.len);
         defer self.allocator.free(lowered);
         for (tag.payloads, 0..) |payload, index| {
-            lowered[index] = try self.restoreConstNodeAtNode(
+            lowered[index] = try self.restoreConstNodeAtNodeWithStaticRoot(
                 store_view,
                 type_view,
                 payload,
                 try self.graph.tagConstructionPayloadNode(request_node, mono_tag_name, index),
+                static_data_const_locator,
             );
         }
         return try self.addExprSpan(lowered);
@@ -21363,12 +21972,39 @@ const BodyContext = struct {
         fn_id: checked.ConstFnId,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftExprId {
+        return try self.restoreConstFnAtNodeWithStaticRoot(
+            store_view,
+            fn_id,
+            request_fn_node,
+            null,
+        );
+    }
+
+    fn restoreConstFnAtNodeWithStaticRoot(
+        self: *BodyContext,
+        store_view: ModuleView,
+        fn_id: checked.ConstFnId,
+        request_fn_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
+    ) Allocator.Error!DraftExprId {
         const raw = @intFromEnum(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
         const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
         switch (fn_value.fn_def) {
-            .parser_runtime => return try self.restoreConstParserRuntimeFnAtNode(store_view, fn_id, fn_value, request_fn_node),
-            .encoder_for_runtime => return try self.restoreConstEncoderForRuntimeFnAtNode(store_view, fn_id, fn_value, request_fn_node),
+            .parser_runtime => return try self.restoreConstParserRuntimeFnAtNode(
+                store_view,
+                fn_id,
+                fn_value,
+                request_fn_node,
+                static_data_const_locator,
+            ),
+            .encoder_for_runtime => return try self.restoreConstEncoderForRuntimeFnAtNode(
+                store_view,
+                fn_id,
+                fn_value,
+                request_fn_node,
+                static_data_const_locator,
+            ),
             else => {},
         }
         if (fn_value.evidence_frames.len == 0 or fn_value.evidence_frame_head == null) {
@@ -21387,6 +22023,7 @@ const BodyContext = struct {
                 fn_def,
                 request_fn_node,
                 retained_evidence,
+                static_data_const_locator,
             );
         }
         const restored_fn = try self.restoreConstFnTemplateAtNode(
@@ -21456,6 +22093,7 @@ const BodyContext = struct {
         fn_def: Ast.FnDef,
         request_fn_node: NodeId,
         retained_evidence: EvidenceChain,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
         var fn_ctx = try BodyContext.init(
@@ -21527,12 +22165,23 @@ const BodyContext = struct {
             initialized += 1;
         }
         for (fn_value.captures, 0..) |capture, index| {
-            captures[index].value = try fn_ctx.restoreConstNodeAtNode(
-                store_view,
-                fn_view,
-                capture.value,
-                captures[index].node,
-            );
+            captures[index].value = if (static_data_const_locator) |const_locator|
+                try fn_ctx.restoredStaticDataCandidateNodeAtNode(
+                    store_view,
+                    fn_view,
+                    capture.value,
+                    captures[index].node,
+                    const_locator,
+                    checkedBinderType(fn_view, constCaptureBinder(capture.id)),
+                    .allow,
+                )
+            else
+                try fn_ctx.restoreConstNodeAtNode(
+                    store_view,
+                    fn_view,
+                    capture.value,
+                    captures[index].node,
+                );
         }
 
         const capture_nested = switch (fn_def) {
@@ -21921,6 +22570,7 @@ const BodyContext = struct {
         fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         request_fn_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const runtime = switch (fn_value.fn_def) {
             .parser_runtime => |runtime| runtime,
@@ -21932,7 +22582,13 @@ const BodyContext = struct {
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
-        var source_captures = try self.builder.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, null);
+        var source_captures = try self.builder.bindConstSourceCaptures(
+            &fn_ctx,
+            store_view,
+            fn_view,
+            fn_value,
+            static_data_const_locator,
+        );
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = fn_view.bodies.expr(runtime.expr);
@@ -21977,7 +22633,16 @@ const BodyContext = struct {
             fn_ctx.setLocalCaptureId(local, parserEncodingCaptureId());
             encoding_let = .{
                 .local = local,
-                .value = try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node),
+                .value = if (static_data_const_locator) |const_locator|
+                    try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                        store_view,
+                        fn_view,
+                        node,
+                        encoding_node,
+                        const_locator,
+                    )
+                else
+                    try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node),
             };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
@@ -22190,6 +22855,7 @@ const BodyContext = struct {
         fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         request_fn_node: NodeId,
+        static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const runtime = switch (fn_value.fn_def) {
             .encoder_for_runtime => |runtime| runtime,
@@ -22201,7 +22867,13 @@ const BodyContext = struct {
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
-        var source_captures = try self.builder.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, null);
+        var source_captures = try self.builder.bindConstSourceCaptures(
+            &fn_ctx,
+            store_view,
+            fn_view,
+            fn_value,
+            static_data_const_locator,
+        );
         defer self.builder.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = fn_view.bodies.expr(runtime.expr);
@@ -22250,7 +22922,16 @@ const BodyContext = struct {
             fn_ctx.setLocalCaptureId(local, encoderForEncodingCaptureId());
             encoding_let = .{
                 .local = local,
-                .value = try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node),
+                .value = if (static_data_const_locator) |const_locator|
+                    try fn_ctx.restoreConstNodeAtNodeWithStaticRoot(
+                        store_view,
+                        fn_view,
+                        node,
+                        encoding_node,
+                        const_locator,
+                    )
+                else
+                    try fn_ctx.restoreConstNodeAtNode(store_view, fn_view, node, encoding_node),
             };
             break :blk try fn_ctx.addExprWithTypeCell(encoding_cell, .{ .local = local });
         } else try fn_ctx.lowerDispatchOperandAtNode(plan_args[0], encoding_node);
@@ -23833,7 +24514,7 @@ const BodyContext = struct {
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
 
-        const callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
+        var callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
         if (self.planUnexecutable(plan) == null) {
             const resolution = self.evidenceResolution(plan) orelse
                 Common.invariant("runtime method call had no StaticDispatchResolution evidence");
@@ -23842,6 +24523,15 @@ const BodyContext = struct {
                     const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
                     try relateFunctionRequestInterface(self.graph, target_node, callable_node);
                     try self.graph.drainDirty();
+                    if (try self.generatedIteratorMethodRequestNode(
+                        initial_lookup,
+                        target_node,
+                        callable_node,
+                        plan_args,
+                        expected_ret_ty,
+                    )) |private_node| {
+                        callable_node = private_node;
+                    }
                 },
                 .structural => {},
             }
@@ -23940,8 +24630,12 @@ const BodyContext = struct {
         _ = try checkedMonoRequestNode(self.graph, try self.lowerTypeNode(checked_ret_ty), plan_ret_node);
         try self.graph.drainDirty();
         const call_data = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
+        const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+            DraftTypeCell.fromGraphNode(plan_ret_node)
+        else
+            expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node);
         const call_expr = try self.addExprWithTypeCell(
-            expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node),
+            call_ret_cell,
             call_data,
         );
         return switch (plan.result_mode) {
@@ -24666,7 +25360,7 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-        const callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
+        var callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
             plan.callable_ty,
             plan.dispatcher,
             plan.dispatcher_ty,
@@ -24684,6 +25378,15 @@ const BodyContext = struct {
                     const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
                     try relateFunctionRequestInterface(self.graph, target_node, callable_node);
                     try self.graph.drainDirty();
+                    if (try self.generatedIteratorMethodRequestNode(
+                        lookup,
+                        target_node,
+                        callable_node,
+                        plan_args,
+                        expected_ret_ty,
+                    )) |private_node| {
+                        callable_node = private_node;
+                    }
                 },
                 .structural => {},
             }
@@ -25077,6 +25780,54 @@ const BodyContext = struct {
             try self.graph.drainDirty();
         }
         return target_node;
+    }
+
+    fn generatedIteratorMethodRequestNode(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        public_target_node: NodeId,
+        request_node: NodeId,
+        operands: []const static_dispatch.StaticDispatchOperand,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!?NodeId {
+        _ = expected_ret_ty;
+        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
+        const checked_args = try self.checkedExprDispatchOperands(operands) orelse return null;
+        defer self.allocator.free(checked_args);
+        const private_node = (try self.generatedIteratorFunctionNode(
+            procedure,
+            public_target_node,
+            request_node,
+            checked_args,
+        )) orelse return null;
+        try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
+        // Both sides are exact generated requests. Their iterator identities
+        // join through the graph's explicit minted-iterator relation; this is
+        // not a checked-public/private interface edge.
+        try self.graph.unify(request_node, private_node);
+        try self.graph.drainDirty();
+        return private_node;
+    }
+
+    fn checkedExprDispatchOperands(
+        self: *BodyContext,
+        operands: []const static_dispatch.StaticDispatchOperand,
+    ) Allocator.Error!?[]checked.CheckedExprId {
+        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
+        errdefer self.allocator.free(checked_args);
+        for (operands, checked_args) |operand, *checked_arg| {
+            checked_arg.* = switch (operand) {
+                .checked_expr => |expr| expr,
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => {
+                    self.allocator.free(checked_args);
+                    return null;
+                },
+            };
+        }
+        return checked_args;
     }
 
     fn methodTargetMonoTypeFromArgs(
@@ -33246,6 +33997,11 @@ const BodyContext = struct {
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (plan.dispatcher_arg_index >= plan_args.len) Common.invariant("iterator dispatch plan dispatcher argument index was outside the argument span");
 
+        const lookup = self.iteratorMethodLookup(plan);
+        if (try self.lowerGeneratedIteratorDispatch(lookup, plan, plan_args, loop_iterator, expected_ret_ty)) |generated| {
+            return generated;
+        }
+
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
@@ -33254,7 +34010,6 @@ const BodyContext = struct {
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
 
-        const lookup = self.iteratorMethodLookup(plan);
         const callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
         try relateFunctionRequestInterface(self.graph, target_node, callable_node);
@@ -33293,6 +34048,49 @@ const BodyContext = struct {
                 .args = try self.addExprSpan(args),
             } },
         );
+    }
+
+    fn lowerGeneratedIteratorDispatch(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        plan: static_dispatch.IteratorDispatchCall,
+        plan_args: []const static_dispatch.IteratorDispatchOperand,
+        loop_iterator: ?DraftTypedLocal,
+        expected_ret_ty: ?DraftTypeCell,
+    ) Allocator.Error!?DraftExprId {
+        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
+        if (procedure != .iter_iter and procedure != .iter_next) return null;
+
+        const dispatcher_node = try self.iteratorOperandNode(plan_args[plan.dispatcher_arg_index], loop_iterator);
+        if (!self.isGeneratedIteratorEvidenceNode(dispatcher_node)) return null;
+        try self.constrainTypeToCell(plan.dispatcher_ty, DraftTypeCell.fromGraphNode(dispatcher_node));
+
+        const iterator = try self.lowerIteratorOperandAtNode(
+            plan_args[plan.dispatcher_arg_index],
+            loop_iterator,
+            dispatcher_node,
+        );
+        switch (procedure) {
+            .iter_iter => {
+                if (expected_ret_ty) |expected| {
+                    try self.graph.unify(dispatcher_node, try expected.toGraphNode(self.graph));
+                    try self.graph.drainDirty();
+                }
+                return iterator;
+            },
+            .iter_next => {
+                const step_ret_node = try self.generatedIteratorStepReturnNode(dispatcher_node);
+                if (expected_ret_ty) |expected| {
+                    try self.graph.unify(step_ret_node, try expected.toGraphNode(self.graph));
+                    try self.graph.drainDirty();
+                }
+                return try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(step_ret_node),
+                    try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
+                );
+            },
+            else => unreachable,
+        }
     }
 
     fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.IteratorDispatchCall) MethodLookup {
@@ -36381,6 +37179,7 @@ fn nominalHasDeclarationBacking(nominal: checked.CheckedNominalType) bool {
             => false,
             .bool_tag_union,
             .try_nominal,
+            .iterator,
             .crypto_sha256_digest,
             .crypto_sha256_hasher,
             .crypto_blake3_digest,
@@ -36420,6 +37219,7 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .fields => .fields,
         .field => .field,
         .try_ => null,
+        .iter => .iter,
         .crypto_sha256_digest => .crypto_sha256_digest,
         .crypto_sha256_hasher => .crypto_sha256_hasher,
         .crypto_blake3_digest => .crypto_blake3_digest,
