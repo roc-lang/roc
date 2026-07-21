@@ -8415,10 +8415,10 @@ const CheckedSourceNodes = struct {
                 try self.markExprSpan(module, call.args, work);
             },
             .e_record => |record| {
+                try self.markExprSpan(module, record.exts, work);
                 for (module.sliceRecordFields(record.fields)) |field_idx| {
                     try self.markExpr(module.getRecordField(field_idx).value, work);
                 }
-                if (record.ext) |ext| try self.markExpr(ext, work);
             },
             .e_block => |block| {
                 try self.markStatementSpan(module, block.stmts, work);
@@ -10158,7 +10158,14 @@ const CheckedBodyPayloadCopier = struct {
             } },
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
-                .ext = if (record.ext) |ext| self.checkedExpr(ext) else null,
+                .ext = blk: {
+                    const exts = self.module.sliceExpr(record.exts);
+                    break :blk switch (exts.len) {
+                        0 => null,
+                        1 => self.checkedExpr(exts[0]),
+                        else => checkedArtifactInvariant("multiple record extensions reached checked-artifact publication before type checking support", .{}),
+                    };
+                },
             } },
             .e_empty_record => .empty_record,
             .e_block => |block| .{ .block = .{

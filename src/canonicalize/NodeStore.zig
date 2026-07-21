@@ -1275,14 +1275,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_record => {
             const p = payload.expr_record;
-            // Retrieve fields span and ext from span_with_node_data
-            const fields_ext = store.span_with_node_data.items.items[p.fields_ext_idx];
-            const ext = if (fields_ext.node == 0) null else @as(CIR.Expr.Idx, @enumFromInt(fields_ext.node));
-
             return CIR.Expr{
                 .e_record = .{
-                    .fields = .{ .span = .{ .start = fields_ext.start, .len = fields_ext.len } },
-                    .ext = ext,
+                    .fields = .{ .span = .{ .start = p.fields_start, .len = p.fields_len } },
+                    .exts = .{ .span = .{ .start = p.exts_start, .len = p.exts_len } },
                 },
             };
         },
@@ -2959,16 +2955,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_record => |e| {
             node.tag = .expr_record;
-            const fields_ext_idx: u32 = @intCast(store.span_with_node_data.len());
-            const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = e.fields.span.start,
-                .len = e.fields.span.len,
-                .node = ext_value,
-            });
-
             node.setPayload(.{ .expr_record = .{
-                .fields_ext_idx = fields_ext_idx,
+                .fields_start = e.fields.span.start,
+                .fields_len = e.fields.span.len,
+                .exts_start = e.exts.span.start,
+                .exts_len = e.exts.span.len,
             } });
         },
         .e_empty_record => {

@@ -255,6 +255,10 @@ pub const ScopeMap = struct {
                 }
             },
             .e_record => |record| {
+                const exts = module_env.store.sliceExpr(record.exts);
+                for (exts) |ext_idx| {
+                    try self.traverseExpr(module_env, ext_idx, scope_end, depth + 1);
+                }
                 const fields = module_env.store.sliceRecordFields(record.fields);
                 for (fields) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);

@@ -80,6 +80,45 @@ test "emit empty record" {
     try testing.expectEqualStrings("{}", emitter.getOutput());
 }
 
+test "emit record extensions in source order" {
+    const module_env = try createTestEnv(test_allocator, "{ ..r, ..s, value: 42 }");
+    defer destroyTestEnv(test_allocator, module_env);
+
+    var emitter = Emitter.init(test_allocator, module_env);
+    defer emitter.deinit();
+
+    const r_ident = try module_env.insertIdent(base.Ident.for_text("r"));
+    const r_pattern = try module_env.store.addPattern(.{ .assign = .{ .ident = r_ident } }, base.Region.zero());
+    const r_expr = try module_env.store.addExpr(.{ .e_lookup_local = .{ .pattern_idx = r_pattern } }, base.Region.zero());
+
+    const s_ident = try module_env.insertIdent(base.Ident.for_text("s"));
+    const s_pattern = try module_env.store.addPattern(.{ .assign = .{ .ident = s_ident } }, base.Region.zero());
+    const s_expr = try module_env.store.addExpr(.{ .e_lookup_local = .{ .pattern_idx = s_pattern } }, base.Region.zero());
+
+    const exts_start = module_env.store.scratchExprTop();
+    try module_env.store.addScratchExpr(r_expr);
+    try module_env.store.addScratchExpr(s_expr);
+    const exts = try module_env.store.exprSpanFrom(exts_start);
+
+    const value = try module_env.store.addExpr(.{ .e_num = .{
+        .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+        .kind = .i64,
+    } }, base.Region.zero());
+    const field_name = try module_env.insertIdent(base.Ident.for_text("value"));
+    const field = try module_env.store.addRecordField(.{ .name = field_name, .value = value }, base.Region.zero());
+    const fields_start = module_env.store.scratch.?.record_fields.top();
+    try module_env.store.scratch.?.record_fields.append(field);
+    const fields = try module_env.store.recordFieldSpanFrom(fields_start);
+
+    const record = try module_env.store.addExpr(.{ .e_record = .{
+        .fields = fields,
+        .exts = exts,
+    } }, base.Region.zero());
+
+    try emitter.emitExpr(record);
+    try testing.expectEqualStrings("{ ..r, ..s, value: 42 }", emitter.getOutput());
+}
+
 test "emit empty list" {
     const module_env = try createTestEnv(test_allocator, "[]");
     defer destroyTestEnv(test_allocator, module_env);

@@ -3438,7 +3438,7 @@ pub const BuildEnv = struct {
             .e_list => |list| try collectDbgRegionsInExprSpan(allocator, env, regions, list.elems),
             .e_tuple => |tuple| try collectDbgRegionsInExprSpan(allocator, env, regions, tuple.elems),
             .e_record => |record| {
-                if (record.ext) |ext| try collectDbgRegionsInExpr(allocator, env, regions, ext);
+                try collectDbgRegionsInExprSpan(allocator, env, regions, record.exts);
                 for (env.store.sliceRecordFields(record.fields)) |field_idx| {
                     try collectDbgRegionsInExpr(allocator, env, regions, env.store.getRecordField(field_idx).value);
                 }

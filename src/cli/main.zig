@@ -10050,7 +10050,7 @@ fn collectExpectBindingPatterns(
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },
             .e_record => |record| {
-                if (record.ext) |ext| try stack.append(allocator, ext);
+                try appendExprSpanForExpectBindings(env, allocator, &stack, record.exts);
                 for (env.store.sliceRecordFields(record.fields)) |field_idx| {
                     try stack.append(allocator, env.store.getRecordField(field_idx).value);
                 }

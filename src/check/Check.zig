@@ -1031,7 +1031,7 @@ const HoistSelectionTransaction = struct {
                 try self.stageExprDependenciesInternal(call.receiver, context);
                 try self.stageExprSpanDependencies(call.args, context);
             },
-            .e_record => |record| try self.stageRecordDependencies(record.fields, record.ext, context),
+            .e_record => |record| try self.stageRecordDependencies(record.fields, record.exts, context),
             .e_tag => |tag| try self.stageExprSpanDependencies(tag.args, context),
             .e_nominal => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
             .e_nominal_external => |nominal| try self.stageExprDependenciesInternal(nominal.backing_expr, context),
@@ -1152,10 +1152,10 @@ const HoistSelectionTransaction = struct {
     fn stageRecordDependencies(
         self: *HoistSelectionTransaction,
         fields: CIR.RecordField.Span,
-        ext: ?CIR.Expr.Idx,
+        exts: CIR.Expr.Span,
         context: *HoistedDependencyContext,
     ) Allocator.Error!void {
-        if (ext) |ext_expr| {
+        for (self.checker.cir.store.sliceExpr(exts)) |ext_expr| {
             try self.stageExprDependenciesInternal(ext_expr, context);
         }
         for (self.checker.cir.store.sliceRecordFields(fields)) |field_idx| {
@@ -2460,10 +2460,10 @@ fn markHoistInvalidatedExprChildren(
             try self.markHoistInvalidatedExprSpan(call.args, work);
         },
         .e_record => |record| {
+            try self.markHoistInvalidatedExprSpan(record.exts, work);
             for (self.cir.store.sliceRecordFields(record.fields)) |field_idx| {
                 try self.markHoistInvalidatedExpr(self.cir.store.getRecordField(field_idx).value, work);
             }
-            if (record.ext) |ext| try self.markHoistInvalidatedExpr(ext, work);
         },
         .e_block => |block| {
             try self.markHoistInvalidatedStatementSpan(block.stmts, work);
@@ -5775,7 +5775,7 @@ fn hoistedRootDependenciesAreKeptInternal(
         )) and
             (try self.hoistedRootDependenciesAreKeptInternal(call.receiver, context, keep_oracle)) and
             try self.hoistedRootExprSpanDependenciesAreKept(call.args, context, keep_oracle),
-        .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.ext, context, keep_oracle),
+        .e_record => |record| self.hoistedRootRecordDependenciesAreKept(record.fields, record.exts, context, keep_oracle),
         .e_tag => |tag| self.hoistedRootExprSpanDependenciesAreKept(tag.args, context, keep_oracle),
         .e_nominal => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
         .e_nominal_external => |nominal| self.hoistedRootDependenciesAreKeptInternal(nominal.backing_expr, context, keep_oracle),
@@ -5901,7 +5901,7 @@ fn hoistedExprAllowsStoredConst(
             try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
         .e_dispatch_call => |call| (try self.hoistedExprAllowsStoredConst(module, call.receiver, context)) and
             try self.hoistedExprSpanAllowsStoredConst(module, call.args, context),
-        .e_record => |record| self.hoistedRecordAllowsStoredConst(module, record.fields, record.ext, context),
+        .e_record => |record| self.hoistedRecordAllowsStoredConst(module, record.fields, record.exts, context),
         .e_tag => |tag| self.hoistedExprSpanAllowsStoredConst(module, tag.args, context),
         .e_nominal => |nominal| self.hoistedExprAllowsStoredConst(module, nominal.backing_expr, context),
         .e_nominal_external => |nominal| self.hoistedExprAllowsStoredConst(module, nominal.backing_expr, context),
@@ -6109,10 +6109,10 @@ fn hoistedRecordAllowsStoredConst(
     self: *Self,
     module: *const ModuleEnv,
     fields: CIR.RecordField.Span,
-    ext: ?CIR.Expr.Idx,
+    exts: CIR.Expr.Span,
     context: *HoistedDependencyContext,
 ) Allocator.Error!bool {
-    if (ext) |ext_expr| {
+    for (module.store.sliceExpr(exts)) |ext_expr| {
         if (!try self.hoistedExprAllowsStoredConst(module, ext_expr, context)) return false;
     }
     for (module.store.sliceRecordFields(fields)) |field_id| {
@@ -6512,11 +6512,11 @@ fn hoistedRootIfDependenciesAreKept(
 fn hoistedRootRecordDependenciesAreKept(
     self: *Self,
     fields: CIR.RecordField.Span,
-    ext: ?CIR.Expr.Idx,
+    exts: CIR.Expr.Span,
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
 ) Allocator.Error!bool {
-    if (ext) |ext_expr| {
+    for (self.cir.store.sliceExpr(exts)) |ext_expr| {
         if (!try self.hoistedRootDependenciesAreKeptInternal(ext_expr, context, keep_oracle)) return false;
     }
     for (self.cir.store.sliceRecordFields(fields)) |field_idx| {
@@ -11783,6 +11783,30 @@ fn checkStoredValueExpr(
     };
 }
 
+/// Type-check a record expression containing more than one spread.
+///
+/// Canonicalization preserves every spread in source order. The typing rule for
+/// combining those rows is intentionally left for the record-spread type-checking
+/// change; do not collapse the list to the legacy single-update behavior here.
+fn checkRecordWithMultipleExtensions(
+    self: *Self,
+    fields: CIR.RecordField.Span,
+    extensions: []const CIR.Expr.Idx,
+    expr_var: Var,
+    env: *Env,
+    expected: Expected,
+    region: Region,
+) std.mem.Allocator.Error!bool {
+    _ = self;
+    _ = fields;
+    _ = extensions;
+    _ = expr_var;
+    _ = env;
+    _ = expected;
+    _ = region;
+    @panic("TODO: type check record expressions with multiple extensions");
+}
+
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -12136,8 +12160,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // record //
         .e_record => |e| {
-            // Check if this is a record update
-            if (e.ext) |record_being_updated_expr| {
+            const extensions = self.cir.store.sliceExpr(e.exts);
+            if (extensions.len > 1) {
+                does_fx = try self.checkRecordWithMultipleExtensions(
+                    e.fields,
+                    extensions,
+                    expr_var,
+                    env,
+                    child_expected,
+                    expr_region,
+                ) or does_fx;
+            } else if (extensions.len == 1) {
+                const record_being_updated_expr = extensions[0];
                 // Create a record type in the type system and assign it the expr_var
 
                 // Check the record being updated

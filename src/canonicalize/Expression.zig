@@ -229,11 +229,11 @@ pub const Expr = union(enum) {
     /// ```roc
     /// { name: "Alice", age: 30 }
     /// { x: 1.0, y: 2.0, z: 3.0 }
-    /// { ..config, debug: True }  # Record update syntax
+    /// { ..defaults, ..overrides, debug: True }
     /// ```
     e_record: struct {
         fields: CIR.RecordField.Span,
-        ext: ?Expr.Idx,
+        exts: Expr.Span,
     },
     /// Empty record constant
     e_empty_record: struct {},
@@ -1061,7 +1061,7 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
-                if (record_expr.ext) |ext_idx| {
+                for (ir.store.exprSlice(record_expr.exts)) |ext_idx| {
                     const ext_begin = tree.beginNode();
                     try tree.pushStaticAtom("ext");
                     const ext_attrs = tree.beginNode();

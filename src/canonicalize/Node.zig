@@ -571,8 +571,10 @@ pub const Payload = extern union {
     };
 
     pub const ExprRecord = extern struct {
-        fields_ext_idx: u32, // Index into span_with_node_data: (fields.start, fields.len, ext_value)
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        fields_start: u32,
+        fields_len: u32,
+        exts_start: u32,
+        exts_len: u32,
     };
 
     pub const ExprTag = extern struct {

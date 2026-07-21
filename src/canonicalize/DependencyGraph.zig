@@ -587,7 +587,7 @@ const DemandAnalyzer = struct {
                     const field = self.cir.store.getRecordField(fields[i]);
                     try walk.push(self.allocator, .{ .visit = field.value });
                 }
-                if (record.ext) |ext_idx| try walk.push(self.allocator, .{ .visit = ext_idx });
+                try self.pushExprSpanReversed(walk, record.exts);
             },
             .e_field_access => |access| try walk.push(self.allocator, .{ .visit = access.receiver }),
             .e_method_call => |call| {
@@ -974,7 +974,7 @@ fn collectNameReferences(
                 for (cir.store.sliceExpr(list.elems)) |elem| try scratch_stack.append(allocator, elem);
             },
             .e_record => |record| {
-                if (record.ext) |ext_idx| try scratch_stack.append(allocator, ext_idx);
+                for (cir.store.sliceExpr(record.exts)) |ext_idx| try scratch_stack.append(allocator, ext_idx);
                 for (cir.store.sliceRecordFields(record.fields)) |field_idx| {
                     const field = cir.store.getRecordField(field_idx);
                     try scratch_stack.append(allocator, field.value);

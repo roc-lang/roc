@@ -8303,12 +8303,12 @@ const DefiniteInitAnalyzer = struct {
             .e_nominal => |nominal| try self.analyzeExpr(nominal.backing_expr, state, breaks),
             .e_nominal_external => |nominal| try self.analyzeExpr(nominal.backing_expr, state, breaks),
             .e_record => |record| blk: {
+                for (self.can.env.store.sliceExpr(record.exts)) |ext| {
+                    if (!try self.analyzeExpr(ext, state, breaks)) break :blk false;
+                }
                 for (self.can.env.store.sliceRecordFields(record.fields)) |field_idx| {
                     const field = self.can.env.store.getRecordField(field_idx);
                     if (!try self.analyzeExpr(field.value, state, breaks)) break :blk false;
-                }
-                if (record.ext) |ext| {
-                    if (!try self.analyzeExpr(ext, state, breaks)) break :blk false;
                 }
                 break :blk true;
             },
@@ -9507,12 +9507,18 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                         }
                     },
                     .e_record => |record| {
-                        if (record.ext) |ext| {
-                            try pending.append(stack_allocator, .{ .expr = .{ .idx = ext, .loop_depth = expr_frame.loop_depth } });
-                        }
-                        for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
-                            const field = self.env.store.getRecordField(field_idx);
+                        const fields = self.env.store.sliceRecordFields(record.fields);
+                        var field_i = fields.len;
+                        while (field_i > 0) {
+                            field_i -= 1;
+                            const field = self.env.store.getRecordField(fields[field_i]);
                             try pending.append(stack_allocator, .{ .expr = .{ .idx = field.value, .loop_depth = expr_frame.loop_depth } });
+                        }
+                        const exts = self.env.store.sliceExpr(record.exts);
+                        var ext_i = exts.len;
+                        while (ext_i > 0) {
+                            ext_i -= 1;
+                            try pending.append(stack_allocator, .{ .expr = .{ .idx = exts[ext_i], .loop_depth = expr_frame.loop_depth } });
                         }
                     },
                     .e_str => |str| {
@@ -10050,17 +10056,6 @@ fn runExprKernel(
                     const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
                     const exts_slice = self.parse_ir.store.recordExtSlice(&e.exts);
 
-                    if (exts_slice.len > 1) {
-                        const feature = try self.env.insertString("multiple record extensions");
-                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                            .feature = feature,
-                            .region = region,
-                        } });
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                        continue :expr_kernel_loop .dispatch;
-                    }
-                    const ext: ?AST.Expr.Idx = if (exts_slice.len == 1) exts_slice[0] else null;
-
                     const seen_fields_top = self.scratch_seen_record_fields.top();
                     defer self.scratch_seen_record_fields.clearFrom(seen_fields_top);
 
@@ -10110,19 +10105,18 @@ fn runExprKernel(
                     try stacks.pushFinishRecord(frame_allocator, .{
                         .region = region,
                         .free_vars_start = self.scratch_free_vars.top(),
-                        .ext = ext,
+                        .ext_count = exts_slice.len,
                         .fields = fields,
                     });
 
-                    var child_count = fields.len;
-                    if (ext != null) child_count += 1;
+                    const child_count = exts_slice.len + fields.len;
                     var child_i = child_count;
                     while (child_i > 0) {
                         child_i -= 1;
-                        if (ext != null and child_i == 0) {
-                            try stacks.pushParse(frame_allocator, .{ .idx = ext.?, .target = .scratch });
+                        if (child_i < exts_slice.len) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = exts_slice[child_i], .target = .scratch });
                         } else {
-                            const field_i = if (ext != null) child_i - 1 else child_i;
+                            const field_i = child_i - exts_slice.len;
                             try stacks.pushParse(frame_allocator, .{ .idx = fields[field_i].value_expr_idx, .target = .scratch });
                         }
                     }
@@ -12164,18 +12158,11 @@ fn runExprKernel(
             const state = stacks.takeFinishRecord();
             defer frame_allocator.free(state.fields);
 
-            const child_count = state.fields.len + @as(usize, @intFromBool(state.ext != null));
+            const child_count = state.ext_count + state.fields.len;
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
-            var child_i: usize = 0;
 
-            const ext_expr: ?Expr.Idx = if (state.ext != null) blk: {
-                const maybe_ext = child_slice[child_i];
-                child_i += 1;
-                break :blk if (maybe_ext.expr) |can_ext| can_ext.idx else null;
-            } else null;
-
-            if (state.fields.len == 0) {
+            if (state.ext_count == 0 and state.fields.len == 0) {
                 child_slots.shrinkRetainingCapacity(result_start);
                 const expr_idx = try self.env.addExpr(CIR.Expr{
                     .e_empty_record = .{},
@@ -12184,6 +12171,15 @@ fn runExprKernel(
                 continue :expr_kernel_loop .dispatch;
             }
 
+            const exts_scratch_top = self.env.store.scratchExprTop();
+            for (child_slice[0..state.ext_count]) |maybe_ext| {
+                if (maybe_ext.expr) |can_ext| {
+                    try self.env.store.addScratchExpr(can_ext.idx);
+                }
+            }
+            const exts_span = try self.env.store.exprSpanFrom(exts_scratch_top);
+
+            var child_i = state.ext_count;
             const scratch_top = self.env.store.scratch.?.record_fields.top();
             for (state.fields) |field_work| {
                 const ast_field = self.parse_ir.store.getRecordField(field_work.field_idx);
@@ -12208,7 +12204,7 @@ fn runExprKernel(
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_record = .{
                     .fields = fields_span,
-                    .ext = ext_expr,
+                    .exts = exts_span,
                 },
             }, state.region);
 
@@ -13391,7 +13387,10 @@ fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const
     }
 
     const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
-    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{
+        .fields = record_span,
+        .exts = .{ .span = DataSpan.empty() },
+    } }, region);
 
     return try self.env.addExpr(CIR.Expr{
         .e_lambda = .{ .args = args_span, .body = record_body },
@@ -13433,7 +13432,10 @@ fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_
     }
 
     const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
-    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{
+        .fields = record_span,
+        .exts = .{ .span = DataSpan.empty() },
+    } }, region);
 
     return try self.env.addExpr(CIR.Expr{
         .e_lambda = .{ .args = args_span, .body = record_body },
@@ -15421,7 +15423,7 @@ const ExprFinishTypeDispatchApplyWork = struct {
 const ExprFinishRecordWork = struct {
     region: Region,
     free_vars_start: u32,
-    ext: ?AST.Expr.Idx,
+    ext_count: usize,
     fields: []const ExprRecordFieldWork,
 };
 

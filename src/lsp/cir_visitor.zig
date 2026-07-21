@@ -265,13 +265,14 @@ pub fn CirVisitor(comptime Context: type) type {
                     }
                 },
                 .e_record => |rec| {
+                    for (store.sliceExpr(rec.exts)) |ext| {
+                        self.walkExpr(store, ext);
+                        if (self.stopped) return;
+                    }
                     for (store.sliceRecordFields(rec.fields)) |field_idx| {
                         const field = store.getRecordField(field_idx);
                         self.walkExpr(store, field.value);
                         if (self.stopped) return;
-                    }
-                    if (rec.ext) |ext| {
-                        self.walkExpr(store, ext);
                     }
                 },
                 .e_str => |str| {

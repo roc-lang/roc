@@ -122,6 +122,49 @@ test "record literal uses record_unbound" {
     }
 }
 
+test "record literal preserves multiple extensions in source order" {
+    const gpa = std.testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(gpa);
+    defer builtin_ctx.deinit();
+
+    const source = "{ ..{ hello: 1 }, ..{ world: 2 } }";
+
+    var env = try ModuleEnv.init(gpa, source);
+    defer env.deinit();
+
+    try env.initCIRFields("test");
+
+    const ast = try parse.expr(gpa, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(gpa, gpa);
+    var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer can.deinit();
+
+    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse return error.CanonicalizeError;
+
+    const outer_record = switch (env.store.getExpr(canonical_expr_idx.idx)) {
+        .e_record => |record| record,
+        else => return error.ExpectedRecord,
+    };
+    try std.testing.expectEqual(@as(u32, 0), outer_record.fields.span.len);
+
+    const exts = env.store.sliceExpr(outer_record.exts);
+    try std.testing.expectEqual(@as(usize, 2), exts.len);
+
+    const expected_names = [_][]const u8{ "hello", "world" };
+    for (exts, expected_names) |ext_idx, expected_name| {
+        const inner_record = switch (env.store.getExpr(ext_idx)) {
+            .e_record => |record| record,
+            else => return error.ExpectedRecordExtension,
+        };
+        const fields = env.store.sliceRecordFields(inner_record.fields);
+        try std.testing.expectEqual(@as(usize, 1), fields.len);
+        try std.testing.expectEqualStrings(expected_name, env.getIdent(env.store.getRecordField(fields[0]).name));
+    }
+}
+
 test "record pattern destructuring" {
     const gpa = std.testing.allocator;
     var builtin_ctx = try BuiltinTestContext.init(gpa);

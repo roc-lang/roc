@@ -380,12 +380,8 @@ fn emitExprFrame(
         .e_record => |record| {
             try self.write("{ ");
             try frames.append(allocator, .{ .write = " }" });
-            if (record.ext) |ext_idx| {
-                try frames.append(allocator, .{ .expr = ext_idx });
-                try frames.append(allocator, .{ .write = ".." });
-                if (self.module_env.store.sliceRecordFields(record.fields).len > 0) try frames.append(allocator, .{ .write = ", " });
-            }
             const fields = self.module_env.store.sliceRecordFields(record.fields);
+            const exts = self.module_env.store.sliceExpr(record.exts);
             var i = fields.len;
             while (i > 0) {
                 i -= 1;
@@ -393,6 +389,13 @@ fn emitExprFrame(
                 try frames.append(allocator, .{ .expr = field.value });
                 try frames.append(allocator, .{ .write = ": " });
                 try frames.append(allocator, .{ .write = self.module_env.getIdent(field.name) });
+                if (i > 0 or exts.len > 0) try frames.append(allocator, .{ .write = ", " });
+            }
+            i = exts.len;
+            while (i > 0) {
+                i -= 1;
+                try frames.append(allocator, .{ .expr = exts[i] });
+                try frames.append(allocator, .{ .write = ".." });
                 if (i > 0) try frames.append(allocator, .{ .write = ", " });
             }
         },

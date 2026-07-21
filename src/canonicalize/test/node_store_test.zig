@@ -349,7 +349,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_record = .{
             .fields = CIR.RecordField.Span{ .span = rand_span() },
-            .ext = null,
+            .exts = CIR.Expr.Span{ .span = rand_span() },
         },
     });
     try expressions.append(gpa, CIR.Expr{
