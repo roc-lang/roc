@@ -16,19 +16,19 @@ print_msg! = |msg| Stdout.line!(msg)
 main! = print_msg!("Hello, world!")
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - effectful_with_effectful_annotation.md:7:20:7:32
+DOES NOT EXIST - effectful_with_effectful_annotation.md:7:27:7:32
 EFFECTFUL TOP LEVEL VALUE - effectful_with_effectful_annotation.md:9:9:9:36
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  print_msg! = |msg| Stdout.line!(msg)                                      │
- │                     ‾‾‾‾‾‾‾‾‾‾‾‾                                           │
- └─────────────────────────────── effectful_with_effectful_annotation.md:7:20 ┘
+ │                            ‾‾‾‾‾                                           │
+ └─────────────────────────────── effectful_with_effectful_annotation.md:7:27 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
 ┌───────────────────────────┐

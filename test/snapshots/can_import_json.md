@@ -11,7 +11,7 @@ main = Json.utf8
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_json.md:1:1:1:17
-NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
+DOES NOT EXIST - can_import_json.md:3:13:3:17
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -29,15 +29,15 @@ NAME NOT IN SCOPE - can_import_json.md:3:8:3:17
       └─────────────────────────────────────────────── can_import_json.md:1:1 ┘
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `utf8` was not found in `Json`. ──────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  main = Json.utf8                                                          │
- │         ‾‾‾‾‾‾‾‾‾                                                          │
- └──────────────────────────────────────────────────── can_import_json.md:3:8 ┘
+ │              ‾‾‾‾                                                          │
+ └─────────────────────────────────────────────────── can_import_json.md:3:13 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `utf8` is spelled correctly and that `Json` exposes it.
 
 # TOKENS
 ~~~zig
@@ -64,7 +64,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "json.Json")
 		(exposes)))
 ~~~

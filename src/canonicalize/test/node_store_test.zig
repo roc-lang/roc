@@ -674,6 +674,7 @@ test "NodeStore round trip - Diagnostics" {
             .ident = rand_ident_idx(),
             .context = .{ .missing_exposed_value = .{
                 .module_name = rand_ident_idx(),
+                .value_name = rand_ident_idx(),
             } },
             .region = rand_region(),
         },

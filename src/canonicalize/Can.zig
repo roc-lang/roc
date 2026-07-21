@@ -496,6 +496,13 @@ pub const CanonicalizedExpr = struct {
     }
 };
 
+const QualifiedValueNotFound = struct {
+    qualified_ident: Ident.Idx,
+    module_name: Ident.Idx,
+    value_name: Ident.Idx,
+    value_region: Region,
+};
+
 const ModuleFoundStatus = enum {
     module_was_found,
     module_not_found,
@@ -7182,7 +7189,7 @@ fn canonicalizeIdentExpr(
             }
         }
 
-        return try self.canonicalizeUnqualifiedIdentExpr(ident, region);
+        return try self.canonicalizeUnqualifiedIdentExpr(ident, region, null);
     } else {
         const feature = try self.env.insertString("report an error when unable to resolve identifier");
         return try self.canonicalizedMalformedExpr(Diagnostic{ .not_implemented = .{
@@ -7309,7 +7316,22 @@ fn canonicalizeQualifiedIdentExpr(
         } });
     };
 
-    return try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens);
+    if (try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens)) |expr| {
+        return expr;
+    }
+
+    const raw_value_region = self.parse_ir.tokens.resolve(e.token);
+    const value_region = if (raw_value_region.end.offset > raw_value_region.start.offset)
+        Region{ .start = .{ .offset = raw_value_region.start.offset + 1 }, .end = raw_value_region.end }
+    else
+        raw_value_region;
+
+    return try self.canonicalizeUnqualifiedIdentExpr(ident, region, .{
+        .qualified_ident = qualified_ident,
+        .module_name = module_alias,
+        .value_name = ident,
+        .value_region = value_region,
+    });
 }
 
 fn canonicalizeTypeDispatchOwner(
@@ -7555,6 +7577,7 @@ fn canonicalizeUnqualifiedIdentExpr(
     self: *Self,
     ident: Ident.Idx,
     region: Region,
+    qualified_value_not_found: ?QualifiedValueNotFound,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     switch (self.scopeLookup(.ident, ident)) {
         .found => |found_pattern_idx| {
@@ -7598,6 +7621,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                         .ident = ident,
                         .context = .{ .missing_exposed_value = .{
                             .module_name = exposed_info.module_name,
+                            .value_name = ident,
                         } },
                         .region = region,
                     } });
@@ -7654,10 +7678,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                         .region = region,
                     } });
                 }
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
-                    .ident = ident,
-                    .region = region,
-                } });
+                return try self.canonicalizedIdentNotFoundExpr(ident, region, qualified_value_not_found);
             };
 
             const active_decl_scope = active_decl_entry.binding;
@@ -7682,10 +7703,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                 .module => 0,
                 .associated => active_decl_scope.canonical_scope,
                 .block => {
-                    return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
-                        .ident = ident,
-                        .region = region,
-                    } });
+                    return try self.canonicalizedIdentNotFoundExpr(ident, region, qualified_value_not_found);
                 },
             };
             std.debug.assert(owner_scope_idx < self.scopes.items.len);
@@ -7714,6 +7732,29 @@ fn canonicalizeUnqualifiedIdentExpr(
             return try self.canonicalizedLocalLookup(ref_pattern_idx, region);
         },
     }
+}
+
+fn canonicalizedIdentNotFoundExpr(
+    self: *Self,
+    ident: Ident.Idx,
+    region: Region,
+    qualified_value_not_found: ?QualifiedValueNotFound,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    if (qualified_value_not_found) |qualified| {
+        return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+            .ident = qualified.qualified_ident,
+            .context = .{ .missing_exposed_value = .{
+                .module_name = qualified.module_name,
+                .value_name = qualified.value_name,
+            } },
+            .region = qualified.value_region,
+        } });
+    }
+
+    return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
+        .ident = ident,
+        .region = region,
+    } });
 }
 
 fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget {

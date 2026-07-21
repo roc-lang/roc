@@ -11,18 +11,18 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
+DOES NOT EXIST - simple_mod_no_blanks.md:2:17:2:22
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  hello! = Stdout.line!("Hello")                                            │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────────────────────── simple_mod_no_blanks.md:2:10 ┘
+ │                  ‾‾‾‾‾                                                     │
+ └─────────────────────────────────────────── simple_mod_no_blanks.md:2:17 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig

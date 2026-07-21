@@ -250,7 +250,7 @@ UNDECLARED TYPE - fuzz_crash_023.md:143:14:143:20
 NAME NOT IN SCOPE - fuzz_crash_023.md:147:9:147:13
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:154:2:154:5
 NAME NOT IN SCOPE - fuzz_crash_023.md:158:2:158:11
-NAME NOT IN SCOPE - fuzz_crash_023.md:175:3:175:15
+DOES NOT EXIST - fuzz_crash_023.md:175:10:175:15
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:11:178:45
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
 MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
@@ -261,8 +261,8 @@ NAME NOT IN SCOPE - fuzz_crash_023.md:185:4:185:10
 NAME NOT IN SCOPE - fuzz_crash_023.md:188:22:188:25
 NAME NOT IN SCOPE - fuzz_crash_023.md:189:26:189:33
 NAME NOT IN SCOPE - fuzz_crash_023.md:189:34:189:38
-NAME NOT IN SCOPE - fuzz_crash_023.md:190:2:190:14
-NAME NOT IN SCOPE - fuzz_crash_023.md:191:2:191:14
+DOES NOT EXIST - fuzz_crash_023.md:190:9:190:14
+DOES NOT EXIST - fuzz_crash_023.md:191:9:191:14
 DOES NOT EXIST - fuzz_crash_023.md:193:4:193:13
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
@@ -720,15 +720,15 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
     Is it misspelled, or is there an import missing?
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!("Adding ${n} to ${number}")                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:175:3 ┘
+ │         ‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────────── fuzz_crash_023.md:175:10 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
 ┌─────────────────────┐
@@ -843,26 +843,26 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
     Is it misspelled, or is there an import missing?
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(interpolated)?                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:190:2 ┘
+ │         ‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_023.md:190:9 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────────── fuzz_crash_023.md:191:2 ┘
+ │         ‾‾‾‾‾                                                              │
+ └─────────────────────────────────────────────────── fuzz_crash_023.md:191:9 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
 ┌────────────────┐

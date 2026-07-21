@@ -16,7 +16,7 @@ main! = |_| {
 ~~~
 # EXPECTED
 DOES NOT EXIST - can_import_missing_import_suggestion.md:6:13:6:24
-NAME NOT IN SCOPE - can_import_missing_import_suggestion.md:7:5:7:17
+DOES NOT EXIST - can_import_missing_import_suggestion.md:7:12:7:17
 # PROBLEMS
 
 ┌────────────────┐
@@ -36,15 +36,15 @@ NAME NOT IN SCOPE - can_import_missing_import_suggestion.md:7:5:7:17
         import pf.Stdin
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(input)                                                       │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────── can_import_missing_import_suggestion.md:7:5 ┘
+ │         ‾‾‾‾‾                                                              │
+ └────────────────────────────── can_import_missing_import_suggestion.md:7:12 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig
@@ -103,18 +103,7 @@ main! = |_| {
 (can-ir
 	(d-let
 		(p-assign (ident "main!"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "input"))
-					(e-call
-						(e-runtime-error (tag "qualified_ident_does_not_exist"))))
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-lookup-local
-						(p-assign (ident "input")))))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~

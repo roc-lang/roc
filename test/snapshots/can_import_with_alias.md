@@ -10,18 +10,18 @@ import json.Json as MyJson
 main = MyJson.decode
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - can_import_with_alias.md:3:8:3:21
+DOES NOT EXIST - can_import_with_alias.md:3:15:3:21
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `decode` was not found in `MyJson`. ──────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  main = MyJson.decode                                                      │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────────────── can_import_with_alias.md:3:8 ┘
+ │                ‾‾‾‾‾‾                                                      │
+ └───────────────────────────────────────────── can_import_with_alias.md:3:15 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `decode` is spelled correctly and that `MyJson` exposes it.
 
 # TOKENS
 ~~~zig
@@ -48,7 +48,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "json.Json")
 		(exposes)))
 ~~~

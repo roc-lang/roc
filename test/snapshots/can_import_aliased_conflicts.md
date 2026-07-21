@@ -15,7 +15,7 @@ main = {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_aliased_conflicts.md:2:1:2:28
-NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
+DOES NOT EXIST - can_import_aliased_conflicts.md:5:15:5:20
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -33,15 +33,15 @@ NAME NOT IN SCOPE - can_import_aliased_conflicts.md:5:9:5:20
       └────────────────────────────────── can_import_aliased_conflicts.md:1:1 ┘
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `parse` was not found in `MyMod`. ────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  x = MyMod.parse                                                           │
- │      ‾‾‾‾‾‾‾‾‾‾‾                                                           │
- └─────────────────────────────────────── can_import_aliased_conflicts.md:5:9 ┘
+ │            ‾‾‾‾‾                                                           │
+ └────────────────────────────────────── can_import_aliased_conflicts.md:5:15 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `parse` is spelled correctly and that `MyMod` exposes it.
 
 # TOKENS
 ~~~zig

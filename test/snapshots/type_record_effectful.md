@@ -17,18 +17,18 @@ printName = |person| {
 main! = |_| {}
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - type_record_effectful.md:7:5:7:17
+DOES NOT EXIST - type_record_effectful.md:7:12:7:17
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(person.name)                                                 │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────── type_record_effectful.md:7:5 ┘
+ │         ‾‾‾‾‾                                                              │
+ └───────────────────────────────────────────── type_record_effectful.md:7:12 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig

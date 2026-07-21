@@ -247,7 +247,7 @@ UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 NAME NOT IN SCOPE - syntax_grab_bag.md:147:9:147:13
 UNRECOGNIZED SYNTAX - syntax_grab_bag.md:154:2:154:5
 NAME NOT IN SCOPE - syntax_grab_bag.md:158:2:158:11
-NAME NOT IN SCOPE - syntax_grab_bag.md:175:3:175:15
+DOES NOT EXIST - syntax_grab_bag.md:175:10:175:15
 NAME NOT IN SCOPE - syntax_grab_bag.md:178:63:178:69
 NAME NOT IN SCOPE - syntax_grab_bag.md:179:42:179:48
 INVALID ASSIGNMENT TO ITSELF - syntax_grab_bag.md:179:50:179:55
@@ -256,8 +256,8 @@ NAME NOT IN SCOPE - syntax_grab_bag.md:185:4:185:10
 NAME NOT IN SCOPE - syntax_grab_bag.md:188:22:188:25
 NAME NOT IN SCOPE - syntax_grab_bag.md:189:26:189:33
 NAME NOT IN SCOPE - syntax_grab_bag.md:189:34:189:38
-NAME NOT IN SCOPE - syntax_grab_bag.md:190:2:190:14
-NAME NOT IN SCOPE - syntax_grab_bag.md:191:2:191:14
+DOES NOT EXIST - syntax_grab_bag.md:190:9:190:14
+DOES NOT EXIST - syntax_grab_bag.md:191:9:191:14
 DOES NOT EXIST - syntax_grab_bag.md:193:4:193:13
 UNUSED VARIABLE - syntax_grab_bag.md:164:2:164:18
 UNUSED VARIABLE - syntax_grab_bag.md:178:2:178:8
@@ -657,15 +657,15 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     Is it misspelled, or is there an import missing?
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!("Adding ${n} to ${number}")                                  │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────────── syntax_grab_bag.md:175:3 ┘
+ │         ‾‾‾‾‾                                                              │
+ └───────────────────────────────────────────────── syntax_grab_bag.md:175:10 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
 ┌───────────────────┐
@@ -759,26 +759,26 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
     Is it misspelled, or is there an import missing?
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(interpolated)?                                               │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────────── syntax_grab_bag.md:190:2 ┘
+ │         ‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:190:9 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(                                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └────────────────────────────────────────────────── syntax_grab_bag.md:191:2 ┘
+ │         ‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────────── syntax_grab_bag.md:191:9 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
 ┌────────────────┐

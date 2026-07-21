@@ -33,17 +33,17 @@ parser = Json.Parser.Advanced.NonExistent.create
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - can_import_unresolved_qualified.md:1:1:1:17
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:5:8:5:31
+DOES NOT EXIST - can_import_unresolved_qualified.md:5:25:5:31
 MOD NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:9:20:9:34
+DOES NOT EXIST - can_import_unresolved_qualified.md:9:25:9:34
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
 MOD NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:13:24:13:51
+DOES NOT EXIST - can_import_unresolved_qualified.md:13:36:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:16:10:16:20
+DOES NOT EXIST - can_import_unresolved_qualified.md:16:15:16:20
 DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
-NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
+DOES NOT EXIST - can_import_unresolved_qualified.md:22:15:22:28
+DOES NOT EXIST - can_import_unresolved_qualified.md:25:43:25:49
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -61,15 +61,15 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
       └─────────────────────────────── can_import_unresolved_qualified.md:1:1 ┘
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `method` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `method` was not found in `Json`. ────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  main = Json.NonExistent.method                                            │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └──────────────────────────────────── can_import_unresolved_qualified.md:5:8 ┘
+ │                          ‾‾‾‾‾‾                                            │
+ └─────────────────────────────────── can_import_unresolved_qualified.md:5:25 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `method` is spelled correctly and that `Json` exposes it.
 
 
 ┌──────────────────┐
@@ -82,15 +82,15 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `stringify` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `stringify` was not found in `Json`. ─────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  parseData = |data| Json.stringify(data)                                   │
- │                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └─────────────────────────────────── can_import_unresolved_qualified.md:9:20 ┘
+ │                          ‾‾‾‾‾‾‾‾‾                                         │
+ └─────────────────────────────────── can_import_unresolved_qualified.md:9:25 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `stringify` is spelled correctly and that `Json` exposes it.
 
 
 ┌──────────────────┐
@@ -113,15 +113,16 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `defaultResponse` in this scope. ─────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `defaultResponse` was not found in `Http`. ───────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  processRequest = |req| Http.Server.defaultResponse                        │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
- └────────────────────────────────── can_import_unresolved_qualified.md:13:24 ┘
+ │                                     ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                        │
+ └────────────────────────────────── can_import_unresolved_qualified.md:13:36 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `defaultResponse` is spelled correctly and that `Http` exposes
+    it.
 
 
 ┌─────────────────┐
@@ -136,15 +137,15 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
     to suppress this warning.
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `prase` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `prase` was not found in `Json`. ─────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  result = Json.prase("test")                                               │
- │           ‾‾‾‾‾‾‾‾‾‾                                                       │
- └────────────────────────────────── can_import_unresolved_qualified.md:16:10 ┘
+ │                ‾‾‾‾‾                                                       │
+ └────────────────────────────────── can_import_unresolved_qualified.md:16:15 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `prase` is spelled correctly and that `Json` exposes it.
 
 
 ┌────────────────┐
@@ -164,26 +165,26 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
         import Unknown
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `invalidMethod` in this scope. ───────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `invalidMethod` was not found in `Http`. ─────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  client = Http.invalidMethod                                               │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────── can_import_unresolved_qualified.md:22:10 ┘
+ │                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └────────────────────────────────── can_import_unresolved_qualified.md:22:15 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `invalidMethod` is spelled correctly and that `Http` exposes it.
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `create` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `create` was not found in `Json`. ────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  parser = Json.Parser.Advanced.NonExistent.create                          │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                          │
- └────────────────────────────────── can_import_unresolved_qualified.md:25:10 ┘
+ │                                            ‾‾‾‾‾‾                          │
+ └────────────────────────────────── can_import_unresolved_qualified.md:25:43 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `create` is spelled correctly and that `Json` exposes it.
 
 # TOKENS
 ~~~zig
@@ -257,7 +258,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "parseData"))
 		(e-lambda
@@ -273,7 +274,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-runtime-error (tag "qualified_ident_does_not_exist")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -286,10 +287,10 @@ NO CHANGE
 		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "client"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(d-let
 		(p-assign (ident "parser"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "json.Json")
 		(exposes))
 	(s-import (mod "http.Client")

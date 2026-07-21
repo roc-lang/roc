@@ -12,18 +12,18 @@ import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - hello_world.md:5:13:5:25
+DOES NOT EXIST - hello_world.md:5:20:5:25
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  main! = |_| Stdout.line!("Hello, world!")                                 │
- │              ‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
- └─────────────────────────────────────────────────────── hello_world.md:5:13 ┘
+ │                     ‾‾‾‾‾                                                  │
+ └─────────────────────────────────────────────────────── hello_world.md:5:20 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig

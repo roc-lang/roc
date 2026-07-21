@@ -92,10 +92,11 @@ pub const InterpolationData = extern struct {
 };
 
 /// Context-specific identifiers for a `qualified_ident_does_not_exist` diagnostic.
-/// `suggested_import` is meaningful only for the `missing_module_or_type` context.
+/// For a missing module/type these store its name and suggested import; for a
+/// missing exposed value they store the module and value names.
 pub const QualifiedIdentDiagnosticData = extern struct {
-    name: u32,
-    suggested_import: u32,
+    primary_ident: u32,
+    secondary_ident: u32,
 };
 
 /// Method-call side data.
@@ -4534,12 +4535,12 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             const context_data_idx: u32 = @intCast(store.qualified_ident_diagnostic_data.len());
             const context_data: QualifiedIdentDiagnosticData = switch (r.context) {
                 .missing_module_or_type => |context| .{
-                    .name = @bitCast(context.name),
-                    .suggested_import = @bitCast(context.suggested_import),
+                    .primary_ident = @bitCast(context.name),
+                    .secondary_ident = @bitCast(context.suggested_import),
                 },
                 .missing_exposed_value => |context| .{
-                    .name = @bitCast(context.module_name),
-                    .suggested_import = @bitCast(context.module_name),
+                    .primary_ident = @bitCast(context.module_name),
+                    .secondary_ident = @bitCast(context.value_name),
                 },
             };
             _ = try store.qualified_ident_diagnostic_data.append(store.gpa, context_data);
@@ -5004,11 +5005,12 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             const ContextTag = std.meta.Tag(Diagnostic.QualifiedIdentDoesNotExistContext);
             const context: Diagnostic.QualifiedIdentDoesNotExistContext = switch (@as(ContextTag, @enumFromInt(p.context))) {
                 .missing_module_or_type => .{ .missing_module_or_type = .{
-                    .name = @bitCast(context_data.name),
-                    .suggested_import = @bitCast(context_data.suggested_import),
+                    .name = @bitCast(context_data.primary_ident),
+                    .suggested_import = @bitCast(context_data.secondary_ident),
                 } },
                 .missing_exposed_value => .{ .missing_exposed_value = .{
-                    .module_name = @bitCast(context_data.name),
+                    .module_name = @bitCast(context_data.primary_ident),
+                    .value_name = @bitCast(context_data.secondary_ident),
                 } },
             };
             return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{

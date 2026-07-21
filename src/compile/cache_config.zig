@@ -58,7 +58,8 @@ pub const Constants = struct {
     /// 33: Builtin indices, identifiers, and checked layouts include integer SIMD vectors.
     /// 34: Platform provides entries include their exact platform-local definition.
     /// 35: Qualified-identifier diagnostics store explicit context side data.
-    pub const CACHE_VERSION = 35;
+    /// 36: Missing exposed-value diagnostics retain the missing value identifier.
+    pub const CACHE_VERSION = 36;
 };
 
 /// Configuration for the Roc cache system.

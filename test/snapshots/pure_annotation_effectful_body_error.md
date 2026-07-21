@@ -16,18 +16,18 @@ bad_function = |msg| Stdout.line!(msg)
 main! = bad_function("This should fail")
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - pure_annotation_effectful_body_error.md:7:22:7:34
+DOES NOT EXIST - pure_annotation_effectful_body_error.md:7:29:7:34
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  bad_function = |msg| Stdout.line!(msg)                                    │
- │                       ‾‾‾‾‾‾‾‾‾‾‾‾                                         │
- └────────────────────────────── pure_annotation_effectful_body_error.md:7:22 ┘
+ │                              ‾‾‾‾‾                                         │
+ └────────────────────────────── pure_annotation_effectful_body_error.md:7:29 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig

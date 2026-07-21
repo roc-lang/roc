@@ -1477,8 +1477,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Does Not Exist", "", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
-            try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" does not exist.");
+
+            switch (data.context) {
+                .missing_module_or_type => {
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" does not exist.");
+                },
+                .missing_exposed_value => |context| {
+                    const module_name = try report.addOwnedString(self.getIdent(context.module_name));
+                    const value_name = try report.addOwnedString(self.getIdent(context.value_name));
+                    try report.headline.addUnqualifiedSymbol(value_name);
+                    try report.headline.addReflowingText(" was not found in ");
+                    try report.headline.addUnqualifiedSymbol(module_name);
+                    try report.headline.addReflowingText(".");
+                },
+            }
+
             switch (data.context) {
                 .missing_module_or_type => |context| {
                     const alias_name = try report.addOwnedString(self.getIdent(context.name));
@@ -1515,7 +1529,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                     const owned_import = try report.addOwnedString(import_text);
                     try report.document.addCodeBlock(owned_import);
                 },
-                .missing_exposed_value => {},
+                .missing_exposed_value => |context| {
+                    const module_name = try report.addOwnedString(self.getIdent(context.module_name));
+                    const value_name = try report.addOwnedString(self.getIdent(context.value_name));
+                    try report.document.addLineBreak();
+                    try report.document.addReflowingText("Check that ");
+                    try report.document.addInlineCode(value_name);
+                    try report.document.addReflowingText(" is spelled correctly and that ");
+                    try report.document.addInlineCode(module_name);
+                    try report.document.addReflowingText(" exposes it.");
+                },
             }
 
             break :blk report;
