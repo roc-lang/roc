@@ -20,7 +20,6 @@ const NodeId = solve.NodeId;
 const InstTag = solve.InstTag;
 const InstField = solve.InstField;
 const InstBacking = solve.InstBacking;
-const InstNamed = solve.InstNamed;
 const InstDeclaredField = solve.InstDeclaredField;
 const InstVariable = solve.InstVariable;
 const GraphTypeFinals = solve.GraphTypeFinals;
@@ -3403,7 +3402,7 @@ const Builder = struct {
         source_ty_view: ModuleView,
         proc: checked.ProcedureUseTemplate,
         source_fn_ty: checked.CheckedTypeId,
-        root_evidence: ?checked.CheckedEvidenceRef,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!Ast.FnSlot {
         const mono_fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const source_fn_key = proc.source_fn_ty_template;
@@ -3443,7 +3442,7 @@ const Builder = struct {
     fn materializeRootProcedureEvidence(
         self: *Builder,
         fn_template: Ast.FnTemplate,
-        evidence_ref: checked.CheckedEvidenceRef,
+        evidence_span: checked.CheckedEvidenceSpan,
     ) Allocator.Error![]const SpecEvidence {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
@@ -3458,16 +3457,16 @@ const Builder = struct {
             .encoder_for_runtime,
             => Common.invariant("root procedure evidence referenced a non-checked procedure template"),
         };
-        const view = self.moduleForId(evidence_ref.artifact);
+        const view = self.moduleForId(evidence_span.checked_module);
         if (!moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes)) {
-            Common.invariant("root procedure evidence and procedure template belonged to different checked artifacts");
+            Common.invariant("root procedure evidence and procedure template belonged to different checked modules");
         }
-        const start: usize = evidence_ref.span.start;
-        const len: usize = evidence_ref.span.len;
+        const start: usize = evidence_span.span.start;
+        const len: usize = evidence_span.span.len;
         if (start > view.static_dispatch_plans.evidence_refs.len or
             len > view.static_dispatch_plans.evidence_refs.len - start)
         {
-            Common.invariant("root procedure evidence range was outside its checked artifact");
+            Common.invariant("root procedure evidence range was outside its checked module");
         }
 
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
@@ -14955,15 +14954,41 @@ const BodyContext = struct {
         return named.args[1..];
     }
 
+    const IteratorRepresentationNames = struct {
+        len_field: names.RecordFieldNameId,
+        step_field: names.RecordFieldNameId,
+        done_tag: names.TagNameId,
+        one_tag: names.TagNameId,
+        skip_tag: names.TagNameId,
+        item_field: names.RecordFieldNameId,
+        rest_field: names.RecordFieldNameId,
+    };
+
+    fn iteratorRepresentationNames(self: *BodyContext) Allocator.Error!IteratorRepresentationNames {
+        const topologies = self.view.static_dispatch_plans.iterator_topologies;
+        if (topologies.len != 1) {
+            Common.invariant("checked module omitted its unique iterator representation topology");
+        }
+        const topology = topologies[0];
+        return .{
+            .len_field = try self.builder.recordFieldName(self.view, topology.len_field),
+            .step_field = try self.builder.recordFieldName(self.view, topology.step_field),
+            .done_tag = try self.builder.tagName(self.view, topology.done_tag),
+            .one_tag = try self.builder.tagName(self.view, topology.one_tag),
+            .skip_tag = try self.builder.tagName(self.view, topology.skip_tag),
+            .item_field = try self.builder.recordFieldName(self.view, topology.item_field),
+            .rest_field = try self.builder.recordFieldName(self.view, topology.rest_field),
+        };
+    }
+
     fn generatedIteratorConstructorFunctionNode(self: *BodyContext, iterator: NodeId) Allocator.Error!NodeId {
         const named = self.graph.content(iterator).named;
         const backing = named.backing orelse
             Common.invariant("generated iterator constructor requested a type without backing");
-        const len_name = try self.builder.program.names.internRecordFieldLabel("len_if_known");
-        const step_name = try self.builder.program.names.internRecordFieldLabel("step");
+        const topology = try self.iteratorRepresentationNames();
         return try self.graphFunctionNode(&.{
-            try self.graph.recordFieldNode(backing.node, len_name),
-            try self.graph.recordFieldNode(backing.node, step_name),
+            try self.graph.recordFieldNode(backing.node, topology.len_field),
+            try self.graph.recordFieldNode(backing.node, topology.step_field),
         }, iterator);
     }
 
@@ -14971,8 +14996,8 @@ const BodyContext = struct {
         const named = self.graph.content(iterator).named;
         const backing = named.backing orelse
             Common.invariant("generated iterator next requested a type without backing");
-        const step_name = try self.builder.program.names.internRecordFieldLabel("step");
-        const step = try self.graph.functionNodes(try self.graph.recordFieldNode(backing.node, step_name));
+        const topology = try self.iteratorRepresentationNames();
+        const step = try self.graph.functionNodes(try self.graph.recordFieldNode(backing.node, topology.step_field));
         return step.ret;
     }
 
@@ -15072,13 +15097,13 @@ const BodyContext = struct {
         self_node: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
+        const topology = try self.iteratorRepresentationNames();
         const public_fields = (try self.graph.recordNodes(public_backing)).fields;
         const fields = try self.graph.arena().alloc(InstField, public_fields.len);
         for (public_fields, fields) |field, *out| {
-            const text = self.builder.program.names.recordFieldLabelText(field.name);
             out.* = .{
                 .name = field.name,
-                .ty = if (Ident.textEql(text, "step"))
+                .ty = if (field.name == topology.step_field)
                     try self.generatedIteratorStepFunctionNode(field.ty, self_node, item_node)
                 else
                     field.ty,
@@ -15109,12 +15134,13 @@ const BodyContext = struct {
         self_node: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
+        const topology = try self.iteratorRepresentationNames();
         const public_tags = (try self.graph.tagRowNodes(public_result)).tags;
         const tags = try self.graph.arena().alloc(InstTag, public_tags.len);
         for (public_tags, tags) |tag, *out| {
             const payloads = try self.graph.arena().alloc(NodeId, tag.payloads.len);
             for (tag.payloads, payloads) |payload, *payload_out| {
-                payload_out.* = try self.generatedIteratorStepPayloadNode(tag.name, payload, self_node, item_node);
+                payload_out.* = try self.generatedIteratorStepPayloadNode(topology, tag.name, payload, self_node, item_node);
             }
             out.* = .{
                 .name = tag.name,
@@ -15130,22 +15156,21 @@ const BodyContext = struct {
 
     fn generatedIteratorStepPayloadNode(
         self: *BodyContext,
+        topology: IteratorRepresentationNames,
         tag_name: names.TagNameId,
         public_payload: NodeId,
         self_node: NodeId,
         item_node: NodeId,
     ) Allocator.Error!NodeId {
-        const tag_text = self.builder.program.names.tagLabelText(tag_name);
-        if (!Ident.textEql(tag_text, "One") and !Ident.textEql(tag_text, "Skip")) return public_payload;
+        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return public_payload;
         const public_fields = (try self.graph.recordNodes(public_payload)).fields;
         const fields = try self.graph.arena().alloc(InstField, public_fields.len);
         for (public_fields, fields) |field, *out| {
-            const field_text = self.builder.program.names.recordFieldLabelText(field.name);
             out.* = .{
                 .name = field.name,
-                .ty = if (Ident.textEql(field_text, "rest"))
+                .ty = if (field.name == topology.rest_field)
                     self_node
-                else if (Ident.textEql(field_text, "item"))
+                else if (field.name == topology.item_field)
                     item_node
                 else
                     field.ty,

@@ -108,7 +108,7 @@ pub const InstDeclaredField = union(enum(u8)) {
 };
 
 /// Named (alias/nominal/opaque) instantiation-graph node.
-pub const InstNamed = struct {
+const InstNamed = struct {
     named_type: Type.NamedType,
     def: Type.TypeDef,
     kind: Type.NamedKind,
@@ -127,11 +127,13 @@ pub const InstNamed = struct {
     declared_order: []const InstDeclaredField = &.{},
 };
 
+/// Graph-owned data for a private iterator representation before sealing.
 pub const InstGeneratedIterator = struct {
     callable_evidence: ?names.TypeDigest,
     public_source: InstIteratorPublicSource,
 };
 
+/// Exact checked public iterator definition refined by a generated iterator.
 pub const InstIteratorPublicSource = struct {
     named_type: Type.NamedType,
     def: Type.TypeDef,
@@ -2610,16 +2612,6 @@ pub const InstGraph = struct {
             };
         }
         return out;
-    }
-
-    fn registerMonoView(self: *InstGraph, raw_node: NodeId, ty: Type.TypeId) Allocator.Error!void {
-        const root = self.find(raw_node);
-        const entry = try self.node_monos.getOrPut(root);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        for (entry.value_ptr.items) |existing| {
-            if (existing == ty) return;
-        }
-        try entry.value_ptr.append(self.allocator, ty);
     }
 
     /// Materialize the active Monotype view of a node, reserving the id first

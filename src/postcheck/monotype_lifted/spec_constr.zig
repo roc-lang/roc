@@ -5530,6 +5530,11 @@ const Cloner = struct {
         // The failed clone is discarded and the attempt repeats. Each retry
         // erases at least one constructor leaf, so attempts are bounded by the
         // leaf count.
+        //
+        // Shape splitting is proved only by the local `continue` edges below.
+        // A `return` exits the enclosing function outside that fixed point, so
+        // a loop containing one must retain its whole runtime slots.
+        if (exprContainsReturn(self.pass.program, loop.body)) has_constructor = false;
         while (has_constructor) {
             var new_params = std.ArrayList(Ast.TypedLocal).empty;
             defer new_params.deinit(self.pass.allocator);

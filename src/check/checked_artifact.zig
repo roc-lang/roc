@@ -954,7 +954,7 @@ pub const RootRequest = struct {
     procedure_template: ?canonical.ProcedureTemplateRef = null,
     procedure_binding: ?TopLevelProcedureBindingRef = null,
     procedure_use: ?ProcedureUseTemplate = null,
-    root_evidence: ?CheckedEvidenceRef = null,
+    root_evidence: ?CheckedEvidenceSpan = null,
 };
 
 /// Public `LoweringEntrypointRequest` declaration.
@@ -2310,7 +2310,7 @@ const RootRequestWithoutOrder = struct {
     procedure_template: ?canonical.ProcedureTemplateRef = null,
     procedure_binding: ?TopLevelProcedureBindingRef = null,
     procedure_use: ?ProcedureUseTemplate = null,
-    root_evidence: ?CheckedEvidenceRef = null,
+    root_evidence: ?CheckedEvidenceSpan = null,
 };
 
 fn appendRoot(
@@ -12045,9 +12045,9 @@ pub const ProcedureUseTemplate = struct {
     runtime_result_provenance: ?RuntimeResultProvenance,
 };
 
-/// An immutable checked-evidence vector owned by one checked artifact.
-pub const CheckedEvidenceRef = struct {
-    artifact: CheckedModuleArtifactKey,
+/// An immutable checked-evidence vector owned by one checked module.
+pub const CheckedEvidenceSpan = struct {
+    checked_module: CheckedModuleArtifactKey,
     span: artifact_serialize.Span,
 };
 
@@ -16225,7 +16225,7 @@ fn hashRequiredTypeForClauseAliases(
 /// Public `PlatformRequiredProcedureUse` declaration.
 pub const PlatformRequiredProcedureUse = struct {
     procedure: ProcedureUseTemplate,
-    root_evidence: ?CheckedEvidenceRef = null,
+    root_evidence: ?CheckedEvidenceSpan = null,
     relation_template_closure: ImportedTemplateClosureView = .{},
 };
 
@@ -16254,7 +16254,7 @@ pub const PlatformRequiredValueUseKind = enum { const_value, procedure_value };
 /// Relocation-invariant (POD) mirror of `PlatformRequiredProcedureUse`.
 pub const StoredPlatformRequiredProcedureUse = struct {
     procedure: ProcedureUseTemplate,
-    root_evidence: ?CheckedEvidenceRef = null,
+    root_evidence: ?CheckedEvidenceSpan = null,
     relation_template_closure: StoredImportedTemplateClosure = .{},
 };
 
@@ -18080,7 +18080,7 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
             .root_evidence = .{
-                .artifact = relation.app_value.artifact,
+                .checked_module = relation.app_value.artifact,
                 .span = relation.root_evidence,
             },
             .relation_template_closure = try cloneImportedTemplateClosure(allocator, proc_use.relation_template_closure),
@@ -18247,7 +18247,7 @@ pub fn buildPlatformAppRelation(
                         exported_binding,
                     ),
                     .root_evidence = .{
-                        .artifact = app_artifact.key,
+                        .checked_module = app_artifact.key,
                         .span = solution.root_evidence,
                     },
                     .relation_template_closure = template_closure,
@@ -24139,7 +24139,7 @@ pub const CheckedModuleArtifact = struct {
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
             // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 199);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 200);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -24287,7 +24287,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 39;
+    const serialized_layout_version: u32 = 40;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -25322,7 +25322,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
                 const evidence = procedure_use.root_evidence orelse {
                     std.debug.panic("checked artifact invariant violated: platform-required procedure use has no root evidence", .{});
                 };
-                std.debug.assert(std.meta.eql(evidence.artifact.bytes, binding.app_value.artifact.bytes));
+                std.debug.assert(std.meta.eql(evidence.checked_module.bytes, binding.app_value.artifact.bytes));
             },
             .top_level,
             .imported,
@@ -29288,8 +29288,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x7E, 0x58, 0x71, 0x73, 0x55, 0x86, 0xD0, 0x8A, 0xF7, 0xF5, 0xC6, 0x45, 0x42, 0x2A, 0x19, 0xCE,
-        0xF2, 0x54, 0xA3, 0xDC, 0x4A, 0x07, 0x46, 0x82, 0x7D, 0x28, 0x4D, 0xFB, 0xF7, 0x90, 0x0D, 0x8F,
+        0xA6, 0xBF, 0xCA, 0xC2, 0x5B, 0x34, 0x3B, 0x67, 0x4B, 0xCB, 0x9B, 0xCE, 0x20, 0x2E, 0xB0, 0x6D,
+        0x4F, 0x2E, 0xD9, 0xA0, 0xF4, 0xEF, 0x16, 0x77, 0xB7, 0x54, 0xF8, 0x49, 0x69, 0x74, 0x40, 0xFD,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

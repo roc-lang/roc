@@ -151,6 +151,7 @@ pub const IteratorProcedureId = enum(u8) {
     range_done,
 };
 
+/// Return the compiler-owned iterator role assigned to a Builtin definition.
 pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
     const env = module.moduleEnvConst();
     if (env.module_role != .builtin) return null;
@@ -1105,6 +1106,19 @@ pub const IteratorStepTopology = struct {
     skip_payload_ty: CheckedTypeId,
 };
 
+/// Checker-owned labels that define the public iterator representation.
+/// Monotype consumes these exact ids when refining the public backing into a
+/// private generated iterator; it never recovers field or tag roles from text.
+pub const IteratorRepresentationTopology = struct {
+    len_field: canonical.RecordFieldLabelId,
+    step_field: canonical.RecordFieldLabelId,
+    done_tag: canonical.TagLabelId,
+    one_tag: canonical.TagLabelId,
+    skip_tag: canonical.TagLabelId,
+    item_field: canonical.RecordFieldLabelId,
+    rest_field: canonical.RecordFieldLabelId,
+};
+
 /// Public `IteratorForPlan` declaration.
 pub const IteratorForPlan = struct {
     iter: IteratorDispatchCall,
@@ -1167,6 +1181,8 @@ pub const StaticDispatchPlanTable = struct {
     /// `CIR.Node.Idx` -> `StaticDispatchPlanId`, sorted by key.
     quote_by_node: []PlanKV = &.{},
     iterator_for_plans: []IteratorForPlan = &.{},
+    /// Exactly one checker-authored public iterator representation topology.
+    iterator_topologies: []IteratorRepresentationTopology = &.{},
     /// `CIR.Node.Idx` -> `IteratorForPlanId`, sorted by key.
     iterator_for_by_node: []PlanKV = &.{},
     template_refs: []StaticDispatchPlanId = &.{},
@@ -1187,6 +1203,7 @@ pub const StaticDispatchPlanTable = struct {
         numeral_by_node: SerializedSlice(PlanKV) = .{},
         quote_by_node: SerializedSlice(PlanKV) = .{},
         iterator_for_plans: SerializedSlice(IteratorForPlan) = .{},
+        iterator_topologies: SerializedSlice(IteratorRepresentationTopology) = .{},
         iterator_for_by_node: SerializedSlice(PlanKV) = .{},
         template_refs: SerializedSlice(StaticDispatchPlanId) = .{},
         operand_pool: SerializedSlice(StaticDispatchOperand) = .{},
@@ -1196,9 +1213,9 @@ pub const StaticDispatchPlanTable = struct {
         site_evidence: SerializedSlice(SiteEvidenceEntry) = .{},
 
         comptime {
-            // 12 side lists → 12 base-pointer fixups on deserialize, never a
+            // 13 side lists → 13 base-pointer fixups on deserialize, never a
             // function of how many plans/operands the table holds.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(StaticDispatchPlanTable, @This());
@@ -1240,6 +1257,17 @@ pub const StaticDispatchPlanTable = struct {
         errdefer quote_by_node.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
         errdefer iterator_for_plans.deinit(allocator);
+        const iterator_topologies = try allocator.alloc(IteratorRepresentationTopology, 1);
+        errdefer allocator.free(iterator_topologies);
+        iterator_topologies[0] = .{
+            .len_field = try names.internRecordFieldLabel("len_if_known"),
+            .step_field = try names.internRecordFieldLabel("step"),
+            .done_tag = try names.internTagLabel("Done"),
+            .one_tag = try names.internTagLabel("One"),
+            .skip_tag = try names.internTagLabel("Skip"),
+            .item_field = try names.internRecordFieldLabel("item"),
+            .rest_field = try names.internRecordFieldLabel("rest"),
+        };
         var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
         errdefer iterator_for_by_node.deinit(allocator);
 
@@ -1563,6 +1591,7 @@ pub const StaticDispatchPlanTable = struct {
             .numeral_by_node = numeral_sorted,
             .quote_by_node = quote_sorted,
             .iterator_for_plans = try iterator_for_plans.toOwnedSlice(allocator),
+            .iterator_topologies = iterator_topologies,
             .iterator_for_by_node = iterator_for_sorted,
             .operand_pool = try operand_pool.toOwnedSlice(allocator),
             .iter_operand_pool = try iter_operand_pool.toOwnedSlice(allocator),
@@ -1627,6 +1656,7 @@ pub const StaticDispatchPlanTable = struct {
         allocator.free(self.iterator_for_by_node);
         allocator.free(self.plans);
         allocator.free(self.iterator_for_plans);
+        allocator.free(self.iterator_topologies);
         allocator.free(@constCast(self.operand_pool));
         allocator.free(@constCast(self.iter_operand_pool));
         allocator.free(self.evidence_nodes);
@@ -2098,7 +2128,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
     // The fixup count is fixed by the number of serialized base pointers, never
     // by how much data each pool holds. The two tables below differ in operand
     // count by three orders of magnitude yet relocate identically.
-    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 12);
+    comptime std.debug.assert(@typeInfo(StaticDispatchPlanTable.Serialized).@"struct".fields.len == 13);
 
     inline for (.{ @as(u32, 4), @as(u32, 4000) }) |operand_count| {
         const operands = try gpa.alloc(StaticDispatchOperand, operand_count);
@@ -2113,10 +2143,20 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
             .{ .key = 10, .val = 0 },
             .{ .key = 11, .val = 1 },
         };
+        var iterator_topologies = [_]IteratorRepresentationTopology{.{
+            .len_field = @enumFromInt(20),
+            .step_field = @enumFromInt(21),
+            .done_tag = @enumFromInt(22),
+            .one_tag = @enumFromInt(23),
+            .skip_tag = @enumFromInt(24),
+            .item_field = @enumFromInt(25),
+            .rest_field = @enumFromInt(26),
+        }};
 
         const table = StaticDispatchPlanTable{
             .plans = &plans,
             .by_expr = &by_expr,
+            .iterator_topologies = &iterator_topologies,
             .operand_pool = operands,
         };
 
@@ -2126,6 +2166,7 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         const loaded = rt.loaded;
         try std.testing.expectEqual(@as(usize, 2), loaded.plans.len);
         try std.testing.expectEqual(@as(usize, operand_count), loaded.operand_pool.len);
+        try std.testing.expectEqualSlices(IteratorRepresentationTopology, &iterator_topologies, loaded.iterator_topologies);
 
         const first_args = loaded.plans[0].argsSlice(&loaded);
         try std.testing.expectEqual(@as(usize, 2), first_args.len);

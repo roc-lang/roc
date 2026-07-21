@@ -1904,7 +1904,7 @@ Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,
 only that ordinary form may be rewritten into a hosted declaration. Checking and
-method-registry publication consume the explicit derived-method kind and must not
+method-registry construction consume the explicit derived-method kind and must not
 recover compiler intent from identifier text or the annotation shape.
 
 Derived `map` and `map!` apply only to tag-union backing shapes. The checker
