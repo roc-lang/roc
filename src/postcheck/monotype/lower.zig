@@ -2184,7 +2184,11 @@ const Builder = struct {
             for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
                 const raw_spec: u32 = @intCast(raw_spec_usize);
                 if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
-                if (!std.meta.eql(spec.source_fn_key, source_fn_key)) continue;
+                // The checked source root selects the template body, but it is
+                // not part of a resolved specialization's identity. Recursive
+                // calls can reach the same template through a different checked
+                // root; exact interface, evidence, and lexical context prove
+                // that they refer to the same active specialization.
                 if (spec.request_fn_ty != null) continue;
                 if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                 if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;

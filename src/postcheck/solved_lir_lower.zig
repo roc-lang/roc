@@ -921,12 +921,20 @@ const Lowerer = struct {
     }
 
     fn lowerLocalInto(self: *Lowerer, target: LIR.LocalId, local: Lifted.LocalId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        if (try self.captureBindingForLocal(local)) |capture| {
-            return try self.lowerCaptureBindingInto(target, capture, next);
-        }
         if (self.typed_local_map.get(.{ .local = local, .ty = ty })) |source| {
             try self.noteLocal(source);
             return try self.assignTypedBoundary(target, ty, source, ty, next);
+        }
+        if (self.local_map[@intFromEnum(local)]) |source| {
+            try self.noteLocal(source);
+            return try self.assignTypedBoundary(target, ty, source, try self.lowerLocalTy(local), next);
+        }
+        // A current lexical binding is authoritative over an enclosing capture.
+        // Wrapper inlining installs the callee arguments in `local_map`; nested
+        // functions can otherwise resolve those exact locals through their own
+        // capture table and incorrectly read the pre-call values.
+        if (try self.captureBindingForLocal(local)) |capture| {
+            return try self.lowerCaptureBindingInto(target, capture, next);
         }
         return try self.assignTypedBoundary(target, ty, try self.localForTyped(local, ty), try self.lowerLocalTy(local), next);
     }
