@@ -853,7 +853,7 @@ pub const Program = struct {
         if (checked_capture_id) |checked_id| {
             if (checked_id.isCanonical()) {
                 const source_binder = binder orelse
-                    Common.invariant("canonical checked capture identity had no checked binder");
+                    Common.invariant("source capture identity had no checked binder");
                 if (checked_id != check.CheckedModule.CaptureId.fromBinder(source_binder)) {
                     Common.invariant("checked capture identity disagreed with its binder");
                 }

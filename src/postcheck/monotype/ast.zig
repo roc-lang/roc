@@ -423,7 +423,7 @@ pub const Local = struct {
     ty: Type.TypeId,
     binder: ?checked.PatternBinderId = null,
     /// Identity of this local as a closure capture. During construction this
-    /// may be a checked binder/generated identity; final Monotype publication
+    /// may be a checked binder/generated identity; final Monotype output
     /// replaces every non-null value with the final local's program-global
     /// post-check identity.
     capture_id: ?checked.CaptureId = null,
