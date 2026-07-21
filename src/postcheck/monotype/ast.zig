@@ -516,7 +516,7 @@ pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
-    /// Checker-authored semantic identity for compiler-owned iterator calls.
+    /// Checker-authored identity for compiler-owned iterator calls.
     /// This remains exact even when control-flow joins choose a different
     /// monomorphic iterator representation for the call result.
     iterator_procedure: ?static_dispatch.IteratorProcedureId = null,

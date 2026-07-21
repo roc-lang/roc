@@ -362,7 +362,11 @@ fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_
 
 fn relateRequestComponent(graph: *InstGraph, public_node: NodeId, request_node: NodeId) Allocator.Error!void {
     if (try graph.containsGeneratedPrivate(request_node)) {
-        try graph.relateOpaqueInterface(public_node, request_node);
+        if (try graph.containsGeneratedPrivate(public_node)) {
+            try graph.unify(public_node, request_node);
+        } else {
+            try graph.relateOpaqueInterface(public_node, request_node);
+        }
     } else {
         try graph.unify(public_node, request_node);
     }
@@ -1397,7 +1401,7 @@ const Builder = struct {
 
     fn lowerRoot(self: *Builder, request: checked.RootRequest) Allocator.Error!void {
         const def = if (request.procedure_template) |template|
-            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type)
+            try self.lowerTemplate(template, moduleView(self.root_view), request.checked_type, request.root_evidence)
         else if (request.procedure_binding) |binding|
             try self.lowerProcedureBindingRoot(request, binding)
         else if (request.procedure_use) |procedure|
@@ -1724,6 +1728,7 @@ const Builder = struct {
         template_ref: names.ProcTemplate,
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!Ast.DefId {
         const fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
@@ -1737,6 +1742,17 @@ const Builder = struct {
         defer self.active_graph = saved_graph;
         defer self.active_body_draft = saved_body_draft;
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const fn_template = self.fnDefForTemplate(
+            view,
+            template_ref,
+            source_fn_ty,
+            source_ty_view.types.rootKey(source_fn_ty),
+            fn_ty,
+        );
+        const evidence = if (root_evidence) |evidence_ref|
+            try self.materializeRootProcedureEvidence(fn_template, evidence_ref)
+        else
+            &.{};
         var root_ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
         defer root_ctx.deinit();
         const request_node = try graph.importMono(fn_ty);
@@ -1747,7 +1763,7 @@ const Builder = struct {
             source_fn_ty,
             source_ty_view.types.rootKey(source_fn_ty),
             request_node,
-            &.{},
+            evidence,
         );
         const draft_fn_id = switch (slot) {
             .local => |target| switch (target) {
@@ -2119,11 +2135,18 @@ const Builder = struct {
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
-        evidence: []const SpecEvidence,
+        partial_evidence: []const SpecEvidence,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
+        if (partial_evidence.len > template.evidence_params.len) {
+            Common.invariant("draft procedure specialization received more evidence than its checked requirements");
+        }
+        const evidence = if (partial_evidence.len == template.evidence_params.len)
+            partial_evidence
+        else
+            try self.completeRootTemplateEvidence(view, template_ref, template, partial_evidence);
         const family = DraftTemplateFamilyAddress.init(template_ref, source_fn_key);
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
@@ -12067,6 +12090,19 @@ const BodyContext = struct {
         return placeholder;
     }
 
+    fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
+        var fresh = try BodyContext.init(
+            self.allocator,
+            self.builder,
+            self.view,
+            self.owner_template,
+            self.graph,
+            self.draft,
+        );
+        defer fresh.deinit();
+        return try fresh.instNode(checked_ty);
+    }
+
     fn scopedNode(self: *BodyContext, address: CheckedTypeAddress) ?NodeId {
         var index = self.decl_scopes.items.len;
         while (index > 0) {
@@ -19590,7 +19626,6 @@ const BodyContext = struct {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
-                    try self.graph.unify(fn_node, private_fn_node);
                     try self.graph.drainDirty();
                     fn_node = private_fn_node;
                 }
@@ -19894,7 +19929,7 @@ const BodyContext = struct {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
             if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
                 if (try self.typeContainsGeneratedOpaqueEvidence(evidence_ty)) {
-                    const public_node = try caller.instNode(arg_ty);
+                    const public_node = try caller.freshInstNode(arg_ty);
                     const private_node = try self.graph.importMono(evidence_ty);
                     try self.graph.relateOpaqueInterface(public_node, private_node);
                     try self.graph.unify(formal_node, public_node);
@@ -23748,7 +23783,11 @@ const BodyContext = struct {
                     else => {},
                 }
                 const lowered = try self.lowerExprInner(checked_expr);
-                try self.graph.unify(expected_node, try self.exprTypeCell(lowered).toGraphNode(self.graph));
+                try relateRequestComponent(
+                    self.graph,
+                    expected_node,
+                    try self.exprTypeCell(lowered).toGraphNode(self.graph),
+                );
                 try self.graph.drainDirty();
                 self.draft.exprs.items[@intFromEnum(lowered)].ty = cell;
                 break :blk lowered;

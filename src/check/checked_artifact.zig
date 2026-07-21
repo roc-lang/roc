@@ -999,6 +999,7 @@ pub const RootRequestTable = struct {
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
         callable_eval_templates: *const CallableEvalTemplateTable,
         hoisted_constants: *const HoistedConstTable,
+        template_root_evidence: []const artifact_serialize.Span,
         explicit_roots: []const ExplicitRootRequestInput,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
@@ -1090,6 +1091,21 @@ pub const RootRequestTable = struct {
                 .exposure = .private,
                 .procedure_template = templateForEntryWrapperRoot(entry_wrappers, root.id),
             });
+        }
+
+        if (template_root_evidence.len != procedure_templates.templates.len) {
+            checkedArtifactInvariant("template root evidence and procedure template tables had different lengths", .{});
+        }
+        for (requests.items) |*request| {
+            if (request.root_evidence != null) continue;
+            const template_ref = request.procedure_template orelse continue;
+            if (!checkedArtifactKeyEql(checkedArtifactKeyFromArtifactRef(template_ref.artifact), artifact_key)) {
+                checkedArtifactInvariant("root procedure template belonged to a different checked artifact", .{});
+            }
+            request.root_evidence = .{
+                .checked_module = artifact_key,
+                .span = template_root_evidence[@intFromEnum(template_ref.template)],
+            };
         }
 
         const all_requests = try requests.toOwnedSlice(allocator);
@@ -13336,6 +13352,7 @@ const EvidencePass = struct {
     compile_time_roots: *const CompileTimeRootTable,
     platform_requirement_solutions: []const requirement_solution.SolutionInput,
     platform_requirement_root_evidence: []artifact_serialize.Span,
+    template_root_evidence: []artifact_serialize.Span,
 
     types: *const types.Store,
 
@@ -13403,6 +13420,7 @@ const EvidencePass = struct {
         compile_time_roots: *const CompileTimeRootTable,
         platform_requirement_solutions: []const requirement_solution.SolutionInput,
         platform_requirement_root_evidence: []artifact_serialize.Span,
+        template_root_evidence: []artifact_serialize.Span,
     ) EvidencePass {
         if (platform_requirement_solutions.len != platform_requirement_root_evidence.len) {
             checkedArtifactInvariant("platform requirement solutions and root evidence output had different lengths", .{});
@@ -13424,6 +13442,7 @@ const EvidencePass = struct {
             .compile_time_roots = compile_time_roots,
             .platform_requirement_solutions = platform_requirement_solutions,
             .platform_requirement_root_evidence = platform_requirement_root_evidence,
+            .template_root_evidence = template_root_evidence,
             .types = module.typeStoreConst(),
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
@@ -13533,6 +13552,31 @@ const EvidencePass = struct {
                 const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], params.items);
                 try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
             }
+        }
+
+        if (self.template_root_evidence.len != self.templates.templates.len) {
+            checkedArtifactInvariant("template root evidence output and procedure template tables had different lengths", .{});
+        }
+        for (self.templates.templates, self.template_root_evidence) |template, *out| {
+            params.clearRetainingCapacity();
+            try self.enumerateTemplateParams(template, &template_defs, &params);
+            var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+            defer entries.deinit(self.allocator);
+            try entries.ensureTotalCapacity(self.allocator, params.items.len);
+            self.current_chain = &.{};
+            for (params.items) |param| {
+                const evidence = (try self.evidenceForVar(
+                    param,
+                    param.dispatcher_var,
+                    param.constraint.fn_var,
+                    true,
+                )) orelse checkedArtifactInvariant(
+                    "procedure template root evidence remained unresolved after checking",
+                    .{},
+                );
+                entries.appendAssumeCapacity(evidence);
+            }
+            out.* = try self.appendEvidenceRefs(entries.items);
         }
 
         // Root edges are their templates' only callers (nothing instantiates
@@ -14494,6 +14538,7 @@ fn resolveTotalDispatchPlans(
     compile_time_roots: *const CompileTimeRootTable,
     platform_requirement_solutions: []const requirement_solution.SolutionInput,
     platform_requirement_root_evidence: []artifact_serialize.Span,
+    template_root_evidence: []artifact_serialize.Span,
 ) Allocator.Error!void {
     var pass = EvidencePass.init(
         allocator,
@@ -14512,6 +14557,7 @@ fn resolveTotalDispatchPlans(
         compile_time_roots,
         platform_requirement_solutions,
         platform_requirement_root_evidence,
+        template_root_evidence,
     );
     defer pass.deinit();
     try pass.run();
@@ -24287,7 +24333,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 40;
+    const serialized_layout_version: u32 = 41;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -24851,6 +24897,20 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(request.order == i);
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(@intFromEnum(request.checked_type) < self.checked_types.roots.items.len);
+            if (request.procedure_template) |template_ref| {
+                std.debug.assert(checkedArtifactKeyEql(
+                    checkedArtifactKeyFromArtifactRef(template_ref.artifact),
+                    self.key,
+                ));
+                std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.len);
+                const evidence = request.root_evidence orelse {
+                    std.debug.panic("checked artifact invariant violated: procedure template root has no checked evidence vector", .{});
+                };
+                std.debug.assert(checkedArtifactKeyEql(evidence.checked_module, self.key));
+                if (@as(u64, evidence.span.start) + evidence.span.len > self.static_dispatch_plans.evidence_refs.len) {
+                    std.debug.panic("checked artifact invariant violated: procedure template root evidence was outside the app evidence table", .{});
+                }
+            }
             if (request.kind == .test_expect or
                 request.kind == .compile_time_constant or
                 request.kind == .compile_time_callable)
@@ -27045,6 +27105,12 @@ pub fn publishFromTypedModule(
     );
     defer allocator.free(platform_requirement_root_evidence);
     @memset(platform_requirement_root_evidence, .{});
+    const template_root_evidence = try allocator.alloc(
+        artifact_serialize.Span,
+        checked_procedure_templates.templates.len,
+    );
+    defer allocator.free(template_root_evidence);
+    @memset(template_root_evidence, .{});
 
     try resolveTotalDispatchPlans(
         allocator,
@@ -27063,6 +27129,7 @@ pub fn publishFromTypedModule(
         &compile_time_roots,
         inputs.platform_requirement_solutions,
         platform_requirement_root_evidence,
+        template_root_evidence,
     );
 
     // Resolutions now carry every direct target (evidence nodes); project the
@@ -27110,6 +27177,7 @@ pub fn publishFromTypedModule(
         &top_level_procedure_bindings,
         &callable_eval_templates,
         &hoisted_constants,
+        template_root_evidence,
         inputs.explicit_roots,
     );
     errdefer root_requests.deinit(allocator);
@@ -27712,6 +27780,13 @@ fn expectProvidedExportKind(
         &template_iterator_refs,
     );
 
+    const template_root_evidence = try allocator.alloc(
+        artifact_serialize.Span,
+        checked_procedure_templates.templates.len,
+    );
+    defer allocator.free(template_root_evidence);
+    @memset(template_root_evidence, .{});
+
     try resolveTotalDispatchPlans(
         allocator,
         module,
@@ -27729,6 +27804,7 @@ fn expectProvidedExportKind(
         &compile_time_roots,
         &.{},
         &.{},
+        template_root_evidence,
     );
 
     var provided_exports = try ProvidedExportTable.fromModule(
@@ -27760,6 +27836,7 @@ fn expectProvidedExportKind(
         &top_level_procedure_bindings,
         &callable_eval_templates,
         &hoisted_constants,
+        template_root_evidence,
         &.{},
     );
     defer root_requests.deinit(allocator);
@@ -29288,8 +29365,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xA6, 0xBF, 0xCA, 0xC2, 0x5B, 0x34, 0x3B, 0x67, 0x4B, 0xCB, 0x9B, 0xCE, 0x20, 0x2E, 0xB0, 0x6D,
-        0x4F, 0x2E, 0xD9, 0xA0, 0xF4, 0xEF, 0x16, 0x77, 0xB7, 0x54, 0xF8, 0x49, 0x69, 0x74, 0x40, 0xFD,
+        0xE0, 0x3C, 0xCD, 0xDB, 0xDD, 0x8B, 0x05, 0x98, 0x8F, 0x7E, 0x27, 0xED, 0x14, 0x94, 0x31, 0x5B,
+        0x3B, 0x40, 0x29, 0xB3, 0x55, 0xDC, 0xEA, 0x01, 0xE0, 0x8D, 0xB0, 0x6F, 0x33, 0x60, 0xC5, 0xBC,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

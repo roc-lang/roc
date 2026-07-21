@@ -414,9 +414,9 @@ const LoopPattern = struct {
     any_demoted: bool,
     /// When the surrounding continuation consumes only part of the loop's
     /// compiler-generated result tuple, every break cloned for this loop uses
-    /// the same exact result projection. This includes breaks nested in a
+    /// the same exact result-tuple item subset. This includes breaks nested in a
     /// value-producing expression off the loop body's final control spine.
-    result_projection: ?LoopResultProjection,
+    result_tuple_subset: ?LoopResultTupleSubset,
 };
 
 /// The result of supplying one loop slot's leaves from a back edge: the
@@ -426,12 +426,12 @@ const SuppliedSlot = struct {
     demoted: bool,
 };
 
-/// Exact projection of a loop's compiler-generated state result. Monotype
+/// Exact item subset of a loop's compiler-generated state-result tuple. Monotype
 /// keeps every reassigned binder in the loop result so later source statements
 /// can observe it. Once the surrounding `let` exposes the complete tail,
 /// SpecConstr can remove result fields whose binders have no use in that tail.
 /// Back-edge state is deliberately unaffected: only exit values use this map.
-const LoopResultProjection = struct {
+const LoopResultTupleSubset = struct {
     source_arity: usize,
     kept_indices: []const u32,
     ty: Type.TypeId,
@@ -2427,7 +2427,7 @@ const Pass = struct {
 
     /// Whether this exact two-argument call is the checker-identified
     /// `Iter.append` procedure. Control-flow joins may select another private
-    /// representation for its result, so the return type is not its semantic
+    /// representation for its result, so the return type is not its checked
     /// procedure identity.
     fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
         if (call.iterator_procedure != .iter_append) return false;
@@ -2489,9 +2489,9 @@ const Pass = struct {
         return try self.buildExactGeneratedIteratorLoopOverBase(loop_expr_id, base_local, loop_parts);
     }
 
-    /// Rebuild a loop over a producer-authored private iterator representation.
+    /// Construct a loop over a producer-authored private iterator representation.
     /// The generated nominal carries the checker's exact iterator topology, so
-    /// every field/tag projection and every refined `rest` binder is selected
+    /// every field/tag read and every refined `rest` binder is selected
     /// from durable producer data rather than inferred from names or bodies.
     fn buildExactGeneratedIteratorLoopOverBase(
         self: *Pass,
@@ -3786,7 +3786,7 @@ const Cloner = struct {
     changes: std.ArrayList(BindingChange),
     inline_stack: std.ArrayList(InlineFrame),
     loop_stack: std.ArrayList(LoopPattern),
-    loop_result_projections: std.AutoHashMap(Ast.ExprId, LoopResultProjection),
+    loop_result_tuple_subsets: std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -3859,7 +3859,7 @@ const Cloner = struct {
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
-            .loop_result_projections = std.AutoHashMap(Ast.ExprId, LoopResultProjection).init(pass.allocator),
+            .loop_result_tuple_subsets = std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
@@ -3890,7 +3890,7 @@ const Cloner = struct {
             .changes = .empty,
             .inline_stack = .empty,
             .loop_stack = .empty,
-            .loop_result_projections = std.AutoHashMap(Ast.ExprId, LoopResultProjection).init(pass.allocator),
+            .loop_result_tuple_subsets = std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
@@ -3915,7 +3915,7 @@ const Cloner = struct {
         self.pending.deinit(self.pass.allocator);
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
-        self.loop_result_projections.deinit();
+        self.loop_result_tuple_subsets.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
         self.changes.deinit(self.pass.allocator);
@@ -4988,8 +4988,8 @@ const Cloner = struct {
             .loop_ => |loop| return try self.materialize(try self.cloneLoopValue(expr.ty, loop)),
             .break_ => |maybe| .{ .break_ = if (maybe) |value| blk: {
                 const projected = if (self.loop_stack.getLastOrNull()) |loop|
-                    if (loop.result_projection) |projection| projected: {
-                        const result = (try self.projectLoopResultValue(value, projection)) orelse value;
+                    if (loop.result_tuple_subset) |subset| projected: {
+                        const result = (try self.trimLoopResultTuple(value, subset)) orelse value;
                         break :projected result;
                     } else value
                 else
@@ -5270,13 +5270,13 @@ const Cloner = struct {
                 .data = .{ .tuple = try self.pass.program.addPatSpan(kept_pats.items) },
             });
         const kept = try self.pass.arena.allocator().dupe(u32, kept_indices.items);
-        const projection = LoopResultProjection{
+        const subset = LoopResultTupleSubset{
             .source_arity = source_arity,
             .kept_indices = kept,
             .ty = projected_ty,
         };
-        const projected_body = (try self.projectLoopControlExpr(loop.body, projection)) orelse return null;
-        try self.loop_result_projections.put(projected_body, projection);
+        const projected_body = (try self.cloneLoopControlExprWithResultTupleSubset(loop.body, subset)) orelse return null;
+        try self.loop_result_tuple_subsets.put(projected_body, subset);
         const projected_loop = try self.addExpr(.{ .ty = projected_ty, .data = .{ .loop_ = .{
             .params = loop.params,
             .initial_values = loop.initial_values,
@@ -5285,8 +5285,8 @@ const Cloner = struct {
 
         var projected_rest = let_.rest;
         if (aggregate_local) |local| {
-            const source_tys = aggregate_tys orelse Common.invariant("aggregate loop projection had no source tuple types");
-            const locals = projected_locals orelse Common.invariant("aggregate loop projection had no projected locals");
+            const source_tys = aggregate_tys orelse Common.invariant("loop result-tuple subset had no source tuple types");
+            const locals = projected_locals orelse Common.invariant("loop result-tuple subset had no selected locals");
             const items = try self.pass.arena.allocator().alloc(Value, source_arity);
             for (source_tys, locals, 0..) |ty, maybe_local, index| {
                 const item_expr = if (maybe_local) |projected_local|
@@ -5314,11 +5314,11 @@ const Cloner = struct {
         } } });
     }
 
-    /// Copy the result-control spine of one loop body at a projected result
+    /// Copy the result-control spine of one loop body at a narrowed result-tuple
     /// type. A null result means the expression can complete normally and the
-    /// projection therefore does not apply. Nested loops own their own breaks
+    /// requested item subset therefore does not apply. Nested loops own their own breaks
     /// and are never traversed here.
-    fn projectLoopControlExpr(self: *Cloner, expr_id: Ast.ExprId, projection: LoopResultProjection) Common.LowerError!?Ast.ExprId {
+    fn cloneLoopControlExprWithResultTupleSubset(self: *Cloner, expr_id: Ast.ExprId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.ExprId {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -5336,13 +5336,13 @@ const Cloner = struct {
             .return_ => |ret| .{ .return_ = ret },
             .continue_ => |continue_| .{ .continue_ = continue_ },
             .break_ => |maybe| .{ .break_ = if (maybe) |value|
-                (try self.projectLoopResultValue(value, projection)) orelse return null
+                (try self.trimLoopResultTuple(value, subset)) orelse return null
             else
                 return null },
             .let_ => |let_| .{ .let_ = .{
                 .bind = let_.bind,
                 .value = let_.value,
-                .rest = (try self.projectLoopControlExpr(let_.rest, projection)) orelse return null,
+                .rest = (try self.cloneLoopControlExprWithResultTupleSubset(let_.rest, subset)) orelse return null,
                 .comptime_site = let_.comptime_site,
             } },
             .block => |block| blk: {
@@ -5351,13 +5351,13 @@ const Cloner = struct {
                 const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
                 defer self.pass.allocator.free(statements);
                 for (source, statements) |stmt, *out| {
-                    if (try self.projectLoopControlStmt(stmt, projection)) |projected| {
+                    if (try self.cloneLoopControlStmtWithResultTupleSubset(stmt, subset)) |projected| {
                         out.* = projected;
                     } else {
                         out.* = stmt;
                     }
                 }
-                const final_expr = (try self.projectLoopControlExpr(block.final_expr, projection)) orelse return null;
+                const final_expr = (try self.cloneLoopControlExprWithResultTupleSubset(block.final_expr, subset)) orelse return null;
                 break :blk .{ .block = .{
                     .statements = try self.pass.program.addStmtSpan(statements),
                     .final_expr = final_expr,
@@ -5370,11 +5370,11 @@ const Cloner = struct {
                 defer self.pass.allocator.free(projected);
                 for (branches, projected) |branch, *out| out.* = .{
                     .cond = branch.cond,
-                    .body = (try self.projectLoopControlExpr(branch.body, projection)) orelse return null,
+                    .body = (try self.cloneLoopControlExprWithResultTupleSubset(branch.body, subset)) orelse return null,
                 };
                 break :blk .{ .if_ = .{
                     .branches = try self.pass.program.addIfBranchSpan(projected),
-                    .final_else = (try self.projectLoopControlExpr(if_.final_else, projection)) orelse return null,
+                    .final_else = (try self.cloneLoopControlExprWithResultTupleSubset(if_.final_else, subset)) orelse return null,
                 } };
             },
             .match_ => |match| blk: {
@@ -5385,7 +5385,7 @@ const Cloner = struct {
                 for (branches, projected) |branch, *out| out.* = .{
                     .pat = branch.pat,
                     .guard = branch.guard,
-                    .body = (try self.projectLoopControlExpr(branch.body, projection)) orelse return null,
+                    .body = (try self.cloneLoopControlExprWithResultTupleSubset(branch.body, subset)) orelse return null,
                 };
                 break :blk .{ .match_ = .{
                     .scrutinee = match.scrutinee,
@@ -5396,59 +5396,59 @@ const Cloner = struct {
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
                 .site = taken.site,
                 .branch_index = taken.branch_index,
-                .body = (try self.projectLoopControlExpr(taken.body, projection)) orelse return null,
+                .body = (try self.cloneLoopControlExprWithResultTupleSubset(taken.body, subset)) orelse return null,
             } },
             .join_point => |join_point| .{ .join_point = .{
                 .id = join_point.id,
                 .params = join_point.params,
-                .body = (try self.projectLoopControlExpr(join_point.body, projection)) orelse return null,
-                .remainder = (try self.projectLoopControlExpr(join_point.remainder, projection)) orelse return null,
+                .body = (try self.cloneLoopControlExprWithResultTupleSubset(join_point.body, subset)) orelse return null,
+                .remainder = (try self.cloneLoopControlExprWithResultTupleSubset(join_point.remainder, subset)) orelse return null,
             } },
             .if_initialized_payload => |payload| .{ .if_initialized_payload = .{
                 .cond = payload.cond,
                 .cond_mask = payload.cond_mask,
                 .payload = payload.payload,
                 .uninitialized_is_cold = payload.uninitialized_is_cold,
-                .initialized = (try self.projectLoopControlExpr(payload.initialized, projection)) orelse return null,
-                .uninitialized = (try self.projectLoopControlExpr(payload.uninitialized, projection)) orelse return null,
+                .initialized = (try self.cloneLoopControlExprWithResultTupleSubset(payload.initialized, subset)) orelse return null,
+                .uninitialized = (try self.cloneLoopControlExprWithResultTupleSubset(payload.uninitialized, subset)) orelse return null,
             } },
             .loop_ => return null,
             else => return null,
         };
-        return try self.addExpr(.{ .ty = projection.ty, .data = data });
+        return try self.addExpr(.{ .ty = subset.ty, .data = data });
     }
 
-    fn projectLoopControlStmt(self: *Cloner, stmt_id: Ast.StmtId, projection: LoopResultProjection) Common.LowerError!?Ast.StmtId {
+    fn cloneLoopControlStmtWithResultTupleSubset(self: *Cloner, stmt_id: Ast.StmtId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.StmtId {
         const stmt = self.pass.program.getStmt(stmt_id);
         const projected: Ast.Stmt = switch (stmt) {
             .let_ => |let_| .{ .let_ = .{
                 .pat = let_.pat,
-                .value = (try self.projectLoopControlExpr(let_.value, projection)) orelse return null,
+                .value = (try self.cloneLoopControlExprWithResultTupleSubset(let_.value, subset)) orelse return null,
                 .recursive = let_.recursive,
                 .comptime_site = let_.comptime_site,
             } },
-            .expr => |value| .{ .expr = (try self.projectLoopControlExpr(value, projection)) orelse return null },
-            .expect => |value| .{ .expect = (try self.projectLoopControlExpr(value, projection)) orelse return null },
-            .dbg => |value| .{ .dbg = (try self.projectLoopControlExpr(value, projection)) orelse return null },
+            .expr => |value| .{ .expr = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
+            .expect => |value| .{ .expect = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
+            .dbg => |value| .{ .dbg = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
             else => return null,
         };
         return try self.pass.program.addStmt(projected);
     }
 
-    fn projectLoopResultValue(self: *Cloner, value_expr: Ast.ExprId, projection: LoopResultProjection) Common.LowerError!?Ast.ExprId {
+    fn trimLoopResultTuple(self: *Cloner, value_expr: Ast.ExprId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.ExprId {
         const tuple = switch (self.pass.program.getExpr(value_expr).data) {
             .tuple => |items| try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(items)),
             else => return null,
         };
         defer self.pass.allocator.free(tuple);
-        if (tuple.len != projection.source_arity) return null;
-        if (projection.kept_indices.len == 1) return tuple[projection.kept_indices[0]];
+        if (tuple.len != subset.source_arity) return null;
+        if (subset.kept_indices.len == 1) return tuple[subset.kept_indices[0]];
 
-        const items = try self.pass.allocator.alloc(Ast.ExprId, projection.kept_indices.len);
+        const items = try self.pass.allocator.alloc(Ast.ExprId, subset.kept_indices.len);
         defer self.pass.allocator.free(items);
-        for (projection.kept_indices, items) |index, *out| out.* = tuple[index];
+        for (subset.kept_indices, items) |index, *out| out.* = tuple[index];
         return try self.addExpr(.{
-            .ty = projection.ty,
+            .ty = subset.ty,
             .data = .{ .tuple = try self.pass.program.addExprSpan(items) },
         });
     }
@@ -6305,7 +6305,7 @@ const Cloner = struct {
     }
 
     fn cloneLoopValue(self: *Cloner, ty: Type.TypeId, loop: anytype) Common.LowerError!Value {
-        const result_projection = self.loop_result_projections.get(loop.body);
+        const result_tuple_subset = self.loop_result_tuple_subsets.get(loop.body);
         const params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
         defer self.pass.allocator.free(params);
         const initial_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(loop.initial_values));
@@ -6384,7 +6384,7 @@ const Cloner = struct {
             try self.loop_stack.append(self.pass.allocator, .{
                 .values = shapes,
                 .any_demoted = false,
-                .result_projection = result_projection,
+                .result_tuple_subset = result_tuple_subset,
             });
             const body = try self.cloneExpr(loop.body);
             const frame = self.loop_stack.pop() orelse Common.invariant("loop stack underflow after split attempt");
@@ -6425,7 +6425,7 @@ const Cloner = struct {
         try self.loop_stack.append(self.pass.allocator, .{
             .values = whole_shapes,
             .any_demoted = false,
-            .result_projection = result_projection,
+            .result_tuple_subset = result_tuple_subset,
         });
         const body = try self.cloneExpr(loop.body);
         if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
@@ -9207,7 +9207,7 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
 
 /// Record the tuple fields demanded from one aggregate local, rejecting any
 /// use that observes the aggregate as a whole or through a non-tuple
-/// projection. `LocalId` is program-global, so binders introduced below this
+/// access. `LocalId` is program-global, so binders introduced below this
 /// expression cannot shadow the queried identity.
 fn collectTupleLocalDemandInExpr(
     program: *const Ast.Program,

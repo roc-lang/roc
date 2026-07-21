@@ -84,9 +84,9 @@ pub const TypeDef = struct {
     iterator_kind: IteratorKind = .none,
     /// Producer-computed minted-chain depth. Meaningful only for `.minted`.
     iterator_depth: u8 = 0,
-    /// Checker-authored semantic identities for the iterator representation.
-    /// Generated iterator types retain these so post-check consumers never
-    /// recover representation roles from display text or structural guesses.
+    /// Checker-authored identities for the iterator representation.
+    /// Generated iterator types retain these as the exact representation roles
+    /// consumed by post-check stages.
     iterator_topology: ?IteratorTopology = null,
 };
 

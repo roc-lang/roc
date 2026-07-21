@@ -7555,6 +7555,9 @@ const Lowerer = struct {
             switch (self.lowerer.types.get(ty)) {
                 .named => |named| if (named.backing) |backing| {
                     if (named.kind == .@"opaque" and
+                        // Generated-private backing is the checked producer's
+                        // explicit runtime representation, not source opacity.
+                        backing.authority != .generated_private and
                         self.lowerer.types.get(backing.ty) == .record and
                         try self.lowerer.typeContainsCallable(backing.ty))
                     {
