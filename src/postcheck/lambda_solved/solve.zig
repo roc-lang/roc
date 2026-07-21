@@ -230,6 +230,7 @@ const Solver = struct {
                 .symbol = local.symbol,
                 .binder = local.binder,
                 .capture_id = local.capture_id,
+                .checked_capture_id = local.checked_capture_id,
                 .ty = self.localTy(capture.local),
             };
         }

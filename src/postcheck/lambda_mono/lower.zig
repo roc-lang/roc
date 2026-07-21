@@ -1271,6 +1271,7 @@ const Lowerer = struct {
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
+                .checked_capture_id = capture.checked_capture_id,
                 .ty = try self.lowerType(capture.ty),
             };
         }

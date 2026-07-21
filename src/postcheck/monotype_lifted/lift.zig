@@ -864,7 +864,7 @@ const Lifter = struct {
         for (0..slots.len) |index| {
             const slot = GuardedList.at(slots, index);
             const id = slotCaptureId(self.output, slot);
-            const value = explicitCaptureValueForId(self.output, explicit, id) orelse
+            const value = explicitCaptureValueForSlot(self.output, explicit, slot) orelse
                 try self.output.addExpr(.{ .ty = slot.ty, .data = .{ .local = slot.local } });
             operands[index] = .{ .id = id, .value = value };
         }
@@ -1055,19 +1055,26 @@ fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
 
 /// Find the operand value supplied for `id` among explicit pre-lift capture
 /// operands, keyed by the CaptureId of each operand's local.
-fn explicitCaptureValueForId(program: *const Ast.Program, explicit: anytype, id: checked.CaptureId) ?Ast.ExprId {
+fn explicitCaptureValueForSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
+    const runtime_id = slotCaptureId(program, slot);
+    const checked_id = program.getLocal(slot.local).checked_capture_id;
+    var checked_match: ?Ast.ExprId = null;
     for (0..explicit.len) |index| {
         const capture = GuardedList.at(explicit, index);
-        const capture_id = program.getLocal(capture.local).capture_id orelse
+        const local = program.getLocal(capture.local);
+        const capture_id = local.capture_id orelse
             Common.invariant("pre-lift capture operand local had no CaptureId");
-        if (capture_id == id) return capture.value;
+        if (capture_id == runtime_id) return capture.value;
+        if (checked_id != null and local.checked_capture_id == checked_id and checked_match == null) {
+            checked_match = capture.value;
+        }
     }
-    return null;
+    return checked_match;
 }
 
-/// Whether an explicit pre-lift capture operand supplies the given CaptureId.
-fn explicitProvidesCaptureId(program: *const Ast.Program, explicit: anytype, id: checked.CaptureId) bool {
-    return explicitCaptureValueForId(program, explicit, id) != null;
+/// Whether an explicit pre-lift capture operand supplies the target slot.
+fn explicitProvidesCaptureSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) bool {
+    return explicitCaptureValueForSlot(program, explicit, slot) != null;
 }
 
 const BoundBinder = struct {
@@ -1488,8 +1495,7 @@ const CaptureSet = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
         for (self.fn_captures[raw].items) |capture| {
-            const id = slotCaptureId(self.program, capture);
-            if (explicitProvidesCaptureId(self.program, explicit, id)) continue;
+            if (explicitProvidesCaptureSlot(self.program, explicit, capture)) continue;
             try self.addIfFree(capture.local, caller_bound);
         }
     }
@@ -1836,14 +1842,19 @@ const CaptureDependencyGraph = struct {
         return null;
     }
 
-    fn edgeSupply(self: *const CaptureDependencyGraph, edge_id: CaptureEdgeId, id: checked.CaptureId) ?CaptureSupply {
+    fn edgeSupply(self: *const CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) ?CaptureSupply {
         const edge = self.edges.items[@intFromEnum(edge_id)];
-        return findSupply(edge.exact_supplies.items, id) orelse findSupply(edge.declared_supplies.items, id);
+        const runtime_id = slotCaptureId(self.program, capture);
+        if (findSupply(edge.exact_supplies.items, runtime_id)) |supply| return supply;
+        const declared_id = switch (edge.site) {
+            .pre_lift => self.program.getLocal(capture.local).checked_capture_id orelse runtime_id,
+            .fn_ref, .call_proc => runtime_id,
+        };
+        return findSupply(edge.declared_supplies.items, declared_id);
     }
 
     fn applyCaptureToEdge(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) Allocator.Error!void {
-        const id = slotCaptureId(self.program, capture);
-        if (self.edgeSupply(edge_id, id)) |supply| {
+        if (self.edgeSupply(edge_id, capture)) |supply| {
             try self.queueNode(supply.node);
             return;
         }
@@ -1880,7 +1891,7 @@ const CaptureDependencyGraph = struct {
     fn resolvedOperandValue(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, slot: Ast.TypedLocal) Allocator.Error!Ast.ExprId {
         const edge = self.edges.items[@intFromEnum(edge_id)];
         const id = slotCaptureId(self.program, slot);
-        if (self.edgeSupply(edge_id, id)) |supply| {
+        if (self.edgeSupply(edge_id, slot)) |supply| {
             const candidate_local = switch (self.program.getExpr(supply.value).data) {
                 .local => |local| local,
                 else => return supply.value,
@@ -2130,13 +2141,21 @@ const CaptureGraphBuilder = struct {
         const captures = self.graph.program.fnDefCaptureSpan(span);
         for (0..captures.len) |index| {
             const capture = GuardedList.at(captures, index);
-            const id = self.graph.program.getLocal(capture.local).capture_id orelse
+            const capture_local = self.graph.program.getLocal(capture.local);
+            const runtime_id = capture_local.capture_id orelse
                 Common.invariant("pre-lift explicit capture local had no CaptureId");
+            const declared_id = capture_local.checked_capture_id orelse runtime_id;
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(capture.value, child);
-            const supply = CaptureSupply{ .id = id, .value = capture.value, .node = child };
-            try declared.append(self.graph.allocator, supply);
-            if (!hasSupplyId(exact.items, id)) try exact.append(self.graph.allocator, supply);
+            try declared.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
+            switch (self.graph.program.getExpr(capture.value).data) {
+                .local => |local| if (self.graph.program.getLocal(local).capture_id) |value_id| {
+                    if (!hasSupplyId(exact.items, value_id)) {
+                        try exact.append(self.graph.allocator, .{ .id = value_id, .value = capture.value, .node = child });
+                    }
+                },
+                else => {},
+            }
         }
         try self.finishEdge(parent, target, .pre_lift, &exact, &declared);
     }

@@ -8632,6 +8632,7 @@ const Cloner = struct {
                 capture_ty,
                 source_local.binder,
                 id,
+                source_local.checked_capture_id,
             );
             worker_captures[index] = .{ .local = local, .ty = capture_ty };
         }

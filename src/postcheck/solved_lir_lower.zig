@@ -1069,6 +1069,7 @@ const Lowerer = struct {
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
+                .checked_capture_id = capture.checked_capture_id,
                 .ty = try self.lowerType(capture.ty),
             };
         }
@@ -1911,8 +1912,9 @@ const Lowerer = struct {
             var captures_owned = captures.len > 0;
             errdefer if (captures_owned) self.allocator.free(captures);
 
+            const entry_proc = try self.markReachableFn(member.target);
             entries[index] = .{
-                .entry = try self.markReachableFn(member.target),
+                .entry = entry_proc,
                 .capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst,
                 .template = try constFnTemplateFromMono(self, self.fnTemplateForFn(member.target)),
                 .captures = captures,
@@ -1963,7 +1965,8 @@ const Lowerer = struct {
         for (0..fields.len) |index| {
             const field = GuardedList.at(fields, index);
             slots[index] = .{
-                .id = field.capture_id orelse Common.invariant("capture record field had no CaptureId"),
+                .id = field.checked_capture_id orelse
+                    Common.invariant("ConstStore capture field had no checked capture identity"),
                 .slot = @intCast(index),
                 .ty = try self.constTypeOfType(field.ty),
                 .plan = try self.constPlanOfType(field.ty),

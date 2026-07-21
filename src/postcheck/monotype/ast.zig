@@ -416,11 +416,15 @@ pub const Local = struct {
     symbol: Common.Symbol,
     ty: Type.TypeId,
     binder: ?checked.PatternBinderId = null,
-    /// Exact identity of this local as a closure capture, carried
-    /// immutably through every post-check IR. Non-null for a captured binding
-    /// (binder-derived) and for a compiler-synthesized
-    /// capturable local (generated).
+    /// Identity of this local as a closure capture. During construction this
+    /// may be a checked binder/generated identity; final Monotype publication
+    /// replaces every non-null value with the final local's program-global
+    /// post-check identity.
     capture_id: ?checked.CaptureId = null,
+    /// Checked-stage identity used only when a compile-time result stores this
+    /// capture back into `ConstStore`. This provenance is never a runtime
+    /// capture join key.
+    checked_capture_id: ?checked.CaptureId = null,
 };
 
 /// Local id paired with its monomorphic type.
@@ -1663,6 +1667,7 @@ pub const ProgramBuilder = struct {
         binder: ?checked.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const checked_capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null;
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -1670,7 +1675,8 @@ pub const ProgramBuilder = struct {
             .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null,
+            .capture_id = checked_capture_id,
+            .checked_capture_id = checked_capture_id,
         });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -1680,7 +1686,10 @@ pub const ProgramBuilder = struct {
     /// `capture_id` is the per-owner generated index; it is stored in the
     /// generated range of `CaptureId`.
     pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
-        self.locals.getPtrImmediate(@intFromEnum(id)).capture_id = checked.CaptureId.generatedCheck(capture_id);
+        const checked_id = checked.CaptureId.generatedCheck(capture_id);
+        const local = self.locals.getPtrImmediate(@intFromEnum(id));
+        local.capture_id = checked_id;
+        local.checked_capture_id = checked_id;
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
@@ -1932,6 +1941,25 @@ pub const ProgramBuilder = struct {
             Common.invariant("Monotype capture local had no CaptureId");
     }
 
+    /// Seal provisional identities on locals emitted outside a body
+    /// materialization. Body drafts seal their own identity equivalence classes
+    /// when committed; this final sweep handles direct generated definitions.
+    pub fn sealRemainingCaptureIdentities(self: *ProgramBuilder) std.mem.Allocator.Error!void {
+        var durable_by_checked = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(self.allocator);
+        defer durable_by_checked.deinit();
+        for (0..self.locals.len()) |index| {
+            const local = self.locals.getPtrImmediate(index);
+            const provisional = local.capture_id orelse continue;
+            if (provisional.isGeneratedLift()) continue;
+            if (index > checked.CaptureId.max_generated_index) {
+                Common.invariant("Monotype program had too many locals for durable capture identity");
+            }
+            const entry = try durable_by_checked.getOrPut(provisional);
+            if (!entry.found_existing) entry.value_ptr.* = checked.CaptureId.generatedLift(@intCast(index));
+            local.capture_id = entry.value_ptr.*;
+        }
+    }
+
     pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
         return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
@@ -1960,6 +1988,29 @@ pub const MonoProgramView = ProgramView;
 
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "final Monotype capture identities preserve direct aliases" {
+    var program = Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const binder: checked.PatternBinderId = @enumFromInt(7);
+    const first = try program.addLocalWithBinder(@enumFromInt(1), unit_ty, binder);
+    const second = try program.addLocalWithBinder(@enumFromInt(2), unit_ty, binder);
+    const uncaptured = try program.addLocal(@enumFromInt(3), unit_ty);
+    const generated = try program.addLocal(@enumFromInt(4), unit_ty);
+    program.setLocalCaptureId(generated, 0);
+
+    try program.sealRemainingCaptureIdentities();
+
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@intFromEnum(first)), program.getLocal(first).capture_id.?);
+    try std.testing.expectEqual(program.getLocal(first).capture_id, program.getLocal(second).capture_id);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(first).checked_capture_id.?);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(second).checked_capture_id.?);
+    try std.testing.expectEqual(@as(?checked.CaptureId, null), program.getLocal(uncaptured).capture_id);
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@intFromEnum(generated)), program.getLocal(generated).capture_id.?);
+    try std.testing.expectEqual(checked.CaptureId.generatedCheck(0), program.getLocal(generated).checked_capture_id.?);
 }
 
 test "monotype program view exposes read-only side arrays" {

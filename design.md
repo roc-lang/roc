@@ -2983,6 +2983,26 @@ record, closure layout, callable tag, erased ABI, or lowered call target.
 Captures remain ordinary free variables until Monotype Lifted IR records them
 on lifted function definitions.
 
+Checked capture identities are construction-time provenance, not durable
+post-check value identity. One checked binder can materialize into several
+runtime values when specialization instantiates it more than once. When a
+Monotype body materialization is committed, each of its checked capture
+identities receives a program-global identity derived from the first final
+`LocalId` in that equivalence class. Local aliases within the same
+materialization retain one identity; a separate materialization receives a
+different identity even when it came from the same checked binder. The checked
+binder remains separate metadata for lexical binding and substitution. The original checked capture
+identity is also carried in a separate provenance field solely for writing a
+compile-time result back to `ConstStore`; it is never used for runtime capture
+joining. Consequently, separate
+materializations cannot collide merely because they came from one checked
+binder. A downstream one-to-one capture rewrite preserves the complete
+post-check capture identity explicitly, while a one-to-many materialization
+receives distinct identities at the producer boundary. Lifting and specialization
+must join capture slots and operands only by that explicit post-check identity;
+they never recover identity from binder, symbol, type, source text, or runtime
+representation.
+
 ### Monotype Specialization
 
 Monotype specialization is root driven.

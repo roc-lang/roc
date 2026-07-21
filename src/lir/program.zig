@@ -50,7 +50,9 @@ pub const FnTemplate = struct {
     evidence_frame_head: ?u32 = null,
 };
 
-/// Capture field copied from a checked binder into a callable payload.
+/// Capture field copied from a checked binding into a callable payload. `id`
+/// is checked-stage provenance for storing a compile-time result in
+/// `ConstStore`; runtime capture joining was completed before LIR.
 pub const CaptureSlot = struct {
     id: const_store.CaptureId,
     slot: u32,

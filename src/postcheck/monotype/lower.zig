@@ -142,6 +142,7 @@ pub fn run(
     }
 
     program.next_symbol = builder.symbols.next;
+    try program.sealRemainingCaptureIdentities();
     program.freeze();
 
     if (@import("builtin").mode == .Debug) {
@@ -5142,7 +5143,7 @@ const Builder = struct {
             if (!capture.id.isCanonical()) continue;
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
-            const local = try fn_ctx.addLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
+            const local = try fn_ctx.addFreshLocalWithBinder(self.symbols.fresh(), lowered_ty, binder);
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -5752,7 +5753,7 @@ const Builder = struct {
             const binder = constCaptureBinder(capture.id);
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
-            const local = try fn_ctx.addLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
+            const local = try fn_ctx.addFreshLocalWithBinderCell(self.symbols.fresh(), capture_cell, binder);
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -7272,6 +7273,7 @@ const DraftLocal = struct {
     ty: DraftTypeCell,
     binder: ?checked.PatternBinderId = null,
     capture_id: ?checked.CaptureId = null,
+    checked_capture_id: ?checked.CaptureId = null,
 };
 
 const DraftTypedLocal = struct {
@@ -8486,16 +8488,30 @@ const BodyDraftStore = struct {
         return id;
     }
 
-    fn addLocal(self: *BodyDraftStore, symbol: Common.Symbol, ty: DraftTypeCell, binder: ?checked.PatternBinderId) Allocator.Error!DraftLocalId {
+    fn addLocal(
+        self: *BodyDraftStore,
+        symbol: Common.Symbol,
+        ty: DraftTypeCell,
+        binder: ?checked.PatternBinderId,
+        inherited_capture_id: ?checked.CaptureId,
+    ) Allocator.Error!DraftLocalId {
         const id: DraftLocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
+        const checked_capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null;
+        const capture_id = if (binder != null) blk: {
+            if (inherited_capture_id) |inherited| break :blk inherited;
+            const index = @intFromEnum(id);
+            if (index > checked.CaptureId.max_generated_index) {
+                Common.invariant("Monotype body had too many locals for provisional capture identity");
+            }
+            break :blk checked.CaptureId.generatedLift(index);
+        } else null;
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
             .ty = ty,
             .binder = binder,
-            // A binder-backed local carries the exact capture identity of
-            // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null,
+            .capture_id = capture_id,
+            .checked_capture_id = checked_capture_id,
         });
         try self.local_names.append(self.allocator, .empty());
         return id;
@@ -8644,7 +8660,9 @@ const BodyDraftStore = struct {
     }
 
     fn setLocalCaptureId(self: *BodyDraftStore, id: DraftLocalId, capture_id: u32) void {
-        self.locals.items[@intFromEnum(id)].capture_id = checked.CaptureId.generatedCheck(capture_id);
+        const checked_id = checked.CaptureId.generatedCheck(capture_id);
+        self.locals.items[@intFromEnum(id)].capture_id = checked_id;
+        self.locals.items[@intFromEnum(id)].checked_capture_id = checked_id;
     }
 
     fn setLocalType(self: *BodyDraftStore, id: DraftLocalId, ty: DraftTypeCell) void {
@@ -8804,16 +8822,31 @@ const BodyDraftStore = struct {
 
         try program.locals.ensureUnusedCapacity(program.allocator, self.locals.items.len);
         try program.local_names.ensureUnusedCapacity(program.allocator, self.locals.items.len);
+        // This commit is one Monotype materialization. Checked capture
+        // identities identify aliases within it, while separate commits get
+        // separate durable ids even when they instantiate the same binder.
+        var durable_capture_ids = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
+        defer durable_capture_ids.deinit();
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
             const expected = ids.local(@enumFromInt(@as(u32, @intCast(index))));
             const sealed_ty = try local.ty.seal(graph, sealer);
+            const durable_capture_id = if (local.capture_id) |provisional| blk: {
+                const final_index = @intFromEnum(expected);
+                if (final_index > checked.CaptureId.max_generated_index) {
+                    Common.invariant("Monotype program had too many locals for durable capture identity");
+                }
+                const entry = try durable_capture_ids.getOrPut(provisional);
+                if (!entry.found_existing) entry.value_ptr.* = checked.CaptureId.generatedLift(final_index);
+                break :blk entry.value_ptr.*;
+            } else null;
             program.locals.appendAssumeCapacity(.{
                 .id = expected,
                 .symbol = local.symbol,
                 .ty = sealed_ty,
                 .binder = local.binder,
-                .capture_id = local.capture_id,
+                .capture_id = durable_capture_id,
+                .checked_capture_id = local.checked_capture_id,
             });
             const local_name = self.sourceText(self.local_names.items[index]);
             program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
@@ -10444,7 +10477,33 @@ const BodyContext = struct {
         ty: DraftTypeCell,
         binder: ?checked.PatternBinderId,
     ) Allocator.Error!DraftLocalId {
-        return try self.draft.addLocal(symbol, ty, binder);
+        const inherited_capture_id = if (binder) |source_binder| blk: {
+            const existing = self.binders.get(source_binder) orelse break :blk null;
+            break :blk self.draft.locals.items[@intFromEnum(existing)].capture_id;
+        } else null;
+        return try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
+    }
+
+    /// Materialize a new runtime binding from checked capture provenance even
+    /// when another instantiation of that checked binder is temporarily in
+    /// scope. This is the one-to-many boundary; ordinary local versions use
+    /// `addLocalWithBinderCell` and inherit the current binding's identity.
+    fn addFreshLocalWithBinder(
+        self: *BodyContext,
+        symbol: Common.Symbol,
+        ty: Type.TypeId,
+        binder: checked.PatternBinderId,
+    ) Allocator.Error!DraftLocalId {
+        return try self.addFreshLocalWithBinderCell(symbol, try self.draftTypeCell(ty), binder);
+    }
+
+    fn addFreshLocalWithBinderCell(
+        self: *BodyContext,
+        symbol: Common.Symbol,
+        ty: DraftTypeCell,
+        binder: checked.PatternBinderId,
+    ) Allocator.Error!DraftLocalId {
+        return try self.draft.addLocal(symbol, ty, binder, null);
     }
 
     fn addFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
@@ -22522,7 +22581,7 @@ const BodyContext = struct {
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_node = try self.graph.importMono(lowered_ty);
             const capture_cell = DraftTypeCell.fromGraphNode(capture_node);
-            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -22741,7 +22800,7 @@ const BodyContext = struct {
             const binder = constCaptureBinder(capture.id);
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const capture_cell = try fn_ctx.draftTypeCell(lowered_ty);
-            const local = try fn_ctx.addLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
+            const local = try fn_ctx.addFreshLocalWithBinderCell(self.builder.symbols.fresh(), capture_cell, binder);
             try fn_ctx.bindLocalName(local, binder);
             const previous = fn_ctx.binders.get(binder);
             try fn_ctx.binders.put(binder, local);
@@ -38228,7 +38287,7 @@ test "body draft store appends draft-local ids spans and type cells" {
 
     const ty = DraftTypeCell.fromGraphNode(try graph.newNode(.{ .primitive = .u64 }));
     var symbol_gen = Common.SymbolGen{};
-    const local = try draft.addLocal(symbol_gen.fresh(), ty, null);
+    const local = try draft.addLocal(symbol_gen.fresh(), ty, null, null);
     const pat = try draft.addPat(.{ .ty = ty, .data = .{ .bind = local } });
     const expr = try draft.addExpr(.{ .ty = ty, .data = .{ .local = local } });
     const expr_span = try draft.addExprSpan(&.{expr});
@@ -38487,7 +38546,7 @@ test "body draft sealed output maps back from specialization cache without body 
     const list_cell = DraftTypeCell.fromGraphNode(list_node);
 
     var symbol_gen = Common.SymbolGen{};
-    const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null);
+    const local = try draft.addLocal(symbol_gen.fresh(), list_cell, null, null);
     const pat = try draft.addPat(.{ .ty = list_cell, .data = .{ .bind = local } });
     const expr = try draft.addExpr(.{ .ty = list_cell, .data = .{ .local = local } });
     const stmt = try draft.addStmt(.{ .let_ = .{

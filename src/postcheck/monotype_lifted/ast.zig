@@ -458,6 +458,7 @@ pub const Program = struct {
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
     ) Program {
+        const first_synthesized_capture_index: u32 = @intCast(locals.items.len);
         return .{
             .allocator = allocator,
             .names = name_store,
@@ -484,7 +485,9 @@ pub const Program = struct {
             .if_branches = ProgramList(IfBranch, "if_branches").fromArrayList(if_branches),
             .string_literals = ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
             .proc_debug_names = proc_debug_names,
-            .next_lift_capture_id = 0,
+            // Final Monotype locals use generatedLift(LocalId), so ids minted
+            // by lifting and spec_constr begin after the entire input arena.
+            .next_lift_capture_id = first_synthesized_capture_index,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
@@ -816,6 +819,7 @@ pub const Program = struct {
         binder: ?check.CheckedModule.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const checked_capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null;
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -823,7 +827,8 @@ pub const Program = struct {
             .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null,
+            .capture_id = checked_capture_id,
+            .checked_capture_id = checked_capture_id,
         });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -839,12 +844,18 @@ pub const Program = struct {
         ty: Type.TypeId,
         binder: ?check.CheckedModule.PatternBinderId,
         capture_id: check.CheckedModule.CaptureId,
+        checked_capture_id: ?check.CheckedModule.CaptureId,
     ) std.mem.Allocator.Error!LocalId {
-        if (binder) |source_binder| {
-            if (capture_id != check.CheckedModule.CaptureId.fromBinder(source_binder)) {
-                Common.invariant("binder-backed replacement local changed its CaptureId");
+        if (checked_capture_id) |checked_id| {
+            if (checked_id.isCanonical()) {
+                const source_binder = binder orelse
+                    Common.invariant("canonical checked capture identity had no checked binder");
+                if (checked_id != check.CheckedModule.CaptureId.fromBinder(source_binder)) {
+                    Common.invariant("checked capture identity disagreed with its binder");
+                }
             }
-        } else if (capture_id.isCanonical()) {
+        }
+        if (binder == null and capture_id.isCanonical()) {
             Common.invariant("capture replacement CaptureId had no checked binder");
         }
 
@@ -855,6 +866,7 @@ pub const Program = struct {
             .ty = ty,
             .binder = binder,
             .capture_id = capture_id,
+            .checked_capture_id = checked_capture_id,
         });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -866,6 +878,9 @@ pub const Program = struct {
     /// within the program.
     pub fn nextLiftCaptureId(self: *Program) check.CheckedModule.CaptureId {
         const index = self.next_lift_capture_id;
+        if (index > check.CheckedModule.CaptureId.max_generated_index) {
+            Common.invariant("lifted program exhausted durable capture identities");
+        }
         self.next_lift_capture_id += 1;
         return check.CheckedModule.CaptureId.generatedLift(index);
     }
