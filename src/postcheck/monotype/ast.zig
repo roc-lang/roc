@@ -153,6 +153,7 @@ pub const SignatureRelation = enum(u8) {
     exact_graph,
 };
 
+/// A specialized Monotype function and its producer-authored signature relation.
 pub const Fn = struct {
     source: FnTemplate,
     signature_relation: SignatureRelation = .independent_roots,
