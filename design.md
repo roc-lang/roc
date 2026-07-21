@@ -1699,6 +1699,20 @@ same nested function instance. Lambdas and closures use the current function
 digest. That makes a lambda inside a nested local procedure belong to that
 nested local procedure, so captures come from the correct body instance.
 
+Function-context identity contains only durable checked identities and type
+digests. Draft-local allocation ids are operational binder-to-value mappings;
+they are not checked identity and must not affect a nested function or local
+procedure digest. Captured runtime values remain separate from `FnDef` identity,
+as described above.
+
+When Monotype restores a capturing function from `ConstStore`, it preserves the
+stored nested `FnDef`, including its producer-authored context function digest
+and local-procedure-context digest. Restoration may install fresh draft locals
+for the stored captures, but it must not recompute either digest from those
+consumer-side locals. Thus a restored function and the corresponding runtime
+successor use the same callable identity whenever their checked identity,
+monomorphic type, evidence, and captures agree.
+
 When Monotype has put a nested function in the nested definition table, that
 table is the only owner of the function body. Later value occurrences of the
 same `FnTemplate` are references to that nested definition; they do not rebuild

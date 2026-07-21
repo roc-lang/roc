@@ -5622,7 +5622,10 @@ const Builder = struct {
         defer fn_ctx.deinit();
         fn_ctx.evidence = try fn_ctx.materializeConstFnEvidence(fn_value);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
-        fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
+        fn_ctx.current_fn_key = switch (fn_value.fn_def) {
+            .nested => |nested| nested.context_fn_key,
+            else => Common.invariant("capturing stored function had no nested function identity"),
+        };
         try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
         const draft = FinalBodyOutputGuard.begin(self);
 
@@ -5679,17 +5682,9 @@ const Builder = struct {
             else
                 try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
         }
-        var template = try self.constFnTemplateToMono(fn_value, ty);
+        const template = try self.constFnTemplateToMono(fn_value, ty);
         const nested = switch (template.fn_def) {
-            .nested => |nested| blk: {
-                template.fn_def = .{ .nested = .{
-                    .owner = nested.owner,
-                    .site = nested.site,
-                    .context_fn_key = try fn_ctx.lexicalContextKey(),
-                    .local_proc_context_digest = nested.local_proc_context_digest,
-                } };
-                break :blk template.fn_def.nested;
-            },
+            .nested => |nested| nested,
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, fn_ctx.current_fn_key);
@@ -11170,12 +11165,6 @@ const BodyContext = struct {
         }
     }
 
-    fn lexicalContextKey(self: *BodyContext) Allocator.Error!names.TypeDigest {
-        const entries = try self.captureLexicalBinderEntries();
-        defer self.allocator.free(entries);
-        return lexicalContextKeyFromEntries(self.current_fn_key, entries);
-    }
-
     fn enterRestoredLocalProcScope(
         self: *BodyContext,
         nested: Ast.NestedFn,
@@ -11298,33 +11287,31 @@ const BodyContext = struct {
         self.allocator.free(context.entries);
     }
 
-    fn localProcUseContextKey(self: *BodyContext, context: LocalProcContext) Allocator.Error!names.TypeDigest {
+    fn localProcUseContextKey(self: *BodyContext, context: LocalProcContext) names.TypeDigest {
         if (context.restored_specialization_key) |key| return key;
-        const entries = try self.allocator.dupe(LexicalBinderEntry, context.entries);
-        defer self.allocator.free(entries);
 
-        for (entries) |*entry| {
+        // The draft locals establish that every declaration-context binder is
+        // available here, but their allocation ids are not callable identity.
+        for (context.entries) |entry| {
             switch (entry.kind) {
                 0 => {
                     const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
-                    const local = self.binders.get(binder) orelse
+                    _ = self.binders.get(binder) orelse
                         Common.invariant("local procedure use was missing a declaration-context binder");
-                    entry.local = @intFromEnum(local);
                 },
                 1 => {
                     const key = TypedBinder{
                         .binder = @enumFromInt(entry.binder),
                         .type_digest = entry.type_digest,
                     };
-                    const local = self.typed_binders.get(key) orelse
+                    _ = self.typed_binders.get(key) orelse
                         Common.invariant("local procedure use was missing a declaration-context typed binder");
-                    entry.local = @intFromEnum(local);
                 },
                 else => Common.invariant("local procedure context had an unknown binder entry kind"),
             }
         }
 
-        return lexicalContextKeyFromEntries(context.base_key, entries);
+        return lexicalContextKeyFromEntries(context.base_key, context.entries);
     }
 
     /// Digest the exact source declaration contexts visible at a nested
@@ -11332,6 +11319,7 @@ const BodyContext = struct {
     /// so restoration never infers lexical provenance from a finished type or
     /// from whichever binders happen to be live at the use site.
     fn localProcContextsDigest(self: *BodyContext) Allocator.Error!?names.TypeDigest {
+        if (self.restored_local_proc_scope) |restored| return restored.source_context_digest;
         if (self.local_proc_contexts.count() == 0) return null;
 
         const addresses = try self.allocator.alloc(DraftLocalProcAddress, self.local_proc_contexts.count());
@@ -11349,7 +11337,7 @@ const BodyContext = struct {
         }.lessThan);
 
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.monotype.local_proc_contexts.v2");
+        hasher.update("roc.monotype.local_proc_contexts.v3");
         for (addresses) |address| {
             const context_id = self.local_proc_contexts.get(address) orelse
                 Common.invariant("local procedure context disappeared while its digest was produced");
@@ -11373,7 +11361,6 @@ const BodyContext = struct {
                 hasher.update(&.{entry.kind});
                 hashU32(&hasher, entry.binder);
                 hasher.update(&entry.type_digest.bytes);
-                hashU32(&hasher, entry.local);
             }
         }
         return .{ .bytes = hasher.finalResult() };
@@ -11484,13 +11471,14 @@ const BodyContext = struct {
     fn lexicalContextKeyFromEntries(base_key: names.TypeDigest, entries: []const LexicalBinderEntry) names.TypeDigest {
         if (entries.len == 0) return base_key;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update("roc.monotype.lexical_context");
+        hasher.update("roc.monotype.lexical_context.v2");
         hasher.update(&base_key.bytes);
+        // `local` installs the checked binder in the active body draft. Its
+        // allocation id changes across restoration and is not checked identity.
         for (entries) |entry| {
             hasher.update(&.{entry.kind});
             hashU32(&hasher, entry.binder);
             hasher.update(&entry.type_digest.bytes);
-            hashU32(&hasher, entry.local);
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -14943,6 +14931,12 @@ const BodyContext = struct {
     ) Allocator.Error!?NodeId {
         const expected = self.expectedGeneratedIteratorProducerNode(expected_ret, kind) orelse return null;
         if (self.isForcedDynamicIteratorNode(expected)) return try self.graphFunctionNode(args, expected);
+        // Range bounds initialize the generated step state but are not stored as
+        // nominal component arguments. Their producer therefore keeps the
+        // checked two-argument request while returning the exact private range.
+        if (kind == .range_exclusive or kind == .range_inclusive) {
+            return try self.graphFunctionNode(args, expected);
+        }
         return try self.graphFunctionNode(self.generatedIteratorComponentNodes(expected, args.len), expected);
     }
 
@@ -20585,7 +20579,7 @@ const BodyContext = struct {
         const previous_owner_template = self.owner_template;
         self.owner_template = context.owner_template;
         defer self.owner_template = previous_owner_template;
-        const context_fn_key = try self.localProcUseContextKey(context);
+        const context_fn_key = self.localProcUseContextKey(context);
         const nested = try self.builder.nestedFnForExpr(
             self.view,
             context.owner_template,
@@ -22018,7 +22012,6 @@ const BodyContext = struct {
         if (fn_value.captures.len != 0) {
             return try self.restoreCapturingConstFnAtNode(
                 store_view,
-                fn_id,
                 fn_value,
                 fn_def,
                 request_fn_node,
@@ -22088,7 +22081,6 @@ const BodyContext = struct {
     fn restoreCapturingConstFnAtNode(
         self: *BodyContext,
         store_view: ModuleView,
-        fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
         request_fn_node: NodeId,
@@ -22107,7 +22099,10 @@ const BodyContext = struct {
         fn_ctx.evidence = retained_evidence;
         defer fn_ctx.deinit();
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
-        fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
+        fn_ctx.current_fn_key = switch (fn_def) {
+            .nested => |nested| nested.context_fn_key,
+            else => Common.invariant("capturing stored function had no nested function identity"),
+        };
         try self.graph.unify(try fn_ctx.instNode(fn_value.source_fn_ty), request_fn_node);
         try self.graph.drainDirty();
 
@@ -22185,12 +22180,7 @@ const BodyContext = struct {
         }
 
         const capture_nested = switch (fn_def) {
-            .nested => |nested| Ast.NestedFn{
-                .owner = nested.owner,
-                .site = nested.site,
-                .context_fn_key = try fn_ctx.lexicalContextKey(),
-                .local_proc_context_digest = nested.local_proc_context_digest,
-            },
+            .nested => |nested| nested,
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
@@ -22269,7 +22259,7 @@ const BodyContext = struct {
         const checked_template = templateForConstFnDef(fn_value.fn_def);
         _ = fn_view.templates.get(checked_template.template);
         if (fn_value.captures.len != 0) {
-            return try self.restoreCapturingConstFn(store_view, fn_id, fn_value, template, ty, retained_evidence, static_data_const_locator);
+            return try self.restoreCapturingConstFn(store_view, fn_value, template, ty, retained_evidence, static_data_const_locator);
         }
         const request_fn_node = try self.activeNodeFromType(ty);
         const restored_fn = try self.restoreConstFnTemplate(fn_value, template, retained_evidence, request_fn_node);
@@ -22322,7 +22312,6 @@ const BodyContext = struct {
     fn restoreCapturingConstFn(
         self: *BodyContext,
         store_view: ModuleView,
-        fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         template: Ast.FnTemplate,
         ty: Type.TypeId,
@@ -22334,7 +22323,10 @@ const BodyContext = struct {
         fn_ctx.evidence = retained_evidence;
         defer fn_ctx.deinit();
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
-        fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
+        fn_ctx.current_fn_key = switch (template.fn_def) {
+            .nested => |nested| nested.context_fn_key,
+            else => Common.invariant("capturing stored function had no nested function identity"),
+        };
         try fn_ctx.constrainTypeToMono(fn_value.source_fn_ty, ty);
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -22392,17 +22384,8 @@ const BodyContext = struct {
                 try fn_ctx.restoreConstNodeAtType(store_view, fn_view, capture.value, captures[index].ty);
         }
 
-        var capture_template = template;
-        const capture_nested = switch (capture_template.fn_def) {
-            .nested => |nested| blk: {
-                capture_template.fn_def = .{ .nested = .{
-                    .owner = nested.owner,
-                    .site = nested.site,
-                    .context_fn_key = try fn_ctx.lexicalContextKey(),
-                    .local_proc_context_digest = nested.local_proc_context_digest,
-                } };
-                break :blk capture_template.fn_def.nested;
-            },
+        const capture_nested = switch (template.fn_def) {
+            .nested => |nested| nested,
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
         const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(capture_nested, fn_ctx.current_fn_key);
@@ -22433,8 +22416,8 @@ const BodyContext = struct {
                 &fn_ctx,
                 lambda_expr_id,
                 capture_nested,
-                capture_template.source_fn_ty,
-                capture_template.source_fn_key,
+                template.source_fn_ty,
+                template.source_fn_key,
                 request_fn_node,
                 capture_entry_guards,
                 fn_ctx.evidence,
@@ -24286,7 +24269,7 @@ const BodyContext = struct {
                 self.view,
                 self.owner_template,
                 expr_id,
-                try self.lexicalContextKey(),
+                self.current_fn_key,
                 try self.localProcContextsDigest(),
             ),
             else => Common.invariant("checked closure did not point at a lambda expression"),
@@ -24407,7 +24390,7 @@ const BodyContext = struct {
             self.view,
             self.owner_template,
             expr_id,
-            try self.lexicalContextKey(),
+            self.current_fn_key,
             try self.localProcContextsDigest(),
         );
         const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
@@ -38159,4 +38142,25 @@ test "record parser presence words cover fields wider than one u64" {
     try std.testing.expectEqual(@as(u64, 2), BodyContext.recordPresenceMask(65));
     try std.testing.expectEqual(@as(u64, 1) << 63, BodyContext.recordPresenceMask(127));
     try std.testing.expectEqual(@as(u64, 1), BodyContext.recordPresenceMask(128));
+}
+
+test "function context identity excludes draft local allocation ids" {
+    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 32 };
+    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 32 };
+    const original = [_]LexicalBinderEntry{.{
+        .kind = 1,
+        .binder = 17,
+        .local = 23,
+        .type_digest = type_digest,
+    }};
+    var restored = original;
+    restored[0].local = 41;
+
+    const original_key = BodyContext.lexicalContextKeyFromEntries(base_key, &original);
+    const restored_key = BodyContext.lexicalContextKeyFromEntries(base_key, &restored);
+    try std.testing.expectEqualSlices(u8, &original_key.bytes, &restored_key.bytes);
+
+    restored[0].binder += 1;
+    const different_binder_key = BodyContext.lexicalContextKeyFromEntries(base_key, &restored);
+    try std.testing.expect(!std.mem.eql(u8, &original_key.bytes, &different_binder_key.bytes));
 }
