@@ -285,6 +285,12 @@ const RuntimeSchemaRequest = struct {
     ty: Type.TypeId,
 };
 
+const StaticDataPlan = struct {
+    candidate: Common.StaticDataId,
+    layout: layout.Idx,
+    plan: LirProgram.ConstPlanId,
+};
+
 const CaptureSource = union(enum) {
     record: LIR.LocalId,
     erased_ptr: LIR.LocalId,
@@ -336,7 +342,7 @@ const Lowerer = struct {
     const_type_map: std.AutoHashMap(Type.TypeId, const_store.ConstTypeId),
     mono_const_type_map: std.AutoHashMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: std.AutoHashMap(Type.TypeId, SolvedType.TypeVarId),
-    static_data_map: []?LIR.StaticDataId,
+    static_data_map: std.AutoHashMap(StaticDataPlan, LIR.StaticDataId),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
     local_map: []?LIR.LocalId,
@@ -384,10 +390,6 @@ const Lowerer = struct {
         errdefer allocator.free(comptime_site_map);
         @memset(comptime_site_map, null);
 
-        const static_data_map = try allocator.alloc(?LIR.StaticDataId, solved.lifted.static_data_values.len());
-        errdefer allocator.free(static_data_map);
-        @memset(static_data_map, null);
-
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -422,7 +424,7 @@ const Lowerer = struct {
             .const_type_map = std.AutoHashMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
             .mono_const_type_map = std.AutoHashMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = std.AutoHashMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
-            .static_data_map = static_data_map,
+            .static_data_map = std.AutoHashMap(StaticDataPlan, LIR.StaticDataId).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = local_map,
             .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
@@ -445,7 +447,7 @@ const Lowerer = struct {
         self.const_type_map.deinit();
         self.mono_const_type_map.deinit();
         self.callable_source_fn_map.deinit();
-        self.allocator.free(self.static_data_map);
+        self.static_data_map.deinit();
         self.layout_owner_types.deinit();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -482,7 +484,7 @@ const Lowerer = struct {
         self.const_type_map.deinit();
         self.mono_const_type_map.deinit();
         self.callable_source_fn_map.deinit();
-        self.allocator.free(self.static_data_map);
+        self.static_data_map.deinit();
         self.layout_owner_types.deinit();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -504,7 +506,7 @@ const Lowerer = struct {
         self.local_map = &.{};
         self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
         self.local_types = std.AutoHashMap(LIR.LocalId, Type.TypeId).init(self.allocator);
-        self.static_data_map = &.{};
+        self.static_data_map = std.AutoHashMap(StaticDataPlan, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
@@ -1345,8 +1347,13 @@ const Lowerer = struct {
         plan: LirProgram.ConstPlanId,
     ) Common.LowerError!LIR.StaticDataId {
         const raw = @intFromEnum(id);
-        if (raw >= self.static_data_map.len) Common.invariant("static data candidate id exceeded lifted static data table");
-        if (self.static_data_map[raw]) |existing| return existing;
+        if (raw >= self.solved.lifted.static_data_values.len()) Common.invariant("static data candidate id exceeded lifted static data table");
+        const key = StaticDataPlan{
+            .candidate = id,
+            .layout = layout_idx,
+            .plan = plan,
+        };
+        if (self.static_data_map.get(key)) |existing| return existing;
 
         const source = GuardedList.at(self.solved.lifted.static_data_values.unsafeRawItemsForView(), raw);
         const result_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
@@ -1357,7 +1364,7 @@ const Lowerer = struct {
             .layout_idx = layout_idx,
             .plan = plan,
         });
-        self.static_data_map[raw] = result_id;
+        try self.static_data_map.put(key, result_id);
         return result_id;
     }
 

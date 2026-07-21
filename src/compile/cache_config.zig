@@ -53,7 +53,10 @@ pub const Constants = struct {
     /// 27: Empty-row provenance and checked iterator-step topology changed serialized state.
     /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
     /// 29: String interpolation constraint metadata moved into the type store.
-    pub const CACHE_VERSION = 30;
+    /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
+    /// 31: Combined the empty-row and interpolation checked-artifact layouts.
+    /// 32: Platform requirement roots carry producer-authored dispatch evidence.
+    pub const CACHE_VERSION = 32;
 };
 
 /// Configuration for the Roc cache system.

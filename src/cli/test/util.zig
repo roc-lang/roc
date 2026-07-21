@@ -16,12 +16,16 @@ pub const default_child_timeout_ms: u64 = 5 * std.time.ms_per_min;
 pub const IsolatedCacheDirs = struct {
     roc_cache_dir: []u8,
     zig_local_cache_dir: []u8,
+    /// Persistent-install root, exported as ROC_INSTALL_DIR so `roc install`
+    /// state never leaks between tests or into the developer's real installs.
+    install_dir: []u8,
     /// Per-subprocess temp dir; see TestProcessDirs.temp_dir for why this must
     /// be isolated from the shared system temp dir.
     temp_dir: []u8,
 
     pub fn deinit(self: IsolatedCacheDirs, allocator: std.mem.Allocator) void {
         allocator.free(self.temp_dir);
+        allocator.free(self.install_dir);
         allocator.free(self.zig_local_cache_dir);
         allocator.free(self.roc_cache_dir);
     }
@@ -31,6 +35,9 @@ pub const IsolatedCacheDirs = struct {
 pub const TestProcessDirs = struct {
     roc_cache_dir: []u8,
     zig_local_cache_dir: []u8,
+    /// Persistent-install root, exported as ROC_INSTALL_DIR; see
+    /// IsolatedCacheDirs.install_dir.
+    install_dir: []u8,
     /// Per-job temp dir, exported as TEMP/TMP/TMPDIR to the roc subprocess. Roc
     /// derives its runtime-host scratch dir (`<temp>/roc/<version>/...`) from
     /// these and runs a background cleanup thread that iterates and deletes
@@ -44,6 +51,7 @@ pub const TestProcessDirs = struct {
     pub fn deinit(self: TestProcessDirs, allocator: std.mem.Allocator) void {
         allocator.free(self.work_dir);
         allocator.free(self.temp_dir);
+        allocator.free(self.install_dir);
         allocator.free(self.zig_local_cache_dir);
         allocator.free(self.roc_cache_dir);
     }
@@ -302,6 +310,10 @@ pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) Tes
     defer allocator.free(zig_local_cache_rel);
     try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
+    const install_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "roc-install" });
+    defer allocator.free(install_rel);
+    try std.Io.Dir.cwd().createDirPath(io, install_rel);
+
     const temp_rel = try std.fs.path.join(allocator, &.{ cache_root_rel, "tmp" });
     defer allocator.free(temp_rel);
     try std.Io.Dir.cwd().createDirPath(io, temp_rel);
@@ -309,6 +321,7 @@ pub fn createIsolatedTestCacheDirs(io: std.Io, allocator: std.mem.Allocator) Tes
     return .{
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
         .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
+        .install_dir = try std.fs.path.join(allocator, &.{ cwd_path, install_rel }),
         .temp_dir = try std.fs.path.join(allocator, &.{ cwd_path, temp_rel }),
     };
 }
@@ -329,6 +342,10 @@ pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) TestDirE
     defer allocator.free(zig_local_cache_rel);
     try std.Io.Dir.cwd().createDirPath(io, zig_local_cache_rel);
 
+    const install_rel = try std.fs.path.join(allocator, &.{ work_dir_rel, "roc-install" });
+    defer allocator.free(install_rel);
+    try std.Io.Dir.cwd().createDirPath(io, install_rel);
+
     const temp_rel = try std.fs.path.join(allocator, &.{ work_dir_rel, "tmp" });
     defer allocator.free(temp_rel);
     try std.Io.Dir.cwd().createDirPath(io, temp_rel);
@@ -336,6 +353,7 @@ pub fn createIsolatedTestDirs(io: std.Io, allocator: std.mem.Allocator) TestDirE
     return .{
         .roc_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, roc_cache_rel }),
         .zig_local_cache_dir = try std.fs.path.join(allocator, &.{ cwd_path, zig_local_cache_rel }),
+        .install_dir = try std.fs.path.join(allocator, &.{ cwd_path, install_rel }),
         .temp_dir = try std.fs.path.join(allocator, &.{ cwd_path, temp_rel }),
         .work_dir = try std.fs.path.join(allocator, &.{ cwd_path, work_dir_rel }),
     };
@@ -374,7 +392,8 @@ pub fn buildIsolatedTestEnvMap(
 
     if (env_map.get("ROC_CACHE_DIR") == null or
         env_map.get("XDG_CACHE_HOME") == null or
-        env_map.get("ZIG_LOCAL_CACHE_DIR") == null)
+        env_map.get("ZIG_LOCAL_CACHE_DIR") == null or
+        env_map.get("ROC_INSTALL_DIR") == null)
     {
         const cache_dirs = try createIsolatedTestCacheDirs(io, allocator);
         defer cache_dirs.deinit(allocator);
@@ -389,6 +408,10 @@ pub fn buildIsolatedTestEnvMap(
 
         if (env_map.get("ZIG_LOCAL_CACHE_DIR") == null) {
             try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
+        }
+
+        if (env_map.get("ROC_INSTALL_DIR") == null) {
+            try env_map.put("ROC_INSTALL_DIR", cache_dirs.install_dir);
         }
 
         // Isolate the temp dir too, so roc's background temp-cleanup thread

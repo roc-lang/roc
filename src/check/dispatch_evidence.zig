@@ -10,15 +10,18 @@
 //! enumerate identical lists without sharing var identities.
 //!
 //! Order contract: depth-first over the resolved type structure — function
-//! args then return, alias/nominal args then backing, row fields/tags then
-//! extension, all in store order — emitting each constrained var's
-//! constraints in range order at its first occurrence; then the collected
+//! args then return, ordinary alias/nominal args then backing, and logical row
+//! fields/tags across the complete extension chain, all in store order —
+//! emitting each constrained var's constraints in range order at its first
+//! occurrence; then the collected
 //! constraints' fn types are walked the same way in emission order (they can
 //! bind further constrained vars, e.g. `where [a.iter : a -> i, i.next : ..]`).
 //!
 //! Each param also carries the semantic PATH from the scheme root to its
 //! dispatcher's first occurrence (function arg positions, type arguments,
-//! row labels, …). Compiler-generated call edges — structural-derivation
+//! row labels, …). Row-extension storage chains, including transparent aliases
+//! within them, are normalized away: a field or tag payload in any tail is
+//! addressed directly from the logical row root. Compiler-generated call edges — structural-derivation
 //! component calls, builtin helper calls — have no checked instantiation
 //! records, so monotype resolves a target's obligations by walking these
 //! paths over the concrete monomorphic callable instead.
@@ -39,22 +42,42 @@ pub const PathStep = extern struct {
     data: u32,
 
     pub const Kind = enum(u32) {
-        fn_arg,
-        fn_ret,
-        alias_arg,
-        alias_backing,
-        nominal_arg,
-        nominal_backing,
-        tuple_elem,
-        record_field,
-        record_ext,
-        tag_payload_tag,
-        tag_payload_index,
-        tag_ext,
+        fn_arg = 0,
+        fn_ret = 1,
+        alias_arg = 2,
+        alias_backing = 3,
+        nominal_arg = 4,
+        nominal_backing = 5,
+        tuple_elem = 6,
+        record_field = 7,
+        // 8 was the checked-store `record_ext` step. Durable paths normalize
+        // row-extension topology away, so the value remains retired.
+        tag_payload_tag = 9,
+        tag_payload_index = 10,
+        // 11 was the checked-store `tag_ext` step and remains retired.
     };
 
+    /// Decode a serialized path kind without trapping on a retired or corrupt
+    /// discriminant. Artifact boundary validation uses this before consumers
+    /// call `stepKind`.
+    pub fn kindOrNull(self: PathStep) ?Kind {
+        return switch (self.kind) {
+            @intFromEnum(Kind.fn_arg) => .fn_arg,
+            @intFromEnum(Kind.fn_ret) => .fn_ret,
+            @intFromEnum(Kind.alias_arg) => .alias_arg,
+            @intFromEnum(Kind.alias_backing) => .alias_backing,
+            @intFromEnum(Kind.nominal_arg) => .nominal_arg,
+            @intFromEnum(Kind.nominal_backing) => .nominal_backing,
+            @intFromEnum(Kind.tuple_elem) => .tuple_elem,
+            @intFromEnum(Kind.record_field) => .record_field,
+            @intFromEnum(Kind.tag_payload_tag) => .tag_payload_tag,
+            @intFromEnum(Kind.tag_payload_index) => .tag_payload_index,
+            else => null,
+        };
+    }
+
     pub fn stepKind(self: PathStep) Kind {
-        return @enumFromInt(self.kind);
+        return self.kindOrNull() orelse unreachable;
     }
 };
 
@@ -64,10 +87,11 @@ pub const EvidenceParam = struct {
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     /// Semantic steps from the scheme root to the dispatcher's first
-    /// occurrence. Empty for dispatchers reachable only through a
-    /// constraint's fn type (no path over the callable exists). Aliases the
-    /// scratch path pool: valid until the next `enumerateEvidenceParams`
-    /// call with the same scratch.
+    /// occurrence. Empty when no path over the normalized callable exists:
+    /// dispatchers reachable only through a constraint's fn type, and open-row
+    /// remainder vars erased when the row closes. Aliases the scratch path
+    /// pool: valid until the next `enumerateEvidenceParams` call with the same
+    /// scratch.
     path: []const PathStep = &.{},
     /// Pool offsets backing `path`; fixed up into the slice once the walk's
     /// pool stops growing.
@@ -79,7 +103,12 @@ const StackEntry = struct {
     var_: Var,
     path_start: u32,
     path_len: u32,
+    /// A row continuation is checked-store traversal state, not a semantic
+    /// path component. Its fields/tags extend the logical row at `path`.
+    row_context: RowContext = .none,
 };
+
+const RowContext = enum { none, record, tag };
 
 /// Reusable scratch state for `enumerateEvidenceParams`.
 pub const Scratch = struct {
@@ -93,7 +122,9 @@ pub const Scratch = struct {
 
     const Child = struct {
         var_: Var,
-        step: PathStep,
+        steps: [2]PathStep = undefined,
+        step_len: u32,
+        row_context: RowContext = .none,
     };
 
     pub fn deinit(self: *Scratch, gpa: Allocator) void {
@@ -163,39 +194,36 @@ fn walk(
         const seen = try scratch.visited.getOrPut(gpa, resolved.var_);
         if (seen.found_existing) continue;
 
+        if (entry.row_context != .none) {
+            try walkRowContinuation(gpa, store, resolved, entry, scratch, out);
+            continue;
+        }
+
         switch (resolved.desc.content) {
             .flex => |flex| try emitConstraints(gpa, store, resolved.var_, flex.constraints, entry, with_paths, scratch, out),
             .rigid => |rigid| try emitConstraints(gpa, store, resolved.var_, rigid.constraints, entry, with_paths, scratch, out),
             .alias => |alias| {
                 scratch.children.clearRetainingCapacity();
                 for (store.sliceAliasArgs(alias), 0..) |arg, i| {
-                    try scratch.children.append(gpa, .{ .var_ = arg, .step = step(.alias_arg, @intCast(i)) });
+                    try scratch.children.append(gpa, child(arg, step(.alias_arg, @intCast(i))));
                 }
-                try scratch.children.append(gpa, .{ .var_ = store.getAliasBackingVar(alias), .step = step(.alias_backing, 0) });
+                try scratch.children.append(gpa, child(store.getAliasBackingVar(alias), step(.alias_backing, 0)));
                 try pushChildren(gpa, scratch, entry);
             },
             .structure => |flat_type| switch (flat_type) {
-                .record => |record| {
-                    scratch.children.clearRetainingCapacity();
-                    const fields = store.getRecordFieldsSlice(record.fields);
-                    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-                        try scratch.children.append(gpa, .{ .var_ = field_var, .step = step(.record_field, @bitCast(name)) });
-                    }
-                    try scratch.children.append(gpa, .{ .var_ = record.ext, .step = step(.record_ext, 0) });
-                    try pushChildren(gpa, scratch, entry);
-                },
+                .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
                 .record_unbound => |fields_range| {
                     scratch.children.clearRetainingCapacity();
                     const fields = store.getRecordFieldsSlice(fields_range);
                     for (fields.items(.name), fields.items(.var_)) |name, field_var| {
-                        try scratch.children.append(gpa, .{ .var_ = field_var, .step = step(.record_field, @bitCast(name)) });
+                        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
                     }
                     try pushChildren(gpa, scratch, entry);
                 },
                 .tuple => |tuple| {
                     scratch.children.clearRetainingCapacity();
                     for (store.sliceVars(tuple.elems), 0..) |elem, i| {
-                        try scratch.children.append(gpa, .{ .var_ = elem, .step = step(.tuple_elem, @intCast(i)) });
+                        try scratch.children.append(gpa, child(elem, step(.tuple_elem, @intCast(i))));
                     }
                     try pushChildren(gpa, scratch, entry);
                 },
@@ -207,19 +235,19 @@ fn walk(
                     // exactly like `.alias_backing`).
                     scratch.children.clearRetainingCapacity();
                     for (store.sliceNominalArgs(nominal), 0..) |arg, i| {
-                        try scratch.children.append(gpa, .{ .var_ = arg, .step = step(.nominal_arg, @intCast(i)) });
+                        try scratch.children.append(gpa, child(arg, step(.nominal_arg, @intCast(i))));
                     }
                     try pushChildren(gpa, scratch, entry);
                 },
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
                     scratch.children.clearRetainingCapacity();
                     for (store.sliceVars(func.args), 0..) |arg, i| {
-                        try scratch.children.append(gpa, .{ .var_ = arg, .step = step(.fn_arg, @intCast(i)) });
+                        try scratch.children.append(gpa, child(arg, step(.fn_arg, @intCast(i))));
                     }
-                    try scratch.children.append(gpa, .{ .var_ = func.ret, .step = step(.fn_ret, 0) });
+                    try scratch.children.append(gpa, child(func.ret, step(.fn_ret, 0)));
                     try pushChildren(gpa, scratch, entry);
                 },
-                .tag_union => |tag_union| try pushChildrenTagged(gpa, scratch, entry, store, tag_union),
+                .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
                 .empty_record, .empty_tag_union => {},
             },
             .err => {},
@@ -227,64 +255,144 @@ fn walk(
     }
 }
 
+/// Traverse a checked row tail while keeping the path anchored at the logical
+/// row root. Transparent aliases and extension links are producer topology;
+/// neither is present after Monotype flattens the row.
+fn walkRowContinuation(
+    gpa: Allocator,
+    store: *const types_mod.Store,
+    resolved: types_mod.ResolvedVarDesc,
+    entry: StackEntry,
+    scratch: *Scratch,
+    out: *std.ArrayListUnmanaged(EvidenceParam),
+) Allocator.Error!void {
+    switch (resolved.desc.content) {
+        // An open row remainder is not a standalone component of the closed,
+        // flattened monomorphic row. Keep its obligation in canonical order,
+        // but publish it pathless rather than misidentifying the whole row as
+        // its dispatcher.
+        .flex => |flex| try emitConstraints(gpa, store, resolved.var_, flex.constraints, entry, false, scratch, out),
+        .rigid => |rigid| try emitConstraints(gpa, store, resolved.var_, rigid.constraints, entry, false, scratch, out),
+        .alias => |alias| {
+            scratch.children.clearRetainingCapacity();
+            try scratch.children.append(gpa, rowContinuation(store.getAliasBackingVar(alias), entry.row_context));
+            try pushChildren(gpa, scratch, entry);
+        },
+        .structure => |flat_type| switch (entry.row_context) {
+            .record => switch (flat_type) {
+                .record => |record| try pushRecordChildren(gpa, scratch, entry, store, record.fields, record.ext),
+                .record_unbound => |fields_range| {
+                    scratch.children.clearRetainingCapacity();
+                    const fields = store.getRecordFieldsSlice(fields_range);
+                    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
+                        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
+                    }
+                    try pushChildren(gpa, scratch, entry);
+                },
+                .empty_record => {},
+                else => unreachable,
+            },
+            .tag => switch (flat_type) {
+                .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
+                .empty_tag_union => {},
+                else => unreachable,
+            },
+            .none => unreachable,
+        },
+        .err => {},
+    }
+}
+
 fn step(kind: PathStep.Kind, data: u32) PathStep {
     return .{ .kind = @intFromEnum(kind), .data = data };
 }
 
+fn child(var_: Var, path_step: PathStep) Scratch.Child {
+    return .{ .var_ = var_, .steps = .{ path_step, undefined }, .step_len = 1 };
+}
+
+fn tagPayloadChild(var_: Var, tag_name_bits: u32, payload_index: u32) Scratch.Child {
+    return .{
+        .var_ = var_,
+        .steps = .{
+            step(.tag_payload_tag, tag_name_bits),
+            step(.tag_payload_index, payload_index),
+        },
+        .step_len = 2,
+    };
+}
+
+fn rowContinuation(var_: Var, context: RowContext) Scratch.Child {
+    std.debug.assert(context != .none);
+    return .{ .var_ = var_, .step_len = 0, .row_context = context };
+}
+
 /// Push the collected children so pops visit them in declared order, each
-/// with `entry`'s path extended by its own step.
+/// with `entry`'s path extended by its semantic steps. A zero-step child is a
+/// checked-store row continuation and retains the logical row-root path.
 fn pushChildren(gpa: Allocator, scratch: *Scratch, entry: StackEntry) Allocator.Error!void {
     var i = scratch.children.items.len;
     while (i > 0) {
         i -= 1;
-        const child = scratch.children.items[i];
+        const next_child = scratch.children.items[i];
+        if (next_child.step_len == 0) {
+            try scratch.stack.append(gpa, .{
+                .var_ = next_child.var_,
+                .path_start = entry.path_start,
+                .path_len = entry.path_len,
+                .row_context = next_child.row_context,
+            });
+            continue;
+        }
         const path_start: u32 = @intCast(scratch.path_pool.items.len);
         // Reserve before self-append: the source range aliases the pool.
-        try scratch.path_pool.ensureUnusedCapacity(gpa, entry.path_len + 1);
+        try scratch.path_pool.ensureUnusedCapacity(gpa, entry.path_len + next_child.step_len);
         scratch.path_pool.appendSliceAssumeCapacity(scratch.pathSlice(entry.path_start, entry.path_len));
-        scratch.path_pool.appendAssumeCapacity(child.step);
+        scratch.path_pool.appendSliceAssumeCapacity(next_child.steps[0..next_child.step_len]);
         try scratch.stack.append(gpa, .{
-            .var_ = child.var_,
+            .var_ = next_child.var_,
             .path_start = path_start,
-            .path_len = entry.path_len + 1,
+            .path_len = entry.path_len + next_child.step_len,
+            .row_context = next_child.row_context,
         });
     }
 }
 
-/// Tag-union variant of `pushChildren`: each payload gets a
-/// (tag label, payload index) step pair.
-fn pushChildrenTagged(
+fn pushRecordChildren(
+    gpa: Allocator,
+    scratch: *Scratch,
+    entry: StackEntry,
+    store: *const types_mod.Store,
+    fields_range: types_mod.RecordField.SafeMultiList.Range,
+    ext: Var,
+) Allocator.Error!void {
+    scratch.children.clearRetainingCapacity();
+    const fields = store.getRecordFieldsSlice(fields_range);
+    for (fields.items(.name), fields.items(.var_)) |name, field_var| {
+        try scratch.children.append(gpa, child(field_var, step(.record_field, @bitCast(name))));
+    }
+    try scratch.children.append(gpa, rowContinuation(ext, .record));
+    try pushChildren(gpa, scratch, entry);
+}
+
+/// Each payload gets a (tag label, payload index) semantic step pair. The
+/// extension is scheduled last as zero-step producer traversal state.
+fn pushTagChildren(
     gpa: Allocator,
     scratch: *Scratch,
     entry: StackEntry,
     store: *const types_mod.Store,
     tag_union: types_mod.TagUnion,
 ) Allocator.Error!void {
+    scratch.children.clearRetainingCapacity();
     const tags = store.getTagsSlice(tag_union.tags);
-    // Push ext first so it pops last.
-    {
-        const path_start: u32 = @intCast(scratch.path_pool.items.len);
-        try scratch.path_pool.ensureUnusedCapacity(gpa, entry.path_len + 1);
-        scratch.path_pool.appendSliceAssumeCapacity(scratch.pathSlice(entry.path_start, entry.path_len));
-        scratch.path_pool.appendAssumeCapacity(step(.tag_ext, 0));
-        try scratch.stack.append(gpa, .{ .var_ = tag_union.ext, .path_start = path_start, .path_len = entry.path_len + 1 });
-    }
-    var i: usize = tags.len;
-    while (i > 0) {
-        i -= 1;
-        const tag_name = tags.items(.name)[i];
-        const tag_args = store.sliceVars(tags.items(.args)[i]);
-        var j: usize = tag_args.len;
-        while (j > 0) {
-            j -= 1;
-            const path_start: u32 = @intCast(scratch.path_pool.items.len);
-            try scratch.path_pool.ensureUnusedCapacity(gpa, entry.path_len + 2);
-            scratch.path_pool.appendSliceAssumeCapacity(scratch.pathSlice(entry.path_start, entry.path_len));
-            scratch.path_pool.appendAssumeCapacity(step(.tag_payload_tag, @bitCast(tag_name)));
-            scratch.path_pool.appendAssumeCapacity(step(.tag_payload_index, @intCast(j)));
-            try scratch.stack.append(gpa, .{ .var_ = tag_args[j], .path_start = path_start, .path_len = entry.path_len + 2 });
+    for (tags.items(.name), tags.items(.args)) |tag_name, args| {
+        for (store.sliceVars(args), 0..) |arg, payload_index| {
+            try scratch.children.append(gpa, tagPayloadChild(arg, @bitCast(tag_name), @intCast(payload_index)));
         }
     }
+    try scratch.children.append(gpa, rowContinuation(tag_union.ext, .tag));
+    try pushChildren(gpa, scratch, entry);
 }
 
 fn emitConstraints(

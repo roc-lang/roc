@@ -654,4 +654,15 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "44" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10170
+        .name = "issue 10170: List fold can concatenate iterator accumulators",
+        .source =
+        \\{
+        \\    _ = [[].iter()].fold([].iter(), |a, b| a.concat(b))
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{}" },
+    },
 };

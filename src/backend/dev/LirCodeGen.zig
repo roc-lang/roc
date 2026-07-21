@@ -518,6 +518,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Readonly data symbols for non-SSO strings in object-file output.
         static_strings: []const StaticStringData.Entry,
+        /// Resolved readonly values used only by in-process native execution.
+        native_static_data: []const usize,
         /// Owned names for generated internal static-data relocation targets.
         static_data_symbol_names: std.ArrayList([]u8),
 
@@ -906,6 +908,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .store = store,
                 .layout_store = layout_store_opt,
                 .static_strings = static_strings,
+                .native_static_data = &.{},
                 .static_data_symbol_names = .empty,
                 .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
@@ -938,6 +941,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         pub fn setComptimeHooks(self: *Self, hooks: ?ComptimeHooks) void {
             self.comptime_hooks = hooks;
+        }
+
+        pub fn setNativeStaticData(self: *Self, addresses: []const usize) void {
+            self.native_static_data = addresses;
         }
 
         /// Clean up resources
@@ -5464,13 +5471,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.codegen.allocStackSlot(size);
             const src_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(src_reg);
-            try self.emitStaticDataAddress(src_reg, id);
+            switch (self.generation_mode) {
+                .native_execution => {
+                    const address = self.nativeStaticDataAddress(id);
+                    try self.codegen.emitLoadImm(src_reg, @bitCast(@as(u64, address)));
+                },
+                .shim_execution, .object_file => try self.emitStaticDataAddress(src_reg, id),
+            }
 
             const temp_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(temp_reg);
             try self.copyChunked(temp_reg, src_reg, 0, frame_ptr, slot, size);
 
             return self.stackLocationForLayout(runtime_layout, slot);
+        }
+
+        fn nativeStaticDataAddress(self: *const Self, id: lir.LIR.StaticDataId) usize {
+            const index: usize = @intFromEnum(id);
+            if (index < self.native_static_data.len) return self.native_static_data[index];
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "Dev/codegen invariant violated: static data value {d} has no native address",
+                    .{@intFromEnum(id)},
+                );
+            }
+            unreachable;
         }
 
         /// Generate code for a local lookup.
@@ -9918,9 +9943,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const skip_patch = blk: {
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
-                    const patch_loc = self.codegen.currentOffset();
-                    try self.codegen.emit.bcond(.mi, 0);
-                    break :blk patch_loc;
+                    break :blk try self.codegen.emitCondJump(.mi);
                 } else {
                     try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
                     break :blk try self.codegen.emitCondJump(.sign);
@@ -9958,9 +9981,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const skip_patch = blk: {
                 if (comptime target.toCpuArch() == .aarch64) {
                     try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
-                    const patch_loc = self.codegen.currentOffset();
-                    try self.codegen.emit.bcond(.mi, 0);
-                    break :blk patch_loc;
+                    break :blk try self.codegen.emitCondJump(.mi);
                 } else {
                     try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
                     break :blk try self.codegen.emitCondJump(.sign);
@@ -11816,25 +11837,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// BRANCH PATCHING MECHANISM:
         /// When generating switch dispatch, we don't know the jump target offset until
         /// we've generated the code for the branch body. So we:
-        /// 1. Emit the branch instruction with offset=0 (placeholder)
+        /// 1. Emit the architecture-specific branch placeholder
         /// 2. Record the instruction's location (patch_loc)
         /// 3. Generate the branch body code
         /// 4. Calculate the actual offset: current_offset - patch_loc
         /// 5. Patch the instruction at patch_loc with the real offset
         ///
-        /// WHY OFFSET 0 IS SAFE:
-        /// Offset 0 means "jump to the next instruction" which is harmless if we
-        /// somehow fail to patch. But in normal operation, codegen.patchJump()
-        /// overwrites the placeholder before execution.
+        /// PLACEHOLDER SAFETY:
+        /// The architecture-specific emitters choose harmless placeholder bytes
+        /// and reserve whatever space their patching strategy requires. In normal
+        /// operation, codegen.patchJump() overwrites the placeholder before execution.
         ///
         /// RETURNS: The patch location (where the displacement bytes are) for later patching.
         fn emitJumpIfNotEqual(self: *Self) Allocator.Error!usize {
             if (comptime target.toCpuArch() == .aarch64) {
-                // B.NE (branch if not equal) with placeholder offset
-                // On aarch64, the entire 4-byte instruction encodes the offset
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.bcond(.ne, 0);
-                return patch_loc;
+                return self.codegen.emitCondJump(.ne);
             } else {
                 // JNE (jump if not equal) with placeholder offset
                 // x86_64: JNE rel32 is 0F 85 xx xx xx xx (6 bytes)
@@ -11848,10 +11865,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emit a conditional jump for unsigned less than (for list length comparisons)
         fn emitJumpIfEqual(self: *Self) Allocator.Error!usize {
             if (comptime target.toCpuArch() == .aarch64) {
-                // B.EQ (branch if equal) with placeholder offset
-                const patch_loc = self.codegen.currentOffset();
-                try self.codegen.emit.bcond(.eq, 0);
-                return patch_loc;
+                return self.codegen.emitCondJump(.eq);
             } else {
                 // JE (jump if equal) with placeholder offset
                 const patch_loc = self.codegen.currentOffset() + 2;

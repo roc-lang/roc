@@ -361,6 +361,13 @@ pub const Resolver = struct {
 
     diagnostics: std.ArrayListUnmanaged(Diagnostic),
 
+    /// The bundle URL the root itself came from, when the build was launched
+    /// from a URL or installed source rather than an ordinary local path. The
+    /// URL is the root's identity; the extracted path is a storage detail.
+    /// Borrowed; must outlive the resolver and have already parsed
+    /// successfully via `base.url.parseUrlPath`.
+    root_url: ?[]const u8 = null,
+
     pub fn init(gpa: Allocator, fetcher: Fetcher, config: Config) Resolver {
         return .{
             .gpa = gpa,
@@ -378,6 +385,11 @@ pub const Resolver = struct {
 
     pub fn deinit(self: *Resolver) void {
         self.arena_state.deinit();
+    }
+
+    /// Declare the bundle URL the root came from; see `root_url`.
+    pub fn setRootUrl(self: *Resolver, url: []const u8) void {
+        self.root_url = url;
     }
 
     fn arena(self: *Resolver) Allocator {
@@ -1011,14 +1023,24 @@ pub const Resolver = struct {
 
         var packages = std.ArrayListUnmanaged(Resolved.Package).empty;
 
-        // Index 0: the root.
+        // Index 0: the root. A URL-launched root carries its bundle URL as
+        // both identity and UrlInfo, exactly like a URL dependency would.
+        const root_url_info: ?Resolved.UrlInfo = if (self.root_url) |url| blk: {
+            const parsed = base.url.parseUrlPath(url) catch unreachable;
+            break :blk .{
+                .url = try out.dupe(u8, url),
+                .url_id = parsed.url_id,
+                .version = parsed.version,
+                .hash = try out.dupe(u8, parsed.hash),
+            };
+        } else null;
         try packages.append(out, .{
             .kind = root_node.kind,
-            .identity = try out.dupe(u8, root_path),
+            .identity = if (root_url_info) |info| info.url else try out.dupe(u8, root_path),
             .root_file = try out.dupe(u8, root_node.root_file),
             .root_dir = try out.dupe(u8, root_node.root_dir),
             .root_source_hash = root_node.root_source_hash,
-            .url = null,
+            .url = root_url_info,
             .deps = &.{},
         });
         const root_local_group = try std.fmt.allocPrint(self.arena(), "l@{s}", .{root_path});

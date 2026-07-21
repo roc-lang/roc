@@ -374,6 +374,7 @@ pub const Expr = union(enum) {
         method_name_region: base.Region,
         constraint_fn_var: ?TypeVar = null,
         step_fn_var: ?TypeVar = null,
+        dispatcher_var: ?TypeVar = null,
     },
     /// Structural equality chosen explicitly by the checker.
     ///
@@ -1319,6 +1320,9 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 if (e.constraint_fn_var) |constraint_fn_var| {
                     try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                }
+                if (e.dispatcher_var) |dispatcher_var| {
+                    try tree.pushU64Pair("dispatcher-var", @intFromEnum(dispatcher_var));
                 }
                 const attrs = tree.beginNode();
 

@@ -880,6 +880,14 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    /// Read one operand by value from a stable span identity. Unlike
+    /// `captureOperandSpan`, this retains no borrow across a recursive walk
+    /// that may append to `capture_operands`.
+    pub fn captureOperandAt(self: *const Program, span_: Span(CaptureOperand), index: usize) CaptureOperand {
+        if (index >= span_.len) Common.invariant("capture operand index was outside span");
+        return self.capture_operands.get(span_.start + index);
+    }
+
     pub fn setCaptureOperandInSpan(self: *Program, span_: Span(CaptureOperand), index: usize, operand: CaptureOperand) void {
         if (index >= span_.len) Common.invariant("capture operand index was outside span");
         self.capture_operands.set(span_.start + index, operand);

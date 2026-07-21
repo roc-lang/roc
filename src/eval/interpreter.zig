@@ -106,6 +106,10 @@ const InterpreterRocEnv = struct {
     jmp_buf: JmpBuf = undefined,
     active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
+    /// Interpreter currently executing through these RocOps. Erased-callable
+    /// trampolines use this explicit host context for static callable data,
+    /// whose immutable capture bytes cannot embed a mutable interpreter pointer.
+    active_interpreter: ?*anyopaque = null,
 
     fn init(allocator: Allocator, caller_roc_ops: *RocOps) InterpreterRocEnv {
         return .{
@@ -300,6 +304,11 @@ pub const Interpreter = struct {
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
     static_strings: backend.StaticStringData.Table,
+    /// Resolved immutable values indexed directly by compact `StaticDataId`.
+    static_data: []const usize,
+    /// Static erased callables use the ordinary target payload ABI. This table
+    /// supplies the interpreter-only proc identity without rewriting that data.
+    static_erased_callables: []const StaticErasedCallable,
     frame_plans: []FramePlan,
     rc_presence: []RcPresence,
     rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{},
@@ -342,6 +351,11 @@ pub const Interpreter = struct {
     pub const ComptimeBranchHit = struct {
         site: LIR.ComptimeSiteId,
         branch_index: u32,
+    };
+
+    pub const StaticErasedCallable = struct {
+        capture_ptr: [*]u8,
+        proc_id: LIR.LirProcSpecId,
     };
 
     const CrashBoundary = struct {
@@ -539,6 +553,8 @@ pub const Interpreter = struct {
                 .hosted_fns = caller_roc_ops.hosted_fns,
             },
             .static_strings = static_strings,
+            .static_data = &.{},
+            .static_erased_callables = &.{},
             .frame_plans = frame_plans,
             .rc_presence = rc_presence,
             .rc_plans = rc_plans,
@@ -563,6 +579,23 @@ pub const Interpreter = struct {
         self.rc_plans.deinit(self.allocator);
         self.allocator.free(self.rc_presence);
         deinitFramePlans(self.allocator, self.frame_plans);
+    }
+
+    /// Install the explicit immutable data image that backs LIR static-data
+    /// literals. Both slices must outlive every evaluation on this interpreter.
+    pub fn setStaticData(
+        self: *LirInterpreter,
+        addresses: []const usize,
+        erased_callables: []const StaticErasedCallable,
+    ) void {
+        self.static_data = addresses;
+        self.static_erased_callables = erased_callables;
+    }
+
+    /// Function address stored in static erased-callable payloads interpreted
+    /// in-process. Proc identity is resolved by `static_erased_callables`.
+    pub fn staticErasedCallableTrampolineAddress() usize {
+        return @intFromPtr(&interpreterErasedCallableTrampoline);
     }
 
     fn deinitFramePlans(allocator: Allocator, frame_plans: []FramePlan) void {
@@ -919,6 +952,9 @@ pub const Interpreter = struct {
 
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        const previous_interpreter = self.roc_env.active_interpreter;
+        self.roc_env.active_interpreter = @ptrCast(self);
+        defer self.roc_env.active_interpreter = previous_interpreter;
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
@@ -2776,10 +2812,7 @@ pub const Interpreter = struct {
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
-            .static_data => self.invariantFailed(
-                "LIR/interpreter invariant violated: static data literal reached compile-time execution",
-                .{},
-            ),
+            .static_data => |id| self.evalStaticDataLiteral(id, target_layout),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
             .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
@@ -2805,6 +2838,23 @@ pub const Interpreter = struct {
             else => unreachable,
         }
         return val;
+    }
+
+    fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
+        const index: usize = @intFromEnum(id);
+        if (index >= self.static_data.len) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: static data value {d} has no image address",
+                .{index},
+            );
+        }
+        const result = try self.alloc(target_layout);
+        const size = self.helper.sizeOf(target_layout);
+        if (size != 0) {
+            const source: [*]const u8 = @ptrFromInt(self.static_data[index]);
+            @memcpy(result.ptr[0..size], source[0..size]);
+        }
+        return result;
     }
 
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
@@ -2856,8 +2906,14 @@ pub const Interpreter = struct {
         args: ?[*]const u8,
         capture: ?[*]u8,
     ) callconv(.c) void {
-        const context = erasedCallableInterpreterContextFromCapture(capture);
-        context.interpreter.callInterpreterErasedCallable(context, ops, ret, args) catch |err| switch (err) {
+        const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+        const active_interpreter = env.active_interpreter orelse {
+            ops.crash("LIR/interpreter erased callable trampoline ran without an active interpreter");
+            unreachable;
+        };
+        const self: *LirInterpreter = @ptrCast(@alignCast(active_interpreter));
+        const callable = self.resolveInterpreterCallable(capture);
+        self.callInterpreterErasedCallable(callable.proc_id, callable.capture_value_ptr, ret, args) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
             error.ComptimeExhaustiveness => ops.crash("LIR/interpreter erased callable trampoline hit compile-time exhaustiveness marker"),
@@ -2866,6 +2922,31 @@ pub const Interpreter = struct {
             // expect_err statements only occur in top-level expect test
             // roots, never in callable bodies.
             error.ExpectErr => unreachable,
+        };
+    }
+
+    const ResolvedInterpreterCallable = struct {
+        proc_id: LIR.LirProcSpecId,
+        capture_value_ptr: [*]u8,
+    };
+
+    fn resolveInterpreterCallable(self: *LirInterpreter, capture: ?[*]u8) ResolvedInterpreterCallable {
+        const capture_ptr = capture orelse self.invariantFailed(
+            "LIR/interpreter invariant violated: erased callable trampoline received a null capture pointer",
+            .{},
+        );
+        for (self.static_erased_callables) |entry| {
+            if (@intFromPtr(entry.capture_ptr) == @intFromPtr(capture_ptr)) {
+                return .{ .proc_id = entry.proc_id, .capture_value_ptr = capture_ptr };
+            }
+        }
+        const context = erasedCallableInterpreterContextFromCapture(capture_ptr);
+        if (context.interpreter != self) {
+            self.invariantFailed("LIR/interpreter invariant violated: erased callable belonged to a different interpreter", .{});
+        }
+        return .{
+            .proc_id = @enumFromInt(context.proc_id),
+            .capture_value_ptr = capture_ptr + context.capture_value_offset,
         };
     }
 
@@ -2882,12 +2963,11 @@ pub const Interpreter = struct {
 
     fn callInterpreterErasedCallable(
         self: *LirInterpreter,
-        context: *ErasedCallableInterpreterContext,
-        _: *RocOps,
+        proc_id: LIR.LirProcSpecId,
+        capture_value_ptr: [*]u8,
         ret: ?[*]u8,
         args: ?[*]const u8,
     ) Error!void {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(context.proc_id);
         const proc_spec = self.store.getProcSpec(proc_id);
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
         if (proc_arg_locals.len == 0) {
@@ -2919,7 +2999,6 @@ pub const Interpreter = struct {
             }
         }
 
-        const capture_value_ptr: [*]u8 = @ptrCast(@as([*]u8, @ptrCast(context)) + context.capture_value_offset);
         proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
@@ -2981,7 +3060,7 @@ pub const Interpreter = struct {
         };
 
         if (@intFromPtr(payload.callable_fn_ptr) == @intFromPtr(&interpreterErasedCallableTrampoline)) {
-            const proc_id = erasedCallableInterpreterProcId(closure_ptr);
+            const proc_id = self.resolveInterpreterCallable(builtins.erased_callable.capturePtr(closure_ptr)).proc_id;
             const proc_ret_layout = self.store.getProcSpec(proc_id).ret_layout;
             if (proc_ret_layout != ret_layout) {
                 return self.invariantFailedError(
@@ -7635,3 +7714,44 @@ pub const Interpreter = struct {
 
     // ═══════════════════════════════════════════════════════════════════
 };
+
+test "interpreter evaluates explicit static data by compact id" {
+    const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+    const allocator = std.testing.allocator;
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    var static_value: u64 = 0xCAFE_BABE_D00D_F00D;
+    var static_addresses = std.ArrayList(usize).empty;
+    defer static_addresses.deinit(allocator);
+    const static_data_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(static_addresses.items.len)));
+    try static_addresses.append(allocator, @intFromPtr(&static_value));
+
+    const result_local = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result_local,
+        .value = .{ .static_data = static_data_id },
+        .next = ret_stmt,
+    } });
+    const frame_locals = try store.addLocalSpan(&.{result_local});
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .u64,
+        .frame_locals = frame_locals,
+    });
+
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    defer interpreter.deinit();
+    interpreter.setStaticData(static_addresses.items, &.{});
+
+    const result = try interpreter.eval(.{ .proc_id = proc, .ret_layout = .u64 });
+    try std.testing.expectEqual(static_value, result.value.read(u64));
+}

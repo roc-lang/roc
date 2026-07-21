@@ -884,6 +884,12 @@ const StaticDataUse = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
     checked_type: checked.CheckedTypeId,
+    type_cell: DraftTypeCell,
+};
+
+const StaticDataEligibilityKey = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
 };
 
 /// Key for a memoized structural-derivation helper def. `value_ty` is the type
@@ -1009,6 +1015,7 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
+    static_data_eligibility: std.AutoHashMap(StaticDataEligibilityKey, bool),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -1056,6 +1063,7 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
+            .static_data_eligibility = std.AutoHashMap(StaticDataEligibilityKey, bool).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
@@ -1119,6 +1127,7 @@ const Builder = struct {
         self.hash_defs.deinit();
         self.equality_defs.deinit();
         self.inspect_defs.deinit();
+        self.static_data_eligibility.deinit();
         self.static_data_ids.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
@@ -1539,7 +1548,12 @@ const Builder = struct {
             arg_exprs[i] = try self.program.addExpr(.{ .ty = arg_ty, .data = .{ .local = local } });
         }
 
-        const callee = try self.fnDefForProcedureUseWithType(view, procedure, request.checked_type);
+        const callee = try self.fnDefForProcedureUseWithType(
+            view,
+            procedure,
+            request.checked_type,
+            request.root_evidence,
+        );
         const body = try self.program.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
@@ -3240,12 +3254,14 @@ const Builder = struct {
         const_locator: checked.ConstLocator,
         node: ?checked.ConstNodeId,
         checked_type: checked.CheckedTypeId,
+        type_cell: DraftTypeCell,
     ) Allocator.Error!Common.StaticDataId {
         const const_node = self.constNode(const_locator, node);
         const gop = try self.static_data_ids.getOrPut(.{
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
+            .type_cell = type_cell,
         });
         if (!gop.found_existing) {
             gop.value_ptr.* = try self.program.addStaticDataValue(.{
@@ -3264,6 +3280,44 @@ const Builder = struct {
 
     fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId, bare_fn: BareFnCandidate) bool {
         return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node), bare_fn);
+    }
+
+    fn constNodeHasStableStaticDataRepresentation(
+        self: *Builder,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+    ) Allocator.Error!bool {
+        const key = StaticDataEligibilityKey{ .module = view.key, .node = node };
+        if (self.static_data_eligibility.get(key)) |stable| return stable;
+
+        const stable = switch (view.const_store.get(node)) {
+            .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
+            .fn_value => false,
+            .zst,
+            .scalar,
+            .str,
+            .crash,
+            => true,
+            .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
+            .list,
+            .tuple,
+            .record,
+            => |children| blk: {
+                for (children) |child| {
+                    if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
+                }
+                break :blk true;
+            },
+            .tag => |tag| blk: {
+                for (tag.payloads) |child| {
+                    if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
+                }
+                break :blk true;
+            },
+            .nominal => |nominal| try self.constNodeHasStableStaticDataRepresentation(view, nominal.backing),
+        };
+        try self.static_data_eligibility.put(key, stable);
+        return stable;
     }
 
     fn constValueMayUseStaticDataCandidate(self: *Builder, view: ModuleView, value: checked.ConstValue, bare_fn: BareFnCandidate) bool {
@@ -3334,6 +3388,7 @@ const Builder = struct {
         source_ty_view: ModuleView,
         proc: checked.ProcedureUseTemplate,
         source_fn_ty: checked.CheckedTypeId,
+        root_evidence: ?checked.CheckedEvidenceRef,
     ) Allocator.Error!Ast.FnSlot {
         const mono_fn_ty = try self.lowerType(source_ty_view, source_fn_ty);
         const source_fn_key = proc.source_fn_ty_template;
@@ -3363,7 +3418,51 @@ const Builder = struct {
                 break :blk self.fnDefForProcedureBindingBody(app_view, binding.body, source_fn_ty, source_fn_key, mono_fn_ty);
             },
         };
-        return try self.lowerFnTemplateCallTarget(fn_template, &.{});
+        const evidence = if (root_evidence) |evidence_ref|
+            try self.materializeRootProcedureEvidence(fn_template, evidence_ref)
+        else
+            &.{};
+        return try self.lowerFnTemplateCallTarget(fn_template, evidence);
+    }
+
+    fn materializeRootProcedureEvidence(
+        self: *Builder,
+        fn_template: Ast.FnTemplate,
+        evidence_ref: checked.CheckedEvidenceRef,
+    ) Allocator.Error![]const SpecEvidence {
+        const template_ref = switch (fn_template.fn_def) {
+            .local_template,
+            .imported_template,
+            .checked_generated,
+            => |template| template,
+            .local_hosted,
+            .imported_hosted,
+            => |hosted| hosted.template,
+            .nested,
+            .parser_runtime,
+            .encoder_for_runtime,
+            => Common.invariant("root procedure evidence referenced a non-checked procedure template"),
+        };
+        const view = self.moduleForId(evidence_ref.artifact);
+        if (!moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes)) {
+            Common.invariant("root procedure evidence and procedure template belonged to different checked artifacts");
+        }
+        const start: usize = evidence_ref.span.start;
+        const len: usize = evidence_ref.span.len;
+        if (start > view.static_dispatch_plans.evidence_refs.len or
+            len > view.static_dispatch_plans.evidence_refs.len - start)
+        {
+            Common.invariant("root procedure evidence range was outside its checked artifact");
+        }
+
+        const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
+        defer graph.destroy();
+        var draft = BodyDraftStore.init(self.allocator);
+        defer draft.deinit();
+        var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &draft);
+        defer ctx.deinit();
+        ctx.evidence = rootEvidence(template_ref, &.{});
+        return try ctx.materializeEvidence(view.static_dispatch_plans.evidence_refs[start .. start + len]);
     }
 
     /// Lower (or defer) a procedure template body and return the Monotype
@@ -12755,6 +12854,15 @@ const BodyContext = struct {
                 const expr_ty = try self.resolvedTypeViewForNode(try self.lowerExprTypeNode(expr_id));
                 return try self.lowerExprWithType(expr_id, expr_ty);
             },
+            .str => |segments| {
+                const expr_node = try self.lowerExprTypeNode(expr_id);
+                try self.graph.unify(expr_node, try self.graph.importMono(try self.builder.primitiveType(.str)));
+                try self.graph.drainDirty();
+                return try self.addExprWithTypeCell(
+                    DraftTypeCell.fromGraphNode(expr_node),
+                    try self.lowerStr(segments),
+                );
+            },
             // Constructor payloads carry the type evidence that completes the
             // constructor node. Lower them first, then seal the whole value at
             // this expression boundary. This is especially important for
@@ -20640,8 +20748,11 @@ const BodyContext = struct {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
         const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
-        if (self.builder.static_data_literals and self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn)) {
-            const id = try self.builder.staticDataValue(const_locator, node, checked_type);
+        if (self.builder.static_data_literals and
+            try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
+            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
+        {
+            const id = try self.builder.staticDataValue(const_locator, node, checked_type, DraftTypeCell.fromSealed(ty));
             return try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
                 .runtime_expr = runtime_expr,
@@ -20664,8 +20775,16 @@ const BodyContext = struct {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
         const runtime_expr = try self.restoreConstNodeAtNode(store_view, type_view, node, request_node);
-        if (self.builder.static_data_literals and self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn)) {
-            const id = try self.builder.staticDataValue(const_locator, node, checked_type);
+        if (self.builder.static_data_literals and
+            try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
+            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
+        {
+            const id = try self.builder.staticDataValue(
+                const_locator,
+                node,
+                checked_type,
+                DraftTypeCell.fromGraphNode(request_node),
+            );
             return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(request_node), .{ .static_data_candidate = .{
                 .static_data = id,
                 .runtime_expr = runtime_expr,
@@ -25389,7 +25508,6 @@ const BodyContext = struct {
                     else => return null,
                 },
                 .tag_payload_index => return null, // only valid after tag_payload_tag
-                .record_ext, .tag_ext => return null, // rows are closed in mono
             }
         }
         return ty;
@@ -25460,7 +25578,6 @@ const BodyContext = struct {
                     else => return null,
                 },
                 .tag_payload_index => return null,
-                .record_ext, .tag_ext => return null,
             }
         }
         return node;

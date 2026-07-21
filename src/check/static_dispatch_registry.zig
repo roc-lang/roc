@@ -971,8 +971,9 @@ pub const EvidencePathStep = dispatch_evidence.PathStep;
 /// method name identifies the obligation, and `path` locates the dispatcher
 /// within the scheme's callable so compiler-generated call edges (which have
 /// no checked instantiation records) can resolve the obligation from the
-/// concrete monomorphic callable. An empty path means the dispatcher is only
-/// reachable through a constraint's fn type.
+/// concrete monomorphic callable. An empty path means the dispatcher has no
+/// component path over the normalized callable (it is reachable only through
+/// a constraint's fn type, or is an open-row remainder erased on closure).
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
     /// Checker-recorded derived implementation permitted when the concrete
@@ -1258,19 +1259,20 @@ pub const StaticDispatchPlanTable = struct {
                     args[1] = .{ .generated_interpolation_iter = checked_expr };
                     const from_interpolation = try names.internMethodName("from_interpolation");
                     const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
+                    const dispatcher_var = interpolation.dispatcher_var orelse unreachable;
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
                         .method = from_interpolation,
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try interpolationDispatcherTypeId(allocator, module, checked_types, expr_idx),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatcher_var),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn_var),
                         .args = ar,
                         .result_mode = .value,
                     });
                     try plan_sources.append(allocator, .{
-                        .dispatcher_var = interpolationDispatcherVar(module, expr_idx),
+                        .dispatcher_var = dispatcher_var,
                         .constraint_fn_var = constraint_fn_var,
                     });
                 },
@@ -1953,39 +1955,6 @@ fn checkedTypeIdForVar(
             std.debug.panic("checked static dispatch invariant violated: dispatch type root was not published", .{});
         }
         unreachable;
-    };
-}
-
-fn interpolationDispatcherTypeId(
-    allocator: Allocator,
-    module: TypedCIR.Module,
-    checked_types: anytype,
-    expr_idx: CIR.Expr.Idx,
-) Allocator.Error!CheckedTypeId {
-    const suffix_target = module.moduleEnvConst().numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
-        return checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx));
-
-    return switch (suffix_target.target()) {
-        .local => |stmt_idx| checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(stmt_idx)),
-        .invalid => checkedTypeIdForVar(allocator, module, checked_types, module.exprType(expr_idx)),
-        .builtin, .external => if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
-        } else unreachable,
-    };
-}
-
-/// Source-var mirror of `interpolationDispatcherTypeId`, for the plan-source
-/// side data the total-resolution pass consumes.
-fn interpolationDispatcherVar(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) Var {
-    const suffix_target = module.moduleEnvConst().numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
-        return module.exprType(expr_idx);
-
-    return switch (suffix_target.target()) {
-        .local => |stmt_idx| ModuleEnv.varFrom(stmt_idx),
-        .invalid => module.exprType(expr_idx),
-        .builtin, .external => if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked static dispatch invariant violated: interpolation suffix target was not published as a local type", .{});
-        } else unreachable,
     };
 }
 

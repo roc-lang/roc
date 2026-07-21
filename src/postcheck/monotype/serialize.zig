@@ -1459,6 +1459,18 @@ fn writeRootRequest(hasher: *std.crypto.hash.sha2.Sha256, request: checked.RootR
     writeOptionalProcedureTemplate(hasher, request.procedure_template);
     writeOptionalTopLevelProcedureBinding(hasher, request.procedure_binding);
     writeOptionalProcedureUseTemplate(hasher, request.procedure_use);
+    writeOptionalCheckedEvidenceRef(hasher, request.root_evidence);
+}
+
+fn writeOptionalCheckedEvidenceRef(hasher: *std.crypto.hash.sha2.Sha256, evidence: ?checked.CheckedEvidenceRef) void {
+    if (evidence) |actual| {
+        writeHashBool(hasher, true);
+        writeHashBytes32(hasher, actual.artifact.bytes);
+        writeHashU32(hasher, actual.span.start);
+        writeHashU32(hasher, actual.span.len);
+    } else {
+        writeHashBool(hasher, false);
+    }
 }
 
 fn writeRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: checked.RootSource) void {

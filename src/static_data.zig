@@ -1,11 +1,10 @@
-//! Target-layout readonly data symbols for internal constants and provided data.
+//! Shared target-layout readonly data symbols for internal constants and provided data.
 //!
 //! Static data exports are materialized from checked `ConstStore` nodes and the
 //! layout/const plans output by direct LIR lowering.
 
 const std = @import("std");
 
-const backend = @import("backend");
 const builtins = @import("builtins");
 const check = @import("check");
 const layout = @import("layout");
@@ -20,8 +19,52 @@ const ConstFn = check.ConstStore.ConstFn;
 const ConstFnDef = check.ConstStore.FnDef;
 const ConstStrDataId = check.ConstStore.ConstStrDataId;
 const ConstValue = CheckedModule.ConstValue;
-const StaticDataExport = backend.StaticDataExport;
-const StaticDataRelocation = backend.StaticDataRelocation;
+
+/// Immutable data symbol materialized in the target's readonly representation.
+pub const StaticDataExport = struct {
+    /// Linker-visible symbol name, for example `roc__answer`.
+    symbol_name: []const u8,
+    /// Fully materialized Roc ABI bytes for the constant.
+    bytes: []const u8,
+    /// Offset inside `bytes` where `symbol_name` points.
+    symbol_offset: u32 = 0,
+    /// Required target alignment of the symbol.
+    alignment: u32,
+    /// Whether an object-file symbol has global linker binding.
+    is_global: bool = true,
+    /// Whether this symbol is part of the host-visible ABI.
+    is_exported: bool = true,
+    /// Pointer relocations from this symbol's bytes to other symbols.
+    relocations: []const StaticDataRelocation = &.{},
+};
+
+/// One explicit pointer relocation inside a readonly static-data symbol.
+pub const StaticDataRelocation = struct {
+    /// Runtime meaning of a relocation target.
+    pub const Kind = enum {
+        address,
+        function_pointer,
+    };
+
+    /// Byte offset inside `StaticDataExport.bytes` where the pointer is stored.
+    offset: u64,
+    /// Symbol whose address should be written at `offset`.
+    target_symbol_name: []const u8,
+    /// Addend applied to the target symbol address.
+    addend: i64 = 0,
+    /// Runtime meaning of the stored pointer.
+    kind: Kind = .address,
+    /// For an erased-callable function pointer, the byte distance from this
+    /// pointer field to the callable's capture bytes.
+    callable_capture_offset: ?u32 = null,
+    /// Whether `target_symbol_name` is owned by this relocation.
+    owns_target_symbol_name: bool = false,
+};
+
+/// Deterministic object-file symbol name for an internal LIR procedure.
+pub fn procSymbolName(allocator: Allocator, proc_symbol: lir.Symbol) Allocator.Error![]u8 {
+    return try std.fmt.allocPrint(allocator, "roc__proc_{x}", .{proc_symbol.raw()});
+}
 
 /// Checked modules whose constants can become target static data.
 pub const ModuleViews = struct {
@@ -864,10 +907,18 @@ const StaticDataBuilder = struct {
         }
 
         const proc = self.lowered.lir_result.store.getProcSpec(entry.entry);
-        const proc_symbol = try backend.procSymbolName(self.allocator, proc.name);
+        const proc_symbol = try procSymbolName(self.allocator, proc.name);
         var proc_symbol_owned = true;
         errdefer if (proc_symbol_owned) self.allocator.free(proc_symbol);
-        try self.writeOwnedPointerRelocation(payload, &payload_relocs, 0, proc_symbol, 0, .function_pointer);
+        try self.writeOwnedPointerRelocation(
+            payload,
+            &payload_relocs,
+            0,
+            proc_symbol,
+            0,
+            .function_pointer,
+            builtins.erased_callable.capture_offset,
+        );
         proc_symbol_owned = false;
 
         try self.writeCaptures(
@@ -1005,6 +1056,7 @@ const StaticDataBuilder = struct {
                 .target_symbol_name = relocation.target_symbol_name,
                 .addend = relocation.addend,
                 .kind = relocation.kind,
+                .callable_capture_offset = relocation.callable_capture_offset,
                 .owns_target_symbol_name = relocation.owns_target_symbol_name,
             };
         }
@@ -1062,6 +1114,7 @@ const StaticDataBuilder = struct {
         target_symbol_name: []const u8,
         addend: i64,
         kind: StaticDataRelocation.Kind,
+        callable_capture_offset: ?u32,
     ) Allocator.Error!void {
         self.writeTargetWord(bytes, offset, 0);
         try relocations.append(self.allocator, .{
@@ -1069,6 +1122,7 @@ const StaticDataBuilder = struct {
             .target_symbol_name = target_symbol_name,
             .addend = addend,
             .kind = kind,
+            .callable_capture_offset = callable_capture_offset,
             .owns_target_symbol_name = true,
         });
     }

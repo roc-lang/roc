@@ -33,6 +33,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
     return struct {
         const Self = @This();
+        const nop_inst: u32 = 0xD503201F;
 
         /// The target this CodeGen was instantiated for
         pub const roc_target = target;
@@ -694,13 +695,21 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Emit conditional jump (returns patch location for fixup)
         pub fn emitCondJump(self: *Self, cond: Emit.Condition) Allocator.Error!usize {
             const patch_loc = self.currentOffset();
-            try self.emit.bcond(cond, 0); // Placeholder offset
+            // Reserve enough space for either:
+            // - a short conditional branch plus nop, or
+            // - an inverted conditional branch over a long unconditional branch.
+            //
+            // AArch64 B.cond reaches only +/-1 MiB (imm19), while B reaches
+            // +/-128 MiB (imm26). The fixed-size placeholder keeps later code
+            // offsets stable when a conditional target turns out to be far away.
+            try self.emit.bcond(cond, 8);
+            try self.emit.b(4);
             return patch_loc;
         }
 
         /// Patch a jump target
         pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) void {
-            const offset: i32 = @intCast(@as(i64, @intCast(target_loc)) - @as(i64, @intCast(patch_loc)));
+            const offset = branchByteOffset(patch_loc, target_loc);
             const offset_words = @divExact(offset, 4);
 
             // Read existing instruction
@@ -709,26 +718,94 @@ pub fn CodeGen(comptime target: RocTarget) type {
             // Determine instruction type and patch accordingly
             if ((inst >> 26) == 0b000101) {
                 // B (unconditional): imm26 in bits [25:0]
-                const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
-                inst = (inst & 0xFC000000) | imm26;
+                inst = encodeB(offset_words);
             } else if ((inst >> 24) == 0b01010100) {
                 // B.cond: imm19 in bits [23:5]
-                const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
-                inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
+                const cond: Emit.Condition = @enumFromInt(inst & 0xF);
+                if (hasReservedLongBranchSlot(self, patch_loc)) {
+                    if (fitsSignedBits(offset_words, 19)) {
+                        inst = encodeBCond(cond, offset_words);
+                        std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
+                        std.mem.writeInt(u32, self.emit.buf.items[patch_loc + 4 ..][0..4], nop_inst, .little);
+                        return;
+                    }
+
+                    const skip_words = @divExact(@as(i64, 8), 4);
+                    inst = encodeBCond(cond.invert(), skip_words);
+                    const long_offset = branchByteOffset(patch_loc + 4, target_loc);
+                    const long_offset_words = @divExact(long_offset, 4);
+                    const long_inst = encodeB(long_offset_words);
+                    std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
+                    std.mem.writeInt(u32, self.emit.buf.items[patch_loc + 4 ..][0..4], long_inst, .little);
+                    return;
+                }
+
+                inst = encodeBCond(cond, offset_words);
             } else if (((inst >> 24) & 0b01111111) == 0b0110100 or ((inst >> 24) & 0b01111111) == 0b0110101) {
                 // CBZ/CBNZ: sf 011010 x imm19 Rt
                 // imm19 is in bits [23:5]
-                const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
+                assertBranchFits(offset_words, 19, "CBZ/CBNZ");
+                const imm19: u19 = @bitCast(@as(i19, @intCast(offset_words)));
                 inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
+            } else {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic("AArch64 patchJump called for non-branch instruction 0x{x} at 0x{x}", .{ inst, patch_loc });
+                }
+                unreachable;
             }
 
             std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
         }
 
+        fn branchByteOffset(from_loc: usize, target_loc: usize) i64 {
+            const offset = @as(i64, @intCast(target_loc)) - @as(i64, @intCast(from_loc));
+            std.debug.assert(@mod(offset, 4) == 0);
+            return offset;
+        }
+
+        fn fitsSignedBits(value: i64, comptime bits: u6) bool {
+            const min = -(@as(i64, 1) << (bits - 1));
+            const max = (@as(i64, 1) << (bits - 1)) - 1;
+            return value >= min and value <= max;
+        }
+
+        fn assertBranchFits(offset_words: i64, comptime bits: u6, comptime kind: []const u8) void {
+            if (fitsSignedBits(offset_words, bits)) return;
+
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
+                    .{ kind, offset_words, bits },
+                );
+            }
+            unreachable;
+        }
+
+        fn encodeB(offset_words: i64) u32 {
+            assertBranchFits(offset_words, 26, "B");
+            const imm26: u26 = @bitCast(@as(i26, @intCast(offset_words)));
+            return (@as(u32, 0b000101) << 26) | imm26;
+        }
+
+        fn encodeBCond(cond: Emit.Condition, offset_words: i64) u32 {
+            assertBranchFits(offset_words, 19, "B.cond");
+            const imm19: u19 = @bitCast(@as(i19, @intCast(offset_words)));
+            return (@as(u32, 0b01010100) << 24) |
+                (@as(u32, imm19) << 5) |
+                @intFromEnum(cond);
+        }
+
+        fn hasReservedLongBranchSlot(self: *Self, patch_loc: usize) bool {
+            if (patch_loc + 8 > self.emit.buf.items.len) return false;
+            const next = std.mem.readInt(u32, self.emit.buf.items[patch_loc + 4 ..][0..4], .little);
+            return (next >> 26) == 0b000101;
+        }
+
         /// Patch a BL (branch with link) instruction to target a specific offset
         pub fn patchBL(self: *Self, patch_loc: usize, offset_words: i32) void {
             // BL uses imm26 encoding: 1 00101 imm26
-            const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
+            assertBranchFits(offset_words, 26, "BL");
+            const imm26: u26 = @bitCast(@as(i26, @intCast(offset_words)));
             const inst: u32 = (@as(u32, 0b100101) << 26) | imm26;
             std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
         }
@@ -809,4 +886,42 @@ test "CodeGen works for all aarch64 targets" {
     try std.testing.expectEqual(RocTarget.arm64linux, LinuxCodeGen.roc_target);
     try std.testing.expectEqual(RocTarget.arm64win, WinCodeGen.roc_target);
     try std.testing.expectEqual(RocTarget.arm64mac, MacCodeGen.roc_target);
+}
+
+test "patch conditional jump keeps near targets short" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const patch = try cg.emitCondJump(.ne);
+    try cg.emit.movRegImm64(.X0, 1);
+    const target = cg.currentOffset();
+
+    cg.patchJump(patch, target);
+
+    const code = cg.getCode();
+    const cond_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
+    const reserved_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
+
+    try std.testing.expectEqual(@as(u4, @intFromEnum(EmitMod.Emit(.arm64linux).Condition.ne)), @as(u4, @truncate(cond_inst)));
+    try std.testing.expectEqual(@as(u19, @intCast(@divExact(@as(i64, @intCast(target - patch)), 4))), @as(u19, @truncate(cond_inst >> 5)));
+    try std.testing.expectEqual(@as(u32, 0xD503201F), reserved_inst);
+}
+
+test "patch conditional jump expands far targets" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const patch = try cg.emitCondJump(.ne);
+    const target = patch + 0x110000;
+
+    cg.patchJump(patch, target);
+
+    const code = cg.getCode();
+    const skip_inst = std.mem.readInt(u32, code[patch..][0..4], .little);
+    const branch_inst = std.mem.readInt(u32, code[patch + 4 ..][0..4], .little);
+
+    try std.testing.expectEqual(@as(u4, @intFromEnum(EmitMod.Emit(.arm64linux).Condition.eq)), @as(u4, @truncate(skip_inst)));
+    try std.testing.expectEqual(@as(u19, 2), @as(u19, @truncate(skip_inst >> 5)));
+    try std.testing.expectEqual(@as(u6, 0b000101), @as(u6, @truncate(branch_inst >> 26)));
+    try std.testing.expectEqual(@as(u26, @intCast(@divExact(@as(i64, @intCast(target - (patch + 4))), 4))), @as(u26, @truncate(branch_inst)));
 }

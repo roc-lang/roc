@@ -680,9 +680,8 @@ pub const Payload = extern union {
 
     pub const ExprInterpolation = extern struct {
         first: u32,
-        parts_step_fn_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, step_fn_var_plus_one)
-        method_name_region_span2_idx: u32,
-        constraint_fn_var_plus_one: u32,
+        interpolation_data_idx: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprStructuralEq = extern struct {

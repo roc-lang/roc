@@ -1220,24 +1220,36 @@ pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
     const new_top = scratch.diagnostics.top();
     if (new_top == 0) return;
 
-    const existing = self.store.sliceDiagnostics(self.diagnostics);
-    const index_start = self.store.index_data.len();
+    const existing_span = self.diagnostics.span;
+    const index_len = self.store.index_data.len();
+    const existing_at_tail = @as(u64, existing_span.start) + @as(u64, existing_span.len) == index_len;
+    const copy_count: u32 = if (existing_at_tail) 0 else existing_span.len;
+    const additional_capacity: usize = @intCast(@as(u64, copy_count) + @as(u64, new_top));
+    const index_start = if (existing_at_tail) existing_span.start else @as(u32, @intCast(index_len));
 
-    for (existing) |diagnostic_idx| {
-        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+    // Reserve before borrowing existing diagnostics. The diagnostic span is a
+    // view into index_data, so growing index_data while iterating that view
+    // would invalidate it if the backing allocation moved.
+    try self.store.index_data.items.ensureUnusedCapacity(self.gpa, additional_capacity);
+
+    if (!existing_at_tail) {
+        const existing = self.store.sliceDiagnostics(self.diagnostics);
+        for (existing) |diagnostic_idx| {
+            _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
+        }
     }
 
     var i: u32 = 0;
     while (i < new_top) : (i += 1) {
         const diagnostic_idx = scratch.diagnostics.items.items[@intCast(i)];
-        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+        _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
     }
 
     scratch.diagnostics.clearFrom(0);
     self.diagnostics = .{
         .span = .{
-            .start = @intCast(index_start),
-            .len = @intCast(existing.len + new_top),
+            .start = index_start,
+            .len = @intCast(@as(u64, existing_span.len) + @as(u64, new_top)),
         },
     };
 }

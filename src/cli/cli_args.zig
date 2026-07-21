@@ -3,6 +3,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const mem = std.mem;
+const install = @import("install.zig");
 
 /// Errors that can occur while parsing CLI arguments.
 pub const ParseError = Allocator.Error || std.Io.Dir.OpenError || std.Io.Dir.Iterator.Error;
@@ -23,6 +24,7 @@ pub const CliArgs = union(enum) {
     version,
     docs: DocsArgs,
     bump: BumpArgs,
+    install: InstallArgs,
     experimental_lsp: ExperimentalLspArgs,
     help: []const u8,
     licenses,
@@ -45,6 +47,10 @@ pub const ArgProblem = union(enum) {
         flag: []const u8,
     },
     unexpected_argument: struct { cmd: []const u8, arg: []const u8 },
+    // Bare `roc <shorthand>` is rejected so the subcommand namespace can never
+    // be conflated with the user-chosen shorthand namespace; running an
+    // installed shorthand requires the explicit `roc run` subcommand.
+    shorthand_requires_run: struct { name: []const u8 },
     invalid_flag_value: struct {
         value: []const u8,
         flag: []const u8,
@@ -131,8 +137,20 @@ pub const RunArgs = struct {
     no_cache: bool = false, // bypass the executable cache
     allow_errors: bool = false, // allow execution even if there are type errors
     watch: bool = false, // hot reload when source inputs change; implied for dev runs
+    explicit_watch: bool = false, // --watch was passed (as opposed to implied by a dev run)
+    explicit_opt: bool = false, // --opt was passed (as opposed to defaulted)
     timings: bool = false, // always show the per-phase timing breakdown
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
+    resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+    via_run_subcommand: bool = false, // parsed from explicit `roc run` (permits installed shorthands)
+    root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
+};
+
+/// Arguments for `roc install`
+pub const InstallArgs = struct {
+    shorthand: []const u8, // the name to install the bundle under (REQUIRED)
+    url: []const u8, // the bundle URL to install (REQUIRED)
+    max_threads: ?usize = null, // max worker threads for the install-time build
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
 };
 
@@ -148,6 +166,8 @@ pub const CheckArgs = struct {
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+    root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
+    main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
 };
 
 /// Arguments for `roc build`
@@ -172,6 +192,8 @@ pub const BuildArgs = struct {
     require_host_runnable_output: bool = false, // internal: reject targets that cannot run on this host
     suppress_build_status: bool = false, // suppress "Built..." output (used by `roc` execution)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+    synthetic_output_basename: ?[]const u8 = null, // internal: default output name when the source was a shorthand/URL, not a path
+    root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
     synthetic_default_platform: bool = false, // internal: build rewrote a headerless app to the default platform
     source_dir_override: ?[]const u8 = null, // internal: resolve root sibling imports from this directory
     synthetic_root_original_path: ?[]const u8 = null, // internal: original path for a synthetic default-app root
@@ -191,6 +213,8 @@ pub const TestArgs = struct {
     watch_inputs_file: ?[]const u8 = null, // internal: write watch input paths and byte states here
     max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+    root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
+    main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
 };
 
 /// Arguments for `roc fmt`
@@ -223,6 +247,8 @@ pub const DocsArgs = struct {
     serve: bool = false, // start an HTTP server after generating docs
     with_lang_ref: bool = false, // include the language reference articles from docs/langref
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+    root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
+    main_source_url: ?[]const u8 = null, // internal: bundle URL provenance when --main was a URL or installed shorthand
 };
 
 /// Arguments for `roc bump`
@@ -234,6 +260,7 @@ pub const BumpArgs = struct {
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
     resolve_limits: ResolveLimitArgs = .{}, // package download size limits
+    root_source_url: ?[]const u8 = null, // internal: bundle URL provenance when the source was a URL or installed shorthand
 };
 
 /// Arguments for `roc experimental-lsp`
@@ -261,13 +288,13 @@ pub const GlueArgs = struct {
 
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
-    if (args.len == 0) return try parseRun(alloc, args);
+    if (args.len == 0) return try parseRun(alloc, args, .default);
 
-    // "run" is not a valid subcommand - give a helpful error
-    // The correct usage is: roc path/to/app.roc (without "run")
-    if (mem.eql(u8, args[0], "run")) {
-        return CliArgs{ .help = run_not_a_command_help };
-    }
+    // `roc run` accepts everything the default run accepts, plus installed
+    // shorthands (which the default run rejects to keep the subcommand
+    // namespace separate from the shorthand namespace).
+    if (mem.eql(u8, args[0], "run")) return try parseRun(alloc, args[1..], .run_subcommand);
+    if (mem.eql(u8, args[0], "install")) return parseInstall(args[1..]);
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
     if (mem.eql(u8, args[0], "bundle")) return try parseBundle(alloc, args[1..]);
@@ -283,7 +310,7 @@ pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) Par
     if (mem.eql(u8, args[0], "help")) return CliArgs{ .help = main_help };
     if (mem.eql(u8, args[0], "licenses")) return parseLicenses(args[1..]);
 
-    return try parseRun(alloc, args);
+    return try parseRun(alloc, args, .default);
 }
 
 const main_help =
@@ -294,6 +321,8 @@ const main_help =
     \\       roc <COMMAND>
     \\
     \\Commands:
+    \\  run              Run a .roc file, a bundle URL, or an installed shorthand
+    \\  install          Install a Roc app from a bundle URL under a shorthand name
     \\  build            Build a binary from the given .roc file, but don't run it
     \\  bundle           Bundle .roc files into a compressed archive
     \\  unbundle         Extract files from compressed .tar.zst archives
@@ -322,19 +351,42 @@ const main_help =
     \\
 ;
 
-const run_not_a_command_help =
-    \\Error: 'run' is not a valid subcommand.
+const run_help =
+    \\Run a Roc application
     \\
-    \\To run a Roc application, use:
-    \\    roc path/to/app.roc
+    \\Usage: roc run [OPTIONS] [SOURCE] [-- [ARGS_FOR_APP]...]
     \\
-    \\For example:
-    \\    roc main.roc           Run main.roc in the current directory
-    \\    roc examples/hello.roc Run hello.roc from the examples folder
+    \\SOURCE may be:
+    \\  a .roc file path        roc run main.roc
+    \\  a bundle URL            roc run https://example.com/tool/1.2.3/<hash>.tar.zst
+    \\  an installed shorthand  roc run tokei      (see `roc install`)
     \\
-    \\Use 'roc help' to see all available commands.
+    \\Running an installed shorthand executes the optimized binary that was
+    \\built at install time; no compilation or network access is needed.
+    \\File and URL sources accept the same options as the default `roc` command.
     \\
 ;
+
+const install_help =
+    \\Install a Roc app from a bundle URL under a shorthand name
+    \\
+    \\Usage: roc install [OPTIONS] <SHORTHAND> <URL>
+    \\
+    \\Downloads the bundle, verifies its content hash, and builds it with
+    \\--opt=speed so that `roc run <SHORTHAND>` executes an optimized binary
+    \\with no compile step. Installations persist outside the cache and are
+    \\scoped to the compiler version that installed them.
+    \\
+    \\Arguments:
+    \\  <SHORTHAND>  A name of your choice: a lowercase letter followed by
+    \\               lowercase letters, digits, or underscores
+    \\  <URL>        A .tar.zst bundle URL ending in a base58-encoded BLAKE3 hash
+    \\
+    \\Options:
+    \\  -j, --jobs=<N>                 Max worker threads for the install-time build
+;
+
+const install_help_with_limits = install_help ++ "\n" ++ resolve_limit_help ++ "\n";
 
 fn parseCheck(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
@@ -1208,9 +1260,14 @@ fn parseExperimentalLsp(args: []const []const u8) CliArgs {
     } };
 }
 
-fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
+/// How a run parse was reached: the default `roc [ROC_FILE]` form, or the
+/// explicit `roc run` subcommand (the only form that accepts shorthands).
+const RunParseMode = enum { default, run_subcommand };
+
+fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) std.mem.Allocator.Error!CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = default_dev_opt;
+    var explicit_opt = false;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
     var allow_errors: bool = false;
@@ -1237,7 +1294,10 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
         if (isHelpFlag(arg)) {
             // We need to free the paths here because we aren't returning the .run variant
             app_args.deinit();
-            return CliArgs{ .help = main_help };
+            return CliArgs{ .help = switch (mode) {
+                .default => main_help,
+                .run_subcommand => run_help,
+            } };
         } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
             switch (parseResolveLimitFlag(arg, &resolve_limits)) {
                 .problem => |problem| return CliArgs{ .problem = problem },
@@ -1258,6 +1318,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
                     opt = level;
+                    explicit_opt = true;
                 } else {
                     app_args.deinit();
                     return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "dev,interpreter,speed,size" } } };
@@ -1303,7 +1364,67 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Er
             }
         }
     }
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch or (opt == .dev), .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits } };
+    if (mode == .default) {
+        if (path) |p| {
+            if (install.classifySourceRef(p) == .shorthand) {
+                app_args.deinit();
+                return CliArgs{ .problem = ArgProblem{ .shorthand_requires_run = .{ .name = p } } };
+            }
+        }
+    }
+
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch or (opt == .dev), .explicit_watch = watch, .explicit_opt = explicit_opt, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits, .via_run_subcommand = mode == .run_subcommand } };
+}
+
+fn parseInstall(args: []const []const u8) CliArgs {
+    var shorthand: ?[]const u8 = null;
+    var url: ?[]const u8 = null;
+    var max_threads: ?usize = null;
+    var resolve_limits: ResolveLimitArgs = .{};
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help = install_help_with_limits };
+        } else if (mem.startsWith(u8, arg, "--max-package-mb") or mem.startsWith(u8, arg, "--max-transitive-mb")) {
+            switch (parseResolveLimitFlag(arg, &resolve_limits)) {
+                .problem => |problem| return CliArgs{ .problem = problem },
+                else => {},
+            }
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            const value = arg[2..];
+            if (value.len == 0) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
+            max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+            };
+        } else if (shorthand == null) {
+            shorthand = arg;
+        } else if (url == null) {
+            url = arg;
+        } else {
+            return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "install", .arg = arg } } };
+        }
+    }
+
+    if (shorthand == null or url == null) {
+        return CliArgs{ .help = install_help_with_limits };
+    }
+
+    return CliArgs{ .install = InstallArgs{
+        .shorthand = shorthand.?,
+        .url = url.?,
+        .max_threads = max_threads,
+        .resolve_limits = resolve_limits,
+    } };
 }
 
 fn isHelpFlag(arg: []const u8) bool {
@@ -2108,5 +2229,112 @@ test "roc licenses" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "licenses", "extrastuff" });
         defer result.deinit(gpa);
         try testing.expectEqualStrings("extrastuff", result.problem.unexpected_argument.arg);
+    }
+}
+
+test "roc install" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "tokei", "https://example.com/tokei/1.2.3/abc.tar.zst" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("tokei", result.install.shorthand);
+        try testing.expectEqualStrings("https://example.com/tokei/1.2.3/abc.tar.zst", result.install.url);
+        try testing.expectEqual(@as(?usize, null), result.install.max_threads);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "--jobs=4", "--max-package-mb=20", "tokei", "https://example.com/tokei/1.2.3/abc.tar.zst" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 4), result.install.max_threads);
+        try testing.expectEqual(@as(?u32, 20), result.install.resolve_limits.max_package_mb);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "tokei" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"install"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "-h" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "install", "a", "https://example.com/x/1.0.0/abc.tar.zst", "extra" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("install", result.problem.unexpected_argument.cmd);
+        try testing.expectEqualStrings("extra", result.problem.unexpected_argument.arg);
+    }
+}
+
+test "roc run subcommand" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "--", "arg1", "arg2" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("tokei", result.run.path);
+        try testing.expect(result.run.via_run_subcommand);
+        try testing.expectEqual(@as(usize, 2), result.run.app_args.len);
+        try testing.expectEqualStrings("arg1", result.run.app_args[0]);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "app.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("app.roc", result.run.path);
+        try testing.expect(result.run.via_run_subcommand);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "https://example.com/x/1.0.0/abc.tar.zst" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("https://example.com/x/1.0.0/abc.tar.zst", result.run.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"run"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("main.roc", result.run.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--help" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.help, std.meta.activeTag(result));
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "--watch" });
+        defer result.deinit(gpa);
+        try testing.expect(result.run.explicit_watch);
+        try testing.expect(!result.run.explicit_opt);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "tokei", "--opt=dev" });
+        defer result.deinit(gpa);
+        try testing.expect(result.run.explicit_opt);
+    }
+}
+
+test "bare shorthand requires the run subcommand" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"tokei"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("tokei", result.problem.shorthand_requires_run.name);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"./tokei"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./tokei", result.run.path);
+        try testing.expect(!result.run.via_run_subcommand);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"https://example.com/x/1.0.0/abc.tar.zst"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("https://example.com/x/1.0.0/abc.tar.zst", result.run.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{"app.roc"});
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("app.roc", result.run.path);
     }
 }

@@ -233,7 +233,7 @@ pub fn lowerCheckedModulesToLir(
         .{
             .proc_debug_names = target.proc_debug_names,
             .specialization_cache = target.monotype_cache,
-            .static_data_literals = target.checked_module_state == .complete and roots.include_internal_static_data,
+            .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
             .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
                 .run => .run,

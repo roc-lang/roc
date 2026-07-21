@@ -281,7 +281,9 @@ pub const PathValidationError = struct {
     reason: PathValidationReason,
 };
 
-const WINDOWS_RESERVED_NAMES = [_][]const u8{
+/// File and directory base names Windows reserves for devices; creating them
+/// misbehaves on Windows, so portable name validation rejects them everywhere.
+pub const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "CON",  "PRN",  "AUX",  "NUL",
     "COM1", "COM2", "COM3", "COM4",
     "COM5", "COM6", "COM7", "COM8",

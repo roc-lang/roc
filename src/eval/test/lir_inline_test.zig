@@ -5580,6 +5580,30 @@ test "bare list iter collect carries scalar list state in the loop" {
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "box_box_count"));
 }
 
+test "issue 10181 explicit Str interpolation suffix checks cleanly" {
+    // Repro for https://github.com/roc-lang/roc/issues/10181
+    const allocator = std.testing.allocator;
+    const source =
+        \\main! = |_| {
+        \\    x = "world"
+        \\    y = "hello ${x}".Str
+        \\    Ok({})
+        \\}
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        allocator,
+        .module,
+        source,
+        &.{},
+        try sharedPrePublishedBuiltin(),
+        null,
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
+}
+
 const dispatch_boundary_source =
     \\Thing := [Val(Str)].{
     \\    to_str : Thing -> Str
@@ -5596,6 +5620,41 @@ test "dispatch evidence boundary validator accepts a published artifact" {
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
+}
+
+test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\helper : a -> Str where [a.to_str : a -> Str]
+        \\helper = |_x| "ok"
+        \\
+        \\main : Str
+        \\main = helper("hi")
+    ;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const paths = resources.checked_artifact.checked_procedure_templates.evidence_param_paths;
+    try std.testing.expect(paths.len > 0);
+
+    // Raw discriminant 8 is the retired checked-store `record_ext` step.
+    paths[0].kind = 8;
+    var failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_kind, failure.kind);
+
+    // A tag label must be immediately paired with a payload-index step.
+    paths[0].kind = 9;
+    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_shape, failure.kind);
+
+    // A well-formed selector must still resolve over the checked callable.
+    paths[0].kind = 0;
+    paths[0].data = std.math.maxInt(u32);
+    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
 }
 
 test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {

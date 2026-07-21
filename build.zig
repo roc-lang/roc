@@ -1847,6 +1847,8 @@ fn createAndRunBuiltinCompiler(
             .{ .name = "collections", .module = roc_modules.collections },
             .{ .name = "layout", .module = roc_modules.layout },
             .{ .name = "lir", .module = roc_modules.lir },
+            .{ .name = "roc_target", .module = roc_modules.roc_target },
+            .{ .name = "static_data", .module = roc_modules.static_data },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
         },
     });

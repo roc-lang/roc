@@ -281,6 +281,7 @@ test "NodeStore round trip - Expressions" {
             .method_name_region = rand_region(),
             .constraint_fn_var = rand_idx(types.Var),
             .step_fn_var = rand_idx(types.Var),
+            .dispatcher_var = rand_idx(types.Var),
         },
     });
     try expressions.append(gpa, CIR.Expr{

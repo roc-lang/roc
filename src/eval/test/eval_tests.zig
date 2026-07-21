@@ -639,6 +639,32 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"yes\", \"no\")" },
     },
     .{
+        .name = "inspect: custom from_numeral typed pattern suffix dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\MyNum := [MyNum(List(U8))].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(MyNum(numeral.digits_before_pt()))
+        \\    is_eq : MyNum, MyNum -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (MyNum(x), MyNum(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : MyNum -> MyNum
+        \\force = |n| n
+        \\
+        \\describe : MyNum -> Str
+        \\describe = |num| match num {
+        \\    123.MyNum => "typed"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(123)), describe(force(124)))
+        ,
+        .expected = .{ .inspect_str = "(\"typed\", \"other\")" },
+    },
+    .{
         .name = "inspect: custom from_numeral literal pattern compares converted values not raw digits",
         .source_kind = .module,
         .source =

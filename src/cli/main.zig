@@ -90,6 +90,7 @@ const watch_mod = if (builtin.target.cpu.arch == .wasm32) struct {
 } else @import("watch");
 
 const cli_args = @import("cli_args.zig");
+const install_store = @import("install.zig");
 const host_symbols = @import("host_symbols.zig");
 const roc_target = @import("target.zig");
 const target_selection = @import("target_selection.zig");
@@ -170,6 +171,12 @@ const CliBuildEnvOptions = struct {
     /// Root path tested against the compiler-owned builtin sources; matches
     /// are compiled with the `.builtin` module role (check sites).
     builtin_role_path: ?[]const u8 = null,
+    /// The bundle URL a URL/installed root came from; becomes the root's
+    /// package identity in place of the extracted path.
+    root_source_url: ?[]const u8 = null,
+    /// The bundle URL an explicit `--main` came from; becomes the root
+    /// identity if that main file ends up as the discovery root.
+    main_source_url: ?[]const u8 = null,
 };
 
 const InitCliBuildEnvError = Allocator.Error ||
@@ -207,6 +214,20 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
         if (isCompilerOwnedBuiltinSourcePath(ctx.gpa, ctx.io.std_io, path)) {
             build_env.setRootModuleRole(.builtin);
         }
+    }
+    if (opts.root_source_url) |url| {
+        // The URL was validated before any pipeline could receive it, so the
+        // only reachable failure here is allocation.
+        build_env.setRootUrl(url) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidUrl => unreachable,
+        };
+    }
+    if (opts.main_source_url) |url| {
+        build_env.setMainUrl(url) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidUrl => unreachable,
+        };
     }
     if (!opts.no_cache) try build_env.enableDefaultCacheManager(opts.verbose_cache);
 
@@ -1080,7 +1101,7 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
 fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
     return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .bump, .glue, .experimental_lsp => true,
+        .run, .build, .check, .test_cmd, .docs, .bump, .glue, .install, .experimental_lsp => true,
         .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
     };
 }
@@ -1147,6 +1168,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .bundle => .bundle,
         .unbundle => .unbundle,
         .bump => .bump,
+        .install => .install,
         else => .unknown,
     };
 
@@ -1215,6 +1237,12 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             },
             else => return err,
         },
+        .install => |install_args| rocInstall(&ctx, install_args, args[0]) catch |err| switch (err) {
+            error.CliError => {
+                // Problems already recorded in context, render them below
+            },
+            else => return err,
+        },
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, .{
             .transport = lsp_args.debug_io,
             .build = lsp_args.debug_build,
@@ -1232,6 +1260,10 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
                 .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
                 .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
                 .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
+                .shorthand_requires_run => |details| ctx.io.stderr().print(
+                    "Error: `{s}` looks like an installed shorthand, and running one requires the `run` subcommand: `roc run {s}`\nIf you meant a local file named `{s}`, write it as `./{s}` instead.\n",
+                    .{ details.name, details.name, details.name, details.name },
+                ),
             };
             return error.InvalidArguments;
         },
@@ -2223,6 +2255,14 @@ fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFai
 }
 
 fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+    switch (install_store.classifySourceRef(args.path)) {
+        .url => return rocRunUrl(ctx, args, arg0),
+        // The parser rejects bare `roc <shorthand>`, so a shorthand here came
+        // from the explicit `roc run` subcommand.
+        .shorthand => return rocRunInstalled(ctx, args),
+        .local_path => {},
+    }
+
     if (args.watch and args.opt != .dev) {
         try ctx.io.stderr().print(
             "Error: `roc --watch` currently supports only the dev backend.\n",
@@ -2235,6 +2275,162 @@ fn rocRun(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!v
         .interpreter, .dev => rocRunSharedMemoryShim(ctx, args, arg0),
         .size, .speed => rocRunBuildAndExec(ctx, args, arg0),
     };
+}
+
+/// Direct URL run: download into the ordinary disposable package cache,
+/// then build and run once. URL roots are immutable managed sources, so they
+/// are never implicitly watched.
+fn rocRunUrl(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+    if (args.explicit_watch) {
+        try ctx.io.stderr().print("Error: --watch is not supported for URL sources.\n", .{});
+        return error.UnsupportedWatchMode;
+    }
+
+    const resolved = try resolveUrlBundle(ctx, args.path);
+    var url_args = args;
+    url_args.path = resolved.source_path;
+    url_args.root_source_url = args.path;
+    url_args.watch = false;
+    return rocRunBuildAndExec(ctx, url_args, arg0);
+}
+
+/// Run the optimized executable that `roc install` built for this shorthand.
+/// No compilation and no network access happen here: the prebuilt binary is
+/// the entire artifact, so this works even with the package cache deleted.
+fn rocRunInstalled(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
+    const name = args.path;
+    if (args.explicit_watch) {
+        try ctx.io.stderr().print("Error: --watch is not supported for installed shorthands.\n", .{});
+        return error.UnsupportedWatchMode;
+    }
+    if (args.explicit_opt) {
+        try ctx.io.stderr().print(
+            "Error: --opt has no effect on `roc run {s}`; installed tools always run the optimized binary that was built at install time.\n",
+            .{name},
+        );
+        return error.InvalidArguments;
+    }
+    if (args.target != null) {
+        try ctx.io.stderr().print(
+            "Error: --target has no effect on `roc run {s}`; installed tools are built for this machine at install time.\n",
+            .{name},
+        );
+        return error.InvalidArguments;
+    }
+
+    const entry = try resolveInstalledEntry(ctx, name);
+    const term = try runCompiledExecutable(ctx, entry.paths.exe_path, args.app_args);
+    try finishCompiledRun(ctx, entry.paths.exe_path, term, 0);
+}
+
+const install_manifest_size_limit = 64 * 1024;
+
+/// Errors that resolving a URL/shorthand source reference can produce, shared
+/// by every subcommand that accepts one.
+const SourceRefResolveError = CliError || Allocator.Error || error{ UnsupportedWatchMode, WriteFailed };
+
+/// A source argument resolved to a compilable local path, together with the
+/// bundle URL it came from when the source was a managed URL/installed root.
+/// The URL — not the extracted path — is the root's package identity.
+const ResolvedSourceArg = struct {
+    path: []const u8,
+    url: ?[]const u8,
+};
+
+/// Resolve a source argument that may be a bundle URL or an installed
+/// shorthand into a local source path. Local paths pass through unchanged.
+/// URL and installed roots are immutable managed sources, so `--watch` is
+/// rejected for both.
+fn resolveSourceArg(ctx: *CliCtx, path: []const u8, watch: bool) SourceRefResolveError!ResolvedSourceArg {
+    switch (install_store.classifySourceRef(path)) {
+        .local_path => return .{ .path = path, .url = null },
+        .url => {
+            if (watch) {
+                try ctx.io.stderr().print("Error: --watch is not supported for URL sources.\n", .{});
+                return error.UnsupportedWatchMode;
+            }
+            const resolved = try resolveUrlBundle(ctx, path);
+            return .{ .path = resolved.source_path, .url = path };
+        },
+        .shorthand => {
+            if (watch) {
+                try ctx.io.stderr().print("Error: --watch is not supported for installed shorthands.\n", .{});
+                return error.UnsupportedWatchMode;
+            }
+            const entry = try resolveInstalledEntry(ctx, path);
+            return .{ .path = entry.paths.main_roc_path, .url = entry.url };
+        },
+    }
+}
+
+/// A validated install entry: its paths plus the bundle URL recorded in its
+/// manifest (the entry's compiler-level identity).
+const ResolvedInstalledEntry = struct {
+    paths: install_store.EntryPaths,
+    url: []const u8,
+};
+
+/// Resolve a shorthand to its published install entry, validating the
+/// manifest and the presence of the built artifact. Missing or corrupt state
+/// is an explicit error — never a fallback to a cache entry or a redownload.
+fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.Error)!ResolvedInstalledEntry {
+    const root = install_store.installRootDir(ctx.coreCtx(), ctx.arena) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoHomeDirectory => return ctx.fail(.{ .install_dir_unavailable = .{
+            .reason = "No home directory could be determined",
+        } }),
+    };
+    const version_dir = try install_store.versionDir(ctx.arena, root);
+    const entry = try install_store.entryPaths(ctx.arena, version_dir, name);
+
+    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (err) {
+        error.FileNotFound => {
+            var entry_dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, entry.entry_dir, .{}) catch {
+                return ctx.fail(.{ .unknown_shorthand = .{ .name = name } });
+            };
+            entry_dir.close(ctx.io.std_io);
+            return ctx.fail(.{ .install_entry_corrupt = .{
+                .name = name,
+                .path = entry.entry_dir,
+                .reason = "its install.json manifest is missing",
+            } });
+        },
+        else => return ctx.fail(.{ .install_entry_corrupt = .{
+            .name = name,
+            .path = entry.entry_dir,
+            .reason = "its install.json manifest could not be read",
+        } }),
+    };
+    var parsed = (try install_store.parseManifest(ctx.gpa, manifest_bytes)) orelse {
+        return ctx.fail(.{ .install_entry_corrupt = .{
+            .name = name,
+            .path = entry.entry_dir,
+            .reason = "its install.json manifest is not valid",
+        } });
+    };
+    defer parsed.deinit();
+
+    // The recorded URL is the entry's identity, so it must still be a valid
+    // bundle URL — a manifest that fails this check is corrupt, and nothing
+    // downstream may be handed an unvalidated URL.
+    _ = base.url.parseUrlPath(parsed.manifest().url) catch {
+        return ctx.fail(.{ .install_entry_corrupt = .{
+            .name = name,
+            .path = entry.entry_dir,
+            .reason = "its install.json manifest records an invalid URL",
+        } });
+    };
+    const manifest_url = try ctx.arena.dupe(u8, parsed.manifest().url);
+
+    std.Io.Dir.cwd().access(ctx.io.std_io, entry.exe_path, .{}) catch {
+        return ctx.fail(.{ .install_entry_corrupt = .{
+            .name = name,
+            .path = entry.entry_dir,
+            .reason = "its built executable is missing",
+        } });
+    };
+
+    return .{ .paths = entry, .url = manifest_url };
 }
 
 fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
@@ -2781,6 +2977,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .resolve_limits = args.resolve_limits,
         .synthetic_default_platform = false,
         .source_dir_override = null,
+        .root_source_url = args.root_source_url,
     }, arg0);
 
     const term = try runCompiledExecutable(ctx, exe_path, args.app_args);
@@ -6026,24 +6223,30 @@ const ResolvedUrlBundle = struct {
 /// Resolve a URL bundle (platform or package) by downloading and caching it.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
 /// Returns the path to `main.roc` inside the cache directory.
-fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!ResolvedUrlBundle {
-    const download = unbundle.download;
-
-    // 1. Validate URL and extract hash
-    const parsed_url = download.validateUrl(url) catch |err| switch (err) {
-        error.InvalidVersion => return ctx.fail(.{ .invalid_url = .{
+/// Validate a bundle URL (https/loopback-http gate plus hash and version
+/// syntax) and report a specific diagnostic for each way it can be invalid.
+fn validateBundleUrl(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!base.url.ParsedUrl {
+    return unbundle.download.validateUrl(url) catch |err| switch (err) {
+        error.InvalidVersion => ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "This URL uses the reserved version 0.0.0, which means \"no version\". The lowest publishable version is 0.0.1.",
         } }),
-        error.AmbiguousVersion => return ctx.fail(.{ .invalid_url = .{
+        error.AmbiguousVersion => ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "This URL contains more than one version number. A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash.",
         } }),
-        else => return ctx.fail(.{ .invalid_url = .{
+        else => ctx.fail(.{ .invalid_url = .{
             .url = url,
             .reason = "Invalid URL format or missing hash. URLs must end with a base58-encoded BLAKE3 hash filename (e.g., '<hash>.tar.zst').",
         } }),
     };
+}
+
+fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!ResolvedUrlBundle {
+    const download = unbundle.download;
+
+    // 1. Validate URL and extract hash
+    const parsed_url = try validateBundleUrl(ctx, url);
     const base58_hash = parsed_url.hash;
 
     // 2. Get cache directory
@@ -6101,15 +6304,254 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     // Platforms must have a main.roc entry point
     const platform_source_path = try std.fs.path.join(ctx.arena, &.{ package_dir_path, "main.roc" });
     std.Io.Dir.cwd().access(ctx.io.std_io, platform_source_path, .{}) catch {
+        // The problem is rendered after this frame returns, so the slice of
+        // searched paths must live on the arena, not this stack frame.
+        const searched_paths = try ctx.arena.alloc([]const u8, 1);
+        searched_paths[0] = platform_source_path;
         return ctx.fail(.{ .platform_source_not_found = .{
             .platform_path = package_dir_path,
-            .searched_paths = &.{platform_source_path},
+            .searched_paths = searched_paths,
         } });
     };
 
     return .{
         .source_path = platform_source_path,
     };
+}
+
+/// Default output basename for `roc build <url>`: the last path segment of
+/// the URL's package id (the part before the version and content hash), e.g.
+/// `tokei` for `https://example.com/tokei/1.2.3/<hash>.tar.zst`. Null when
+/// the URL has no usable segment, in which case the module name is used.
+fn urlDefaultOutputBasename(url: []const u8) ?[]const u8 {
+    const parsed = base.url.parseUrlPath(url) catch return null;
+    var it = std.mem.splitBackwardsScalar(u8, parsed.url_id.prefix(url), '/');
+    while (it.next()) |segment| {
+        if (segment.len == 0) continue;
+        // The host segment can carry a port; a colon is not a usable filename
+        // on Windows, so fall back to the module name instead.
+        if (std.mem.findScalar(u8, segment, ':') != null) return null;
+        return segment;
+    }
+    return null;
+}
+
+test "urlDefaultOutputBasename derives the package segment" {
+    try std.testing.expectEqualStrings("tokei", urlDefaultOutputBasename("https://example.com/tokei/1.2.3/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst").?);
+    try std.testing.expectEqualStrings("thing", urlDefaultOutputBasename("https://example.com/thing/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst").?);
+    // A bare host:port segment is not a usable filename on Windows.
+    try std.testing.expect(urlDefaultOutputBasename("http://127.0.0.1:8642/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst") == null);
+    try std.testing.expect(urlDefaultOutputBasename("not a url") == null);
+}
+
+/// A staging directory older than this cannot belong to a live install and
+/// is safe to reclaim.
+const stale_staging_max_age_ns: i128 = std.time.ns_per_day;
+
+/// Reclaim staging directories stranded by interrupted installs. The install
+/// root is deliberately outside every cache cleanup, and each staging name
+/// embeds a random suffix no later install reuses, so nothing else ever
+/// deletes them. Best-effort: any failure just leaves the sweep to a future
+/// install.
+fn sweepStaleStagingDirs(std_io: std.Io, version_dir: []const u8) void {
+    var dir = std.Io.Dir.cwd().openDir(std_io, version_dir, .{ .iterate = true }) catch return;
+    defer dir.close(std_io);
+
+    const now_ns: i128 = std.Io.Timestamp.now(std_io, .real).nanoseconds;
+    var it = dir.iterate();
+    while (true) {
+        const entry = (it.next(std_io) catch break) orelse break;
+        if (entry.kind != .directory) continue;
+        if (!std.mem.startsWith(u8, entry.name, ".staging-")) continue;
+
+        const info = dir.statFile(std_io, entry.name, .{}) catch continue;
+        const mtime_ns: i128 = @intCast(info.mtime.nanoseconds);
+        if (now_ns - mtime_ns <= stale_staging_max_age_ns) continue;
+
+        dir.deleteTree(std_io, entry.name) catch {};
+    }
+}
+
+/// Install a bundle URL under a shorthand: download and verify it into a
+/// staging directory, build it with --opt=speed for the host target, then
+/// publish the completed entry with a single atomic rename so a partial
+/// installation is never visible. After this succeeds, `roc run <shorthand>`
+/// needs neither the network nor any cache.
+fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMainError!void {
+    if (!install_store.isValidShorthand(args.shorthand)) {
+        return ctx.fail(.{ .invalid_shorthand = .{ .name = args.shorthand } });
+    }
+    const parsed_url = try validateBundleUrl(ctx, args.url);
+
+    const root = install_store.installRootDir(ctx.coreCtx(), ctx.arena) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoHomeDirectory => return ctx.fail(.{ .install_dir_unavailable = .{
+            .reason = "No home directory could be determined",
+        } }),
+    };
+    const version_dir = try install_store.versionDir(ctx.arena, root);
+    const entry = try install_store.entryPaths(ctx.arena, version_dir, args.shorthand);
+
+    // Same name + same URL is idempotent; same name + different URL fails
+    // without touching the existing entry.
+    const existing_bytes: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (err) {
+        error.FileNotFound => existing: {
+            var entry_dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, entry.entry_dir, .{}) catch break :existing null;
+            entry_dir.close(ctx.io.std_io);
+            return ctx.fail(.{ .install_entry_corrupt = .{
+                .name = args.shorthand,
+                .path = entry.entry_dir,
+                .reason = "its install.json manifest is missing",
+            } });
+        },
+        else => return ctx.fail(.{ .install_entry_corrupt = .{
+            .name = args.shorthand,
+            .path = entry.entry_dir,
+            .reason = "its install.json manifest could not be read",
+        } }),
+    };
+    if (existing_bytes) |bytes| {
+        var parsed = (try install_store.parseManifest(ctx.gpa, bytes)) orelse {
+            return ctx.fail(.{ .install_entry_corrupt = .{
+                .name = args.shorthand,
+                .path = entry.entry_dir,
+                .reason = "its install.json manifest is not valid",
+            } });
+        };
+        defer parsed.deinit();
+        if (std.mem.eql(u8, parsed.manifest().url, args.url)) {
+            // Same name + same URL: an intact entry makes this a no-op, and a
+            // damaged one is safe to repair since the URL matches.
+            const exe_intact = intact: {
+                std.Io.Dir.cwd().access(ctx.io.std_io, entry.exe_path, .{}) catch break :intact false;
+                break :intact true;
+            };
+            if (exe_intact) {
+                try ctx.io.stdout().print("`{s}` is already installed. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand });
+                return;
+            }
+            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, entry.entry_dir) catch {
+                return ctx.fail(.{ .install_entry_corrupt = .{
+                    .name = args.shorthand,
+                    .path = entry.entry_dir,
+                    .reason = "its built executable is missing, and the damaged entry could not be removed for repair",
+                } });
+            };
+        } else {
+            const existing_url = try ctx.arena.dupe(u8, parsed.manifest().url);
+            return ctx.fail(.{ .shorthand_conflict = .{
+                .name = args.shorthand,
+                .existing_url = existing_url,
+                .new_url = args.url,
+            } });
+        }
+    }
+
+    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, version_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = version_dir, .err = err } });
+    };
+
+    sweepStaleStagingDirs(ctx.io.std_io, version_dir);
+
+    // The `.` prefix keeps staging directories out of the shorthand namespace.
+    var staging_suffix: [8]u8 = undefined;
+    ctx.io.std_io.random(&staging_suffix);
+    const staging_name = try std.fmt.allocPrint(ctx.arena, ".staging-{s}-{s}", .{ args.shorthand, std.fmt.bytesToHex(staging_suffix, .lower) });
+    const staging_dir = try std.fs.path.join(ctx.arena, &.{ version_dir, staging_name });
+    const staging = try install_store.entryPathsIn(ctx.arena, staging_dir, args.shorthand);
+    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir) catch {};
+
+    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, staging.source_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = staging.source_dir, .err = err } });
+    };
+    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, staging.bin_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = staging.bin_dir, .err = err } });
+    };
+
+    try ctx.io.stdout().print("Downloading {s} ...\n", .{args.url});
+    ctx.io.flush();
+
+    const limits_config = resolutionConfigFromLimits(args.resolve_limits);
+    var gpa_copy = ctx.gpa;
+    _ = unbundle.download.downloadAndExtract(&gpa_copy, ctx.io.std_io, args.url, staging.source_dir, .{
+        .max_expanded_bytes = limits_config.max_package_expanded_bytes,
+    }) catch |download_err| {
+        return ctx.fail(.{ .download_failed = .{ .url = args.url, .err = download_err } });
+    };
+
+    // The downloader leaves the compressed bundle next to the extraction for
+    // cache reuse; an install entry is not a cache, so drop it.
+    const kept_tar_name = try std.fmt.allocPrint(ctx.arena, "{s}.tar.zst", .{parsed_url.hash});
+    const kept_tar_path = try std.fs.path.join(ctx.arena, &.{ staging.source_dir, kept_tar_name });
+    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, kept_tar_path) catch {};
+
+    std.Io.Dir.cwd().access(ctx.io.std_io, staging.main_roc_path, .{}) catch {
+        return ctx.fail(.{ .install_bundle_missing_main = .{
+            .url = args.url,
+            .searched_path = staging.main_roc_path,
+        } });
+    };
+
+    try ctx.io.stdout().print("Building {s} with --opt=speed ...\n", .{args.shorthand});
+    ctx.io.flush();
+
+    var warning_count: usize = 0;
+    try rocBuild(ctx, .{
+        .path = staging.main_roc_path,
+        .opt = .speed,
+        .target = null,
+        .output = staging.exe_path,
+        .debug = false,
+        .allow_errors = false,
+        .verbose = false,
+        .no_cache = false,
+        .max_threads = args.max_threads,
+        .wasm_memory = null,
+        .wasm_stack_size = null,
+        .exit_on_warnings = false,
+        .warning_count_out = &warning_count,
+        .require_executable_output = true,
+        .require_host_runnable_output = true,
+        .suppress_build_status = true,
+        .resolve_limits = args.resolve_limits,
+        .synthetic_default_platform = false,
+        .source_dir_override = null,
+        .root_source_url = args.url,
+    }, arg0);
+
+    // The manifest is written last, so a staged entry is complete by the time
+    // it can be published.
+    const manifest_json = try install_store.manifestToJson(ctx.arena, .{
+        .format_version = install_store.manifest_format_version,
+        .url = args.url,
+        .hash = parsed_url.hash,
+        .compiler_version = build_options.compiler_version,
+    });
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = staging.manifest_path, .data = manifest_json }) catch |err| {
+        return ctx.fail(.{ .file_write_failed = .{ .path = staging.manifest_path, .err = err } });
+    };
+
+    std.Io.Dir.cwd().rename(staging_dir, std.Io.Dir.cwd(), entry.entry_dir, ctx.io.std_io) catch |rename_err| {
+        // A concurrent install of the same shorthand may have published first;
+        // a same-URL winner makes this install a success with redundant work.
+        const winner_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch {
+            return ctx.fail(.{ .install_publish_failed = .{ .name = args.shorthand, .err = rename_err } });
+        };
+        var winner = (try install_store.parseManifest(ctx.gpa, winner_bytes)) orelse {
+            return ctx.fail(.{ .install_publish_failed = .{ .name = args.shorthand, .err = rename_err } });
+        };
+        defer winner.deinit();
+        if (!std.mem.eql(u8, winner.manifest().url, args.url)) {
+            const existing_url = try ctx.arena.dupe(u8, winner.manifest().url);
+            return ctx.fail(.{ .shorthand_conflict = .{
+                .name = args.shorthand,
+                .existing_url = existing_url,
+                .new_url = args.url,
+            } });
+        }
+    };
+
+    try ctx.io.stdout().print("Installed {s}. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand });
 }
 
 /// Resolve a URL platform specification by downloading and caching the bundle.
@@ -6699,7 +7141,21 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
     }
 }
 
-fn rocBuild(ctx: *CliCtx, args: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+fn rocBuild(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) CliMainError!void {
+    var args = args_in;
+    const resolved_source = try resolveSourceArg(ctx, args_in.path, args_in.watch);
+    args.path = resolved_source.path;
+    if (args.root_source_url == null) {
+        args.root_source_url = resolved_source.url;
+    }
+    if (args.synthetic_output_basename == null) {
+        switch (install_store.classifySourceRef(args_in.path)) {
+            .shorthand => args.synthetic_output_basename = args_in.path,
+            .url => args.synthetic_output_basename = urlDefaultOutputBasename(args_in.path),
+            .local_path => {},
+        }
+    }
+
     // `roc build --watch` rebuilds on every change. The watch loop reruns this same
     // command (minus --watch) per change; the child writes its discovered inputs to
     // the --watch-inputs-file so the next iteration watches the right files.
@@ -6756,7 +7212,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, original_source: [
     synthetic_args.synthetic_root_header_len = header.len;
     synthetic_args.synthetic_root_header_lines = countNewlines(header);
     if (synthetic_args.output == null) {
-        synthetic_args.output = try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+        synthetic_args.output = args.synthetic_output_basename orelse try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
     }
 
     switch (synthetic_args.opt) {
@@ -8126,6 +8582,8 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
+    else if (args.synthetic_output_basename) |basename|
+        try ctx.arena.dupe(u8, basename)
     else
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
@@ -8136,6 +8594,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
+        .root_source_url = args.root_source_url,
     });
     if (args.synthetic_root_original_path) |original_path| {
         if (args.synthetic_root_original_source) |original_source| {
@@ -8429,6 +8888,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
+    else if (args.synthetic_output_basename) |basename|
+        try ctx.arena.dupe(u8, basename)
     else
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
@@ -8452,6 +8913,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
+        .root_source_url = args.root_source_url,
     });
     if (args.synthetic_root_original_path) |original_path| {
         if (args.synthetic_root_original_source) |original_source| {
@@ -8756,6 +9218,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const output_path = if (args.output) |output|
         try ctx.arena.dupe(u8, output)
+    else if (args.synthetic_output_basename) |basename|
+        try ctx.arena.dupe(u8, basename)
     else
         try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 
@@ -8779,6 +9243,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
+        .root_source_url = args.root_source_url,
     });
     if (args.synthetic_root_original_path) |original_path| {
         if (args.synthetic_root_original_source) |original_source| {
@@ -10823,8 +11288,8 @@ const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Ti
 const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
 const ReportRenderError = Allocator.Error || CliOutputWriteError;
 const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
-const RocTestError = WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
-const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || error{CheckFailed};
+const RocTestError = WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
+const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || SourceRefResolveError || error{CheckFailed};
 
 const WatchEventSignal = struct {
     dirty: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -11816,9 +12281,19 @@ fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchC
     }
 }
 
-fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
+fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    var args = args_in;
+    const resolved_source = try resolveSourceArg(ctx, args_in.path, args_in.watch);
+    args.path = resolved_source.path;
+    args.root_source_url = resolved_source.url;
+    if (args_in.main) |main_path| {
+        const resolved_main = try resolveSourceArg(ctx, main_path, args_in.watch);
+        args.main = resolved_main.path;
+        args.main_source_url = resolved_main.url;
+    }
 
     if (args.watch) {
         return runWatchCommand(ctx, arg0, .{ .test_cmd = args });
@@ -11838,6 +12313,8 @@ fn rocTest(ctx: *CliCtx, args: cli_args.TestArgs, arg0: []const u8) RocTestError
         .verbose_cache = args.verbose,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
+        .root_source_url = args.root_source_url,
+        .main_source_url = args.main_source_url,
     });
     defer build_env.deinit();
 
@@ -13474,6 +13951,8 @@ fn checkFileWithBuildEnvPreserved(
     ctx: *CliCtx,
     filepath: []const u8,
     main_filepath: ?[]const u8,
+    root_source_url: ?[]const u8,
+    main_source_url: ?[]const u8,
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
@@ -13496,6 +13975,8 @@ fn checkFileWithBuildEnvPreserved(
         .synthetic_default_app = synthetic_default_app,
         .source_dir_override = source_dir_override,
         .builtin_role_path = filepath,
+        .root_source_url = root_source_url,
+        .main_source_url = main_source_url,
     });
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath) catch |err| {
@@ -13634,6 +14115,8 @@ fn checkFileWithBuildEnv(
     ctx: *CliCtx,
     filepath: []const u8,
     main_filepath: ?[]const u8,
+    root_source_url: ?[]const u8,
+    main_source_url: ?[]const u8,
     _: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
@@ -13651,6 +14134,8 @@ fn checkFileWithBuildEnv(
         .resolution_config = resolution_config,
         .source_dir_override = source_dir_override,
         .synthetic_default_app = synthetic_default_app,
+        .root_source_url = root_source_url,
+        .main_source_url = main_source_url,
         // Checking is not complete until the platform/app relation output
         // completes, so `roc check` finalizes the relation-bearing platform
         // root once (which also resolves the platform target config constants
@@ -13855,6 +14340,8 @@ fn rocCheckDefaultApp(
         ctx,
         files.app_path,
         null,
+        null,
+        null,
         args.time,
         cache_config,
         args.max_threads,
@@ -13906,6 +14393,8 @@ fn rocCheckDefaultAppPreserved(
         ctx,
         files.app_path,
         null,
+        null,
+        null,
         args.time,
         cache_config,
         args.max_threads,
@@ -13941,9 +14430,19 @@ fn writeDefaultAppCheckWatchInputs(
     try writeWatchInputSetFile(ctx, file_path, &input_set);
 }
 
-fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckError!void {
+fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocCheckError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    var args = args_in;
+    const resolved_source = try resolveSourceArg(ctx, args_in.path, args_in.watch);
+    args.path = resolved_source.path;
+    args.root_source_url = resolved_source.url;
+    if (args_in.main) |main_path| {
+        const resolved_main = try resolveSourceArg(ctx, main_path, args_in.watch);
+        args.main = resolved_main.path;
+        args.main_source_url = resolved_main.url;
+    }
 
     if (args.watch) {
         return runWatchCommand(ctx, arg0, .{ .check = args });
@@ -14001,6 +14500,8 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
             ctx,
             args.path,
             args.main,
+            args.root_source_url,
+            args.main_source_url,
             args.time,
             cache_config,
             args.max_threads,
@@ -14037,6 +14538,8 @@ fn rocCheck(ctx: *CliCtx, args: cli_args.CheckArgs, arg0: []const u8) RocCheckEr
             ctx,
             args.path,
             args.main,
+            args.root_source_url,
+            args.main_source_url,
             args.time,
             cache_config,
             args.max_threads,
@@ -14265,7 +14768,12 @@ fn sendResponse(
     try w.flush();
 }
 
-fn rocBump(ctx: *CliCtx, args: cli_args.BumpArgs) CliMainError!void {
+fn rocBump(ctx: *CliCtx, args_in: cli_args.BumpArgs) CliMainError!void {
+    var args = args_in;
+    const resolved_source = try resolveSourceArg(ctx, args_in.path, false);
+    args.path = resolved_source.path;
+    args.root_source_url = resolved_source.url;
+
     const stdout = ctx.io.stdout();
 
     // Resolve the old package's version, from --old-version or the URL.
@@ -14328,9 +14836,9 @@ fn rocBump(ctx: *CliCtx, args: cli_args.BumpArgs) CliMainError!void {
         .roc_ctx = ctx.coreCtx(),
     };
 
-    var old_result = try bumpCheckSide(ctx, old_path, cache_config, args, "old");
+    var old_result = try bumpCheckSide(ctx, old_path, null, cache_config, args, "old");
     defer old_result.deinit(ctx.gpa);
-    var new_result = try bumpCheckSide(ctx, args.path, cache_config, args, "new");
+    var new_result = try bumpCheckSide(ctx, args.path, args.root_source_url, cache_config, args, "new");
     defer new_result.deinit(ctx.gpa);
 
     var old_api = try bumpExtractApi(ctx, &old_result.build_env, "old");
@@ -14408,6 +14916,7 @@ fn rocBump(ctx: *CliCtx, args: cli_args.BumpArgs) CliMainError!void {
 fn bumpCheckSide(
     ctx: *CliCtx,
     path: []const u8,
+    root_source_url: ?[]const u8,
     cache_config: CacheConfig,
     args: cli_args.BumpArgs,
     side: []const u8,
@@ -14416,6 +14925,8 @@ fn bumpCheckSide(
     var result = checkFileWithBuildEnvPreserved(
         ctx,
         path,
+        null,
+        root_source_url,
         null,
         false,
         cache_config,
@@ -14634,9 +15145,19 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
     };
 }
 
-fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
+fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    var args = args_in;
+    const resolved_source = try resolveSourceArg(ctx, args_in.path, false);
+    args.path = resolved_source.path;
+    args.root_source_url = resolved_source.url;
+    if (args_in.main) |main_path| {
+        const resolved_main = try resolveSourceArg(ctx, main_path, false);
+        args.main = resolved_main.path;
+        args.main_source_url = resolved_main.url;
+    }
 
     const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
@@ -14655,6 +15176,8 @@ fn rocDocs(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
         ctx,
         args.path,
         args.main,
+        args.root_source_url,
+        args.main_source_url,
         args.time,
         cache_config,
         null, // max_threads: use default (single-threaded for now)

@@ -954,6 +954,7 @@ pub const RootRequest = struct {
     procedure_template: ?canonical.ProcedureTemplateRef = null,
     procedure_binding: ?TopLevelProcedureBindingRef = null,
     procedure_use: ?ProcedureUseTemplate = null,
+    root_evidence: ?CheckedEvidenceRef = null,
 };
 
 /// Public `LoweringEntrypointRequest` declaration.
@@ -1051,6 +1052,7 @@ pub const RootRequestTable = struct {
                     .abi = .platform,
                     .exposure = .platform_required,
                     .procedure_use = procedure_use.procedure,
+                    .root_evidence = procedure_use.root_evidence,
                 }),
                 .const_value => {},
             }
@@ -2307,6 +2309,7 @@ const RootRequestWithoutOrder = struct {
     procedure_template: ?canonical.ProcedureTemplateRef = null,
     procedure_binding: ?TopLevelProcedureBindingRef = null,
     procedure_use: ?ProcedureUseTemplate = null,
+    root_evidence: ?CheckedEvidenceRef = null,
 };
 
 fn appendRoot(
@@ -2325,6 +2328,7 @@ fn appendRoot(
         .procedure_template = request.procedure_template,
         .procedure_binding = request.procedure_binding,
         .procedure_use = request.procedure_use,
+        .root_evidence = request.root_evidence,
     });
 }
 
@@ -6260,6 +6264,15 @@ fn appendStaticDispatchTypeRoots(
             },
             .e_interpolation => |interpolation| {
                 _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, module.exprType(expr_idx));
+                _ = try appendCheckedTypeRoot(
+                    allocator,
+                    module,
+                    names,
+                    imports,
+                    store,
+                    active,
+                    interpolation.dispatcher_var orelse checkedArtifactInvariant("checked interpolation expression had no static dispatch dispatcher type", .{}),
+                );
                 _ = try appendCheckedTypeRoot(
                     allocator,
                     module,
@@ -12016,6 +12029,12 @@ pub const ProcedureUseTemplate = struct {
     runtime_result_provenance: ?RuntimeResultProvenance,
 };
 
+/// An immutable checked-evidence vector owned by one checked artifact.
+pub const CheckedEvidenceRef = struct {
+    artifact: CheckedModuleArtifactKey,
+    span: artifact_serialize.Span,
+};
+
 /// Public `LocalProcedureBinding` declaration.
 pub const LocalProcedureBinding = struct {
     binder: PatternBinderId,
@@ -13295,6 +13314,8 @@ const EvidencePass = struct {
     template_iterator_refs: *const TemplateIteratorRefs,
     entry_wrappers: *const EntryWrapperTable,
     compile_time_roots: *const CompileTimeRootTable,
+    platform_requirement_solutions: []const requirement_solution.SolutionInput,
+    platform_requirement_root_evidence: []artifact_serialize.Span,
 
     types: *const types.Store,
 
@@ -13360,7 +13381,12 @@ const EvidencePass = struct {
         template_iterator_refs: *const TemplateIteratorRefs,
         entry_wrappers: *const EntryWrapperTable,
         compile_time_roots: *const CompileTimeRootTable,
+        platform_requirement_solutions: []const requirement_solution.SolutionInput,
+        platform_requirement_root_evidence: []artifact_serialize.Span,
     ) EvidencePass {
+        if (platform_requirement_solutions.len != platform_requirement_root_evidence.len) {
+            checkedArtifactInvariant("platform requirement solutions and root evidence output had different lengths", .{});
+        }
         return .{
             .allocator = allocator,
             .module = module,
@@ -13376,6 +13402,8 @@ const EvidencePass = struct {
             .template_iterator_refs = template_iterator_refs,
             .entry_wrappers = entry_wrappers,
             .compile_time_roots = compile_time_roots,
+            .platform_requirement_solutions = platform_requirement_solutions,
+            .platform_requirement_root_evidence = platform_requirement_root_evidence,
             .types = module.typeStoreConst(),
             .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
             .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
@@ -13509,6 +13537,36 @@ const EvidencePass = struct {
             const span = try self.appendEvidenceRefs(entries.items);
             try self.site_seen.put(site_key, {});
             try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
+        }
+
+        // A platform requirement invokes an app procedure without a source
+        // expression use site in the eventual platform module. Resolve that
+        // root edge here, while the app checker's solved requirement variable
+        // and exact target records are still available, and carry only the
+        // finished evidence vector across the checked-artifact boundary.
+        for (self.platform_requirement_solutions, self.platform_requirement_root_evidence) |solution, *out| {
+            out.* = .{};
+            if (!solution.is_function or try solutionVarsReachErr(self.allocator, self.module, solution)) continue;
+
+            params.clearRetainingCapacity();
+            try self.enumerateParams(solution.solved_var, &params);
+            var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+            defer entries.deinit(self.allocator);
+            try entries.ensureTotalCapacity(self.allocator, params.items.len);
+            self.current_chain = &.{};
+            for (params.items) |param| {
+                const evidence = (try self.evidenceForVar(
+                    param,
+                    param.dispatcher_var,
+                    param.constraint.fn_var,
+                    true,
+                )) orelse checkedArtifactInvariant(
+                    "platform requirement root evidence remained unresolved after checking",
+                    .{},
+                );
+                entries.appendAssumeCapacity(evidence);
+            }
+            out.* = try self.appendEvidenceRefs(entries.items);
         }
 
         // Explicit shared-var use sites no template chain fully bound resolve
@@ -14414,6 +14472,8 @@ fn resolveTotalDispatchPlans(
     template_iterator_refs: *const TemplateIteratorRefs,
     entry_wrappers: *const EntryWrapperTable,
     compile_time_roots: *const CompileTimeRootTable,
+    platform_requirement_solutions: []const requirement_solution.SolutionInput,
+    platform_requirement_root_evidence: []artifact_serialize.Span,
 ) Allocator.Error!void {
     var pass = EvidencePass.init(
         allocator,
@@ -14430,6 +14490,8 @@ fn resolveTotalDispatchPlans(
         template_iterator_refs,
         entry_wrappers,
         compile_time_roots,
+        platform_requirement_solutions,
+        platform_requirement_root_evidence,
     );
     defer pass.deinit();
     try pass.run();
@@ -16143,6 +16205,7 @@ fn hashRequiredTypeForClauseAliases(
 /// Public `PlatformRequiredProcedureUse` declaration.
 pub const PlatformRequiredProcedureUse = struct {
     procedure: ProcedureUseTemplate,
+    root_evidence: ?CheckedEvidenceRef = null,
     relation_template_closure: ImportedTemplateClosureView = .{},
 };
 
@@ -16171,6 +16234,7 @@ pub const PlatformRequiredValueUseKind = enum { const_value, procedure_value };
 /// Relocation-invariant (POD) mirror of `PlatformRequiredProcedureUse`.
 pub const StoredPlatformRequiredProcedureUse = struct {
     procedure: ProcedureUseTemplate,
+    root_evidence: ?CheckedEvidenceRef = null,
     relation_template_closure: StoredImportedTemplateClosure = .{},
 };
 
@@ -16201,6 +16265,8 @@ pub const PlatformRequirementRelationInput = struct {
     value_kind: PlatformRequiredValueKind,
     /// The app-store checked root the checker solved this requirement's type to.
     solved_root_app: CheckedTypeId,
+    /// Root-call dispatch evidence in the app artifact's evidence table.
+    root_evidence: artifact_serialize.Span = .{},
     /// Range into the owning `PlatformAppRelation.identity_solutions_app`: the
     /// app-store solved roots of this requirement's identity variables, in
     /// canonical identity-slot order.
@@ -16454,6 +16520,8 @@ pub const PlatformRequirementRelation = struct {
     app_value: TopLevelValueRef,
     requested_source_ty: canonical.CanonicalTypeKey,
     requested_source_ty_payload: CheckedTypeId,
+    /// Root-call dispatch evidence in `app_value.artifact`.
+    root_evidence: artifact_serialize.Span = .{},
     value_kind: PlatformRequiredValueKind,
 };
 
@@ -16566,6 +16634,7 @@ pub const PlatformRequirementRelationTable = struct {
                 .app_value = input.app_value,
                 .requested_source_ty = payload_key,
                 .requested_source_ty_payload = payload,
+                .root_evidence = input.root_evidence,
                 .value_kind = input.value_kind,
             };
         }
@@ -16600,6 +16669,8 @@ pub const PlatformRequirementSolution = struct {
     pattern: CheckedPatternId,
     /// The requirement type as solved in the app env, in the app's store.
     solved_root: CheckedTypeId,
+    /// Root-call dispatch evidence in this app artifact's evidence table.
+    root_evidence: artifact_serialize.Span = .{},
     value_kind: PlatformRequiredValueKind,
     /// Range into the table's `identity_solutions`; the offset within the
     /// range is the canonical identity slot of the platform requirement
@@ -16671,7 +16742,11 @@ fn platformRequirementSolutionTableFromInputs(
     exported_procedure_bindings: *const ExportedProcedureBindingTable,
     exported_const_templates: *const ExportedConstTemplateTable,
     inputs: []const requirement_solution.SolutionInput,
+    root_evidence: []const artifact_serialize.Span,
 ) Allocator.Error!PlatformRequirementSolutionTable {
+    if (inputs.len != root_evidence.len) {
+        checkedArtifactInvariant("platform requirement solutions and root evidence had different lengths", .{});
+    }
     if (inputs.len == 0) return .{};
 
     const import_views = CheckedImportViews{
@@ -16687,7 +16762,7 @@ fn platformRequirementSolutionTableFromInputs(
     var identity_solutions = std.ArrayList(CheckedTypeId).empty;
     errdefer identity_solutions.deinit(allocator);
 
-    for (inputs) |input| {
+    for (inputs, root_evidence) |input, evidence| {
         if (try solutionVarsReachErr(allocator, module, input)) continue;
 
         const top_level = top_level_values.lookupByDef(input.def) orelse {
@@ -16732,6 +16807,7 @@ fn platformRequirementSolutionTableFromInputs(
             .def = input.def,
             .pattern = top_level.pattern,
             .solved_root = solved_root,
+            .root_evidence = evidence,
             .value_kind = value_kind,
             .identity_start = identity_start,
             .identity_len = @intCast(input.identity_vars.len),
@@ -17982,6 +18058,10 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .intrinsic = proc_use.procedure.intrinsic,
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
+            .root_evidence = .{
+                .artifact = relation.app_value.artifact,
+                .span = relation.root_evidence,
+            },
             .relation_template_closure = try cloneImportedTemplateClosure(allocator, proc_use.relation_template_closure),
         } },
     };
@@ -18005,6 +18085,7 @@ fn commitPlatformRequiredValueUse(
         .procedure_value => |proc_use| .{
             .procedure_value = .{
                 .procedure = proc_use.procedure,
+                .root_evidence = proc_use.root_evidence,
                 .relation_template_closure = try pool.commit(allocator, proc_use.relation_template_closure),
             },
         },
@@ -18109,6 +18190,7 @@ pub fn buildPlatformAppRelation(
             .requested_source_ty = requested_source_ty,
             .value_kind = value_kind,
             .solved_root_app = solution.solved_root,
+            .root_evidence = solution.root_evidence,
             .identity_start = identity_start,
             .identity_len = identity_len,
         };
@@ -18143,6 +18225,10 @@ pub fn buildPlatformAppRelation(
                         requested_source_ty,
                         exported_binding,
                     ),
+                    .root_evidence = .{
+                        .artifact = app_artifact.key,
+                        .span = solution.root_evidence,
+                    },
                     .relation_template_closure = template_closure,
                 } };
             } else blk: {
@@ -23783,6 +23869,9 @@ pub const DispatchEvidenceFailure = struct {
         template_plan_refs_out_of_bounds,
         template_evidence_params_out_of_bounds,
         evidence_param_path_out_of_bounds,
+        evidence_param_path_invalid_kind,
+        evidence_param_path_invalid_shape,
+        evidence_param_path_diverges_from_checked_type,
     };
 
     kind: Kind,
@@ -24168,7 +24257,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 36;
+    const serialized_layout_version: u32 = 38;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -24406,6 +24495,181 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
+    fn evidencePathGrammarFailure(path: []const static_dispatch.EvidencePathStep) ?DispatchEvidenceFailure.Kind {
+        var path_index: usize = 0;
+        while (path_index < path.len) {
+            const path_step = path[path_index];
+            const kind = path_step.kindOrNull() orelse return .evidence_param_path_invalid_kind;
+            path_index += 1;
+            switch (kind) {
+                .fn_ret, .alias_backing, .nominal_backing => {
+                    if (path_step.data != 0) return .evidence_param_path_invalid_shape;
+                },
+                .tag_payload_tag => {
+                    if (path_index >= path.len) return .evidence_param_path_invalid_shape;
+                    const payload_kind = path[path_index].kindOrNull() orelse return .evidence_param_path_invalid_kind;
+                    if (payload_kind != .tag_payload_index) return .evidence_param_path_invalid_shape;
+                    path_index += 1;
+                },
+                .tag_payload_index => return .evidence_param_path_invalid_shape,
+                .fn_arg, .alias_arg, .nominal_arg, .tuple_elem, .record_field => {},
+            }
+        }
+        return null;
+    }
+
+    fn checkedPayloadOrNull(view: CheckedTypeStoreView, ty: CheckedTypeId) ?CheckedTypePayload {
+        if (@intFromEnum(ty) >= view.payloadCount()) return null;
+        return view.payload(ty);
+    }
+
+    /// Resolve one logical record-field selection over the published checked
+    /// row. Aliases and row extensions are transparent producer topology; a
+    /// nominal is not, matching the durable path and Monotype consumer.
+    fn checkedEvidenceRecordFieldChild(
+        view: CheckedTypeStoreView,
+        names: *const canonical.CanonicalNameStore,
+        root: CheckedTypeId,
+        label: canonical.RecordFieldLabelId,
+    ) ?CheckedTypeId {
+        var current = root;
+        var remaining = view.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (checkedPayloadOrNull(view, current) orelse return null) {
+                .alias => |alias| current = alias.backing,
+                .record => |record| {
+                    for (record.fields) |field| {
+                        if (names.recordFieldLabelTextEql(field.name, label)) return field.ty;
+                    }
+                    current = record.ext;
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| {
+                        if (names.recordFieldLabelTextEql(field.name, label)) return field.ty;
+                    }
+                    return null;
+                },
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    /// Resolve one logical tag-payload selection over the published checked
+    /// row, with the same alias/extension normalization as record fields.
+    fn checkedEvidenceTagPayloadChild(
+        view: CheckedTypeStoreView,
+        names: *const canonical.CanonicalNameStore,
+        root: CheckedTypeId,
+        label: canonical.TagLabelId,
+        payload_index: u32,
+    ) ?CheckedTypeId {
+        var current = root;
+        var remaining = view.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (checkedPayloadOrNull(view, current) orelse return null) {
+                .alias => |alias| current = alias.backing,
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| {
+                        if (!names.tagLabelTextEql(tag.name, label)) continue;
+                        const payloads = tag.argsSlice(view);
+                        if (payload_index >= payloads.len) return null;
+                        return payloads[payload_index];
+                    }
+                    current = tag_union.ext;
+                },
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    /// Verify that a normalized path selects a real component of the
+    /// template's published checked callable. This mirrors Monotype's path
+    /// vocabulary while resolving row labels across complete logical rows.
+    fn checkedEvidencePathResolves(
+        self: *const CheckedModuleArtifact,
+        start_ty: CheckedTypeId,
+        path: []const static_dispatch.EvidencePathStep,
+    ) bool {
+        const view = self.checked_types.view();
+        var ty = start_ty;
+        var path_index: usize = 0;
+        while (path_index < path.len) {
+            const path_step = path[path_index];
+            const kind = path_step.kindOrNull() orelse return false;
+            path_index += 1;
+            const payload = checkedPayloadOrNull(view, ty) orelse return false;
+            switch (kind) {
+                .fn_arg => switch (payload) {
+                    .function => |func| {
+                        if (path_step.data >= func.args.len) return false;
+                        ty = func.args[path_step.data];
+                    },
+                    else => return false,
+                },
+                .fn_ret => switch (payload) {
+                    .function => |func| ty = func.ret,
+                    else => return false,
+                },
+                .alias_arg => switch (payload) {
+                    .alias => |alias| {
+                        if (path_step.data >= alias.args.len) return false;
+                        ty = alias.args[path_step.data];
+                    },
+                    else => return false,
+                },
+                .alias_backing => switch (payload) {
+                    .alias => |alias| ty = alias.backing,
+                    else => return false,
+                },
+                .nominal_arg => switch (payload) {
+                    .nominal => |nominal| {
+                        if (path_step.data >= nominal.args.len) return false;
+                        ty = nominal.args[path_step.data];
+                    },
+                    else => return false,
+                },
+                .nominal_backing => switch (payload) {
+                    .nominal => |nominal| ty = view.nominalBackingTemplateForPayload(nominal) orelse return false,
+                    else => return false,
+                },
+                .tuple_elem => switch (payload) {
+                    .tuple => |elems| {
+                        if (path_step.data >= elems.len) return false;
+                        ty = elems[path_step.data];
+                    },
+                    else => return false,
+                },
+                .record_field => {
+                    if (path_step.data >= self.canonical_names.recordFieldLabelCount()) return false;
+                    ty = checkedEvidenceRecordFieldChild(
+                        view,
+                        &self.canonical_names,
+                        ty,
+                        @enumFromInt(path_step.data),
+                    ) orelse return false;
+                },
+                .tag_payload_tag => {
+                    if (path_index >= path.len) return false;
+                    const payload_step = path[path_index];
+                    if (payload_step.kindOrNull() != .tag_payload_index) return false;
+                    path_index += 1;
+                    if (path_step.data >= self.canonical_names.tagLabelCount()) return false;
+                    ty = checkedEvidenceTagPayloadChild(
+                        view,
+                        &self.canonical_names,
+                        ty,
+                        @enumFromInt(path_step.data),
+                        payload_step.data,
+                    ) orelse return false;
+                },
+                .tag_payload_index => return false,
+            }
+        }
+        return true;
+    }
+
     /// Public `validateDispatchEvidence` function.
     ///
     /// Dispatch-evidence totality at the check/postcheck boundary: every
@@ -24515,6 +24779,24 @@ pub const CheckedModuleArtifact = struct {
             if (@as(u64, param.path.start) + param.path.len > templates.evidence_param_paths.len) {
                 return .{ .kind = .evidence_param_path_out_of_bounds, .index = @intCast(i), .method = param.method };
             }
+            const path = templates.evidenceParamPath(param);
+            if (evidencePathGrammarFailure(path)) |kind| {
+                return .{ .kind = kind, .index = @intCast(i), .method = param.method };
+            }
+        }
+        for (templates.templates) |template| {
+            const params = templates.evidenceParams(&template);
+            for (params, 0..) |param, param_offset| {
+                const path = templates.evidenceParamPath(param);
+                if (path.len == 0) continue;
+                if (!self.checkedEvidencePathResolves(template.checked_fn_root, path)) {
+                    return .{
+                        .kind = .evidence_param_path_diverges_from_checked_type,
+                        .index = template.evidence_params.start + @as(u32, @intCast(param_offset)),
+                        .method = param.method,
+                    };
+                }
+            }
         }
 
         return null;
@@ -24547,6 +24829,18 @@ pub const CheckedModuleArtifact = struct {
                     std.debug.panic("checked artifact invariant violated: compile-time/test root has no entry wrapper template", .{});
                 };
                 std.debug.assert(@intFromEnum(template_ref.template) < self.checked_procedure_templates.templates.len);
+            }
+            if (request.kind == .platform_required_binding and request.procedure_use != null) {
+                _ = request.root_evidence orelse {
+                    std.debug.panic("checked artifact invariant violated: platform procedure root has no checked evidence vector", .{});
+                };
+            }
+        }
+
+        for (self.platform_requirement_solutions.solutions) |solution| {
+            if (solution.value_kind != .procedure_value) continue;
+            if (@as(u64, solution.root_evidence.start) + solution.root_evidence.len > self.static_dispatch_plans.evidence_refs.len) {
+                std.debug.panic("checked artifact invariant violated: platform requirement root evidence was outside the app evidence table", .{});
             }
         }
 
@@ -24995,6 +25289,10 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModuleArtifact, binding: P
                         .{},
                     );
                 }
+                const evidence = procedure_use.root_evidence orelse {
+                    std.debug.panic("checked artifact invariant violated: platform-required procedure use has no root evidence", .{});
+                };
+                std.debug.assert(std.meta.eql(evidence.artifact.bytes, binding.app_value.artifact.bytes));
             },
             .top_level,
             .imported,
@@ -26711,6 +27009,13 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
     );
 
+    const platform_requirement_root_evidence = try allocator.alloc(
+        artifact_serialize.Span,
+        inputs.platform_requirement_solutions.len,
+    );
+    defer allocator.free(platform_requirement_root_evidence);
+    @memset(platform_requirement_root_evidence, .{});
+
     try resolveTotalDispatchPlans(
         allocator,
         module,
@@ -26726,6 +27031,8 @@ pub fn publishFromTypedModule(
         &template_iterator_refs,
         &entry_wrappers,
         &compile_time_roots,
+        inputs.platform_requirement_solutions,
+        platform_requirement_root_evidence,
     );
 
     // Resolutions now carry every direct target (evidence nodes); project the
@@ -26878,6 +27185,7 @@ pub fn publishFromTypedModule(
         &exported_procedure_bindings,
         &exported_const_templates,
         inputs.platform_requirement_solutions,
+        platform_requirement_root_evidence,
     );
     errdefer platform_requirement_solutions.deinit(allocator);
 
@@ -27389,6 +27697,8 @@ fn expectProvidedExportKind(
         &template_iterator_refs,
         &entry_wrappers,
         &compile_time_roots,
+        &.{},
+        &.{},
     );
 
     var provided_exports = try ProvidedExportTable.fromModule(
@@ -28948,8 +29258,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x45, 0x27, 0x7B, 0xD6, 0xE9, 0x3E, 0x68, 0xAF, 0x3D, 0xD5, 0x4C, 0x69, 0x63, 0xD3, 0x16, 0xE9,
-        0x4A, 0x04, 0x3E, 0x04, 0x90, 0x60, 0x3B, 0x34, 0xB5, 0xC3, 0x6F, 0xA8, 0x03, 0x9C, 0x42, 0xC9,
+        0xD9, 0x0F, 0x91, 0x24, 0x6C, 0x87, 0xF5, 0xBD, 0xB9, 0xDB, 0x37, 0xCD, 0xE2, 0xBB, 0x6F, 0x7B,
+        0x21, 0x07, 0xDE, 0xCA, 0x2B, 0x2F, 0xCE, 0x11, 0xBB, 0x11, 0x83, 0x5B, 0x9C, 0xFA, 0x15, 0xFE,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -4352,16 +4352,19 @@ const Cloner = struct {
     }
 
     fn captureOperandSpanCanSubstitute(self: *Cloner, span: Ast.Span(Ast.CaptureOperand)) bool {
-        const operands = self.pass.program.captureOperandSpan(span);
-        for (0..operands.len) |index| if (!self.exprCanSubstitute(GuardedList.at(operands, index).value)) return false;
+        const operand_count: usize = @intCast(span.len);
+        for (0..operand_count) |index| {
+            const operand = self.pass.program.captureOperandAt(span, index);
+            if (!self.exprCanSubstitute(operand.value)) return false;
+        }
         return true;
     }
 
     fn callableValueFromRef(self: *Cloner, ty: Type.TypeId, fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue) Common.LowerError!Value {
-        const source_operands = self.pass.program.captureOperandSpan(fn_ref.captures);
-        const captures = try self.pass.arena.allocator().alloc(CaptureValue, source_operands.len);
-        for (0..source_operands.len) |index| {
-            const operand = GuardedList.at(source_operands, index);
+        const capture_count: usize = @intCast(fn_ref.captures.len);
+        const captures = try self.pass.arena.allocator().alloc(CaptureValue, capture_count);
+        for (0..capture_count) |index| {
+            const operand = self.pass.program.captureOperandAt(fn_ref.captures, index);
             captures[index] = .{ .id = operand.id, .value = try self.cloneExprValue(operand.value) };
         }
         return .{ .callable = .{
@@ -9211,6 +9214,104 @@ test "call-pattern scans direct call and function reference capture operands" {
     try std.testing.expect(exprContainsReturn(&program, call_proc));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, call_proc));
     try std.testing.expect(localUseBeforeEffect(&program, local, call_proc));
+}
+
+test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {
+    const allocator = std.testing.allocator;
+    // Repro for https://github.com/roc-lang/roc/issues/10168. Cloning one
+    // capture may append nested callable operands, but every sibling capture
+    // must still be cloned with its original identity.
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const fn_ty = try program.types.add(.{ .func = .{
+        .args = Type.Span.empty(),
+        .ret = unit_ty,
+    } });
+    const fn_list_ty = try program.types.add(.{ .list = fn_ty });
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const nested_binder: check.CheckedModule.PatternBinderId = @enumFromInt(1);
+    const nested_capture_local = try program.addLocalWithBinder(@enumFromInt(1), unit_ty, nested_binder);
+    const nested_capture_slots = try program.addTypedLocalSpan(&.{.{
+        .local = nested_capture_local,
+        .ty = unit_ty,
+    }});
+    const nested_fn = try program.addFn(.{
+        .symbol = @enumFromInt(2),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = nested_capture_slots,
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+    const nested_capture_value = try program.addExpr(.{
+        .ty = unit_ty,
+        .data = .{ .local = nested_capture_local },
+    });
+    const nested_operands = try program.addCaptureOperandSpan(&.{.{
+        .id = check.CheckedModule.CaptureId.fromBinder(nested_binder),
+        .value = nested_capture_value,
+    }});
+    const nested_fn_ref = try program.addExpr(.{
+        .ty = fn_ty,
+        .data = .{ .fn_ref = .{
+            .fn_id = nested_fn,
+            .captures = nested_operands,
+        } },
+    });
+
+    // The list forces the nested callable value to be materialized while
+    // cloning the first outer capture, which appends its capture operands.
+    const first_value = try program.addExpr(.{
+        .ty = fn_list_ty,
+        .data = .{ .list = try program.addExprSpan(&.{nested_fn_ref}) },
+    });
+    const second_value = unit_expr;
+    const first_local = try program.addLocal(@enumFromInt(3), fn_list_ty);
+    const second_local = try program.addLocal(@enumFromInt(4), unit_ty);
+    const first_id = program.ensureLiftCaptureId(first_local);
+    const second_id = program.ensureLiftCaptureId(second_local);
+    const outer_capture_slots = try program.addTypedLocalSpan(&.{
+        .{ .local = first_local, .ty = fn_list_ty },
+        .{ .local = second_local, .ty = unit_ty },
+    });
+    const outer_fn = try program.addFn(.{
+        .symbol = @enumFromInt(5),
+        .args = Ast.Span(Ast.TypedLocal).empty(),
+        .captures = outer_capture_slots,
+        .body = .{ .roc = unit_expr },
+        .ret = unit_ty,
+    });
+    const outer_operands = try program.addCaptureOperandSpan(&.{
+        .{ .id = first_id, .value = first_value },
+        .{ .id = second_id, .value = second_value },
+    });
+
+    // Make the nested append move the backing allocation deterministically,
+    // independent of ArrayList's current growth policy.
+    while (program.capture_operands.len() < program.capture_operands.capacity()) {
+        _ = try program.addCaptureOperandSpan(&.{.{
+            .id = check.CheckedModule.CaptureId.generatedLift(3),
+            .value = second_value,
+        }});
+    }
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    const value = try cloner.callableValueFromRef(fn_ty, .{
+        .fn_id = outer_fn,
+        .captures = outer_operands,
+    });
+    const callable = switch (value) {
+        .callable => |callable| callable,
+        else => return error.TestUnexpectedResult,
+    };
+    try std.testing.expectEqual(@as(usize, 2), callable.captures.len);
+    try std.testing.expectEqual(first_id, callable.captures[0].id);
+    try std.testing.expectEqual(second_id, callable.captures[1].id);
 }
 
 test "expression traversal visits both operands of structural_hash" {

@@ -5972,8 +5972,9 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_field_access => |field| self.hoistedRootDependenciesAreKeptInternal(field.receiver, context, keep_oracle),
         .e_interpolation => |interpolation| blk: {
             const fn_var = interpolation.constraint_fn_var orelse break :blk false;
+            const dispatcher_var = interpolation.dispatcher_var orelse break :blk false;
             if (!try self.staticDispatchAllowsHoistedRoot(
-                self.interpolationDispatchOwnerVar(expr),
+                dispatcher_var,
                 fn_var,
             )) break :blk false;
             break :blk (try self.hoistedRootDependenciesAreKeptInternal(interpolation.first, context, keep_oracle)) and
@@ -13333,6 +13334,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     interpolation.method_name_region,
                     constraint_fn_var,
                     step_fn_var,
+                    dispatcher_var,
                 );
             }
         },
@@ -15026,19 +15028,6 @@ fn typeDispatchOwnerVar(self: *Self, stmt_idx: CIR.Statement.Idx) Var {
         .s_type_var_alias => |alias| ModuleEnv.varFrom(alias.type_var_anno),
         .s_alias_decl => ModuleEnv.varFrom(stmt_idx),
         else => @panic("type dispatch owner statement was not a type-var alias or type alias"),
-    };
-}
-
-fn interpolationDispatchOwnerVar(self: *Self, expr_idx: CIR.Expr.Idx) Var {
-    const suffix_target = self.cir.numericSuffixTargetForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse
-        return ModuleEnv.varFrom(expr_idx);
-
-    return switch (suffix_target.target()) {
-        .local => |stmt_idx| ModuleEnv.varFrom(stmt_idx),
-        .invalid => ModuleEnv.varFrom(expr_idx),
-        .builtin, .external => if (builtin.mode == .Debug) {
-            std.debug.panic("check invariant violated: interpolation suffix target was not a local type", .{});
-        } else unreachable,
     };
 }
 

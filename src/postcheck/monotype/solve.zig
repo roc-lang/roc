@@ -2639,12 +2639,11 @@ pub const InstGraph = struct {
     ) Allocator.Error!Type.TypeId {
         const ty = existing orelse return try self.monoFor(node);
         const root = self.find(node);
-        const previous_root = if (self.mono_nodes.get(ty)) |mapped| self.find(mapped) else null;
-        try self.mono_nodes.put(ty, root);
-        try self.registerMonoView(root, ty);
-        if (previous_root == null or previous_root.? != root) {
-            try self.queueDirty(root);
-        }
+        const previous_root = if (self.mono_nodes.get(ty)) |mapped|
+            self.find(mapped)
+        else
+            return try self.monoFor(root);
+        if (previous_root != root) return try self.monoFor(root);
         return ty;
     }
 
@@ -3591,6 +3590,28 @@ test "record field graph access distinguishes inspection from runtime constructi
     try std.testing.expect(graph.sameClass(field_ty, selected));
     const definition_private = try graph.opaqueDefinitionFieldNode(named, field_name);
     try std.testing.expect(graph.sameClass(field_ty, definition_private));
+}
+
+test "monotype reuse keeps views of different roots distinct" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const old_root = try graph.newNode(.{ .primitive = .u64 });
+    const new_root = try graph.newNode(.{ .primitive = .str });
+    const old_view = try graph.monoFor(old_root);
+    const new_view = try graph.monoForWithReuse(new_root, old_view);
+
+    try std.testing.expect(old_view != new_view);
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(old_view));
+    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(new_view));
 }
 
 test "alias unification does not make the alias its own backing" {

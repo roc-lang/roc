@@ -427,8 +427,30 @@ pub const Phase = enum {
     WaitingOnPlatformRequirements,
     /// Imports ready, needs type checking
     TypeCheck,
-    /// Fully compiled
+    /// Terminal; `ModuleState.completion` records success or failure.
     Done,
+};
+
+/// Terminal outcome of a module compilation.
+///
+/// Phase progress and dependency readiness are deliberately separate: a failed
+/// module is terminal for coordinator accounting, but its partial `ModuleEnv`
+/// is never a valid semantic input to a dependent module.
+pub const Completion = enum {
+    pending,
+    succeeded,
+    failed,
+};
+
+/// Readiness of one semantic dependency. An unresolved import is intentionally
+/// distinct from a failed module: unresolved names proceed to canonicalization
+/// so that stage can report the source error, while a known failed module makes
+/// every dependent fail without consuming its partial semantic state.
+const DependencyReadiness = enum {
+    unresolved,
+    waiting,
+    succeeded,
+    failed,
 };
 
 /// State of a single module within a package
@@ -459,6 +481,9 @@ pub const ModuleState = struct {
     cached_ast: ?*AST,
     /// Current compilation phase
     phase: Phase,
+    /// Explicit terminal outcome. `.succeeded` means all semantic data required
+    /// by dependents, including the module content identity, was produced.
+    completion: Completion,
     /// Local imports (module IDs within same package)
     imports: std.ArrayList(ModuleId),
     /// External imports (qualified names like "pf.Stdout")
@@ -492,6 +517,7 @@ pub const ModuleState = struct {
             .path = path,
             .cached_ast = null,
             .phase = .Parse,
+            .completion = .pending,
             .imports = std.ArrayList(ModuleId).empty,
             .external_imports = std.ArrayList([]const u8).empty,
             .dependents = std.ArrayList(ModuleId).empty,
@@ -532,6 +558,14 @@ pub const ModuleState = struct {
             .env = env,
             .checked_artifact = self.checkedArtifact(),
         };
+    }
+
+    fn completedSuccessfully(self: *const ModuleState) bool {
+        return self.phase == .Done and self.completion == .succeeded;
+    }
+
+    fn completedWithFailure(self: *const ModuleState) bool {
+        return self.phase == .Done and self.completion == .failed;
     }
 
     fn replaceModuleEnv(self: *ModuleState, env: *ModuleEnv) void {
@@ -662,7 +696,7 @@ pub const PackageState = struct {
     modules: std.ArrayList(ModuleState),
     /// Module name -> module ID lookup
     module_names: std.StringHashMap(ModuleId),
-    /// Number of modules not yet in Done phase
+    /// Number of modules that have not reached a terminal outcome.
     remaining_modules: usize,
     /// Root module ID (the module that starts the build)
     root_module_id: ?ModuleId,
@@ -756,20 +790,11 @@ pub const PackageState = struct {
         return self.module_names.get(name);
     }
 
-    pub fn getSemanticDataIfDone(self: *PackageState, name: []const u8) ?compile_package.SemanticModuleData {
+    pub fn getSemanticDataIfSucceeded(self: *PackageState, name: []const u8) ?compile_package.SemanticModuleData {
         const id = self.module_names.get(name) orelse return null;
         const mod = &self.modules.items[id];
-        if (mod.phase != .Done) return null;
+        if (!mod.completedSuccessfully()) return null;
         return mod.semanticData();
-    }
-
-    /// Check if a module is done (regardless of whether it has an env).
-    /// This is used to check if dependents can proceed - a module that failed
-    /// to parse is still "done" and shouldn't block dependents.
-    pub fn isDone(self: *PackageState, name: []const u8) bool {
-        const id = self.module_names.get(name) orelse return false;
-        const mod = &self.modules.items[id];
-        return mod.phase == .Done;
     }
 
     pub fn moduleReaches(self: *const PackageState, from: ModuleId, target: ModuleId) bool {
@@ -3094,29 +3119,127 @@ pub const Coordinator = struct {
         return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
     }
 
+    /// Complete one module successfully and notify every dependency consumer.
+    /// This is the only transition to `.completion = .succeeded`.
+    fn completeModuleSuccessfully(
+        self: *Coordinator,
+        pkg: *PackageState,
+        module_id: ModuleId,
+    ) Allocator.Error!void {
+        const mod = pkg.getModule(module_id) orelse
+            coordinatorInvariant("successful completion named missing module {d} in package '{s}'", .{ module_id, pkg.name });
+        if (mod.completion != .pending or mod.phase == .Done) {
+            coordinatorInvariant(
+                "module '{s}' in package '{s}' completed successfully from phase {s} with outcome {s}",
+                .{ mod.name, pkg.name, @tagName(mod.phase), @tagName(mod.completion) },
+            );
+        }
+
+        mod.phase = .Done;
+        mod.completion = .succeeded;
+        mod.visit_color = .black;
+
+        if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
+            coordinatorInvariant("successful completion counters were already zero for module '{s}'", .{mod.name});
+        }
+        pkg.remaining_modules -= 1;
+        self.total_remaining -= 1;
+
+        for (mod.dependents.items) |dep_id| {
+            try self.tryUnblock(pkg, dep_id);
+        }
+        try self.wakeCrossPackageDependents(pkg.name, module_id);
+        try self.wakeAppsWaitingOnPlatformRequirements();
+    }
+
+    /// Complete modules with failure and propagate that explicit outcome through
+    /// the dependency graph. The worklist keeps arbitrarily deep import chains
+    /// off the process stack. This is the only transition to
+    /// `.completion = .failed`.
+    fn completeModulesWithFailure(
+        self: *Coordinator,
+        initial: []const ModuleRef,
+    ) Allocator.Error!void {
+        var work = std.ArrayList(ModuleRef).empty;
+        defer work.deinit(self.gpa);
+        try work.appendSlice(self.gpa, initial);
+
+        var next: usize = 0;
+        while (next < work.items.len) : (next += 1) {
+            const module_ref = work.items[next];
+            const pkg = self.packages.get(module_ref.pkg_name) orelse
+                coordinatorInvariant("failed completion named missing package '{s}'", .{module_ref.pkg_name});
+            const mod = pkg.getModule(module_ref.module_id) orelse
+                coordinatorInvariant(
+                    "failed completion named missing module {d} in package '{s}'",
+                    .{ module_ref.module_id, module_ref.pkg_name },
+                );
+
+            switch (mod.completion) {
+                .failed => continue,
+                .succeeded => coordinatorInvariant(
+                    "dependency failure reached already-successful module '{s}' in package '{s}'",
+                    .{ mod.name, pkg.name },
+                ),
+                .pending => {},
+            }
+            if (mod.phase == .Done) {
+                coordinatorInvariant("terminal module '{s}' had pending completion outcome", .{mod.name});
+            }
+
+            mod.phase = .Done;
+            mod.completion = .failed;
+            mod.visit_color = .black;
+
+            if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
+                coordinatorInvariant("failed completion counters were already zero for module '{s}'", .{mod.name});
+            }
+            pkg.remaining_modules -= 1;
+            self.total_remaining -= 1;
+
+            for (mod.dependents.items) |dependent_id| {
+                try work.append(self.gpa, .{
+                    .pkg_name = pkg.name,
+                    .module_id = dependent_id,
+                });
+            }
+
+            const cross_key = try std.fmt.allocPrint(self.gpa, "{s}:{d}", .{ pkg.name, module_ref.module_id });
+            defer self.gpa.free(cross_key);
+            if (self.cross_package_dependents.get(cross_key)) |dependents| {
+                try work.appendSlice(self.gpa, dependents.items);
+            }
+
+            const is_platform_root = self.platform_root_package_name != null and
+                std.mem.eql(u8, pkg.name, self.platform_root_package_name.?) and
+                pkg.root_module_id != null and
+                pkg.root_module_id.? == module_ref.module_id;
+            if (is_platform_root) {
+                if (self.app_package_name) |app_package_name| {
+                    const app_pkg = self.packages.get(app_package_name) orelse
+                        coordinatorInvariant("registered app package '{s}' was missing", .{app_package_name});
+                    const app_root_id = app_pkg.root_module_id orelse
+                        coordinatorInvariant("registered app package '{s}' had no root module", .{app_package_name});
+                    try work.append(self.gpa, .{
+                        .pkg_name = app_pkg.name,
+                        .module_id = app_root_id,
+                    });
+                }
+            }
+        }
+    }
+
     fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
         const module_time = mod.compile_time_ns;
         if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
         self.module_time_sum_ns += module_time;
 
-        mod.phase = .Done;
-        mod.visit_color = .black;
-
         installPlatformRequirementSurface(mod);
 
         self.cache_hits += 1;
-
-        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-        if (self.total_remaining > 0) self.total_remaining -= 1;
-
-        for (mod.dependents.items) |dep_id| {
-            try self.tryUnblock(pkg, dep_id);
-        }
-
         const module_id = pkg.getModuleId(mod.name) orelse return;
-        try self.wakeCrossPackageDependents(pkg.name, module_id);
-        try self.wakeAppsWaitingOnPlatformRequirements();
+        try self.completeModuleSuccessfully(pkg, module_id);
     }
 
     /// When a platform root finishes checking with a published artifact and a
@@ -3217,6 +3340,11 @@ pub const Coordinator = struct {
         self.total_parse_ns += result.parse_ns;
         mod.compile_time_ns += result.parse_ns;
 
+        // A registered dependency (notably the platform root) may have failed
+        // while this parse task was in flight. Retain the parsed source state for
+        // diagnostics/watch inputs, but never revive the failed module.
+        if (mod.completedWithFailure()) return;
+
         for (result.discovered_local_imports.items) |imp| {
             const child_id = try pkg.ensureModule(self.gpa, imp.module_name, imp.path);
             const current_mod = pkg.getModule(result.module_id) orelse {
@@ -3226,10 +3354,7 @@ pub const Coordinator = struct {
                 unreachable;
             };
 
-            if (child_id == result.module_id or pkg.moduleReaches(child_id, result.module_id)) {
-                try self.handleCycleInline(pkg, result.module_id, child_id);
-                return;
-            }
+            const closes_cycle = child_id == result.module_id or pkg.moduleReaches(child_id, result.module_id);
 
             try current_mod.imports.append(self.gpa, child_id);
 
@@ -3241,6 +3366,14 @@ pub const Coordinator = struct {
             }
 
             try pkg.recordLocalImportReachability(self.gpa, result.module_id, child_id);
+
+            // Record the closing edge before handling the error so the graph
+            // contains the exact SCC and failure propagation reaches every
+            // cycle member and transitive dependent.
+            if (closes_cycle) {
+                try self.handleCycleInline(pkg, result.module_id);
+                return;
+            }
 
             if (child.phase == .Parse) {
                 pkg.remaining_modules += 1;
@@ -3356,6 +3489,8 @@ pub const Coordinator = struct {
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
         mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
 
+        if (mod.completedWithFailure()) return;
+
         if (self.appShouldWaitForPlatformRequirements(mod)) {
             mod.phase = .WaitingOnPlatformRequirements;
             mod.visit_color = .black;
@@ -3385,8 +3520,9 @@ pub const Coordinator = struct {
     }
 
     /// App roots wait for the registered platform's root module to finish
-    /// checking, so the requirement surface (or the platform's own failure
-    /// diagnostics) always exists before the app is checked. Registration is
+    /// checking successfully, so its requirement surface is final before the
+    /// app is checked. Platform failure propagates to the app root instead of
+    /// supplying a partial platform environment. Registration is
     /// the authority for whether a platform exists; canonicalization progress
     /// and package names are never consulted.
     fn appShouldWaitForPlatformRequirements(self: *Coordinator, mod: *ModuleState) bool {
@@ -3396,7 +3532,14 @@ pub const Coordinator = struct {
             else => return false,
         }
         const platform_root = self.platformRootCandidate() orelse return false;
-        return platform_root.mod.phase != .Done;
+        return switch (platform_root.mod.completion) {
+            .pending => true,
+            .succeeded => false,
+            .failed => coordinatorInvariant(
+                "failed platform root '{s}' reached app scheduling before failure propagation",
+                .{platform_root.mod.name},
+            ),
+        };
     }
 
     fn wakeAppsWaitingOnPlatformRequirements(self: *Coordinator) Allocator.Error!void {
@@ -3424,8 +3567,8 @@ pub const Coordinator = struct {
         const imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_envs);
 
-        // All direct imports are Done, so their deep content identities are
-        // final; compute this module's identity before the cache-key probe and
+        // All direct imports completed successfully, so their deep content
+        // identities are final; compute this module's identity before the cache-key probe and
         // before type-checking (the unifier consumes precomputed identities).
         try mod.moduleEnv().?.ensureContentIdentity(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
@@ -3543,6 +3686,11 @@ pub const Coordinator = struct {
             unreachable;
         };
 
+        // Failure propagation can make an already-queued task irrelevant. The
+        // result owns any newly produced checked artifact; WorkerResult.deinit
+        // releases it while the module retains its original env.
+        if (mod.completedWithFailure()) return;
+
         if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: mod.reports BEFORE append: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
@@ -3649,28 +3797,13 @@ pub const Coordinator = struct {
         if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
         self.module_time_sum_ns += module_time;
 
-        // Mark as done
-        mod.phase = .Done;
-        mod.visit_color = .black;
-
         installPlatformRequirementSurface(mod);
 
         // Update compile stats
         self.cache_misses += 1;
         self.modules_compiled += 1;
 
-        // Decrement counters
-        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-        if (self.total_remaining > 0) self.total_remaining -= 1;
-
-        // Wake local dependents (same package)
-        for (mod.dependents.items) |dep_id| {
-            try self.tryUnblock(pkg, dep_id);
-        }
-
-        // Wake cross-package dependents (other packages that import this module)
-        try self.wakeCrossPackageDependents(result.package_name, result.module_id);
-        try self.wakeAppsWaitingOnPlatformRequirements();
+        try self.completeModuleSuccessfully(pkg, result.module_id);
     }
 
     /// Handle a parse failure
@@ -3705,21 +3838,10 @@ pub const Coordinator = struct {
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
         result.reports.clearRetainingCapacity();
 
-        // Mark as done (with errors)
-        mod.phase = .Done;
-
-        // Decrement counters
-        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-        if (self.total_remaining > 0) self.total_remaining -= 1;
-
-        // Wake local dependents (they'll see this module as done with errors)
-        for (mod.dependents.items) |dep_id| {
-            try self.tryUnblock(pkg, dep_id);
-        }
-
-        // Wake cross-package dependents
-        try self.wakeCrossPackageDependents(result.package_name, result.module_id);
-        try self.wakeAppsWaitingOnPlatformRequirements();
+        try self.completeModulesWithFailure(&.{.{
+            .pkg_name = pkg.name,
+            .module_id = result.module_id,
+        }});
     }
 
     /// Handle a non-parsing compilation failure.
@@ -3750,17 +3872,10 @@ pub const Coordinator = struct {
         }
         result.reports.clearRetainingCapacity();
 
-        mod.phase = .Done;
-
-        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-        if (self.total_remaining > 0) self.total_remaining -= 1;
-
-        for (mod.dependents.items) |dep_id| {
-            try self.tryUnblock(pkg, dep_id);
-        }
-
-        try self.wakeCrossPackageDependents(result.package_name, result.module_id);
-        try self.wakeAppsWaitingOnPlatformRequirements();
+        try self.completeModulesWithFailure(&.{.{
+            .pkg_name = pkg.name,
+            .module_id = result.module_id,
+        }});
     }
 
     /// Handle cycle detection
@@ -3788,40 +3903,42 @@ pub const Coordinator = struct {
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
         result.reports.clearRetainingCapacity();
 
-        // Mark as done (with cycle error)
-        mod.phase = .Done;
-
-        // Decrement counters
-        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-        if (self.total_remaining > 0) self.total_remaining -= 1;
-        try self.wakeAppsWaitingOnPlatformRequirements();
+        try self.completeModulesWithFailure(&.{.{
+            .pkg_name = pkg.name,
+            .module_id = result.module_id,
+        }});
     }
 
-    /// Handle cycle detection inline during canonicalization result processing
-    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, child_id: ModuleId) Allocator.Error!void {
-        const mod = pkg.getModule(module_id).?;
-        const child = pkg.getModule(child_id).?;
+    /// Handle a cycle after its closing edge has been recorded. Reachability is
+    /// the package's exact transitive closure, so mutual reachability names the
+    /// complete strongly connected component without a second graph traversal.
+    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) Allocator.Error!void {
+        var cycle_members = std.ArrayList(ModuleRef).empty;
+        defer cycle_members.deinit(self.gpa);
 
-        // Create cycle error report
-        const rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle. Cycles between modules are not allowed.", .runtime_error);
-        try mod.reports.append(self.gpa, rep);
+        for (pkg.modules.items, 0..) |*candidate, candidate_index| {
+            const candidate_id: ModuleId = @intCast(candidate_index);
+            const module_reaches_candidate = candidate_id == module_id or pkg.moduleReaches(module_id, candidate_id);
+            const candidate_reaches_module = candidate_id == module_id or pkg.moduleReaches(candidate_id, module_id);
+            if (!module_reaches_candidate or !candidate_reaches_module) continue;
 
-        // Mark both as done
-        if (mod.phase != .Done) {
-            mod.phase = .Done;
-            if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-            if (self.total_remaining > 0) self.total_remaining -= 1;
+            const rep = try Report.init(
+                self.gpa,
+                "Import Cycle Detected",
+                "This module participates in an import cycle. Cycles between modules are not allowed.",
+                .runtime_error,
+            );
+            try candidate.reports.append(self.gpa, rep);
+            try cycle_members.append(self.gpa, .{
+                .pkg_name = pkg.name,
+                .module_id = candidate_id,
+            });
         }
 
-        if (child.phase != .Done) {
-            child.phase = .Done;
-            if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
-            if (self.total_remaining > 0) self.total_remaining -= 1;
-
-            // Add report to child too
-            const child_rep = try Report.init(self.gpa, "Import Cycle Detected", "This module participates in an import cycle.", .runtime_error);
-            try child.reports.append(self.gpa, child_rep);
+        if (cycle_members.items.len == 0) {
+            coordinatorInvariant("cycle-closing module '{s}' belonged to no SCC", .{pkg.modules.items[module_id].name});
         }
+        try self.completeModulesWithFailure(cycle_members.items);
     }
 
     fn buildCanonicalizeImports(
@@ -3834,24 +3951,37 @@ pub const Coordinator = struct {
         errdefer imports.deinit(allocator);
 
         for (mod.imports.items) |imp_id| {
-            const imp = pkg.getModule(imp_id).?;
-            // Skip imports whose module env is missing (e.g. the source file
-            // wasn't found during discovery). Canonicalize will emit a
-            // `module_not_found` diagnostic for the unresolved name — see
-            // src/canonicalize/can.zig where it checks `explicit_module_envs`.
-            // Mirrors the `orelse continue` handling for external_imports below.
-            const env = imp.moduleEnv() orelse continue;
+            const imp = pkg.getModule(imp_id) orelse
+                coordinatorInvariant("module '{s}' named missing local import {d}", .{ mod.name, imp_id });
+            if (!imp.completedSuccessfully()) {
+                coordinatorInvariant(
+                    "module '{s}' canonicalized with local import '{s}' in phase {s}, outcome {s}",
+                    .{ mod.name, imp.name, @tagName(imp.phase), @tagName(imp.completion) },
+                );
+            }
+            const env = imp.moduleEnv() orelse
+                coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
             try imports.append(allocator, .{
                 .import_name = imp.name,
                 .module_env = env,
             });
         }
         for (mod.external_imports.items) |ext_name| {
-            const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse continue;
-            try imports.append(allocator, .{
-                .import_name = ext_name,
-                .module_env = ext_env,
-            });
+            switch (self.externalImportReadiness(pkg.name, ext_name)) {
+                .unresolved => continue,
+                .succeeded => {
+                    const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse
+                        coordinatorInvariant("successful external import '{s}' had no module environment", .{ext_name});
+                    try imports.append(allocator, .{
+                        .import_name = ext_name,
+                        .module_env = ext_env,
+                    });
+                },
+                .waiting, .failed => |readiness| coordinatorInvariant(
+                    "module '{s}' canonicalized with external import '{s}' in state {s}",
+                    .{ mod.name, ext_name, @tagName(readiness) },
+                ),
+            }
         }
 
         return try imports.toOwnedSlice(allocator);
@@ -3891,20 +4021,35 @@ pub const Coordinator = struct {
             }
 
             if (pkg.module_names.get(import_name)) |imp_id| {
-                const imp = pkg.getModule(imp_id).?;
-                if (imp.moduleEnv()) |env| {
-                    const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
-                    try imported_envs.append(allocator, env);
-                    module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
+                const imp = pkg.getModule(imp_id) orelse
+                    coordinatorInvariant("module '{s}' named missing local import {d}", .{ mod.name, imp_id });
+                if (!imp.completedSuccessfully()) {
+                    coordinatorInvariant(
+                        "module '{s}' type-checked with local import '{s}' in phase {s}, outcome {s}",
+                        .{ mod.name, imp.name, @tagName(imp.phase), @tagName(imp.completion) },
+                    );
                 }
+                const env = imp.moduleEnv() orelse
+                    coordinatorInvariant("successful local import '{s}' had no module environment", .{imp.name});
+                const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
+                try imported_envs.append(allocator, env);
+                module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
                 continue;
             }
 
-            if (self.getExternalEnv(pkg.name, import_name)) |ext_env| {
-                const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
-                try imported_envs.append(allocator, ext_env);
-                module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
-                continue;
+            switch (self.externalImportReadiness(pkg.name, import_name)) {
+                .unresolved => continue,
+                .succeeded => {
+                    const ext_env = self.getExternalEnv(pkg.name, import_name) orelse
+                        coordinatorInvariant("successful external import '{s}' had no module environment", .{import_name});
+                    const resolved_module_idx: u32 = @intCast(imported_envs.items.len);
+                    try imported_envs.append(allocator, ext_env);
+                    module_env.imports.setResolvedModule(import_idx, resolved_module_idx);
+                },
+                .waiting, .failed => |readiness| coordinatorInvariant(
+                    "module '{s}' type-checked with external import '{s}' in state {s}",
+                    .{ mod.name, import_name, @tagName(readiness) },
+                ),
             }
         }
 
@@ -3913,7 +4058,7 @@ pub const Coordinator = struct {
         if (builtin.mode == .Debug) {
             for (mod.imports.items) |imp_id| {
                 const imp = pkg.getModule(imp_id).?;
-                std.debug.assert(imp.phase == .Done);
+                std.debug.assert(imp.completedSuccessfully());
             }
         }
 
@@ -3971,27 +4116,49 @@ pub const Coordinator = struct {
 
     /// Try to unblock a module waiting on imports
     fn tryUnblock(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) Allocator.Error!void {
-        const mod = pkg.getModule(module_id) orelse return;
+        const mod = pkg.getModule(module_id) orelse
+            coordinatorInvariant("unblock named missing module {d} in package '{s}'", .{ module_id, pkg.name });
         if (mod.phase != .WaitingOnImports) return;
 
         // Check local imports
         for (mod.imports.items) |imp_id| {
-            const imp = pkg.getModule(imp_id) orelse continue;
-            if (imp.phase != .Done) {
-                if (comptime trace_build) {
-                    std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on local import {}\n", .{ pkg.name, mod.name, imp_id });
-                }
-                return; // Not ready yet
+            const imp = pkg.getModule(imp_id) orelse
+                coordinatorInvariant("module '{s}' named missing local import {d}", .{ mod.name, imp_id });
+            switch (imp.completion) {
+                .pending => {
+                    if (comptime trace_build) {
+                        std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on local import {}\n", .{ pkg.name, mod.name, imp_id });
+                    }
+                    return;
+                },
+                .succeeded => {},
+                .failed => {
+                    try self.completeModulesWithFailure(&.{.{
+                        .pkg_name = pkg.name,
+                        .module_id = module_id,
+                    }});
+                    return;
+                },
             }
         }
 
         // Check external imports
         for (mod.external_imports.items) |ext_name| {
-            if (!self.isExternalReady(pkg.name, ext_name)) {
-                if (comptime trace_build) {
-                    std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, ext_name });
-                }
-                return;
+            switch (self.externalImportReadiness(pkg.name, ext_name)) {
+                .unresolved, .succeeded => {},
+                .waiting => {
+                    if (comptime trace_build) {
+                        std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, ext_name });
+                    }
+                    return;
+                },
+                .failed => {
+                    try self.completeModulesWithFailure(&.{.{
+                        .pkg_name = pkg.name,
+                        .module_id = module_id,
+                    }});
+                    return;
+                },
             }
         }
 
@@ -4101,7 +4268,7 @@ pub const Coordinator = struct {
         });
     }
 
-    /// Wake all cross-package dependents of a completed module
+    /// Wake all cross-package dependents of a successfully completed module.
     fn wakeCrossPackageDependents(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
         // Build key
         var key_buf: [256]u8 = undefined;
@@ -4124,24 +4291,27 @@ pub const Coordinator = struct {
         }
     }
 
-    /// Check if an external import is ready.
-    /// Returns true if:
-    /// - The target module is done (has completed compilation), OR
-    /// - The import cannot be resolved (invalid shorthand, missing package, etc.)
-    ///   In the latter case, we return true to allow the module to proceed to
-    ///   type-checking, where the unresolved import will produce a proper error.
-    ///   Returning false would cause the coordinator to wait forever for something
-    ///   that will never be ready.
+    fn externalImportReadiness(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) DependencyReadiness {
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return .unresolved;
+        const source = self.packages.get(source_pkg) orelse return .unresolved;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return .unresolved;
+        const target_pkg = self.packages.get(target_pkg_name) orelse return .unresolved;
+        const module_id = target_pkg.getModuleId(qualified.module) orelse return .unresolved;
+        const mod = target_pkg.getModule(module_id) orelse
+            coordinatorInvariant("external import '{s}' resolved to missing module {d}", .{ import_name, module_id });
+
+        return switch (mod.completion) {
+            .pending => .waiting,
+            .succeeded => .succeeded,
+            .failed => .failed,
+        };
+    }
+
+    /// Whether an external dependency has reached a terminal state, or cannot
+    /// be resolved and must proceed for source diagnostics. Semantic consumers
+    /// use `externalImportReadiness` so failure cannot be mistaken for success.
     pub fn isExternalReady(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) bool {
-        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return true;
-
-        const source = self.packages.get(source_pkg) orelse return true;
-        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return true;
-        const target_pkg = self.packages.get(target_pkg_name) orelse return true;
-
-        // Use isDone instead of getEnvIfDone - a module that failed to parse
-        // is still "done" and shouldn't block dependents (even if it has no env)
-        return target_pkg.isDone(qualified.module);
+        return self.externalImportReadiness(source_pkg, import_name) != .waiting;
     }
 
     /// Get the ModuleEnv for an external import
@@ -4152,7 +4322,7 @@ pub const Coordinator = struct {
         const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
         const target_pkg = self.packages.get(target_pkg_name) orelse return null;
 
-        return if (target_pkg.getSemanticDataIfDone(qualified.module)) |semantic|
+        return if (target_pkg.getSemanticDataIfSucceeded(qualified.module)) |semantic|
             semantic.env
         else
             null;
@@ -4165,7 +4335,7 @@ pub const Coordinator = struct {
         const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
         const target_pkg = self.packages.get(target_pkg_name) orelse return null;
 
-        return if (target_pkg.getSemanticDataIfDone(qualified.module)) |semantic|
+        return if (target_pkg.getSemanticDataIfSucceeded(qualified.module)) |semantic|
             semantic.checked_artifact
         else
             null;
@@ -6611,21 +6781,23 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
     for (pf_leaf_ids) |leaf_id| {
         const leaf = pf_pkg.getModule(leaf_id).?;
         leaf.phase = .Done;
+        leaf.completion = .succeeded;
         pf_pkg.remaining_modules -= 1;
         coord.total_remaining -= 1;
     }
 
-    // pf.main should still be WaitingOnImports (all imports are now Done but
+    // pf.main should still be WaitingOnImports (all imports succeeded but
     // nobody called tryUnblock yet - in real code handleTypeChecked wakes dependents)
     try std.testing.expect(pf_pkg.getModule(pf_main_id).?.phase == .WaitingOnImports);
 
     // Verify external import readiness via the public isExternalReady API
-    // pf.Stdout and pf.Stderr should be ready (they're Done)
+    // pf.Stdout and pf.Stderr should be ready (they succeeded)
     try std.testing.expect(coord.isExternalReady(app_identity, "pf.Stdout"));
     try std.testing.expect(coord.isExternalReady(app_identity, "pf.Stderr"));
 
     // Now simulate completing pf.main
     pf_pkg.getModule(pf_main_id).?.phase = .Done;
+    pf_pkg.getModule(pf_main_id).?.completion = .succeeded;
     pf_pkg.remaining_modules -= 1;
     coord.total_remaining -= 1;
 
@@ -6634,6 +6806,7 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
 
     // Now simulate completing app.expect_with_main
     app_pkg.getModule(app_mod_id).?.phase = .Done;
+    app_pkg.getModule(app_mod_id).?.completion = .succeeded;
     app_pkg.remaining_modules -= 1;
     coord.total_remaining -= 1;
 
@@ -6701,6 +6874,7 @@ test "Coordinator handleParseFailed advances module to Done" {
     // Verify module advanced to Done (not stuck in Parsing)
     const mod_after = pkg.getModule(module_id).?;
     try std.testing.expect(mod_after.phase == .Done);
+    try std.testing.expect(mod_after.completion == .failed);
 
     // Verify counters decremented
     try std.testing.expectEqual(@as(usize, 0), pkg.remaining_modules);

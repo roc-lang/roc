@@ -404,6 +404,8 @@ const CustomCase = enum {
     docs_main_platform_url_package,
     build_issue_9435_hosted_nominal_return,
     bundle_complex_package,
+    install_run_roundtrip,
+    install_hash_mismatch,
     glue_debug,
     glue_debug_interpreter,
     glue_c_header,
@@ -851,6 +853,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed emits no invalid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build --opt=speed --debug emits valid LLVM debug info", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--debug", "--no-cache" }, .roc_file = "test/cli/simple_success.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &invalid_llvm_debug_info_needles } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10020: inline effectful record lambda with open Try row builds", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/Issue10020EffectfulRecordLambda.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "tag count failed Lambda Solved unification" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10176: compile-time imported matrix checks without segfault", .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10176_compile_time_matrix/Main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // repro for https://github.com/roc-lang/roc/issues/9690: a self-recursive
     // closure that captures an enclosing value must compile through the LLVM
     // size/speed backend. The crash guard inside the program makes a wrong
@@ -923,6 +926,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 9969: nominal-promoted constructors survive spec-constr case-of-case on roc build", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_9969_spec_constr_nominal/main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "known constructor match had no matching branch" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10124: spec-constr case-of-case distribution stays bounded", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_10124_spec_constr_case_budget/main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10157: binding Json.parser_camel at a concrete record type builds", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/issue_10157_json_parser_camel_concrete_record.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 10172: imported record alias mapped into an error payload checks", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10172_imported_record_alias/main.roc", .exit = .success, .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{ .{ .stream = .stderr, .text = "overflowed its stack" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "derived map transforms the selected direct tag payload", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/DerivedTagMap.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "derived map preserves payload selection across an import", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/derived_tag_map_import/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "derived map! runs an effectful transform", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/DerivedTagMapEffectful.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "transformed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -1204,6 +1208,15 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc bump --expect rejects a malformed version", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/parser_v1", "--old-version", "1.2.3", "--expect", "v2.0.0" }, .roc_file = "test/bump/parser_v1/main.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "not a valid version" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump requires --old", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache" }, .roc_file = "test/bump/parser_v1/main.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "no value was supplied for --old" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc bump requires an old version for non-URL sources", .body = .{ .command = .{ .args = &.{ "bump", "--no-cache", "--old", "test/bump/parser_v1" }, .roc_file = "test/bump/parser_v1/main.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "--old-version" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install with no arguments prints usage", .body = .{ .command = .{ .args = &.{"install"}, .contains = &.{.{ .stream = .stdout, .text = "Usage: roc install" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install rejects an invalid shorthand", .body = .{ .command = .{ .args = &.{ "install", "Bad_Name", "https://example.com/x/1.0.0/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst" }, .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "not a valid shorthand name" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a URL without a content hash", .body = .{ .command = .{ .args = &.{ "install", "tool", "https://example.com/tool.tar.zst" }, .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "Invalid URL format or missing hash" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run reports an unknown shorthand", .body = .{ .command = .{ .args = &.{ "run", "nosuchtool" }, .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Nothing is installed under the name" }, .{ .stream = .stderr, .text = "roc install nosuchtool" }, .{ .stream = .stderr, .text = "./nosuchtool" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "bare roc rejects a shorthand and points at roc run", .body = .{ .command = .{ .args = &.{"sometool"}, .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "roc run sometool" }, .{ .stream = .stderr, .text = "./sometool" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run --help prints run usage", .body = .{ .command = .{ .args = &.{ "run", "--help" }, .contains = &.{.{ .stream = .stdout, .text = "Usage: roc run" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc run rejects --watch for installed shorthands", .body = .{ .command = .{ .args = &.{ "run", "sometool", "--watch" }, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "--watch is not supported for installed shorthands" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install/run roundtrip over loopback HTTP", .body = .{ .custom = .install_run_roundtrip } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a hash mismatch and leaves no entry", .body = .{ .custom = .install_hash_mismatch } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs pure expects for a wasm-only platform (issue 9668)", .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "shared libraries" }, .{ .stream = .stderr, .text = ".so/.dylib/.dll" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc explains wasm-only Shared output as a wasm module (issue 9668)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "targets wasm32" }, .{ .stream = .stderr, .text = ".wasm module" }, .{ .stream = .stderr, .text = "roc build" }, .{ .stream = .stderr, .text = "wasm artifact" } }, .not_contains = &.{.{ .stream = .stderr, .text = ".so/.dylib/.dll" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --opt=dev rejects non executable targets", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--target=wasm32" }, .roc_file = "test/wasm/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "only produces static libraries" }, .{ .stream = .stderr, .text = "TARGET NOT SUPPORTED" }, .{ .stream = .stderr, .text = "unsupported target" } } }} } } },
@@ -1503,6 +1516,7 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) CliRunnerError!CaseEnv {
     try env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir);
     try env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
+    try env_map.put("ROC_INSTALL_DIR", dirs.install_dir);
     try util.putIsolatedTempEnv(&env_map, dirs.temp_dir);
 
     return .{
@@ -1634,7 +1648,7 @@ fn runInterpreterTest(
     const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{backend.cliName()}) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate opt arg" };
 
-    var argv_buf: [5][]const u8 = undefined;
+    var argv_buf: [7][]const u8 = undefined;
     var argc: usize = 0;
     argv_buf[argc] = roc_binary_path;
     argc += 1;
@@ -1642,17 +1656,22 @@ fn runInterpreterTest(
     argc += 1;
     argv_buf[argc] = opt_arg;
     argc += 1;
+    argv_buf[argc] = roc_file;
+    argc += 1;
     switch (platform.test_kind) {
         .native_run => {},
         .io_spec => |io_spec| {
-            const test_arg = std.fmt.allocPrint(allocator, "--test={s}", .{io_spec}) catch
-                return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to allocate IO spec arg" };
-            argv_buf[argc] = test_arg;
+            // App args go after `--` so the CLI forwards them to the host
+            // instead of parsing them; the host takes `--test <spec>` as two
+            // arguments, matching the built-executable path below.
+            argv_buf[argc] = "--";
+            argc += 1;
+            argv_buf[argc] = "--test";
+            argc += 1;
+            argv_buf[argc] = io_spec;
             argc += 1;
         },
     }
-    argv_buf[argc] = roc_file;
-    argc += 1;
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
     const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
@@ -2231,6 +2250,8 @@ fn runCustomCase(
         .docs_main_platform_url_package => customDocsMainPlatformUrlPackage(io, allocator, &env, &timer, timeout_ms),
         .build_issue_9435_hosted_nominal_return => customBuildIssue9435(io, allocator, &env, &timer, timeout_ms),
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
+        .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
+        .install_hash_mismatch => customInstallHashMismatch(io, allocator, &env, &timer, timeout_ms),
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
         .glue_debug_interpreter => customGlueDebugInterpreter(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
@@ -6296,6 +6317,247 @@ fn customBundleComplexPackage(io: std.Io, allocator: Allocator, env: *const Case
         .contains = &.{.{ .stream = .stdout, .text = "Created:" }},
         .not_contains = &.{.{ .stream = .stderr, .text = "missing from bundle" }},
     })) |failure| return failure;
+    return null;
+}
+
+/// Serves one HTTP request from a background thread: reads whatever arrives,
+/// responds with the bundle bytes, and exits. `roc install` performs exactly
+/// one download in the roundtrip below; every later step must work offline.
+const InstallBundleServer = struct {
+    server: *std.Io.net.Server,
+    bundle_data: []const u8,
+    io: std.Io,
+
+    const ServeError = std.Io.net.Server.AcceptError || std.Io.net.Stream.Reader.Error || std.Io.net.Stream.Writer.Error || std.Io.Writer.Error || error{ NoSpaceLeft, ReadFailed };
+
+    fn run(ctx: *@This()) void {
+        ctx.serveOne() catch {};
+    }
+
+    fn serveOne(ctx: *@This()) ServeError!void {
+        const stream = try ctx.server.accept(ctx.io);
+        defer stream.close(ctx.io);
+
+        var request_buf: [4096]u8 = undefined;
+        var recv_buffer: [512]u8 = undefined;
+        var conn_reader = stream.reader(ctx.io, &recv_buffer);
+        var slices = [_][]u8{request_buf[0..]};
+        _ = std.Io.Reader.readVec(&conn_reader.interface, &slices) catch |err| switch (err) {
+            error.EndOfStream => {},
+            error.ReadFailed => return error.ReadFailed,
+        };
+
+        var header_buf: [160]u8 = undefined;
+        const header = try std.fmt.bufPrint(&header_buf, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n", .{ctx.bundle_data.len});
+        var write_buf: [4096]u8 = undefined;
+        var stream_writer = stream.writer(ctx.io, &write_buf);
+        try stream_writer.interface.writeAll(header);
+        try stream_writer.interface.writeAll(ctx.bundle_data);
+        try stream_writer.interface.flush();
+    }
+};
+
+/// Unblock an InstallBundleServer thread stuck in accept() when the roc
+/// command under test failed before ever connecting, so a clean assertion
+/// failure is reported instead of a join hang that the harness times out.
+fn pokeInstallBundleServer(io: std.Io, port: u16) void {
+    var address = std.Io.net.IpAddress.parse("127.0.0.1", port) catch return;
+    const stream = std.Io.net.IpAddress.connect(&address, io, .{ .mode = .stream }) catch return;
+    stream.close(io);
+}
+
+fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Bundle a headerless default app from its own directory so main.roc sits
+    // at the bundle root.
+    const app_dir = createWorkSubdir(io, allocator, env, "install-app") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create app dir: {}", .{err});
+    const app_main = std.fs.path.join(allocator, &.{ app_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_main, .data = "main! = |_args| {\n    echo!(\"installed tool ran\")\n    Ok({})\n}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app main.roc: {}", .{err});
+
+    const serve_dir = createWorkSubdir(io, allocator, env, "install-serve") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create serve dir: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", serve_dir, "main.roc" }, app_dir, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle failed");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    const bundle_filename = std.fs.path.basename(bundle_path);
+
+    const bundle_bytes = std.Io.Dir.cwd().readFileAlloc(io, bundle_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read bundle {s}: {}", .{ bundle_path, err });
+
+    const loopback = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch |err|
+        return customInfraFailure(allocator, timer, "failed to parse loopback address: {}", .{err});
+    var server = loopback.listen(io, .{ .reuse_address = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to listen on loopback: {}", .{err});
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    var server_ctx = InstallBundleServer{
+        .server = &server,
+        .bundle_data = bundle_bytes,
+        .io = io,
+    };
+    const server_thread = std.Thread.spawn(.{}, InstallBundleServer.run, .{&server_ctx}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to spawn server thread: {}", .{err});
+
+    const url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}", .{ port, bundle_filename }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate url: {}", .{err});
+
+    // 1. Install: downloads (the only network access in this test), builds
+    //    with --opt=speed, and publishes the entry.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "install", "hello_tool", url },
+        .contains = &.{.{ .stream = .stdout, .text = "Installed hello_tool" }},
+    })) |failure| {
+        pokeInstallBundleServer(io, port);
+        server_thread.join();
+        return failure;
+    }
+    server_thread.join();
+
+    // 2. Run the installed shorthand.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "run", "hello_tool" },
+        .contains = &.{.{ .stream = .stdout, .text = "installed tool ran" }},
+    })) |failure| return failure;
+
+    // 3. Desert island: delete the package cache; the installed tool must
+    //    still run (and must not touch the network — the server is gone).
+    std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "run", "hello_tool" },
+        .contains = &.{.{ .stream = .stdout, .text = "installed tool ran" }},
+    })) |failure| return failure;
+
+    // 4. Same name + same URL is an idempotent no-op (no download).
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "install", "hello_tool", url },
+        .contains = &.{.{ .stream = .stdout, .text = "already installed" }},
+    })) |failure| return failure;
+
+    // 5. Same name + different URL fails without touching the entry
+    //    (detected before any download).
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "install", "hello_tool", "https://example.com/other/1.2.3/AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst" },
+        .exit = .{ .code = 1 },
+        .contains = &.{.{ .stream = .stderr, .text = "already installed from a different URL" }},
+    })) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "run", "hello_tool" },
+        .contains = &.{.{ .stream = .stdout, .text = "installed tool ran" }},
+    })) |failure| return failure;
+
+    // 6. Build flags that cannot apply to a prebuilt binary are rejected.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "run", "hello_tool", "--opt=speed" },
+        .exit = .failure,
+        .contains = &.{.{ .stream = .stderr, .text = "--opt has no effect" }},
+    })) |failure| return failure;
+
+    return null;
+}
+
+fn customInstallHashMismatch(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Serve a well-formed bundle under a URL whose filename hash does not
+    // match its content: decompression succeeds but BLAKE3 verification must
+    // fail, and the failed install must leave no visible entry.
+    const app_dir = createWorkSubdir(io, allocator, env, "mismatch-app") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create app dir: {}", .{err});
+    const app_main = std.fs.path.join(allocator, &.{ app_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_main, .data = "main! = |_args| {\n    echo!(\"should never run\")\n    Ok({})\n}\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app main.roc: {}", .{err});
+
+    const serve_dir = createWorkSubdir(io, allocator, env, "mismatch-serve") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create serve dir: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", serve_dir, "main.roc" }, app_dir, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle failed");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+
+    const bundle_bytes = std.Io.Dir.cwd().readFileAlloc(io, bundle_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read bundle {s}: {}", .{ bundle_path, err });
+
+    // A fixed valid base58 hash that cannot match this bundle's real content
+    // hash (the bundle's own filename is derived from its BLAKE3 hash, so any
+    // other valid hash string mismatches).
+    const wrong_hash_filename = "AQmoxbAY7eQfXMbi9XUxBvBGZcxZCs1tdNeFriRRkwSc.tar.zst";
+    if (std.mem.eql(u8, std.fs.path.basename(bundle_path), wrong_hash_filename)) {
+        return customInfraFailure(allocator, timer, "fixture bundle unexpectedly matches the wrong-hash filename", .{});
+    }
+
+    const loopback = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch |err|
+        return customInfraFailure(allocator, timer, "failed to parse loopback address: {}", .{err});
+    var server = loopback.listen(io, .{ .reuse_address = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to listen on loopback: {}", .{err});
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    var server_ctx = InstallBundleServer{
+        .server = &server,
+        .bundle_data = bundle_bytes,
+        .io = io,
+    };
+    const server_thread = std.Thread.spawn(.{}, InstallBundleServer.run, .{&server_ctx}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to spawn server thread: {}", .{err});
+
+    const url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}", .{ port, wrong_hash_filename }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate url: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "install", "badtool", url },
+        .exit = .{ .code = 1 },
+        .contains = &.{ .{ .stream = .stderr, .text = "Failed to download from" }, .{ .stream = .stderr, .text = "HashMismatch" } },
+    })) |failure| {
+        pokeInstallBundleServer(io, port);
+        server_thread.join();
+        return failure;
+    }
+    server_thread.join();
+
+    // "Nothing is installed" (rather than a corrupt-entry report) proves the
+    // failed install left no visible entry behind.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "run", "badtool" },
+        .exit = .{ .code = 1 },
+        .contains = &.{.{ .stream = .stderr, .text = "Nothing is installed under the name" }},
+    })) |failure| return failure;
+
     return null;
 }
 

@@ -300,6 +300,7 @@ pub const ModuleType = enum {
     ctx,
     build_options,
     layout,
+    static_data,
     values,
     eval,
     ipc,
@@ -340,9 +341,10 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options, .ctx },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
+            .static_data => &.{ .base, .builtins, .check, .layout, .lir, .roc_target },
             .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
-            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
+            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .static_data, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
             .ipc => &.{},
 
             .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy },
@@ -352,7 +354,7 @@ pub const ModuleType = enum {
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
             .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
-            .backend => &.{ .base, .layout, .builtins, .can, .lir, .roc_target, .ctx },
+            .backend => &.{ .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx },
             .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
             .postcheck => &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core },
             .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck, .builtins },
@@ -384,6 +386,7 @@ pub const RocModules = struct {
     ctx: *Module,
     build_options: *Module,
     layout: *Module,
+    static_data: *Module,
     values: *Module,
     eval: *Module,
     ipc: *Module,
@@ -460,6 +463,7 @@ pub const RocModules = struct {
                 .{ .root_source_file = build_options_step.getOutput() },
             ),
             .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
+            .static_data = b.addModule("static_data", .{ .root_source_file = b.path("src/static_data.zig") }),
             .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
             .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
             .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
@@ -543,6 +547,7 @@ pub const RocModules = struct {
             .ctx,
             .build_options,
             .layout,
+            .static_data,
             .values,
             .eval,
             .ipc,
@@ -617,6 +622,7 @@ pub const RocModules = struct {
         step.root_module.addImport("ctx", self.ctx);
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
+        step.root_module.addImport("static_data", self.static_data);
         step.root_module.addImport("eval", self.eval);
         step.root_module.addImport("fmt", self.fmt);
         step.root_module.addImport("unbundle", self.unbundle);
@@ -670,6 +676,7 @@ pub const RocModules = struct {
             .ctx => self.ctx,
             .build_options => self.build_options,
             .layout => self.layout,
+            .static_data => self.static_data,
             .values => self.values,
             .eval => self.eval,
             .ipc => self.ipc,
@@ -727,6 +734,7 @@ pub const RocModules = struct {
             .ctx,
             .eval,
             .layout,
+            .static_data,
             .values,
             .ipc,
             .fmt,

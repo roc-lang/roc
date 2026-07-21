@@ -444,15 +444,10 @@ fn filterTypeModuleEntries(
     var idx: usize = 0;
     while (idx < entries_list.items.len) {
         const entry = &entries_list.items[idx];
-        // Keep the main type entry (name matches the module name) and any entries
-        // that are prefixed with the module name (e.g. "Color.helper" which would
-        // have been a method moved under Color by the hierarchical pass, but if not
-        // yet moved, we still keep it).
-        if (std.mem.eql(u8, entry.name, module_name) or
-            (std.mem.startsWith(u8, entry.name, module_name) and
-                entry.name.len > module_name.len and
-                entry.name[module_name.len] == '.'))
-        {
+        // At this point the hierarchical pass has already moved associated
+        // entries under their parent. Anything still at top level is a sibling
+        // declaration, so a type module keeps only its main type entry.
+        if (std.mem.eql(u8, entry.name, module_name)) {
             idx += 1;
         } else {
             var removed = entries_list.orderedRemove(idx);

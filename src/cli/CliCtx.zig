@@ -119,6 +119,7 @@ pub const Command = enum {
     docs,
     bump,
     repl,
+    install,
     unknown,
 
     pub fn name(self: Command) []const u8 {
@@ -134,6 +135,7 @@ pub const Command = enum {
             .docs => "docs",
             .bump => "bump",
             .repl => "repl",
+            .install => "install",
             .unknown => "unknown",
         };
     }

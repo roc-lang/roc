@@ -25,6 +25,7 @@ nodes: Node.List,
 regions: Region.List,
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan), // Checked literal dispatch metadata owned by literal nodes
+interpolation_data: collections.SafeList(InterpolationData), // Canonical and checked data owned by interpolation expressions
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
 method_call_data: collections.SafeList(MethodCallData), // Typed storage for method args plus method-token source region
@@ -75,6 +76,18 @@ pub const LiteralDispatchPlan = extern struct {
     pub fn dispatchKind(self: LiteralDispatchPlan) Kind {
         return @enumFromInt(self.kind);
     }
+};
+
+/// Canonical and checked data owned by a compiler-created interpolation expression.
+/// Optional type variables use zero for null and otherwise store `@intFromEnum(var) + 1`.
+pub const InterpolationData = extern struct {
+    parts_start: u32,
+    parts_len: u32,
+    method_region_start: u32,
+    method_region_end: u32,
+    constraint_fn_var_plus_one: u32,
+    step_fn_var_plus_one: u32,
+    dispatcher_var_plus_one: u32,
 };
 
 /// Method-call side data.
@@ -312,6 +325,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer int128_values.deinit(gpa);
     var literal_dispatch_plans = try collections.SafeList(LiteralDispatchPlan).initCapacity(gpa, capacity / 8);
     errdefer literal_dispatch_plans.deinit(gpa);
+    var interpolation_data = try collections.SafeList(InterpolationData).initCapacity(gpa, capacity / 16);
+    errdefer interpolation_data.deinit(gpa);
     var span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4);
     errdefer span2_data.deinit(gpa);
     var span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4);
@@ -353,6 +368,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .regions = regions,
         .int128_values = int128_values,
         .literal_dispatch_plans = literal_dispatch_plans,
+        .interpolation_data = interpolation_data,
         .span2_data = span2_data,
         .span_with_node_data = span_with_node_data,
         .method_call_data = method_call_data,
@@ -381,6 +397,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .regions = try self.regions.clone(gpa),
         .int128_values = try self.int128_values.clone(gpa),
         .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
+        .interpolation_data = try self.interpolation_data.clone(gpa),
         .span2_data = try self.span2_data.clone(gpa),
         .span_with_node_data = try self.span_with_node_data.clone(gpa),
         .method_call_data = try self.method_call_data.clone(gpa),
@@ -409,6 +426,7 @@ pub fn deinit(store: *NodeStore) void {
     store.regions.deinit(store.gpa);
     store.int128_values.deinit(store.gpa);
     store.literal_dispatch_plans.deinit(store.gpa);
+    store.interpolation_data.deinit(store.gpa);
     store.span2_data.deinit(store.gpa);
     store.span_with_node_data.deinit(store.gpa);
     store.method_call_data.deinit(store.gpa);
@@ -437,6 +455,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.regions.relocate(offset);
     store.int128_values.relocate(offset);
     store.literal_dispatch_plans.relocate(offset);
+    store.interpolation_data.relocate(offset);
     store.span2_data.relocate(offset);
     store.span_with_node_data.relocate(offset);
     store.method_call_data.relocate(offset);
@@ -1436,26 +1455,29 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_interpolation => {
             const p = payload.expr_interpolation;
-            const region_span = store.span2_data.items.items[p.method_name_region_span2_idx];
-            const parts_step = store.span_with_node_data.items.items[p.parts_step_fn_idx];
+            const data = store.interpolation_data.items.items[p.interpolation_data_idx];
             return CIR.Expr{ .e_interpolation = .{
                 .first = @enumFromInt(p.first),
                 .parts = .{ .span = .{
-                    .start = parts_step.start,
-                    .len = parts_step.len,
+                    .start = data.parts_start,
+                    .len = data.parts_len,
                 } },
                 .method_name_region = base.Region{
-                    .start = .{ .offset = region_span.start },
-                    .end = .{ .offset = region_span.len },
+                    .start = .{ .offset = data.method_region_start },
+                    .end = .{ .offset = data.method_region_end },
                 },
-                .constraint_fn_var = if (p.constraint_fn_var_plus_one == 0)
+                .constraint_fn_var = if (data.constraint_fn_var_plus_one == 0)
                     null
                 else
-                    @enumFromInt(p.constraint_fn_var_plus_one - 1),
-                .step_fn_var = if (parts_step.node == 0)
+                    @enumFromInt(data.constraint_fn_var_plus_one - 1),
+                .step_fn_var = if (data.step_fn_var_plus_one == 0)
                     null
                 else
-                    @enumFromInt(parts_step.node - 1),
+                    @enumFromInt(data.step_fn_var_plus_one - 1),
+                .dispatcher_var = if (data.dispatcher_var_plus_one == 0)
+                    null
+                else
+                    @enumFromInt(data.dispatcher_var_plus_one - 1),
             } };
         },
         .expr_structural_eq => {
@@ -1688,25 +1710,23 @@ pub fn replaceExprWithInterpolationConstraint(
     method_name_region: Region,
     constraint_fn_var: types.Var,
     step_fn_var: types.Var,
+    dispatcher_var: types.Var,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    const parts_step_fn_idx: u32 = @intCast(store.span_with_node_data.len());
-    _ = try store.span_with_node_data.append(store.gpa, .{
-        .start = parts.span.start,
-        .len = parts.span.len,
-        .node = @intFromEnum(step_fn_var) + 1,
-    });
-    const region_span2_idx: u32 = @intCast(store.span2_data.len());
-    _ = try store.span2_data.append(store.gpa, .{
-        .start = method_name_region.start.offset,
-        .len = method_name_region.end.offset,
+    const interpolation_data_idx: u32 = @intCast(store.interpolation_data.len());
+    _ = try store.interpolation_data.append(store.gpa, .{
+        .parts_start = parts.span.start,
+        .parts_len = parts.span.len,
+        .method_region_start = method_name_region.start.offset,
+        .method_region_end = method_name_region.end.offset,
+        .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
+        .step_fn_var_plus_one = @intFromEnum(step_fn_var) + 1,
+        .dispatcher_var_plus_one = @intFromEnum(dispatcher_var) + 1,
     });
     var node = Node.init(.expr_interpolation);
     node.setPayload(.{ .expr_interpolation = .{
         .first = @intFromEnum(first),
-        .parts_step_fn_idx = parts_step_fn_idx,
-        .method_name_region_span2_idx = region_span2_idx,
-        .constraint_fn_var_plus_one = @intFromEnum(constraint_fn_var) + 1,
+        .interpolation_data_idx = interpolation_data_idx,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2752,25 +2772,19 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_interpolation => |e| {
             node.tag = .expr_interpolation;
-            const parts_step_fn_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = e.parts.span.start,
-                .len = e.parts.span.len,
-                .node = if (e.step_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
-            });
-            const region_span2_idx: u32 = @intCast(store.span2_data.len());
-            _ = try store.span2_data.append(store.gpa, .{
-                .start = e.method_name_region.start.offset,
-                .len = e.method_name_region.end.offset,
+            const interpolation_data_idx: u32 = @intCast(store.interpolation_data.len());
+            _ = try store.interpolation_data.append(store.gpa, .{
+                .parts_start = e.parts.span.start,
+                .parts_len = e.parts.span.len,
+                .method_region_start = e.method_name_region.start.offset,
+                .method_region_end = e.method_name_region.end.offset,
+                .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
+                .step_fn_var_plus_one = if (e.step_fn_var) |var_| @intFromEnum(var_) + 1 else 0,
+                .dispatcher_var_plus_one = if (e.dispatcher_var) |var_| @intFromEnum(var_) + 1 else 0,
             });
             node.setPayload(.{ .expr_interpolation = .{
                 .first = @intFromEnum(e.first),
-                .parts_step_fn_idx = parts_step_fn_idx,
-                .method_name_region_span2_idx = region_span2_idx,
-                .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_|
-                    @intFromEnum(var_) + 1
-                else
-                    0,
+                .interpolation_data_idx = interpolation_data_idx,
             } });
         },
         .e_structural_eq => |e| {
@@ -5406,6 +5420,7 @@ pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers (16 bytes total)
     int128_values: collections.SafeList(i128).Serialized, // Must be first data field for 16-byte alignment
     literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan).Serialized,
+    interpolation_data: collections.SafeList(InterpolationData).Serialized,
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
@@ -5436,6 +5451,7 @@ pub const Serialized = extern struct {
         // Serialize int128_values FIRST to ensure 16-byte alignment (i128 requires it)
         try self.int128_values.serialize(&store.int128_values, allocator, writer);
         try self.literal_dispatch_plans.serialize(&store.literal_dispatch_plans, allocator, writer);
+        try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
         // Serialize nodes
         try self.nodes.serialize(&store.nodes, allocator, writer);
         // Serialize regions
@@ -5485,6 +5501,7 @@ pub const Serialized = extern struct {
             .regions = self.regions.deserializeInto(base_addr),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
+            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
@@ -5515,6 +5532,7 @@ pub const Serialized = extern struct {
             .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
+            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),

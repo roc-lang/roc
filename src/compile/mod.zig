@@ -12,7 +12,7 @@ pub const single_module = @import("compile_module.zig");
 pub const module_discovery = @import("module_discovery.zig");
 pub const dependency_sort = @import("dependency_sort.zig");
 pub const threading = @import("threading.zig");
-pub const static_data_exports = @import("static_data_exports.zig");
+pub const static_data_exports = @import("static_data");
 pub const package_source = @import("package_source.zig");
 pub const package_resolution = @import("package_resolution.zig");
 pub const package_identity = @import("package_identity.zig");
@@ -90,7 +90,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
     std.testing.refAllDecls(@import("dependency_sort.zig"));
-    std.testing.refAllDecls(@import("static_data_exports.zig"));
+    std.testing.refAllDecls(static_data_exports);
     std.testing.refAllDecls(@import("package_source.zig"));
     std.testing.refAllDecls(@import("package_resolution.zig"));
     std.testing.refAllDecls(@import("package_identity.zig"));
@@ -118,8 +118,10 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10021_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10057_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10105_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10182_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10132_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10218_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10271_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));
     std.testing.refAllDecls(@import("test/list_map_target_independent_lir_test.zig"));
     std.testing.refAllDecls(@import("test/platform_box_update_lir_test.zig"));
