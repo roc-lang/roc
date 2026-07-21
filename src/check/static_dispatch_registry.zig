@@ -128,6 +128,75 @@ pub fn isIteratorOwner(owner: BuiltinOwner) bool {
     };
 }
 
+/// Semantic identity assigned to compiler-owned iterator procedures while
+/// checking still has the defining builtin declaration in hand.
+pub const IteratorProcedureId = enum(u8) {
+    iter_next,
+    iter_custom,
+    iter_single,
+    list_iter,
+    iter_map,
+    iter_keep_if,
+    iter_drop_if,
+    iter_take_first,
+    iter_drop_first,
+    iter_concat,
+    iter_append,
+    iter_exclusive_range,
+    iter_inclusive_range,
+    numeric_range_exclusive,
+    numeric_range_inclusive,
+    iter_from_step,
+    range_done,
+};
+
+pub fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
+    const env = module.moduleEnvConst();
+    if (env.module_role != .builtin) return null;
+    const def = module.def(def_idx);
+    const ident = switch (def.pattern.data) {
+        .assign => |assign| assign.ident,
+        else => return null,
+    };
+    const text = module.getIdent(ident);
+
+    const exact = [_]struct { []const u8, IteratorProcedureId }{
+        .{ "Builtin.Iter.next", .iter_next },
+        .{ "Builtin.Iter.custom", .iter_custom },
+        .{ "Builtin.Iter.single", .iter_single },
+        .{ "Builtin.List.iter", .list_iter },
+        .{ "Builtin.Iter.map", .iter_map },
+        .{ "Builtin.Iter.keep_if", .iter_keep_if },
+        .{ "Builtin.Iter.drop_if", .iter_drop_if },
+        .{ "Builtin.Iter.take_first", .iter_take_first },
+        .{ "Builtin.Iter.drop_first", .iter_drop_first },
+        .{ "Builtin.Iter.concat", .iter_concat },
+        .{ "Builtin.Iter.append", .iter_append },
+        .{ "Builtin.Iter.exclusive_range", .iter_exclusive_range },
+        .{ "Builtin.Iter.inclusive_range", .iter_inclusive_range },
+        .{ "iter_from_step", .iter_from_step },
+        .{ "Builtin.iter_from_step", .iter_from_step },
+        .{ "range_done", .range_done },
+        .{ "Builtin.range_done", .range_done },
+    };
+    for (exact) |entry| {
+        if (Ident.textEql(text, entry[0])) return entry[1];
+    }
+
+    const numeric_types = [_][]const u8{
+        "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec",
+    };
+    inline for (numeric_types) |numeric| {
+        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".range_exclusive")) {
+            return .numeric_range_exclusive;
+        }
+        if (Ident.textEql(text, "Builtin.Num." ++ numeric ++ ".range_inclusive")) {
+            return .numeric_range_inclusive;
+        }
+    }
+    return null;
+}
+
 /// Public `MethodKey` declaration.
 pub const MethodKey = struct {
     owner: MethodOwner,
@@ -138,6 +207,7 @@ pub const MethodKey = struct {
 pub const ProcedureMethodTarget = struct {
     proc: canonical.ProcedureValueRef,
     template: canonical.ProcedureTemplateRef,
+    iterator_procedure: ?IteratorProcedureId = null,
 };
 
 /// Public `LocalProcedureMethodTarget` declaration.
@@ -258,6 +328,7 @@ pub const MethodRegistry = struct {
                 break :blk .{ .procedure = .{
                     .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
                     .template = template,
+                    .iterator_procedure = iteratorProcedureForDef(module, def_idx),
                 } };
             } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
@@ -489,6 +560,7 @@ fn referencedProcedureTargetForMethodBinding(
                         .callable => .{ .procedure = .{
                             .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
                             .template = template_entry.template,
+                            .iterator_procedure = iteratorProcedureForDef(module, target_def_idx),
                         } },
                         .structural => |kind| .{ .structural = kind },
                     },

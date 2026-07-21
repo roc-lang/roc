@@ -12,6 +12,7 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 const static_dispatch = check.StaticDispatchRegistry;
+const names = check.CheckedNames;
 
 const UnifyPair = struct {
     first: Type.TypeVarId,
@@ -1378,6 +1379,10 @@ const Solver = struct {
                         left_named.kind != right_named.kind or
                         left_named.builtin_owner != right_named.builtin_owner)
                     {
+                        if (try self.unifyForcedDynamicIterator(a, b, left_named, right_named)) return;
+                        if (try self.unifyIteratorOwnerStampedPublic(a, b, left_named, right_named)) return;
+                        if (try self.unifyGeneratedIteratorJoin(a, b, left_named, right_named)) return;
+                        if (try self.unifyPublicGeneratedIterator(a, b, left_named, right_named)) return;
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
                     try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
@@ -1403,6 +1408,125 @@ const Solver = struct {
                 else => Common.invariant("named type failed Lambda Solved unification"),
             },
             .link, .unbound, .forall => unreachable,
+        }
+    }
+
+    fn unifyIteratorOwnerStampedPublic(
+        self: *Solver,
+        left_ty: Type.TypeVarId,
+        right_ty: Type.TypeVarId,
+        left: anytype,
+        right: anytype,
+    ) Allocator.Error!bool {
+        if (left.kind != right.kind) return false;
+        if (!sameMonoTypeDef(left.def, right.def)) return false;
+        _ = iteratorLikeOwnerFromPair(left.builtin_owner, right.builtin_owner) orelse return false;
+        if (left.builtin_owner == right.builtin_owner) return false;
+
+        try self.unifySpans(left.args, right.args, "iterator owner-stamp argument lists failed Lambda Solved unification");
+        if (isIteratorLikeOwner(left.builtin_owner)) {
+            self.program.types.set(right_ty, .{ .link = left_ty });
+        } else {
+            self.program.types.set(left_ty, .{ .link = right_ty });
+        }
+        return true;
+    }
+
+    fn unifyForcedDynamicIterator(
+        self: *Solver,
+        left_ty: Type.TypeVarId,
+        right_ty: Type.TypeVarId,
+        left: anytype,
+        right: anytype,
+    ) Allocator.Error!bool {
+        if (MonoType.iteratorRelation(left, right) != .forced_dynamic) return false;
+
+        const left_dynamic = left.def.iterator_representation == .forced_dynamic;
+        if (left.args.count() == 0 or right.args.count() == 0) {
+            Common.invariant("forced-dynamic iterator reached Lambda Solved without a public item argument");
+        }
+
+        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        try self.unifyIteratorBackings(left, right);
+        if (left_dynamic) {
+            self.program.types.set(right_ty, .{ .link = left_ty });
+        } else {
+            self.program.types.set(left_ty, .{ .link = right_ty });
+        }
+        return true;
+    }
+
+    fn unifyGeneratedIteratorJoin(
+        self: *Solver,
+        left_ty: Type.TypeVarId,
+        right_ty: Type.TypeVarId,
+        left: anytype,
+        right: anytype,
+    ) Allocator.Error!bool {
+        if (MonoType.iteratorRelation(left, right) != .minted_join) return false;
+
+        if (left.args.count() == 0 or right.args.count() == 0) {
+            Common.invariant("generated iterator join reached Lambda Solved without a public item argument");
+        }
+        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+
+        if (left.backing) |left_backing| {
+            const right_backing = right.backing orelse
+                Common.invariant("generated iterator join found backing on only one side");
+            if (left_backing.use != right_backing.use) {
+                Common.invariant("generated iterator join found different backing uses");
+            }
+            if (left_backing.authority != right_backing.authority) {
+                Common.invariant("generated iterator join found different backing authorities");
+            }
+            try self.unify(left_backing.ty, right_backing.ty);
+        } else if (right.backing != null) {
+            Common.invariant("generated iterator join found backing on only one side");
+        }
+
+        if (isIteratorLikeOwner(left.builtin_owner)) {
+            self.program.types.set(right_ty, .{ .link = left_ty });
+        } else {
+            self.program.types.set(left_ty, .{ .link = right_ty });
+        }
+        return true;
+    }
+
+    fn unifyPublicGeneratedIterator(
+        self: *Solver,
+        left_ty: Type.TypeVarId,
+        right_ty: Type.TypeVarId,
+        left: anytype,
+        right: anytype,
+    ) Allocator.Error!bool {
+        if (MonoType.iteratorRelation(left, right) != .public_minted) return false;
+
+        if (left.args.count() == 0 or right.args.count() == 0) {
+            Common.invariant("generated iterator evidence reached Lambda Solved without a public item argument");
+        }
+        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+
+        if (left.def.iterator_representation == .minted) {
+            self.program.types.set(right_ty, .{ .link = left_ty });
+        } else {
+            self.program.types.set(left_ty, .{ .link = right_ty });
+        }
+        return true;
+    }
+
+    fn unifyIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
+        if (left.backing) |left_backing| {
+            const right_backing = right.backing orelse
+                Common.invariant("iterator unification found backing on only one side");
+            if (left_backing.use != right_backing.use) {
+                Common.invariant("iterator unification found different backing uses");
+            }
+            if (left_backing.authority != right_backing.authority) {
+                Common.invariant("iterator unification found different backing authorities");
+            }
+            try self.unify(left_backing.ty, right_backing.ty);
+        } else if (right.backing != null) {
+            Common.invariant("iterator unification found backing on only one side");
         }
     }
 
@@ -1758,7 +1882,39 @@ const TypeCloner = struct {
 fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
     return left.module == right.module and
         left.type_name == right.type_name and
-        left.source_decl == right.source_decl;
+        left.source_decl == right.source_decl and
+        optionalDigestEql(left.generated, right.generated) and
+        left.iterator_representation == right.iterator_representation and
+        left.iterator_kind == right.iterator_kind and
+        left.iterator_depth == right.iterator_depth;
+}
+
+fn iteratorLikeOwnerFromPair(
+    left: ?static_dispatch.BuiltinOwner,
+    right: ?static_dispatch.BuiltinOwner,
+) ?static_dispatch.BuiltinOwner {
+    if (left) |left_owner| {
+        if (!isIteratorLikeOwner(left_owner)) return null;
+        if (right) |right_owner| {
+            if (left_owner != right_owner) return null;
+        }
+        return left_owner;
+    }
+    if (right) |right_owner| {
+        if (!isIteratorLikeOwner(right_owner)) return null;
+        return right_owner;
+    }
+    return null;
+}
+
+fn isIteratorLikeOwner(owner: ?static_dispatch.BuiltinOwner) bool {
+    return static_dispatch.isIteratorOwner(owner orelse return false);
+}
+
+fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
+    if (left == null and right == null) return true;
+    if (left == null or right == null) return false;
+    return std.mem.eql(u8, left.?.bytes[0..], right.?.bytes[0..]);
 }
 
 test "lambda solved solve declarations are referenced" {

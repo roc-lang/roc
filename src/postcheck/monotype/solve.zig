@@ -1697,6 +1697,75 @@ pub const InstGraph = struct {
                         try self.unifyThroughBacking(right, right_content, left, pending);
                         return;
                     }
+                    switch (Type.iteratorRelation(left_named, right_named)) {
+                        .ordinary => {},
+                        .public_minted => {
+                            if (left_named.args.len == 0 or right_named.args.len == 0) {
+                                Common.invariant("minted/public iterator pair reached Monotype instantiation without a public item argument");
+                            }
+                            try pending.append(self.allocator, .{
+                                .left = left_named.args[0],
+                                .right = right_named.args[0],
+                            });
+                            if (left_named.def.iterator_representation == .minted) {
+                                try self.union_(left, right);
+                            } else {
+                                try self.union_(right, left);
+                            }
+                            return;
+                        },
+                        .forced_dynamic => {
+                            if (left_named.args.len == 0 or right_named.args.len == 0) {
+                                Common.invariant("forced-dynamic iterator reached Monotype instantiation without a public item argument");
+                            }
+                            try pending.append(self.allocator, .{
+                                .left = left_named.args[0],
+                                .right = right_named.args[0],
+                            });
+                            if (left_named.def.iterator_representation == .forced_dynamic) {
+                                try self.union_(left, right);
+                            } else {
+                                try self.union_(right, left);
+                            }
+                            return;
+                        },
+                        .minted_join => {
+                            if (left_named.args.len == 0 or right_named.args.len == 0) {
+                                Common.invariant("minted iterator join reached Monotype instantiation without a public item argument");
+                            }
+                            try pending.append(self.allocator, .{
+                                .left = left_named.args[0],
+                                .right = right_named.args[0],
+                            });
+                            if (left_named.backing) |left_backing| {
+                                const right_backing = right_named.backing orelse
+                                    Common.invariant("minted iterator join found backing on only one side");
+                                if (left_backing.use != right_backing.use) {
+                                    Common.invariant("minted iterator join found different backing uses");
+                                }
+                                if (left_backing.authority != right_backing.authority) {
+                                    Common.invariant("minted iterator join found different backing authorities");
+                                }
+                                try pending.append(self.allocator, .{
+                                    .left = left_backing.node,
+                                    .right = right_backing.node,
+                                });
+                            } else if (right_named.backing != null) {
+                                Common.invariant("minted iterator join found backing on only one side");
+                            }
+
+                            // Close recursive `rest` references before the
+                            // backing pair is drained. Otherwise each nominal
+                            // unwrap creates another fresh structural node.
+                            if (left_named.builtin_owner) |left_owner| {
+                                if (!static_dispatch.isIteratorOwner(left_owner)) unreachable;
+                                try self.union_(left, right);
+                            } else {
+                                try self.union_(right, left);
+                            }
+                            return;
+                        },
+                    }
                     if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
                             try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });

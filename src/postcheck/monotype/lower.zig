@@ -1012,6 +1012,7 @@ const Builder = struct {
     target_usize: base.target.TargetUsize,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    generated_iter_types: std.AutoHashMap([32]u8, Type.TypeId),
     spec_store: specialize.SpecBuilder,
     lowered_templates: std.AutoHashMap(Ast.FnId, LoweredTemplate),
     /// Nested-fn specialization records keyed by function id; the durable
@@ -1062,6 +1063,7 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .generated_iter_types = std.AutoHashMap([32]u8, Type.TypeId).init(allocator),
             .spec_store = spec_store,
             .lowered_templates = std.AutoHashMap(Ast.FnId, LoweredTemplate).init(allocator),
             .lowered_nested_by_fn = std.AutoHashMap(Ast.FnId, Ast.SpecId).init(allocator),
@@ -1139,6 +1141,7 @@ const Builder = struct {
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
         self.spec_store.deinit();
+        self.generated_iter_types.deinit();
         self.type_cache.deinit();
         self.evidence_arena.deinit();
     }

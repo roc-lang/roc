@@ -2385,6 +2385,10 @@ fn intrinsicForProcedureDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?Intr
     return can.BuiltinLowLevel.intrinsicAnnotation(env, expr_ident);
 }
 
+fn iteratorProcedureForDef(module: TypedCIR.Module, def_idx: CIR.Def.Idx) ?IteratorProcedureId {
+    return static_dispatch.iteratorProcedureForDef(module, def_idx);
+}
+
 /// Record the reachability semantics introduced by the canonical
 /// BuiltinLowLevel transform while the explicit CIR low-level node is still
 /// available. Post-check stages consume this field directly from procedure
@@ -11651,6 +11655,8 @@ pub const CheckedProcedureBody = union(enum) {
 /// Public compiler-intrinsic identity published by canonicalization.
 pub const IntrinsicId = can.BuiltinLowLevel.IntrinsicId;
 
+pub const IteratorProcedureId = static_dispatch.IteratorProcedureId;
+
 /// Producer-recorded reason a procedure result may be unreachable when its
 /// final Monotype is uninhabited. Consumers use this metadata directly rather
 /// than rediscovering compiler-provided low-level bodies.
@@ -12025,6 +12031,8 @@ pub const ProcedureUseTemplate = struct {
     /// Post-check consumers must not derive this by walking binding bodies or
     /// exported template closures.
     intrinsic: ?IntrinsicId = null,
+    /// Producer-recorded semantic role for compiler-owned iterator procedures.
+    iterator_procedure: ?IteratorProcedureId = null,
     /// Producer-owned reachability fact for a compiler-provided result.
     runtime_result_provenance: ?RuntimeResultProvenance,
 };
@@ -12578,6 +12586,7 @@ fn categorizeLocalValueRef(
                         } },
                         .source_fn_ty_template = .{},
                         .intrinsic = null,
+                        .iterator_procedure = null,
                         .runtime_result_provenance = null,
                     } };
                 }
@@ -12588,6 +12597,7 @@ fn categorizeLocalValueRef(
                     } },
                     .source_fn_ty_template = .{},
                     .intrinsic = intrinsicForProcedureDef(module, entry.def),
+                    .iterator_procedure = iteratorProcedureForDef(module, entry.def),
                     .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, entry.def),
                 } };
             },
@@ -12677,6 +12687,7 @@ fn categorizeImportedValueRef(
             .binding = .{ .imported = binding.binding },
             .source_fn_ty_template = .{},
             .intrinsic = binding.intrinsic,
+            .iterator_procedure = binding.iterator_procedure,
             .runtime_result_provenance = binding.runtime_result_provenance,
         } };
     }
@@ -18056,6 +18067,7 @@ fn clonePlatformRequiredValueUseWithRelation(
                 .source_fn_ty_template = relation.requested_source_ty,
                 .source_fn_ty_payload = relation.requested_source_ty_payload,
                 .intrinsic = proc_use.procedure.intrinsic,
+                .iterator_procedure = proc_use.procedure.iterator_procedure,
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
             .root_evidence = .{
@@ -18475,6 +18487,7 @@ fn platformRequiredProcedureUse(
         .source_fn_ty_template = requested_source_ty,
         .source_fn_ty_payload = null,
         .intrinsic = null,
+        .iterator_procedure = exported_binding.iterator_procedure,
         .runtime_result_provenance = exported_binding.runtime_result_provenance,
     };
 }
@@ -21177,6 +21190,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
         .source_scheme = .{},
         .body = .{ .callable_eval_template = @enumFromInt(3) },
         .intrinsic = .str_inspect,
+        .iterator_procedure = .iter_map,
         .runtime_result_provenance = .list_element_read,
         .template_closure = stored,
     });
@@ -21189,6 +21203,7 @@ test "ExportedProcedureBindingTable: serialize/relocate preserves rows and closu
 
     try std.testing.expectEqual(@as(usize, 1), rt.loaded.bindings.len);
     try std.testing.expectEqual(IntrinsicId.str_inspect, rt.loaded.bindings[0].intrinsic.?);
+    try std.testing.expectEqual(IteratorProcedureId.iter_map, rt.loaded.bindings[0].iterator_procedure.?);
     try std.testing.expectEqual(
         RuntimeResultProvenance.list_element_read,
         rt.loaded.bindings[0].runtime_result_provenance.?,
@@ -23221,6 +23236,7 @@ pub const ImportedProcedureBindingView = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
     body: ImportedProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
+    iterator_procedure: ?IteratorProcedureId = null,
     runtime_result_provenance: ?RuntimeResultProvenance,
     template_closure: StoredImportedTemplateClosure = .{},
 };
@@ -23303,6 +23319,7 @@ pub const ExportedProcedureBindingTable = struct {
                 .source_scheme = binding.source_scheme,
                 .body = body,
                 .intrinsic = intrinsicForProcedureDef(module, def_idx),
+                .iterator_procedure = iteratorProcedureForDef(module, def_idx),
                 .runtime_result_provenance = runtimeResultProvenanceForProcedureDef(module, def_idx),
                 .template_closure = stored_closure,
             });
@@ -24257,7 +24274,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 38;
+    const serialized_layout_version: u32 = 39;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29258,8 +29275,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xD9, 0x0F, 0x91, 0x24, 0x6C, 0x87, 0xF5, 0xBD, 0xB9, 0xDB, 0x37, 0xCD, 0xE2, 0xBB, 0x6F, 0x7B,
-        0x21, 0x07, 0xDE, 0xCA, 0x2B, 0x2F, 0xCE, 0x11, 0xBB, 0x11, 0x83, 0x5B, 0x9C, 0xFA, 0x15, 0xFE,
+        0x7E, 0x58, 0x71, 0x73, 0x55, 0x86, 0xD0, 0x8A, 0xF7, 0xF5, 0xC6, 0x45, 0x42, 0x2A, 0x19, 0xCE,
+        0xF2, 0x54, 0xA3, 0xDC, 0x4A, 0x07, 0x46, 0x82, 0x7D, 0x28, 0x4D, 0xFB, 0xF7, 0x90, 0x0D, 0x8F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
