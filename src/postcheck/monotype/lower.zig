@@ -1786,6 +1786,7 @@ const Builder = struct {
             source_ty_view.types.rootKey(source_fn_ty),
             request_node,
             evidence,
+            .independent_roots,
         );
         const draft_fn_id = switch (slot) {
             .local => |target| switch (target) {
@@ -2158,6 +2159,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
+        signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -2266,6 +2268,9 @@ const Builder = struct {
             if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
+            if (signature_relation == .exact_graph) {
+                source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation = .exact_graph;
+            }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
         self.count("template_misses");
@@ -2282,16 +2287,19 @@ const Builder = struct {
                 .{ .imported_template = template_ref },
         };
         const symbol = self.symbols.fresh();
-        const fn_id = try source_ctx.draft.addFn(.{ .source = .{
-            .fn_def = fn_def,
-            .source_fn_ty = source_fn_ty,
-            .source_fn_key = source_fn_key,
-            .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
-            .evidence_digest = evidence_digest,
-            .const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes),
-            .const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames),
-            .const_evidence_frame_head = stored_evidence.head,
-        } });
+        const fn_id = try source_ctx.draft.addFn(.{
+            .source = .{
+                .fn_def = fn_def,
+                .source_fn_ty = source_fn_ty,
+                .source_fn_key = source_fn_key,
+                .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
+                .evidence_digest = evidence_digest,
+                .const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames),
+                .const_evidence_frame_head = stored_evidence.head,
+            },
+            .signature_relation = signature_relation,
+        });
         const local_evidence_owner = specEvidenceLocalOwner(source_ctx.draft, evidence);
         const local_context_dependent = local_evidence_owner != null or structural_lexical_dependent;
         const lexical_owner = local_evidence_owner orelse if (structural_lexical_dependent)
@@ -7265,6 +7273,7 @@ const DraftFnTemplate = struct {
 
 const DraftFn = struct {
     source: DraftFnTemplate,
+    signature_relation: Ast.SignatureRelation = .independent_roots,
 };
 
 const DraftLocal = struct {
@@ -8406,6 +8415,12 @@ const BodyDraftStore = struct {
         Common.invariant("body draft core item had no explicit owner");
     }
 
+    fn currentOwnerOwnsCore(self: *const BodyDraftStore, kind: DraftCoreKind, index: usize) bool {
+        const raw_kind = @intFromEnum(kind);
+        if (index >= self.owner_starts[raw_kind]) return true;
+        return std.meta.eql(self.ownerForCore(kind, index), self.current_owner);
+    }
+
     fn addExpr(self: *BodyDraftStore, expr: DraftExpr) Allocator.Error!DraftExprId {
         const id: DraftExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
         try self.exprs.append(self.allocator, expr);
@@ -8898,6 +8913,7 @@ const BodyDraftStore = struct {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
                 .source = try BodyDraftStore.sealFnTemplate(graph, sealer, fn_.source),
+                .signature_relation = fn_.signature_relation,
             });
         }
 
@@ -20966,6 +20982,7 @@ const BodyContext = struct {
             source_fn_key,
             request_fn_node,
             requested_evidence,
+            if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
         );
     }
 
@@ -22512,6 +22529,7 @@ const BodyContext = struct {
                 fn_value.source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
+                .independent_roots,
             )),
         };
     }
@@ -22743,6 +22761,7 @@ const BodyContext = struct {
                 template.source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
+                .independent_roots,
             )),
         };
     }
@@ -27093,6 +27112,7 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    if (procedure.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
                 );
                 break :blk slot;
             },
@@ -31752,14 +31772,14 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => |binder| {
-                if (self.binders.get(binder) == null) {
+                if (self.currentOwnerPatternBinderLocal(binder) == null) {
                     const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
                     try self.bindLocalName(local, binder);
                     try self.binders.put(binder, local);
                 }
             },
             .as => |as| {
-                if (self.binders.get(as.binder) == null) {
+                if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
                     const local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
                     try self.bindLocalName(local, as.binder);
                     try self.binders.put(as.binder, local);
@@ -31834,14 +31854,14 @@ const BodyContext = struct {
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => |binder| {
-                if (self.binders.get(binder) == null) {
+                if (self.currentOwnerPatternBinderLocal(binder) == null) {
                     const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), try self.lowerTypeCell(pattern.ty), binder);
                     try self.bindLocalName(local, binder);
                     try self.binders.put(binder, local);
                 }
             },
             .as => |as| {
-                if (self.binders.get(as.binder) == null) {
+                if (self.currentOwnerPatternBinderLocal(as.binder) == null) {
                     const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), try self.lowerTypeCell(pattern.ty), as.binder);
                     try self.bindLocalName(local, as.binder);
                     try self.binders.put(as.binder, local);
@@ -31900,7 +31920,7 @@ const BodyContext = struct {
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached Monotype lowering"),
             .assign => |binder| blk: {
-                const local = if (self.binders.get(binder)) |existing| existing else inner: {
+                const local = if (self.currentOwnerPatternBinderLocal(binder)) |existing| existing else inner: {
                     const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, binder);
                     try self.bindLocalName(new_local, binder);
                     try self.binders.put(binder, new_local);
@@ -31909,7 +31929,7 @@ const BodyContext = struct {
                 break :blk .{ .bind = local };
             },
             .as => |as| blk: {
-                const local = if (self.binders.get(as.binder)) |existing| existing else inner: {
+                const local = if (self.currentOwnerPatternBinderLocal(as.binder)) |existing| existing else inner: {
                     const new_local = try self.addLocalWithBinder(self.builder.symbols.fresh(), ty, as.binder);
                     try self.bindLocalName(new_local, as.binder);
                     try self.binders.put(as.binder, new_local);
@@ -35488,13 +35508,21 @@ const BodyContext = struct {
         return try self.addPatWithTypeCell(ty_cell, data);
     }
 
+    fn currentOwnerPatternBinderLocal(
+        self: *BodyContext,
+        binder: checked.PatternBinderId,
+    ) ?DraftLocalId {
+        const local = self.binders.get(binder) orelse return null;
+        return if (self.draft.currentOwnerOwnsCore(.locals, @intFromEnum(local))) local else null;
+    }
+
     fn materializePatternBinderAtCell(
         self: *BodyContext,
         binder: checked.PatternBinderId,
         cell: DraftTypeCell,
     ) Allocator.Error!DraftLocalId {
         if (self.reuse_pre_registered_pattern_binders) {
-            return self.binders.get(binder) orelse
+            return self.currentOwnerPatternBinderLocal(binder) orelse
                 Common.invariant("pattern binder was not pre-registered before materialization");
         }
         const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, binder);
@@ -35779,11 +35807,13 @@ const BodyContext = struct {
         binders: *BinderMap,
     ) Allocator.Error!void {
         if (binders.get(binder)) |existing| {
-            const existing_node = try self.localTypeCell(existing).toGraphNode(self.graph);
-            if (!self.graph.sameClass(existing_node, node)) {
-                Common.invariant("materialized pattern binder was pre-registered at a different graph class");
+            if (self.draft.currentOwnerOwnsCore(.locals, @intFromEnum(existing))) {
+                const existing_node = try self.localTypeCell(existing).toGraphNode(self.graph);
+                if (!self.graph.sameClass(existing_node, node)) {
+                    Common.invariant("materialized pattern binder was pre-registered at a different graph class");
+                }
+                return;
             }
-            return;
         }
         const cell = DraftTypeCell.fromGraphNode(node);
         const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, binder);
@@ -35934,7 +35964,7 @@ const BodyContext = struct {
         const data: BodyPatData = switch (pattern.data) {
             .as => |as| .{ .as = .{
                 .pattern = try self.lowerPatternPlanPlaceholderAtNode(as.pattern, node, pending),
-                .local = self.binders.get(as.binder) orelse
+                .local = self.currentOwnerPatternBinderLocal(as.binder) orelse
                     Common.invariant("materialized as-pattern binder was not pre-registered"),
             } },
             .applied_tag => |tag| blk: {
@@ -38492,6 +38522,30 @@ test "body draft ownership runs restore the parent across nested lowering" {
         try std.testing.expectEqual(@as(u32, @intCast(index)), owner_run.starts[kind]);
         try std.testing.expectEqual(@as(u32, @intCast(index + 1)), owner_run.ends[kind]);
     }
+}
+
+test "body draft core ownership distinguishes sibling materializations" {
+    const allocator = std.testing.allocator;
+    const first_fn: DraftFnId = @enumFromInt(1);
+    const second_fn: DraftFnId = @enumFromInt(2);
+    var draft = BodyDraftStore.init(allocator);
+    defer draft.deinit();
+
+    const ty: DraftTypeCell = .{ .sealed = @enumFromInt(0) };
+    var symbols = Common.SymbolGen{};
+    const first_scope = try draft.enterOwner(.{ .draft_fn = first_fn });
+    const first_local = try draft.addLocal(symbols.fresh(), ty, null, null);
+    try std.testing.expect(draft.currentOwnerOwnsCore(.locals, @intFromEnum(first_local)));
+
+    const second_scope = try draft.enterOwner(.{ .draft_fn = second_fn });
+    try std.testing.expect(!draft.currentOwnerOwnsCore(.locals, @intFromEnum(first_local)));
+    const second_local = try draft.addLocal(symbols.fresh(), ty, null, null);
+    try std.testing.expect(draft.currentOwnerOwnsCore(.locals, @intFromEnum(second_local)));
+    second_scope.leave();
+
+    try std.testing.expect(draft.currentOwnerOwnsCore(.locals, @intFromEnum(first_local)));
+    try std.testing.expect(!draft.currentOwnerOwnsCore(.locals, @intFromEnum(second_local)));
+    first_scope.leave();
 }
 
 test "body draft definition retention follows explicit reservation ownership" {

@@ -102,6 +102,10 @@ pub const Stmt = Mono.Stmt;
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
+    /// Exact producer-authored Monotype signature graph. This is present only
+    /// while the lifted function still has that signature; transformations
+    /// that synthesize a different ABI clear it explicitly.
+    signature: ?Type.TypeId = null,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,

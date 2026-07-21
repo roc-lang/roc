@@ -28,9 +28,11 @@ const TestEvidenceMappingError = std.mem.Allocator.Error || CacheError || error{
 /// Magic bytes at the start of a specialization cache file.
 pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
+/// Version 9: function metadata records whether a signature is independent
+/// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 8;
+pub const FORMAT_VERSION: u32 = 9;
 
 const SECTION_COUNT = 42;
 
@@ -2455,7 +2457,10 @@ test "monotype specialization cache mapped view survives source builder dealloca
             .const_evidence_frames = .{ .start = 0, .len = 1 },
             .const_evidence_frame_head = 0,
         };
-        try fns.append(allocator, .{ .source = fn_template });
+        try fns.append(allocator, .{
+            .source = fn_template,
+            .signature_relation = .exact_graph,
+        });
         try defs.append(allocator, .{
             .symbol = @enumFromInt(1),
             .fn_def = fn_template,
@@ -2496,6 +2501,7 @@ test "monotype specialization cache mapped view survives source builder dealloca
     var resolved: [0]ResolvedImportedFn = .{};
     _ = try program.verifyAndResolveImports(&name_store, loaded_shards[0..], resolved[0..]);
     try std.testing.expectEqual(@as(usize, 1), program.exprs.len);
+    try std.testing.expectEqual(Ast.SignatureRelation.exact_graph, program.fns[0].signature_relation);
 }
 
 test "monotype specialization cache reports malformed internal data as corruption" {

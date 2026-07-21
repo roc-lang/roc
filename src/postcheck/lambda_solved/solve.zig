@@ -210,16 +210,6 @@ const Solver = struct {
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
         const arg_locals = self.lifted.typedLocalSpan(fn_.args);
-        const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
-        defer self.allocator.free(args);
-        for (arg_locals, 0..) |arg, i| {
-            const local = self.lifted.locals[@intFromEnum(arg.local)];
-            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
-                Common.invariant("Lambda Solved function argument type differed from its local type");
-            }
-            args[i] = self.localTy(arg.local);
-        }
-
         const capture_locals = self.lifted.typedLocalSpan(fn_.captures);
         const captures = try self.allocator.alloc(Type.Capture, capture_locals.len);
         defer self.allocator.free(captures);
@@ -241,6 +231,39 @@ const Solver = struct {
             .captures = capture_span,
         }};
         const callable = try self.program.types.add(.{ .lambda_set = try self.program.types.addMembers(&members) });
+
+        if (fn_.signature) |signature| {
+            var cloner = TypeCloner.init(self);
+            defer cloner.deinit();
+            const fn_ty = try cloner.lower(signature);
+            try cloner.markForcedDynamicCallables();
+            const func = switch (self.program.types.rootContentCompressed(fn_ty)) {
+                .func => |value| value,
+                else => Common.invariant("producer-authored lifted function signature was not a function"),
+            };
+            if (func.args.count() != arg_locals.len) {
+                Common.invariant("producer-authored lifted function signature arity changed before Lambda Solved");
+            }
+            for (arg_locals, 0..) |arg, i| {
+                const local = self.lifted.locals[@intFromEnum(arg.local)];
+                if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+                    Common.invariant("Lambda Solved function argument type differed from its local type");
+                }
+                try self.unify(self.localTy(arg.local), self.program.types.spanItem(func.args, i));
+            }
+            try self.unify(func.callable, callable);
+            return self.program.types.rootCompressed(fn_ty);
+        }
+
+        const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
+        defer self.allocator.free(args);
+        for (arg_locals, 0..) |arg, i| {
+            const local = self.lifted.locals[@intFromEnum(arg.local)];
+            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+                Common.invariant("Lambda Solved function argument type differed from its local type");
+            }
+            args[i] = self.localTy(arg.local);
+        }
 
         return try self.program.types.add(.{ .func = .{
             .args = try self.program.types.addSpan(args),

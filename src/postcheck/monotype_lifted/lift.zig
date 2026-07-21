@@ -488,9 +488,14 @@ const Lifter = struct {
             },
             .hosted => .hosted,
         };
+        const source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
-            .source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null,
+            .source = source,
+            .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
+                .independent_roots => null,
+                .exact_graph => source.?.mono_fn_ty,
+            } else null,
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -502,9 +507,14 @@ const Lifter = struct {
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
         try self.rewriteExpr(def.body);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
+        const source = self.nestedSource(def.fn_id, def.fn_def);
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
-            .source = self.nestedSource(def.fn_id, def.fn_def),
+            .source = source,
+            .signature = switch (self.source.fnSignatureRelation(def.fn_id)) {
+                .independent_roots => null,
+                .exact_graph => source.mono_fn_ty,
+            },
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },
@@ -765,9 +775,14 @@ const Lifter = struct {
 
         try self.rewriteExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const source = self.source.fnSource(lambda.fn_id);
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
-            .source = self.source.fnSource(lambda.fn_id),
+            .source = source,
+            .signature = switch (self.source.fnSignatureRelation(lambda.fn_id)) {
+                .independent_roots => null,
+                .exact_graph => source.mono_fn_ty,
+            },
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },

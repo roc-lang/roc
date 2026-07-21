@@ -148,8 +148,14 @@ pub const FnTemplate = struct {
 };
 
 /// Monotype function-specialization metadata.
+pub const SignatureRelation = enum(u8) {
+    independent_roots,
+    exact_graph,
+};
+
 pub const Fn = struct {
     source: FnTemplate,
+    signature_relation: SignatureRelation = .independent_roots,
 };
 
 /// Function imported from another specialization shard.
@@ -1042,6 +1048,12 @@ pub const ProgramView = struct {
         const raw = @intFromEnum(id);
         if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
         return self.fns[raw].source;
+    }
+
+    pub fn fnSignatureRelation(self: ProgramView, id: FnId) SignatureRelation {
+        const raw = @intFromEnum(id);
+        if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
+        return self.fns[raw].signature_relation;
     }
 
     pub fn constFnEvidence(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {

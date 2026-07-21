@@ -3003,6 +3003,16 @@ must join capture slots and operands only by that explicit post-check identity;
 they never recover identity from binder, symbol, type, source text, or runtime
 representation.
 
+Draft body ownership is equally strict. A copied lexical binder map may expose
+an enclosing value to a nested function, but a source binding pattern always
+materializes its runtime local under the current specialization owner. It may
+reuse only a pre-registered local owned by that same owner; it must never bind
+to a local owned by an enclosing or sibling materialization merely because the
+checked binder id is the same. Draft sealing retains or suppresses whole owned
+specializations and rejects every retained record that references suppressed
+owned content, so cross-materialization local reuse cannot become durable
+Monotype IR.
+
 ### Monotype Specialization
 
 Monotype specialization is root driven.
@@ -3650,6 +3660,21 @@ one `func` node with all arguments in `args`. It is not represented as nested
 unary functions unless the source type explicitly returns another function.
 Lambda-set solving, erased callable ABI solving, and specialization identity all
 use the full ordered argument list plus the result type.
+
+Monotype records whether a function signature's argument and result positions
+are independent roots or one exact producer-authored graph. The generated
+`Iter.fromStep` boundary uses the exact-graph relation because its result
+iterator intentionally retains the step function argument's runtime callable
+representation; ordinary function signatures use independent roots. Monotype
+Lifted retains an exact graph only while that ABI is unchanged. Lambda Solved
+then imports it from a single signature root, preserving recursive edges and
+intentional sharing between an argument and a nested result slot, and relates
+the lifted argument locals and callable member to those exact slots. A
+transformation that synthesizes a different function ABI clears the producer
+signature and provides its new argument and result slots explicitly. Consumers
+never infer signature relationships by comparing `TypeId`s from independently
+imported roots: equal type ids describe equal Monotype shapes, not runtime
+value flow.
 
 ### Lambda Solving
 

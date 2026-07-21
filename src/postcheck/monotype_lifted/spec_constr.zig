@@ -695,6 +695,7 @@ const Pass = struct {
                 self.program.setFnAt(index, .{
                     .symbol = fn_.symbol,
                     .source = fn_.source,
+                    .signature = fn_.signature,
                     .args = fn_.args,
                     .captures = fn_.captures,
                     .body = .{ .roc = peeled },
@@ -1261,6 +1262,7 @@ const Pass = struct {
         const fn_id_reserved = try self.program.addFn(.{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
@@ -1298,6 +1300,7 @@ const Pass = struct {
         self.program.setFn(spec_fn_id, .{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = args,
             .captures = source_fn.captures,
             .body = body,
@@ -3202,6 +3205,7 @@ const Pass = struct {
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
+            .signature = fn_.signature,
             .args = fn_.args,
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
@@ -3236,6 +3240,7 @@ const Pass = struct {
             self.program.setFn(fn_id, .{
                 .symbol = fn_.symbol,
                 .source = fn_.source,
+                .signature = fn_.signature,
                 .args = fn_.args,
                 .captures = fn_.captures,
                 .body = .{ .roc = cloned },
@@ -8655,6 +8660,7 @@ const Cloner = struct {
         const worker_fn_id = try self.pass.program.addFn(.{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = args_span,
             .captures = captures_span,
             .body = .hosted,
@@ -8694,6 +8700,7 @@ const Cloner = struct {
         self.pass.program.setFn(worker_fn_id, .{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = args_span,
             .captures = captures_span,
             .body = .{ .roc = try self.cloneExpr(source_body) },
