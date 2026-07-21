@@ -122,7 +122,7 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "first"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 301)
+									(e-interpolation (constraint-fn-var 301) (dispatcher-var 26)
 										(first
 											(e-literal (string "long list starting with ")))
 										(parts
@@ -155,7 +155,7 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 337)
+									(e-interpolation (constraint-fn-var 337) (dispatcher-var 43)
 										(first
 											(e-literal (string "pair of equal values: ")))
 										(parts

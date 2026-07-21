@@ -95,6 +95,7 @@ extern const roc_table: Table;
 extern const roc_names: RocList;
 extern const roc_tree: Tree;
 extern const roc_boxed_add_one: ?[*]u8;
+extern const roc_boxed_static_label: ?[*]u8;
 // The app's entrypoint, exported under its provides symbol with its natural
 // C ABI: main_for_host! takes no arguments and returns {}.
 extern fn roc_main() callconv(.c) void;
@@ -190,6 +191,7 @@ fn runStaticDataChecks(roc_ops: *RocOps, host_env: *HostEnv) error{StaticDataHos
 
     try expectTree(roc_tree, roc_ops);
     try expectBoxedAddOne(roc_boxed_add_one, roc_ops);
+    try expectBoxedStaticLabel(roc_boxed_static_label, roc_ops);
 
     try expectEqualUsize(host_env.dealloc_count, 0, "static checks did not dealloc");
 }
@@ -317,7 +319,7 @@ fn expectStaticAllocationPtr(
     try expectEqualIsize(try readRefcount(data_ptr), before, label);
 }
 
-const I64ToI64Args = extern struct {
+const I64Arg = extern struct {
     arg0: i64,
 };
 
@@ -329,7 +331,7 @@ fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckF
     builtins.erased_callable.incref(ptr, 1, roc_ops);
     try expectEqualIsize(try readRefcount(ptr), before, "boxed_add_one incref keeps static refcount");
 
-    var args = I64ToI64Args{ .arg0 = 41 };
+    var args = I64Arg{ .arg0 = 41 };
     var result: i64 = undefined;
     const payload = builtins.erased_callable.payloadPtr(ptr);
     payload.callable_fn_ptr(
@@ -342,6 +344,30 @@ fn expectBoxedAddOne(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckF
 
     builtins.erased_callable.decref(ptr, roc_ops);
     try expectEqualIsize(try readRefcount(ptr), before, "boxed_add_one decref keeps static refcount");
+}
+
+fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostCheckFailed}!void {
+    const expected = "captured readonly label whose final-drop helper is relocated from static data";
+    const ptr = boxed orelse return fail("expected boxed_static_label static data pointer");
+    try expectStaticDataPtr(ptr, "boxed_static_label");
+
+    const payload = builtins.erased_callable.payloadPtr(ptr);
+    const on_drop = payload.on_drop orelse return fail("expected boxed_static_label on_drop helper");
+
+    var args = I64Arg{ .arg0 = 0 };
+    var result: RocStr = undefined;
+    payload.callable_fn_ptr(
+        roc_ops,
+        @ptrCast(&result),
+        @ptrCast(&args),
+        builtins.erased_callable.capturePtr(ptr),
+    );
+    try expectStr(result, expected, roc_ops, "boxed_static_label call");
+
+    // Exercise the explicitly relocated helper as well as the callable proc.
+    // Its captured string is static, so final-drop preserves the backing.
+    on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
+    try expectStr(result, expected, roc_ops, "boxed_static_label on_drop");
 }
 
 fn expectStaticDataPtr(data_ptr: ?[*]u8, label: []const u8) error{StaticDataHostCheckFailed}!void {

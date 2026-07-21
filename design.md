@@ -465,6 +465,30 @@ not silently demote the value from compile-time evaluation. No backend may
 rediscover or guess root eligibility by scanning source syntax, function
 bodies, object symbols, or generated code.
 
+Target static data is produced from explicit, closed LIR initializer procedures.
+Monotype restoration builds each initializer from the stored `ConstStore` value,
+then closure lifting, lambda solving, layout commitment, structural LIR rewrites,
+and ARC run normally. The initializer's returned LIR value is the sole source of
+target representation: static materialization freezes its exact bytes,
+allocations, procedure relocations, and explicit generated-RC-helper
+relocations into readonly target data. It must not
+walk `ConstStore` in reverse using a type-derived storage plan, because a
+target-independent `ConstStore` node does not preserve the contextual callable
+encoding of every nested allocation.
+
+Static initializer execution uses target-width symbolic memory rather than host
+pointers. Every allocation records its committed target layout, alignment,
+reference-count metadata, and relocations. Materialization freezes the graph
+reachable from the returned value and may deduplicate only exact target
+representations. It must not choose callable variants, reconstruct layouts, or
+search for compatible encodings: those decisions already exist explicitly in
+the initializer's LIR. In particular, an erased callable's final-drop
+relocation carries its exact RC operation and capture-layout identity; a
+backend compiles that named atomic helper and never derives it from the
+capture layout or a symbol name.
+Initializer procedures are materialization-only LIR: they remain available to
+the freezer but runtime backends do not emit dead machine code for them.
+
 ## Backend Builtins
 
 Backend builtin linking is part of backend code generation, not a later repair
@@ -1051,13 +1075,13 @@ alias roots union-find representatives for concrete structures.
 
 The compile coordinator records phase progress separately from terminal module
 outcome. A terminal module has exactly one explicit outcome: success or failure.
-Successful completion means the module produced the complete semantic state
+Successful completion means the module produced all checked module data
 required by importers, including its final content identity. Failed completion
 is terminal only for scheduling and accounting; any partial `ModuleEnv` retained
-for diagnostics or watch inputs is not semantic import data.
+for diagnostics or watch inputs is not checked import data.
 
-Every semantic scheduling edge requires successful completion. Canonicalization,
-content-identity construction, checking, checked-cache publication, and platform
+Every checked-module dependency edge requires successful completion. Canonicalization,
+content-identity construction, checking, checked module cache insertion, and platform
 requirement checking may consume only successful imported modules. A known
 failed module causes failure to propagate iteratively through all local-import,
 cross-package-import, and registered platform/app dependency edges. An import

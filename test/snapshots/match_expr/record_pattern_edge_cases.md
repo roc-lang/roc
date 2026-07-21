@@ -163,7 +163,7 @@ match ... {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "c"))))
-						(e-interpolation (constraint-fn-var 311)
+						(e-interpolation (constraint-fn-var 311) (dispatcher-var 15)
 							(first
 								(e-literal (string "deeply nested: ")))
 							(parts
@@ -188,7 +188,7 @@ match ... {
 							(p-assign (ident "#interp_1"))
 							(e-lookup-local
 								(p-assign (ident "x"))))
-						(e-interpolation (constraint-fn-var 331)
+						(e-interpolation (constraint-fn-var 331) (dispatcher-var 30)
 							(first
 								(e-literal (string "mixed with empty: ")))
 							(parts
@@ -220,7 +220,7 @@ match ... {
 							(p-assign (ident "#interp_3"))
 							(e-lookup-local
 								(p-assign (ident "simple"))))
-						(e-interpolation (constraint-fn-var 352)
+						(e-interpolation (constraint-fn-var 352) (dispatcher-var 52)
 							(first
 								(e-literal (string "mixed: ")))
 							(parts
@@ -259,7 +259,7 @@ match ... {
 							(p-assign (ident "#interp_5"))
 							(e-lookup-local
 								(p-assign (ident "d"))))
-						(e-interpolation (constraint-fn-var 374)
+						(e-interpolation (constraint-fn-var 374) (dispatcher-var 76)
 							(first
 								(e-literal (string "multiple nested: ")))
 							(parts
@@ -283,7 +283,7 @@ match ... {
 							(p-assign (ident "#interp_6"))
 							(e-lookup-local
 								(p-assign (ident "x"))))
-						(e-interpolation (constraint-fn-var 393)
+						(e-interpolation (constraint-fn-var 393) (dispatcher-var 89)
 							(first
 								(e-literal (string "renamed: ")))
 							(parts
@@ -318,7 +318,7 @@ match ... {
 									(e-lookup-local
 										(p-assign (ident "userAge"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 416)
+						(e-interpolation (constraint-fn-var 416) (dispatcher-var 112)
 							(first
 								(e-literal (string "renamed nested: ")))
 							(parts

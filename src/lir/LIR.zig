@@ -668,6 +668,10 @@ pub const LirProcSpec = struct {
     body: ?CFStmtId = null,
     ret_layout: layout.Idx,
     abi: ProcAbi = .roc,
+    /// This closed proc exists only so target static-data materialization can
+    /// execute its exact post-layout construction. Runtime backends register
+    /// and emit only ordinary procedures.
+    is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.

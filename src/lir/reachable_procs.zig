@@ -2,11 +2,11 @@
 //!
 //! This runs after structural LIR rewrites and before ARC insertion so ARC,
 //! codegen, LirImage, and interpreters all see one dense proc-id space that
-//! contains only procs demanded by roots and explicit callable data.
+//! contains only procs demanded by roots, closed static initializers, and
+//! explicit callable data.
 
 const std = @import("std");
 const base = @import("base");
-const check = @import("check");
 const collections = @import("collections");
 const core = @import("lir_core");
 
@@ -16,9 +16,9 @@ const LirProgram = core.Program;
 const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 
-/// Remove proc specs unreachable from `root_procs` and explicit constant
-/// callable plans, then rewrite every retained proc reference to the compact
-/// id space.
+/// Remove proc specs unreachable from roots, closed static initializers, and
+/// explicit constant callable plans, then rewrite every retained proc reference
+/// to the compact id space.
 pub fn run(result: *LirProgram.Result) Allocator.Error!void {
     var pass = try Pass.init(result);
     defer pass.deinit();
@@ -119,6 +119,7 @@ const Pass = struct {
         }
         for (self.result.requested_layouts.items) |request| {
             try self.markConstPlan(request.plan);
+            if (request.initializer) |initializer| try self.markProc(initializer);
         }
 
         try self.drainProcQueue();
@@ -129,6 +130,7 @@ const Pass = struct {
         self.remapReachableProcStmtRefs();
         self.remapRootProcs();
         self.remapConstRoots();
+        self.remapStaticDataInitializers();
         try self.remapErasedFns();
         self.remapComptimeSites();
         self.remapProcDebugNames();
@@ -282,7 +284,7 @@ const Pass = struct {
         if (index >= self.result.static_data_values.items.len) reachableProcInvariant("static data reference exceeds static_data_values len");
         if (self.reachable_static_data[index]) return;
         self.reachable_static_data[index] = true;
-        try self.markConstPlan(self.result.static_data_values.items[index].plan);
+        try self.markProc(self.result.static_data_values.items[index].initializer);
     }
 
     fn markFnSet(self: *Pass, set_id: LirProgram.FnSetId) Allocator.Error!void {
@@ -484,6 +486,16 @@ const Pass = struct {
         }
     }
 
+    fn remapStaticDataInitializers(self: *Pass) void {
+        for (self.result.requested_layouts.items) |*request| {
+            if (request.initializer) |initializer| request.initializer = self.remapProc(initializer);
+        }
+        for (self.result.static_data_values.items, 0..) |*value, index| {
+            if (!self.reachable_static_data[index]) continue;
+            value.initializer = self.remapProc(value.initializer);
+        }
+    }
+
     fn remapErasedFns(self: *Pass) Allocator.Error!void {
         for (self.result.erased_fns.items) |*set| {
             var kept_count: usize = 0;
@@ -555,6 +567,23 @@ const Pass = struct {
         }
         for (self.result.const_roots.items) |root| {
             if (@intFromEnum(root.proc) >= proc_count) reachableProcInvariant("const root proc exceeds compact proc_specs len");
+        }
+        for (self.result.requested_layouts.items) |request| {
+            if (request.initializer) |initializer| {
+                self.verifyProcRef(initializer, proc_count);
+                if (!self.store.getProcSpec(initializer).is_static_initializer) {
+                    reachableProcInvariant("requested static initializer was marked as a runtime proc");
+                }
+                if (self.result.const_plans.items[@intFromEnum(request.plan)] != .layout_only) {
+                    reachableProcInvariant("requested static initializer retained a ConstStore storage plan");
+                }
+            }
+        }
+        for (self.result.static_data_values.items) |value| {
+            self.verifyProcRef(value.initializer, proc_count);
+            if (!self.store.getProcSpec(value.initializer).is_static_initializer) {
+                reachableProcInvariant("internal static initializer was marked as a runtime proc");
+            }
         }
         for (0..self.store.procDebugNameCount()) |index| {
             const entry = self.store.getProcDebugName(index);
@@ -755,7 +784,7 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(call.proc));
 }
 
-test "reachable proc pass marks static data callable plans" {
+test "reachable proc pass follows static initializer proc refs" {
     var result = try LirProgram.Result.init(std.testing.allocator, base.target.TargetUsize.native);
     defer result.deinit();
 
@@ -768,45 +797,23 @@ test "reachable proc pass marks static data callable plans" {
         .ret_layout = .zst,
     });
 
-    const erased_entries = try std.testing.allocator.alloc(LirProgram.ErasedFn, 1);
-    erased_entries[0] = .{
-        .entry = callable_proc,
-        .template = .{
-            .fn_def = .{
-                .checked_generated = .{
-                    .proc_base = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
-                    .template = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
-                },
-            },
-            .source_fn_ty = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
-            .source_fn_key = .{},
-        },
-    };
-    const erased_set: LirProgram.ErasedFnsId = @enumFromInt(@as(u32, @intCast(result.erased_fns.items.len)));
-    try result.erased_fns.append(std.testing.allocator, .{
-        .layout = .zst,
-        .entries = erased_entries,
+    const initializer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const initializer_body = try result.store.addCFStmt(.{ .assign_literal = .{
+        .target = value,
+        .value = .{ .proc_ref = callable_proc },
+        .next = initializer_ret,
+    } });
+    const initializer = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = initializer_body,
+        .ret_layout = .zst,
+        .is_static_initializer = true,
     });
 
-    const plan: LirProgram.ConstPlanId = @enumFromInt(@as(u32, @intCast(result.const_plans.items.len)));
-    try result.const_plans.append(std.testing.allocator, .{ .erased_fn = erased_set });
     const static_data: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(result.static_data_values.items.len)));
     try result.static_data_values.append(std.testing.allocator, .{
-        .const_locator = .{
-            .artifact = .{},
-            .owner = .{
-                .top_level_binding = .{
-                    .module_idx = 0,
-                    .pattern = undefined, // Reachability tests do not inspect checked const owner metadata.
-                },
-            },
-            .template = undefined, // Reachability tests do not inspect checked const owner metadata.
-            .source_scheme = .{},
-        },
-        .node = null,
-        .checked_type = undefined, // Reachability tests do not inspect checked const type metadata.
-        .layout_idx = .zst,
-        .plan = plan,
+        .initializer = initializer,
     });
 
     const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
@@ -825,14 +832,17 @@ test "reachable proc pass marks static data callable plans" {
 
     try run(&result);
 
-    try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
+    try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[@intFromEnum(erased_set)].entries.len);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(result.erased_fns.items[@intFromEnum(erased_set)].entries[0].entry));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.static_data_values.items[0].initializer));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(result.root_procs.items[0]));
+    const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer);
+    try std.testing.expect(compact_initializer.is_static_initializer);
+    const initializer_proc_ref = result.store.getCFStmt(compact_initializer.body.?).assign_literal.value.proc_ref;
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(initializer_proc_ref));
 }
 
-test "reachable proc pass marks finite callable capture plans" {
+test "reachable proc pass follows packed erased callable refs in static initializers" {
     var result = try LirProgram.Result.init(std.testing.allocator, base.target.TargetUsize.native);
     defer result.deinit();
 
@@ -845,77 +855,26 @@ test "reachable proc pass marks finite callable capture plans" {
         .ret_layout = .zst,
     });
 
-    const erased_entries = try std.testing.allocator.alloc(LirProgram.ErasedFn, 1);
-    erased_entries[0] = .{
-        .entry = callable_proc,
-        .template = .{
-            .fn_def = .{
-                .checked_generated = .{
-                    .proc_base = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
-                    .template = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
-                },
-            },
-            .source_fn_ty = undefined, // Reachability tests only need the callable entry proc, not checked metadata.
-            .source_fn_key = .{},
-        },
-    };
-    const erased_set: LirProgram.ErasedFnsId = @enumFromInt(@as(u32, @intCast(result.erased_fns.items.len)));
-    try result.erased_fns.append(std.testing.allocator, .{
-        .layout = .zst,
-        .entries = erased_entries,
+    const initializer_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
+    const initializer_body = try result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+        .target = value,
+        .proc = callable_proc,
+        .capture = null,
+        .capture_layout = null,
+        .on_drop = .none,
+        .next = initializer_ret,
+    } });
+    const initializer = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = initializer_body,
+        .ret_layout = .zst,
+        .is_static_initializer = true,
     });
 
-    const erased_plan: LirProgram.ConstPlanId = @enumFromInt(@as(u32, @intCast(result.const_plans.items.len)));
-    try result.const_plans.append(std.testing.allocator, .{ .erased_fn = erased_set });
-
-    const finite_captures = try std.testing.allocator.alloc(LirProgram.CaptureSlot, 1);
-    finite_captures[0] = .{
-        .id = check.ConstStore.CaptureId.generatedLift(0),
-        .slot = 0,
-        .ty = undefined, // Reachability tests do not inspect checked capture types.
-        .plan = erased_plan,
-    };
-    const finite_variants = try std.testing.allocator.alloc(LirProgram.FnVariant, 1);
-    finite_variants[0] = .{
-        .id = undefined, // Reachability tests do not inspect callable variant metadata ids.
-        .discriminant = 0,
-        .variant_index = 0,
-        .payload_layout = .zst,
-        .template = .{
-            .fn_def = .{ .checked_generated = .{
-                .proc_base = @enumFromInt(1),
-                .template = @enumFromInt(1),
-            } },
-            .source_fn_ty = @enumFromInt(1),
-            .source_fn_key = .{},
-        },
-        .captures = finite_captures,
-    };
-    const fn_set: LirProgram.FnSetId = @enumFromInt(@as(u32, @intCast(result.fn_sets.items.len)));
-    try result.fn_sets.append(std.testing.allocator, .{
-        .layout = .zst,
-        .variants = finite_variants,
-    });
-
-    const finite_plan: LirProgram.ConstPlanId = @enumFromInt(@as(u32, @intCast(result.const_plans.items.len)));
-    try result.const_plans.append(std.testing.allocator, .{ .fn_value = fn_set });
     const static_data: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(result.static_data_values.items.len)));
     try result.static_data_values.append(std.testing.allocator, .{
-        .const_locator = .{
-            .artifact = .{},
-            .owner = .{
-                .top_level_binding = .{
-                    .module_idx = 0,
-                    .pattern = undefined, // Reachability tests do not inspect checked const owner metadata.
-                },
-            },
-            .template = undefined, // Reachability tests do not inspect checked const owner metadata.
-            .source_scheme = .{},
-        },
-        .node = null,
-        .checked_type = undefined, // Reachability tests do not inspect checked const type metadata.
-        .layout_idx = .zst,
-        .plan = finite_plan,
+        .initializer = initializer,
     });
 
     const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } });
@@ -934,9 +893,12 @@ test "reachable proc pass marks finite callable capture plans" {
 
     try run(&result);
 
-    try std.testing.expectEqual(@as(usize, 2), result.store.procSpecCount());
+    try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[@intFromEnum(erased_set)].entries.len);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(result.erased_fns.items[@intFromEnum(erased_set)].entries[0].entry));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(result.static_data_values.items[0].initializer));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(result.root_procs.items[0]));
+    const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer);
+    try std.testing.expect(compact_initializer.is_static_initializer);
+    const packed_erased_proc = result.store.getCFStmt(compact_initializer.body.?).assign_packed_erased_fn.proc;
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(packed_erased_proc));
 }

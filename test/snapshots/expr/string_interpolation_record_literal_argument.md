@@ -43,7 +43,7 @@ NO CHANGE
 				(fields
 					(field (name "two")
 						(e-num (value "2")))))))
-	(e-interpolation (constraint-fn-var 214)
+	(e-interpolation (constraint-fn-var 214) (dispatcher-var 10)
 		(first
 			(e-literal (string "")))
 		(parts

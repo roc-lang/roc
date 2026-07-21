@@ -2033,7 +2033,7 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 1242)
+									(e-interpolation (constraint-fn-var 1242) (dispatcher-var 256)
 										(first
 											(e-literal (string "Ag ")))
 										(parts

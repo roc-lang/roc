@@ -128,6 +128,7 @@ pub const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
     fn_id: ?FnId = null,
+    const_locator: ?check.CheckedModule.ConstLocator = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.

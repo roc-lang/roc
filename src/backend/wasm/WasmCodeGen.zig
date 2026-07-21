@@ -262,6 +262,8 @@ function_symbol_names: std.ArrayList([]u8),
 rc_helper_funcs: std.AutoHashMap(u64, u32),
 /// Map from RC helper key → wasm table index for erased-callable final-drop callbacks.
 rc_helper_table_indices: std.AutoHashMap(u64, u32),
+/// Atomic helpers explicitly named by static-data relocations.
+static_data_rc_helpers: []const RcHelperKey = &.{},
 /// Map from proc spec id → wasm table index (for proc_ref literals).
 proc_table_indices: std.AutoHashMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
@@ -1297,6 +1299,23 @@ fn addOwnedLocalFunctionSymbol(
         defined,
         name,
         WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+    );
+}
+
+fn addRcHelperFunctionSymbol(
+    self: *Self,
+    defined: index_types.DefinedFunction,
+    helper_key: RcHelperKey,
+    atomicity: RcAtomicity,
+) Allocator.Error!SymbolIndex {
+    const cache_key = rcHelperCacheKey(helper_key, atomicity);
+    const name = std.fmt.allocPrint(self.allocator, "roc__rc_helper_{x}", .{cache_key}) catch return error.OutOfMemory;
+    errdefer self.allocator.free(name);
+    try self.function_symbol_names.append(self.allocator, name);
+    return try self.addTrackedDefinedFunctionSymbol(
+        defined,
+        name,
+        WasmLinking.SymFlag.VISIBILITY_HIDDEN,
     );
 }
 
@@ -3032,6 +3051,14 @@ fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
     return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
 }
 
+fn staticDataRequiresRcHelper(self: *const Self, helper_key: RcHelperKey, atomicity: RcAtomicity) bool {
+    if (atomicity != .atomic) return false;
+    for (self.static_data_rc_helpers) |required| {
+        if (required.op == helper_key.op and required.layout_idx == helper_key.layout_idx) return true;
+    }
+    return false;
+}
+
 fn emitRawRcHelperCallByKey(
     self: *Self,
     helper_key: RcHelperKey,
@@ -3386,7 +3413,11 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomic
     const func_idx = defined.function.raw();
     const cache_key = rcHelperCacheKey(helper_key, atomicity);
     try self.rc_helper_funcs.put(cache_key, func_idx);
-    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_helper", cache_key);
+    if (self.staticDataRequiresRcHelper(helper_key, atomicity)) {
+        _ = try self.addRcHelperFunctionSymbol(defined, helper_key, atomicity);
+    } else {
+        _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_rc_helper", cache_key);
+    }
     return func_idx;
 }
 
@@ -3450,6 +3481,27 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicit
     }
 
     return root_func_idx;
+}
+
+/// Compile the exact atomic helper functions named by static-data
+/// relocations and place their callable addresses in the Wasm table.
+pub fn compileStaticDataRcHelpers(self: *Self, helpers: []const RcHelperKey) Allocator.Error!void {
+    for (helpers) |helper_key| {
+        if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "WASM/codegen invariant violated: static data requested noop RC helper for layout {d}",
+                    .{@intFromEnum(helper_key.layout_idx)},
+                );
+            }
+            unreachable;
+        }
+        const cache_key = rcHelperCacheKey(helper_key, .atomic);
+        if (self.rc_helper_table_indices.contains(cache_key)) continue;
+        const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
+        const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
+        try self.rc_helper_table_indices.put(cache_key, table_idx);
+    }
 }
 
 /// Emit the body of an already-reserved RC helper function. Child helper references
@@ -7597,11 +7649,13 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     // This ensures that when compiling any proc body, all sibling proc_specs
     // are already known and can be called without triggering recursive compilation.
     for (proc_specs, 0..) |proc, i| {
+        if (proc.is_static_initializer) continue;
         try self.registerProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
     try self.buildProcArgCountsTable(proc_specs);
     // Pass 2: Compile proc bodies.
     for (proc_specs, 0..) |proc, i| {
+        if (proc.is_static_initializer) continue;
         try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
     }
 }

@@ -36,6 +36,11 @@ const GuardedList = collections.GuardedList;
 const TypeFieldSpanBorrow = Type.StoreSpanBorrow(Type.Field, "fields");
 const PatternRefutability = can.PatternRefutability;
 
+const DispatchInstantiationPhase = enum {
+    template_relation_replay,
+    expression_lowering,
+};
+
 /// Internal control surface for Monotype specialization cache integration.
 pub const SpecializationCacheControl = struct {
     /// Load valid specialization cache shards before fresh lowering starts.
@@ -887,7 +892,7 @@ const StaticDataUse = struct {
     type_cell: DraftTypeCell,
 };
 
-const StaticDataEligibilityKey = struct {
+const ConstNodeAddress = struct {
     module: checked.ModuleId,
     node: checked.ConstNodeId,
 };
@@ -1015,7 +1020,7 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
-    static_data_eligibility: std.AutoHashMap(StaticDataEligibilityKey, bool),
+    static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -1063,7 +1068,7 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
-            .static_data_eligibility = std.AutoHashMap(StaticDataEligibilityKey, bool).init(allocator),
+            .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
@@ -1421,6 +1426,7 @@ const Builder = struct {
             .checked_type = request.checked_type,
             .ty = ret_ty,
             .def = def,
+            .const_locator = request.const_locator,
         });
         try self.appendRuntimeSchemaRequestsForType(ret_ty);
     }
@@ -3287,8 +3293,8 @@ const Builder = struct {
         view: ModuleView,
         node: checked.ConstNodeId,
     ) Allocator.Error!bool {
-        const key = StaticDataEligibilityKey{ .module = view.key, .node = node };
-        if (self.static_data_eligibility.get(key)) |stable| return stable;
+        const address = ConstNodeAddress{ .module = view.key, .node = node };
+        if (self.static_data_eligibility.get(address)) |stable| return stable;
 
         const stable = switch (view.const_store.get(node)) {
             .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
@@ -3316,7 +3322,7 @@ const Builder = struct {
             },
             .nominal => |nominal| try self.constNodeHasStableStaticDataRepresentation(view, nominal.backing),
         };
-        try self.static_data_eligibility.put(key, stable);
+        try self.static_data_eligibility.put(address, stable);
         return stable;
     }
 
@@ -7943,6 +7949,7 @@ const DraftLayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
     ty: DraftTypeCell,
     def: ?DraftDefId = null,
+    const_locator: ?checked.ConstLocator = null,
 };
 
 const DraftRuntimeSchemaRequest = struct {
@@ -8818,6 +8825,7 @@ const BodyDraftStore = struct {
                 .checked_type = request.checked_type,
                 .ty = try request.ty.seal(graph, sealer),
                 .def = if (request.def) |def_id| ids.def(def_id) else null,
+                .const_locator = request.const_locator,
             });
         }
 
@@ -12467,7 +12475,12 @@ const BodyContext = struct {
             if (relation_kind == .conversion) continue;
             const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
             const expr_ty = self.view.bodies.expr(plan.expr).ty;
-            _ = try self.dispatchResultTypeNode(expr_ty, plan_id, null);
+            _ = try self.dispatchResultTypeNodeInPhase(
+                expr_ty,
+                plan_id,
+                null,
+                .template_relation_replay,
+            );
         }
         try self.graph.drainDirty();
     }
@@ -19350,6 +19363,7 @@ const BodyContext = struct {
             checked_ret_ty,
             operands,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
+            .expression_lowering,
         );
     }
 
@@ -19362,6 +19376,7 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         operands: []const static_dispatch.StaticDispatchOperand,
         expected_ret_node: ?NodeId,
+        phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != operands.len) {
@@ -19383,8 +19398,28 @@ const BodyContext = struct {
             },
             .type_only => {},
         }
-        for (fn_graph.args, operands) |formal_node, operand| {
-            try self.relateFormalToOperand(formal_node, caller, operand);
+        const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
+        for (fn_graph.args, operands, request_args) |formal_node, operand, *request_arg| {
+            request_arg.* = formal_node;
+            switch (operand) {
+                .checked_expr => |checked_arg| {
+                    const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+                    const public_node = try caller.instNode(arg_ty);
+                    try self.graph.unify(formal_node, public_node);
+                    if (phase == .expression_lowering) {
+                        const evidence_node = try caller.lowerExprTypeNode(checked_arg);
+                        request_arg.* = try checkedMonoRequestNode(
+                            self.graph,
+                            public_node,
+                            evidence_node,
+                        );
+                    }
+                },
+                .generated_interpolation_iter,
+                .generated_numeral,
+                .generated_quote,
+                => {},
+            }
         }
         try self.graph.unify(fn_graph.ret, try caller.instNode(checked_ret_ty));
         var request_ret = fn_graph.ret;
@@ -19396,7 +19431,7 @@ const BodyContext = struct {
             );
         }
         try self.graph.drainDirty();
-        return try functionRequestNode(self.graph, fn_node, fn_graph.args, request_ret);
+        return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
 
     fn relateFormalToOperand(
@@ -21908,6 +21943,7 @@ const BodyContext = struct {
             expr.ty,
             plan_args,
             request_fn_node,
+            .expression_lowering,
         );
         const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != 1) Common.invariant("stored parser constructor had an unexpected arity");
@@ -22176,6 +22212,7 @@ const BodyContext = struct {
             expr.ty,
             plan_args,
             request_fn_node,
+            .expression_lowering,
         );
         const callable = try self.graph.functionNodes(callable_node);
         if (callable.args.len != 1) Common.invariant("stored encoder_for constructor had an unexpected arity");
@@ -24599,6 +24636,21 @@ const BodyContext = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
+        return try self.dispatchResultTypeNodeInPhase(
+            checked_ret_ty,
+            maybe_plan,
+            expected_ret_ty,
+            .expression_lowering,
+        );
+    }
+
+    fn dispatchResultTypeNodeInPhase(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        expected_ret_ty: ?Type.TypeId,
+        phase: DispatchInstantiationPhase,
+    ) Allocator.Error!NodeId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
 
@@ -24611,7 +24663,16 @@ const BodyContext = struct {
         call_ctx.current_entry_root = self.current_entry_root;
 
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-        const callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
+        const callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
+            plan.callable_ty,
+            plan.dispatcher,
+            plan.dispatcher_ty,
+            self,
+            checked_ret_ty,
+            plan_args,
+            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
+            phase,
+        );
         if (self.planUnexecutable(plan) == null) {
             const resolution = self.evidenceResolution(plan) orelse
                 Common.invariant("runtime method result had no StaticDispatchResolution evidence");
@@ -32021,10 +32082,14 @@ const BodyContext = struct {
                         .final_expr = try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell),
                     } });
                 }
-                const value = try self.lowerBranchValueAtTypeCell(block.final_expr, result_cell);
                 return try self.addExprWithTypeCell(state_cell, .{ .block = .{
                     .statements = try self.addStmtSpan(statements.items[0..statements.len]),
-                    .final_expr = try self.stateResultAfterValueAtTypeCells(state_cell, result_cell, merge_binders, value),
+                    .final_expr = try self.lowerValueThenStateResultAtTypeCells(
+                        block.final_expr,
+                        result_cell,
+                        state_cell,
+                        merge_binders,
+                    ),
                 } });
             },
             else => {
@@ -32032,10 +32097,175 @@ const BodyContext = struct {
                     const scrutinee = try self.lowerUninhabitedScrutineeAtTypeCell(body, result_cell);
                     return try self.zeroBranchMatchAtTypeCell(scrutinee, state_cell);
                 }
-                const value = try self.lowerBranchValueAtTypeCell(body, result_cell);
-                return try self.stateResultAfterValueAtTypeCells(state_cell, result_cell, merge_binders, value);
+                return try self.lowerValueThenStateResultAtTypeCells(body, result_cell, state_cell, merge_binders);
             },
         }
+    }
+
+    /// Lower one branch result and compose its state directly into the
+    /// enclosing branch state. A nested `if`/`match` owns a smaller lexical
+    /// state tuple containing only the binders that expression reassigns. Its
+    /// result must be destructured and repacked while those binder locals are
+    /// still in scope; unwrapping it as an ordinary value would let the outer
+    /// tuple refer to a local outside the `let` that defines it.
+    fn lowerValueThenStateResultAtTypeCells(
+        self: *BodyContext,
+        body: checked.CheckedExprId,
+        result_cell: DraftTypeCell,
+        outer_state_cell: DraftTypeCell,
+        outer_merge_binders: []const MergeBinder,
+    ) Allocator.Error!DraftExprId {
+        const checked_body = self.view.bodies.expr(body);
+        switch (checked_body.data) {
+            .if_ => |if_| return try self.lowerNestedIfThenStateResultAtTypeCells(
+                body,
+                if_,
+                result_cell,
+                outer_state_cell,
+                outer_merge_binders,
+            ),
+            .match_ => |match| return try self.lowerNestedMatchThenStateResultAtTypeCells(
+                body,
+                match,
+                result_cell,
+                outer_state_cell,
+                outer_merge_binders,
+            ),
+            else => {},
+        }
+
+        const value = try self.lowerBranchValueAtTypeCell(body, result_cell);
+        return try self.stateResultAfterValueAtTypeCells(
+            outer_state_cell,
+            result_cell,
+            outer_merge_binders,
+            value,
+        );
+    }
+
+    fn lowerNestedIfThenStateResultAtTypeCells(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        if_: anytype,
+        result_cell: DraftTypeCell,
+        outer_state_cell: DraftTypeCell,
+        outer_merge_binders: []const MergeBinder,
+    ) Allocator.Error!DraftExprId {
+        const nested_merge_binders = try self.stateMergeBinders(expr_id);
+        defer self.allocator.free(nested_merge_binders);
+        if (nested_merge_binders.len == 0) {
+            const value = try self.addExprWithTypeCell(
+                result_cell,
+                try self.lowerIfAtTypeCells(
+                    if_,
+                    result_cell,
+                    result_cell,
+                    &.{},
+                    try self.ifComptimeSite(expr_id, if_),
+                ),
+            );
+            return try self.stateResultAfterValueAtTypeCells(
+                outer_state_cell,
+                result_cell,
+                outer_merge_binders,
+                value,
+            );
+        }
+
+        const nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
+        const nested_state = try self.addExprWithTypeCell(
+            nested_state_cell,
+            try self.lowerIfAtTypeCells(
+                if_,
+                result_cell,
+                nested_state_cell,
+                nested_merge_binders,
+                try self.ifComptimeSite(expr_id, if_),
+            ),
+        );
+        return try self.composeNestedStateResultAtTypeCells(
+            nested_state,
+            nested_state_cell,
+            result_cell,
+            nested_merge_binders,
+            outer_state_cell,
+            outer_merge_binders,
+        );
+    }
+
+    fn lowerNestedMatchThenStateResultAtTypeCells(
+        self: *BodyContext,
+        expr_id: checked.CheckedExprId,
+        match: anytype,
+        result_cell: DraftTypeCell,
+        outer_state_cell: DraftTypeCell,
+        outer_merge_binders: []const MergeBinder,
+    ) Allocator.Error!DraftExprId {
+        const nested_merge_binders = try self.stateMergeBinders(expr_id);
+        defer self.allocator.free(nested_merge_binders);
+        const comptime_site = try self.matchComptimeSite(expr_id, match);
+        if (nested_merge_binders.len == 0) {
+            const value = try self.lowerMatchExprWithOutput(match, .{ .value = result_cell }, comptime_site);
+            return try self.stateResultAfterValueAtTypeCells(
+                outer_state_cell,
+                result_cell,
+                outer_merge_binders,
+                value,
+            );
+        }
+
+        const nested_state_cell = try self.stateResultTypeCell(nested_merge_binders, result_cell);
+        const nested_state = try self.lowerMatchExprWithOutput(match, .{ .state_result = .{
+            .result_cell = result_cell,
+            .state_cell = nested_state_cell,
+            .merge_binders = nested_merge_binders,
+        } }, comptime_site);
+        return try self.composeNestedStateResultAtTypeCells(
+            nested_state,
+            nested_state_cell,
+            result_cell,
+            nested_merge_binders,
+            outer_state_cell,
+            outer_merge_binders,
+        );
+    }
+
+    fn composeNestedStateResultAtTypeCells(
+        self: *BodyContext,
+        nested_state: DraftExprId,
+        nested_state_cell: DraftTypeCell,
+        result_cell: DraftTypeCell,
+        nested_merge_binders: []const MergeBinder,
+        outer_state_cell: DraftTypeCell,
+        outer_merge_binders: []const MergeBinder,
+    ) Allocator.Error!DraftExprId {
+        const pattern_items = try self.allocator.alloc(DraftPatId, nested_merge_binders.len + 1);
+        defer self.allocator.free(pattern_items);
+        for (nested_merge_binders, 0..) |merge, index| {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.bindLocalName(local, merge.binder);
+            try self.binders.put(merge.binder, local);
+            pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+        }
+
+        const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), result_cell, null);
+        pattern_items[nested_merge_binders.len] = try self.addPatWithTypeCell(result_cell, .{ .bind = result_local });
+        const bind_pat = try self.addPatWithTypeCell(
+            nested_state_cell,
+            .{ .tuple = try self.addPatSpan(pattern_items) },
+        );
+        const result = try self.addExprWithTypeCell(result_cell, .{ .local = result_local });
+        const rest = try self.stateResultTupleExprAtTypeCells(
+            outer_state_cell,
+            outer_merge_binders,
+            result,
+        );
+
+        return try self.addExprWithTypeCell(outer_state_cell, .{ .let_ = .{
+            .bind = bind_pat,
+            .value = nested_state,
+            .rest = rest,
+        } });
     }
 
     fn lowerBodyThenStateOnlyAtTypeCell(
@@ -32090,6 +32320,45 @@ const BodyContext = struct {
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
     ) Allocator.Error!LoweredDiscardedExpr {
+        const checked_expr = self.view.bodies.expr(expr_id);
+        switch (checked_expr.data) {
+            .if_, .match_ => {
+                const merge_binders = try self.stateMergeBinders(expr_id);
+                defer self.allocator.free(merge_binders);
+                if (merge_binders.len != 0) {
+                    const state_cell = try self.stateOnlyTypeCell(merge_binders);
+                    const state_value = switch (checked_expr.data) {
+                        .if_ => |if_| try self.addExprWithTypeCell(
+                            state_cell,
+                            try self.lowerIfStateOnlyAtTypeCell(
+                                if_,
+                                state_cell,
+                                merge_binders,
+                                try self.ifComptimeSite(expr_id, if_),
+                            ),
+                        ),
+                        .match_ => |match| try self.lowerMatchExprWithOutput(
+                            match,
+                            .{ .state_only = .{
+                                .state_cell = state_cell,
+                                .merge_binders = merge_binders,
+                            } },
+                            try self.matchComptimeSite(expr_id, match),
+                        ),
+                        else => unreachable,
+                    };
+                    return .{
+                        .stmt = try self.addStmt(.{ .let_ = .{
+                            .pat = try self.stateOnlyPatternAtTypeCell(state_cell, merge_binders),
+                            .value = state_value,
+                        } }),
+                        .termination = .none,
+                    };
+                }
+            },
+            else => {},
+        }
+
         const cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
         if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
             return .{
@@ -32348,6 +32617,13 @@ const BodyContext = struct {
         };
 
         const pattern_data = self.view.bodies.pattern(pattern).data;
+        if (try self.appendStatefulControlPatternStatement(
+            pattern,
+            expr,
+            statement.source_region,
+            lowered,
+        )) return true;
+
         const destructs = switch (pattern_data) {
             .record_destructure => |destructs| destructs,
             else => return false,
@@ -32371,6 +32647,115 @@ const BodyContext = struct {
         else
             null;
         try self.appendRecordRestPatternStatements(source_expr, value_node, destructs, lowered, comptime_site);
+        return true;
+    }
+
+    /// A statement-position `if`/`match` can both produce the statement value
+    /// and reassign surrounding binders. Keep that nested state tuple intact
+    /// until the outer statement destructures it. The reassigned locals and
+    /// the result local are then bound by an ordinary block statement, so they
+    /// remain in scope for every later statement and loop back edge.
+    fn appendStatefulControlPatternStatement(
+        self: *BodyContext,
+        pattern: checked.CheckedPatternId,
+        expr_id: checked.CheckedExprId,
+        source_region: base.Region,
+        lowered: *LoweredStatements,
+    ) Allocator.Error!bool {
+        const checked_expr = self.view.bodies.expr(expr_id);
+        switch (checked_expr.data) {
+            .if_, .match_ => {},
+            else => return false,
+        }
+
+        const merge_binders = try self.stateMergeBinders(expr_id);
+        defer self.allocator.free(merge_binders);
+        if (merge_binders.len == 0) return false;
+
+        const value_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id));
+        try self.constrainTypeToCell(self.view.bodies.pattern(pattern).ty, value_cell);
+        try self.graph.drainDirty();
+        const state_cell = try self.stateResultTypeCell(merge_binders, value_cell);
+        const state_value = switch (checked_expr.data) {
+            .if_ => |if_| try self.addExprWithTypeCell(
+                state_cell,
+                try self.lowerIfAtTypeCells(
+                    if_,
+                    value_cell,
+                    state_cell,
+                    merge_binders,
+                    try self.ifComptimeSite(expr_id, if_),
+                ),
+            ),
+            .match_ => |match| try self.lowerMatchExprWithOutput(
+                match,
+                .{ .state_result = .{
+                    .result_cell = value_cell,
+                    .state_cell = state_cell,
+                    .merge_binders = merge_binders,
+                } },
+                try self.matchComptimeSite(expr_id, match),
+            ),
+            else => unreachable,
+        };
+
+        const state_pattern_items = try self.allocator.alloc(DraftPatId, merge_binders.len + 1);
+        defer self.allocator.free(state_pattern_items);
+        for (merge_binders, 0..) |merge, index| {
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), merge.ty, merge.binder);
+            try self.bindLocalName(local, merge.binder);
+            try self.binders.put(merge.binder, local);
+            state_pattern_items[index] = try self.addPatWithTypeCell(merge.ty, .{ .bind = local });
+        }
+        const result_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), value_cell, null);
+        state_pattern_items[merge_binders.len] = try self.addPatWithTypeCell(value_cell, .{ .bind = result_local });
+        try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+            .pat = try self.addPatWithTypeCell(
+                state_cell,
+                .{ .tuple = try self.addPatSpan(state_pattern_items) },
+            ),
+            .value = state_value,
+        } }));
+
+        const result = try self.addExprWithTypeCell(value_cell, .{ .local = result_local });
+        const comptime_site = if (self.shouldRecordComptimeSite(.destructure) and self.patternCanMiss(pattern))
+            try self.addComptimeSite(
+                .destructure,
+                source_region,
+                self.view.exhaustiveness_sites.lookupByDestructurePattern(pattern),
+                &.{},
+            )
+        else
+            null;
+        if (!self.patternNeedsExplicitBinding(pattern)) {
+            const result_pattern = if (self.patternIsShapeFree(pattern))
+                try self.lowerShapeFreePatternAtCell(pattern, value_cell)
+            else
+                try self.lowerPatternAtNode(pattern, try value_cell.toGraphNode(self.graph));
+            try lowered.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                .pat = result_pattern,
+                .value = result,
+                .comptime_site = comptime_site,
+            } }));
+            return true;
+        }
+
+        const unit_ty = try self.unitType();
+        var unit = try self.addExpr(.{ .ty = unit_ty, .data = .unit });
+        unit = try self.wrapComptimeBranch(comptime_site, 0, unit);
+        const miss = if (comptime_site) |site|
+            try self.comptimeExhaustivenessFailedExpr(unit_ty, site)
+        else
+            try self.runtimeCrashExpr(unit_ty, "pattern match failed");
+        try lowered.append(self.allocator, try self.addStmt(.{ .expr = try self.lowerMaterializedPatternValueThen(
+            pattern,
+            result,
+            value_cell,
+            .{ .sealed = unit_ty },
+            .{ .expr = unit },
+            miss,
+            null,
+        ) }));
         return true;
     }
 

@@ -177,7 +177,7 @@ NO CHANGE
 							(p-assign (ident "process")))
 						(e-lookup-local
 							(p-assign (ident "child")))))
-				(e-interpolation (constraint-fn-var 313)
+				(e-interpolation (constraint-fn-var 313) (dispatcher-var 33)
 					(first
 						(e-literal (string "")))
 					(parts
@@ -224,7 +224,7 @@ NO CHANGE
 												(e-literal (string "")))
 											(e-lookup-local
 												(p-assign (ident "process_child")))))
-									(e-interpolation (constraint-fn-var 379)
+									(e-interpolation (constraint-fn-var 379) (dispatcher-var 63)
 										(first
 											(e-literal (string "")))
 										(parts

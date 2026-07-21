@@ -366,7 +366,7 @@ NO CHANGE
 						(p-assign (ident "#interp_0"))
 						(e-lookup-local
 							(p-assign (ident "s"))))
-					(e-interpolation (constraint-fn-var 521)
+					(e-interpolation (constraint-fn-var 521) (dispatcher-var 116)
 						(first
 							(e-literal (string "")))
 						(parts

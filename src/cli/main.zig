@@ -5494,13 +5494,26 @@ fn writeDevRunImageToSharedMemory(
         const proc_specs = store.getProcSpecs();
         try codegen.compileAllProcSpecs(proc_specs);
 
-        const code_symbols = try ctx.gpa.alloc(backend.RunImage.CodeSymbolInput, proc_specs.len);
+        const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, readonly_data.items);
+        defer ctx.gpa.free(static_rc_helpers);
+        try codegen.compileStaticDataRcHelpers(static_rc_helpers);
+
+        var runtime_proc_count: usize = 0;
+        for (proc_specs) |proc| {
+            if (!proc.is_static_initializer) runtime_proc_count += 1;
+        }
+
+        const code_symbols = try ctx.gpa.alloc(
+            backend.RunImage.CodeSymbolInput,
+            runtime_proc_count + static_rc_helpers.len,
+        );
         var initialized_code_symbols: usize = 0;
         defer {
             for (code_symbols[0..initialized_code_symbols]) |symbol| ctx.gpa.free(symbol.name);
             ctx.gpa.free(code_symbols);
         }
-        for (proc_specs, 0..) |_, i| {
+        for (proc_specs, 0..) |proc, i| {
+            if (proc.is_static_initializer) continue;
             const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
             const compiled = codegen.compiledProcSymbol(proc_id) orelse {
                 if (builtin.mode == .Debug) {
@@ -5508,9 +5521,25 @@ fn writeDevRunImageToSharedMemory(
                 }
                 unreachable;
             };
-            code_symbols[i] = .{
+            code_symbols[initialized_code_symbols] = .{
                 .name = try backend.procSymbolName(ctx.gpa, compiled.name),
                 .code_offset = compiled.code_start,
+            };
+            initialized_code_symbols += 1;
+        }
+        for (static_rc_helpers) |helper_key| {
+            const code_offset = codegen.compiledStaticDataRcHelperOffset(helper_key) orelse {
+                if (builtin.mode == .Debug) {
+                    std.debug.panic(
+                        "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
+                        .{helper_key.encode()},
+                    );
+                }
+                unreachable;
+            };
+            code_symbols[initialized_code_symbols] = .{
+                .name = try backend.atomicRcHelperSymbolName(ctx.gpa, helper_key),
+                .code_offset = code_offset,
             };
             initialized_code_symbols += 1;
         }
@@ -7916,8 +7945,12 @@ fn writeDevWasmObject(
     };
     codegen.configureBuiltinRelocs(builtin_symbols);
 
+    const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
+    defer ctx.gpa.free(static_rc_helpers);
+    codegen.static_data_rc_helpers = static_rc_helpers;
     try codegen.registerIndirectCallTypes();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 
     for (entrypoints) |entry| {
         _ = try codegen.generateEntrypointWrapper(
@@ -8068,10 +8101,14 @@ fn rocBuildWasmSurgical(
     codegen.configureBuiltinRelocs(builtin_symbols);
     codegen.configureStaticDataAddressTracking();
 
+    const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
+    defer ctx.gpa.free(static_rc_helpers);
+    codegen.static_data_rc_helpers = static_rc_helpers;
     try codegen.registerIndirectCallTypes();
     codegen.configureSymbolAbi();
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 
     var host_to_app_map: std.ArrayList(backend.wasm.WasmModule.HostToAppEntry) = .empty;
     defer host_to_app_map.deinit(ctx.gpa);
@@ -8279,6 +8316,7 @@ fn compileLlvmAppObject(
     link_type: roc_target.OutputKind,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
+    static_data_exports: []const backend.StaticDataExport,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
 ) CliMainError!LlvmObjectPaths {
@@ -8300,6 +8338,10 @@ fn compileLlvmAppObject(
     codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
     codegen.debug_producer = "roc " ++ build_options.compiler_version;
     defer codegen.deinit();
+
+    const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
+    defer ctx.gpa.free(static_rc_helpers);
+    codegen.static_data_rc_helpers = static_rc_helpers;
 
     const llvm_entrypoints = try ctx.arena.alloc(llvm_codegen.MonoLlvmCodeGen.Entrypoint, entrypoints.len);
     for (entrypoints, 0..) |entrypoint, i| {
@@ -8453,7 +8495,17 @@ fn rocBuildWasmLlvm(
         unreachable;
     }
 
-    const app_object = try compileLlvmAppObject(ctx, args, .wasm32, link_type, lowered, entrypoints, false, false);
+    const app_object = try compileLlvmAppObject(
+        ctx,
+        args,
+        .wasm32,
+        link_type,
+        lowered,
+        entrypoints,
+        static_data_exports,
+        false,
+        false,
+    );
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
     var owned_inputs: std.ArrayList([]u8) = .empty;
@@ -8768,6 +8820,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             link_type,
             &lowered,
             entrypoints,
+            static_data_exports,
             enable_default_platform_runtime,
             args.synthetic_default_platform,
         );

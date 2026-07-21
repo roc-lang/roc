@@ -278,17 +278,25 @@ const RootEntry = struct {
 const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
+    initializer: ?Type.FnId,
+    const_locator: ?check.CheckedModule.ConstLocator,
+};
+
+const StaticInitializerRequest = struct {
+    static_data: Common.StaticDataId,
+    ty: Type.TypeId,
+    layout_idx: layout.Idx,
+};
+
+const StaticInitializerEntry = struct {
+    expr: Lifted.ExprId,
+    ty: Type.TypeId,
+    proc: LIR.LirProcSpecId,
 };
 
 const RuntimeSchemaRequest = struct {
     def: MonoType.TypeDef,
     ty: Type.TypeId,
-};
-
-const StaticDataPlan = struct {
-    candidate: Common.StaticDataId,
-    layout: layout.Idx,
-    plan: LirProgram.ConstPlanId,
 };
 
 const CaptureSource = union(enum) {
@@ -342,7 +350,8 @@ const Lowerer = struct {
     const_type_map: std.AutoHashMap(Type.TypeId, const_store.ConstTypeId),
     mono_const_type_map: std.AutoHashMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: std.AutoHashMap(Type.TypeId, SolvedType.TypeVarId),
-    static_data_map: std.AutoHashMap(StaticDataPlan, LIR.StaticDataId),
+    static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
+    static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
     local_map: []?LIR.LocalId,
@@ -424,7 +433,8 @@ const Lowerer = struct {
             .const_type_map = std.AutoHashMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
             .mono_const_type_map = std.AutoHashMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = std.AutoHashMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
-            .static_data_map = std.AutoHashMap(StaticDataPlan, LIR.StaticDataId).init(allocator),
+            .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
+            .static_initializer_queue = .empty,
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = local_map,
             .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
@@ -447,7 +457,8 @@ const Lowerer = struct {
         self.const_type_map.deinit();
         self.mono_const_type_map.deinit();
         self.callable_source_fn_map.deinit();
-        self.static_data_map.deinit();
+        self.static_initializer_queue.deinit(self.allocator);
+        self.static_initializer_map.deinit();
         self.layout_owner_types.deinit();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -484,7 +495,8 @@ const Lowerer = struct {
         self.const_type_map.deinit();
         self.mono_const_type_map.deinit();
         self.callable_source_fn_map.deinit();
-        self.static_data_map.deinit();
+        self.static_initializer_queue.deinit(self.allocator);
+        self.static_initializer_map.deinit();
         self.layout_owner_types.deinit();
         self.type_layouts.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
@@ -506,7 +518,8 @@ const Lowerer = struct {
         self.local_map = &.{};
         self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
         self.local_types = std.AutoHashMap(LIR.LocalId, Type.TypeId).init(self.allocator);
-        self.static_data_map = std.AutoHashMap(StaticDataPlan, LIR.StaticDataId).init(self.allocator);
+        self.static_initializer_queue = .empty;
+        self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
@@ -532,6 +545,8 @@ const Lowerer = struct {
             try self.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
+                .initializer = if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null,
+                .const_locator = request.const_locator,
             });
         }
 
@@ -557,13 +572,59 @@ const Lowerer = struct {
     }
 
     fn lowerReachableFns(self: *Lowerer) Common.LowerError!void {
-        var index: usize = 0;
-        while (index < self.fn_reach_queue.items.len) : (index += 1) {
-            const fn_id = self.fn_reach_queue.items[index];
-            const fn_index = @intFromEnum(fn_id);
-            if (self.fn_written.items[fn_index]) continue;
-            try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
+        var fn_queue_index: usize = 0;
+        var initializer_queue_index: usize = 0;
+        while (fn_queue_index < self.fn_reach_queue.items.len or initializer_queue_index < self.static_initializer_queue.items.len) {
+            while (fn_queue_index < self.fn_reach_queue.items.len) : (fn_queue_index += 1) {
+                const fn_id = self.fn_reach_queue.items[fn_queue_index];
+                const fn_index = @intFromEnum(fn_id);
+                if (self.fn_written.items[fn_index]) continue;
+                try self.lowerFnSpec(fn_id, self.fn_specs.items[fn_index]);
+            }
+            if (initializer_queue_index < self.static_initializer_queue.items.len) {
+                const initializer = self.static_initializer_queue.items[initializer_queue_index];
+                initializer_queue_index += 1;
+                try self.lowerStaticInitializer(initializer);
+            }
         }
+    }
+
+    fn lowerStaticInitializer(self: *Lowerer, initializer: StaticInitializerEntry) Common.LowerError!void {
+        self.captures.clearRetainingCapacity();
+        @memset(self.local_map, null);
+        self.typed_local_map.clearRetainingCapacity();
+        self.local_types.clearRetainingCapacity();
+
+        const saved_ret_ty = self.current_ret_ty;
+        const saved_proc_locals = self.current_proc_locals;
+        const saved_current_fn = self.current_fn;
+        const saved_current_proc = self.current_proc;
+        const saved_loc = self.result.store.current_loc;
+        const saved_region = self.result.store.current_region;
+        var proc_locals: ProcLocalSet = .{};
+        defer proc_locals.deinit(self.allocator);
+        defer {
+            self.current_ret_ty = saved_ret_ty;
+            self.current_proc_locals = saved_proc_locals;
+            self.current_fn = saved_current_fn;
+            self.current_proc = saved_current_proc;
+            self.result.store.current_loc = saved_loc;
+            self.result.store.current_region = saved_region;
+        }
+
+        self.current_ret_ty = initializer.ty;
+        self.current_proc_locals = &proc_locals;
+        self.current_fn = null;
+        self.current_proc = initializer.proc;
+        self.result.store.current_loc = self.solved.lifted.exprLoc(initializer.expr);
+        self.result.store.current_region = self.solved.lifted.exprRegion(initializer.expr);
+
+        const body = try self.lowerExprReturn(initializer.expr, initializer.ty);
+        const frame_locals = try self.writeFrameLocals(&proc_locals);
+        const proc = self.result.store.getProcSpecPtr(initializer.proc);
+        proc.body = body;
+        proc.frame_locals = frame_locals;
+        proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
     }
 
     fn lowerFnSpec(self: *Lowerer, fn_id: Type.FnId, spec: FnSpec) Common.LowerError!void {
@@ -1293,14 +1354,23 @@ const Lowerer = struct {
         }
 
         for (self.layout_requests.items) |request| {
+            const initializer = if (request.initializer) |initializer_fn| blk: {
+                const proc = try self.markReachableFn(initializer_fn);
+                self.result.store.getProcSpecPtr(proc).is_static_initializer = true;
+                break :blk proc;
+            } else null;
             try self.result.requested_layouts.append(self.allocator, .{
                 .ty = self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
+                .const_locator = request.const_locator,
                 .layout_idx = try self.layoutOfType(request.ty),
-                .plan = if (self.layout_request_const_plans)
+                .plan = if (initializer != null)
+                    try self.layoutOnlyConstPlan()
+                else if (self.layout_request_const_plans)
                     try self.constPlanOfType(request.ty)
                 else
                     try self.layoutOnlyConstPlan(),
+                .initializer = initializer,
             });
         }
     }
@@ -1342,104 +1412,43 @@ const Lowerer = struct {
 
     fn lirStaticDataFor(
         self: *Lowerer,
-        id: Common.StaticDataId,
+        candidate: Mono.StaticDataCandidate,
+        ty: Type.TypeId,
         layout_idx: layout.Idx,
-        plan: LirProgram.ConstPlanId,
     ) Common.LowerError!LIR.StaticDataId {
-        const raw = @intFromEnum(id);
-        if (raw >= self.solved.lifted.static_data_values.len()) Common.invariant("static data candidate id exceeded lifted static data table");
-        const key = StaticDataPlan{
-            .candidate = id,
-            .layout = layout_idx,
-            .plan = plan,
+        const request = StaticInitializerRequest{
+            .static_data = candidate.static_data,
+            .ty = ty,
+            .layout_idx = layout_idx,
         };
-        if (self.static_data_map.get(key)) |existing| return existing;
+        const gop = try self.static_initializer_map.getOrPut(request);
+        if (gop.found_existing) return gop.value_ptr.*;
 
-        const source = GuardedList.at(self.solved.lifted.static_data_values.unsafeRawItemsForView(), raw);
+        const proc = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(self.symbols.fresh()),
+            .args = LIR.LocalSpan.empty(),
+            .body = null,
+            .ret_layout = layout_idx,
+            .abi = .roc,
+            .is_static_initializer = true,
+        });
         const result_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(self.result.static_data_values.items.len)));
         try self.result.static_data_values.append(self.allocator, .{
-            .const_locator = source.const_locator,
-            .node = source.node,
-            .checked_type = source.checked_type,
-            .layout_idx = layout_idx,
-            .plan = plan,
+            .initializer = proc,
         });
-        try self.static_data_map.put(key, result_id);
+        try self.static_initializer_queue.append(self.allocator, .{
+            .expr = candidate.runtime_expr,
+            .ty = ty,
+            .proc = proc,
+        });
+        gop.value_ptr.* = result_id;
         return result_id;
     }
 
-    fn constPlanNeedsStaticData(self: *Lowerer, plan_id: LirProgram.ConstPlanId, layout_idx: layout.Idx) bool {
+    fn layoutNeedsStaticData(self: *Lowerer, layout_idx: layout.Idx) bool {
         const layout_data = self.result.layouts.getLayout(layout_idx);
         if (self.result.layouts.layoutSize(layout_data) == 0) return false;
-        return switch (self.result.const_plans.items[@intFromEnum(plan_id)]) {
-            .pending => Common.invariant("pending const plan reached static-data selection"),
-            .layout_only => Common.invariant("layout-only const plan reached static-data selection"),
-            .zst,
-            .scalar,
-            => false,
-            .str,
-            .list,
-            .box,
-            .fn_value,
-            .erased_fn,
-            => true,
-            .tuple => |plans| self.aggregatePlanNeedsStaticData(plans, layout_idx),
-            .record => |plans| self.aggregatePlanNeedsStaticData(plans, layout_idx),
-            .tag_union => |variants| self.tagPlanNeedsStaticData(variants, layout_idx),
-            .named => |named| switch (layout_data.tag) {
-                .box,
-                .box_of_zst,
-                => true,
-                else => self.constPlanNeedsStaticData(named.backing, layout_idx),
-            },
-        };
-    }
-
-    fn aggregatePlanNeedsStaticData(self: *Lowerer, plans: []const LirProgram.ConstPlanId, layout_idx: layout.Idx) bool {
-        if (plans.len == 0) return false;
-        const layout_data = self.result.layouts.getLayout(layout_idx);
-        return switch (layout_data.tag) {
-            .zst => false,
-            .box,
-            .box_of_zst,
-            .list,
-            .list_of_zst,
-            .closure,
-            .erased_callable,
-            => true,
-            .struct_ => blk: {
-                const struct_idx = layout_data.getStruct().idx;
-                for (plans, 0..) |plan, index| {
-                    const field_layout = self.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(index));
-                    if (self.constPlanNeedsStaticData(plan, field_layout)) break :blk true;
-                }
-                break :blk false;
-            },
-            else => Common.invariant("aggregate const plan reached a non-aggregate layout"),
-        };
-    }
-
-    fn tagPlanNeedsStaticData(self: *Lowerer, variants: []const LirProgram.ConstTagVariant, layout_idx: layout.Idx) bool {
-        const layout_data = self.result.layouts.getLayout(layout_idx);
-        switch (layout_data.tag) {
-            .zst, .scalar => return false,
-            .box, .box_of_zst => return true,
-            .tag_union => {},
-            else => Common.invariant("tag const plan reached a non-tag layout"),
-        }
-        const data = self.result.layouts.getTagUnionData(layout_data.getTagUnion().idx);
-        const layout_variants = self.result.layouts.getTagUnionVariants(data);
-        if (layout_variants.len != variants.len) Common.invariant("tag const plan variant count differed from layout variant count");
-        for (variants, 0..) |variant, index| {
-            if (variant.payloads.len == 0) continue;
-            const payload_layout = layout_variants.get(@intCast(index)).payload_layout;
-            if (variant.payloads.len == 1) {
-                if (self.constPlanNeedsStaticData(variant.payloads[0], payload_layout)) return true;
-            } else if (self.aggregatePlanNeedsStaticData(variant.payloads, payload_layout)) {
-                return true;
-            }
-        }
-        return false;
+        return self.result.layouts.layoutContainsRefcounted(layout_data);
     }
 
     fn buildConstPlan(self: *Lowerer, ty: Type.TypeId) Common.LowerError!LirProgram.ConstPlan {
@@ -2182,7 +2191,10 @@ const Lowerer = struct {
             Common.invariant("debug Lambda Mono verifier saw a layout request count mismatch");
         }
         for (self.layout_requests.items, requests) |direct, expected| {
-            if (direct.checked_type != expected.checked_type or !try type_equivalence.equivalent(direct.ty, expected.ty)) {
+            if (direct.checked_type != expected.checked_type or
+                !std.meta.eql(direct.const_locator, expected.const_locator) or
+                !try type_equivalence.equivalent(direct.ty, expected.ty))
+            {
                 Common.invariant("debug Lambda Mono verifier saw a layout request mismatch");
             }
         }
@@ -2214,11 +2226,10 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
-        const plan = try self.constPlanOfType(ty);
-        if (self.constPlanNeedsStaticData(plan, layout_idx)) {
+        if (self.layoutNeedsStaticData(layout_idx)) {
             return try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .static_data = try self.lirStaticDataFor(candidate.static_data, layout_idx, plan) },
+                .value = .{ .static_data = try self.lirStaticDataFor(candidate, ty, layout_idx) },
                 .next = next,
             } });
         }

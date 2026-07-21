@@ -503,9 +503,10 @@ const Pass = struct {
     /// Functions that directly call themselves. Let-substitution-aware call
     /// patterns are always relevant at these recursive worker boundaries.
     self_recursive_fns: []bool,
-    /// One rewritten callable body per source lifted function. Capture values
+    /// One rewritten callable body per stable Monotype template identity.
+    /// Lifted FnIds are transient products of traversal order; capture values
     /// are explicit operands and therefore do not create new body identities.
-    callable_workers: std.AutoHashMap(Ast.FnId, Ast.FnId),
+    callable_workers: std.AutoHashMap(names.TypeDigest, Ast.FnId),
     /// Reverse index from each rewritten callable body to its source function.
     /// This keeps later materialization rooted at the source instead of cloning
     /// an already-rewritten worker.
@@ -606,7 +607,7 @@ const Pass = struct {
             .whole_body_cloned = whole_body_cloned,
             .shape_demand_fns = shape_demand_fns,
             .self_recursive_fns = self_recursive_fns,
-            .callable_workers = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
+            .callable_workers = std.AutoHashMap(names.TypeDigest, Ast.FnId).init(allocator),
             .callable_sources = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
             .next_join_point = 0,
         };
@@ -5629,6 +5630,12 @@ const Cloner = struct {
     /// then materializes as written. Returns null on a pinned block with all
     /// speculative work undone.
     fn cloneBlockValue(self: *Cloner, block: anytype) Common.LowerError!?Value {
+        // The block-final position is the capability that makes an
+        // `unreachable` marker valid. Treating this block as transparent would
+        // let the marker escape into an ordinary expression position (for
+        // example, the rest of a synthesized `let`).
+        if (self.pass.program.getExpr(block.final_expr).data == .@"unreachable") return null;
+
         const change_start = self.changes.items.len;
         const pending_entry = self.pending.items.len;
 
@@ -5676,6 +5683,8 @@ const Cloner = struct {
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
 
+        const terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
+
         const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
         defer self.pass.allocator.free(source);
 
@@ -5686,7 +5695,7 @@ const Cloner = struct {
             // Cloning it as one lets a branch-built value sink the tail into
             // the branches, where each branch's constructor is known.
             switch (self.pass.program.getStmt(stmt)) {
-                .let_ => |let_| if (!let_.recursive) {
+                .let_ => |let_| if (!let_.recursive and !terminated) {
                     const tail = try self.pass.program.addExpr(.{ .ty = ty, .data = .{ .block = .{
                         .statements = try self.pass.program.addStmtSpan(source[index + 1 ..]),
                         .final_expr = block.final_expr,
@@ -7721,12 +7730,17 @@ const Cloner = struct {
 
     fn materializeCallableWorker(self: *Cloner, callable: CallableValue) Common.LowerError!Ast.ExprId {
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
-        if (self.pass.callable_workers.get(source_fn_id)) |worker_fn_id| {
+        const source_fn = self.pass.program.getFn(source_fn_id);
+        const source_identity = Mono.fnTemplateDigest(
+            source_fn.source orelse Common.invariant("rewritten callable source had no Monotype template identity"),
+            &self.pass.program.types,
+            &self.pass.program.names,
+        );
+        if (self.pass.callable_workers.get(source_identity)) |worker_fn_id| {
             const worker = self.pass.program.getFn(worker_fn_id);
             return try self.materializeCallableWithCaptures(callable.ty, worker_fn_id, worker.captures, callable.captures);
         }
 
-        const source_fn = self.pass.program.getFn(source_fn_id);
         const source_body = switch (source_fn.body) {
             .roc => |body| body,
             .hosted => Common.invariant("hosted callable value needed a rewritten body"),
@@ -7763,7 +7777,7 @@ const Cloner = struct {
             .body = .hosted,
             .ret = source_fn.ret,
         });
-        try self.pass.callable_workers.put(source_fn_id, worker_fn_id);
+        try self.pass.callable_workers.put(source_identity, worker_fn_id);
         try self.pass.callable_sources.put(worker_fn_id, source_fn_id);
         try self.pass.copyProcDebugName(source_fn.symbol, symbol);
 

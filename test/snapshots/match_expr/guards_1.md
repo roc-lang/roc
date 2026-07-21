@@ -110,7 +110,7 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 282)
+									(e-interpolation (constraint-fn-var 282) (dispatcher-var 20)
 										(first
 											(e-literal (string "positive: ")))
 										(parts
@@ -137,7 +137,7 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 339)
+									(e-interpolation (constraint-fn-var 339) (dispatcher-var 35)
 										(first
 											(e-literal (string "negative: ")))
 										(parts

@@ -113,7 +113,7 @@ expect f(["a"]) == "x"
 										(p-assign (ident "#interp_0"))
 										(e-lookup-local
 											(p-assign (ident "x"))))
-									(e-interpolation (constraint-fn-var 223)
+									(e-interpolation (constraint-fn-var 223) (dispatcher-var 13)
 										(first
 											(e-literal (string "")))
 										(parts
@@ -125,7 +125,7 @@ expect f(["a"]) == "x"
 						(p-assign (ident "#interp_1"))
 						(e-lookup-local
 							(p-assign (ident "inner"))))
-					(e-interpolation (constraint-fn-var 243)
+					(e-interpolation (constraint-fn-var 243) (dispatcher-var 23)
 						(first
 							(e-literal (string "<tr>")))
 						(parts

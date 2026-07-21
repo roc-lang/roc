@@ -514,6 +514,7 @@ test "hoisted list constants lower to internal static data" {
     defer lowered.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
+    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -747,6 +748,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     defer lowered.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.static_data_values.items.len);
+    try expectStaticInitializersMaterializationOnly(&lowered.lir_result);
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 }
 
@@ -2019,6 +2021,12 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
         }
     }
     return error.StaticDataLiteralNotFound;
+}
+
+fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
+    for (result.static_data_values.items) |value| {
+        try std.testing.expect(result.store.getProcSpec(value.initializer).is_static_initializer);
+    }
 }
 
 fn storedI64(

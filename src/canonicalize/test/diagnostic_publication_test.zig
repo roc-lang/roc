@@ -6,15 +6,15 @@ const ModuleEnv = @import("../ModuleEnv.zig");
 
 const testing = std.testing;
 
-fn pushInvalidNumLiteral(env: *ModuleEnv) !void {
+fn pushInvalidNumLiteral(env: *ModuleEnv) std.mem.Allocator.Error!void {
     try env.pushDiagnostic(.{ .invalid_num_literal = .{ .region = base.Region.zero() } });
 }
 
-fn pushEmptyTuple(env: *ModuleEnv) !void {
+fn pushEmptyTuple(env: *ModuleEnv) std.mem.Allocator.Error!void {
     try env.pushDiagnostic(.{ .empty_tuple = .{ .region = base.Region.zero() } });
 }
 
-fn pushChainedRange(env: *ModuleEnv) !void {
+fn pushChainedRange(env: *ModuleEnv) std.mem.Allocator.Error!void {
     try env.pushDiagnostic(.{ .range_op_chained = .{ .region = base.Region.zero() } });
 }
 

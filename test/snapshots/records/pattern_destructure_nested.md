@@ -114,7 +114,7 @@ match person {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-interpolation (constraint-fn-var 226)
+						(e-interpolation (constraint-fn-var 226) (dispatcher-var 30)
 							(first
 								(e-literal (string "")))
 							(parts

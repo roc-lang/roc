@@ -2022,7 +2022,7 @@ pub const Header = union(enum) {
             },
             .type_module => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("type-module");
+                try tree.pushStaticAtom("type-mod");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);

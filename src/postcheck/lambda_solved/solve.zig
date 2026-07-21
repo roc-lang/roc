@@ -165,6 +165,7 @@ const Solver = struct {
                 .checked_type = request.checked_type,
                 .ty = ty,
                 .fn_id = request.fn_id,
+                .const_locator = request.const_locator,
             });
         }
 

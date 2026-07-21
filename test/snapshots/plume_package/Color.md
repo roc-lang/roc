@@ -988,7 +988,7 @@ is_named_color = |str| {
 																		(p-assign (ident "#interp_0"))
 																		(e-lookup-local
 																			(p-assign (ident "str"))))
-																	(e-interpolation (constraint-fn-var 921)
+																	(e-interpolation (constraint-fn-var 921) (dispatcher-var 173)
 																		(first
 																			(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got ")))
 																		(parts
@@ -1009,7 +1009,7 @@ is_named_color = |str| {
 															(p-assign (ident "#interp_1"))
 															(e-lookup-local
 																(p-assign (ident "str"))))
-														(e-interpolation (constraint-fn-var 947)
+														(e-interpolation (constraint-fn-var 947) (dispatcher-var 189)
 															(first
 																(e-literal (string "Expected Hex must start with # and be 7 characters long, got ")))
 															(parts
@@ -1170,7 +1170,7 @@ is_named_color = |str| {
 											(p-assign (ident "#interp_9"))
 											(e-lookup-local
 												(p-assign (ident "str"))))
-										(e-interpolation (constraint-fn-var 1121)
+										(e-interpolation (constraint-fn-var 1121) (dispatcher-var 353)
 											(first
 												(e-literal (string "Unknown color ")))
 											(parts

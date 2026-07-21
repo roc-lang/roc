@@ -331,6 +331,8 @@ const Lowerer = struct {
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
+                .initializer = if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null,
+                .const_locator = request.const_locator,
             });
         }
 

@@ -468,6 +468,7 @@ const Lifter = struct {
                 .checked_type = request.checked_type,
                 .ty = request.ty,
                 .fn_id = fn_id,
+                .const_locator = request.const_locator,
             });
         }
     }

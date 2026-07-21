@@ -564,7 +564,7 @@ fn lowerEvalAndFinishRoots(
     var static_erased_callable_count: usize = 0;
     for (materialized_static_data) |static_export| {
         for (static_export.relocations) |relocation| {
-            if (relocation.kind == .function_pointer) static_erased_callable_count += 1;
+            if (relocation.callable_capture_offset != null) static_erased_callable_count += 1;
         }
     }
     const static_erased_callables = try allocator.alloc(Interpreter.StaticErasedCallable, static_erased_callable_count);
@@ -576,34 +576,32 @@ fn lowerEvalAndFinishRoots(
         const allocation_address = std.math.sub(usize, symbol_address, static_export.symbol_offset) catch
             finalizationInvariant("interpreter static-data symbol offset exceeded its allocation address");
         for (static_export.relocations) |relocation| {
-            if (relocation.kind != .function_pointer) continue;
-            const capture_offset = relocation.callable_capture_offset orelse
-                finalizationInvariant("interpreter static callable relocation omitted its capture offset");
+            const capture_offset = relocation.callable_capture_offset orelse continue;
+            if (relocation.kind != .function_pointer or relocation.rc_helper != null) {
+                finalizationInvariant("interpreter static callable relocation had inconsistent function metadata");
+            }
             const callable_address = std.math.add(usize, allocation_address, @intCast(relocation.offset)) catch
                 finalizationInvariant("interpreter static callable address overflowed");
             const capture_address = std.math.add(usize, callable_address, capture_offset) catch
                 finalizationInvariant("interpreter static callable capture address overflowed");
             static_erased_callables[static_erased_callable_index] = .{
                 .capture_ptr = @ptrFromInt(capture_address),
-                .proc_id = procIdForStaticFunctionSymbol(&lowered.lir_result.store, relocation.target_symbol_name) orelse
-                    finalizationInvariant("interpreter static callable referenced an unknown LIR procedure"),
+                .proc_id = relocation.procedure orelse
+                    finalizationInvariant("interpreter static callable relocation omitted its LIR procedure"),
             };
             static_erased_callable_index += 1;
         }
     }
 
     const InterpreterStaticFunctionResolver = struct {
-        store: *const lir.LirStore,
-
-        fn resolve(raw: ?*anyopaque, symbol_name: []const u8) ?usize {
-            const self: *@This() = @ptrCast(@alignCast(raw.?));
-            _ = procIdForStaticFunctionSymbol(self.store, symbol_name) orelse return null;
+        fn resolve(_: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+            if (relocation.rc_helper != null) return Interpreter.staticErasedCallableOnDropAddress();
+            if (relocation.callable_capture_offset == null) return null;
+            _ = relocation.procedure orelse return null;
             return Interpreter.staticErasedCallableTrampolineAddress();
         }
     };
-    var interpreter_function_resolver = InterpreterStaticFunctionResolver{ .store = &lowered.lir_result.store };
     static_data_image.resolveFunctionRelocations(.{
-        .context = @ptrCast(&interpreter_function_resolver),
         .resolve = InterpreterStaticFunctionResolver.resolve,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -706,17 +704,6 @@ fn lowerEvalAndFinishRoots(
 fn compilerHostMustUseInterpreterForCtfe() bool {
     return builtin.target.os.tag == .freestanding or
         builtin.target.cpu.arch == .wasm32;
-}
-
-fn procIdForStaticFunctionSymbol(store: *const lir.LirStore, symbol_name: []const u8) ?lir.LIR.LirProcSpecId {
-    for (store.getProcSpecs(), 0..) |proc, index| {
-        var name_buf: [64]u8 = undefined;
-        const expected = std.fmt.bufPrint(&name_buf, "roc__proc_{x}", .{proc.name.raw()}) catch return null;
-        if (std.mem.eql(u8, expected, symbol_name)) {
-            return @enumFromInt(@as(u32, @intCast(index)));
-        }
-    }
-    return null;
 }
 
 const DevRootProgressState = enum(u8) {
@@ -1066,6 +1053,9 @@ fn lowerDevEvalAndFinishRoots(
         .call_exit = CompileTimeHost.rocComptimeCallExit,
     });
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized_static_data);
+    defer allocator.free(static_rc_helpers);
+    try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 
     var host_allocator_impl = ThreadSafeAllocator.init(allocator);
     const host_allocator = host_allocator_impl.allocator();
@@ -1131,19 +1121,22 @@ fn lowerDevEvalAndFinishRoots(
 
     const StaticFunctionResolver = struct {
         codegen: *const backend.HostLirCodeGen,
-        store: *const lir.LirStore,
         executable: *const backend.ExecutableMemory,
 
-        fn resolve(raw: ?*anyopaque, symbol_name: []const u8) ?usize {
+        fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
-            const proc_id = procIdForStaticFunctionSymbol(self.store, symbol_name) orelse return null;
+            if (relocation.rc_helper) |helper| {
+                const offset = self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null;
+                return @intFromPtr(self.executable.codePtr() + offset);
+            }
+            if (relocation.callable_capture_offset == null) return null;
+            const proc_id = relocation.procedure orelse return null;
             const compiled = self.codegen.compiledProcSymbol(proc_id) orelse return null;
             return @intFromPtr(self.executable.codePtr() + compiled.code_start);
         }
     };
     var static_function_resolver = StaticFunctionResolver{
         .codegen = &codegen,
-        .store = &lowered.lir_result.store,
         .executable = &executable,
     };
     static_data_image.resolveFunctionRelocations(.{

@@ -493,9 +493,12 @@ const LinearRewriteFrame = struct {
     head: LIR.CFStmtId,
     retain_assign_ref_target: bool = true,
     retain_set_target: bool = true,
-    /// Span-indexed operand positions whose ownership unit moves into the
-    /// constructed value instead of being retained.
+    /// Low-level retained argument positions whose ownership unit moves into
+    /// the result instead of being retained.
     transfer_mask: u64 = 0,
+    /// Aggregate operand positions whose ownership unit moves into the
+    /// constructed value instead of being retained.
+    transfer_positions: []const u32 = &.{},
     /// Move the tag payload or packed capture instead of retaining it.
     transfer_single: bool = false,
     /// Skip the low-level retain_result incref: the result binding is
@@ -903,7 +906,11 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .assign_list => |assign| {
-                    const transfer = try self.transferForAggregate(&path.owned, assign.elems, assign.target, assign.next, path.options.loop_keep);
+                    var transfer_positions: std.ArrayList(u32) = .empty;
+                    errdefer transfer_positions.deinit(self.store.allocator);
+                    const transfer = try self.transferForAggregate(&path.owned, assign.elems, assign.target, assign.next, path.options.loop_keep, &transfer_positions);
+                    var transferred_positions = try self.takeTransferPositions(&transfer_positions);
+                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
@@ -914,13 +921,18 @@ const Inserter = struct {
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
-                        .transfer_mask = transfer.transfer_mask,
+                        .transfer_positions = transferred_positions,
                         .post_release = try self.takePostReleases(&deaths),
                     });
+                    transferred_positions = &.{};
                     path.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
-                    const transfer = try self.transferForAggregate(&path.owned, assign.fields, assign.target, assign.next, path.options.loop_keep);
+                    var transfer_positions: std.ArrayList(u32) = .empty;
+                    errdefer transfer_positions.deinit(self.store.allocator);
+                    const transfer = try self.transferForAggregate(&path.owned, assign.fields, assign.target, assign.next, path.options.loop_keep, &transfer_positions);
+                    var transferred_positions = try self.takeTransferPositions(&transfer_positions);
+                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
                     if (transfer.release_old_target) {
                         current_start = try self.emitRebindRelease(assign.target, current_start);
                     }
@@ -931,9 +943,10 @@ const Inserter = struct {
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
-                        .transfer_mask = transfer.transfer_mask,
+                        .transfer_positions = transferred_positions,
                         .post_release = try self.takePostReleases(&deaths),
                     });
+                    transferred_positions = &.{};
                     path.cursor = assign.next;
                 },
                 .assign_tag => |assign| {
@@ -954,16 +967,21 @@ const Inserter = struct {
                     path.cursor = assign.next;
                 },
                 .store_struct => |assign| {
-                    const transfer_mask = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.dest, &path.owned, path.options.loop_keep);
+                    var transfer_positions: std.ArrayList(u32) = .empty;
+                    errdefer transfer_positions.deinit(self.store.allocator);
+                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &path.owned, path.options.loop_keep, &transfer_positions);
+                    var transferred_positions = try self.takeTransferPositions(&transfer_positions);
+                    errdefer if (transferred_positions.len != 0) self.store.allocator.free(transferred_positions);
                     var deaths: std.ArrayList(LIR.LocalId) = .empty;
                     errdefer deaths.deinit(self.store.allocator);
                     try self.postStmtDeaths(&path.owned, &.{}, assign.fields, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
                         .head = current_start,
-                        .transfer_mask = transfer_mask,
+                        .transfer_positions = transferred_positions,
                         .post_release = try self.takePostReleases(&deaths),
                     });
+                    transferred_positions = &.{};
                     path.cursor = assign.next;
                 },
                 .store_tag => |assign| {
@@ -1171,6 +1189,12 @@ const Inserter = struct {
         self.store.current_region = self.store.stmtRegion(frame.stmt);
         var next = tail_start;
         var cloned: LIR.CFStmtId = undefined;
+        defer if (frame.transfer_positions.len != 0) {
+            self.store.allocator.free(frame.transfer_positions);
+        };
+        defer if (frame.post_release.len != 0) {
+            self.store.allocator.free(frame.post_release);
+        };
 
         // Lifetime-ending releases come right after the statement and its
         // own retains.
@@ -1179,9 +1203,6 @@ const Inserter = struct {
             while (i > 0) {
                 i -= 1;
                 next = try self.releaseLocalIfRc(frame.post_release[i], next);
-            }
-            if (frame.post_release.len != 0) {
-                self.store.allocator.free(frame.post_release);
             }
         }
         switch (stmt) {
@@ -1262,7 +1283,7 @@ const Inserter = struct {
                 } });
             },
             .assign_list => |assign| {
-                next = try self.retainSpanExcept(assign.elems, frame.transfer_mask, next);
+                next = try self.retainSpanExceptPositions(assign.elems, frame.transfer_positions, next);
                 cloned = try self.store.addCFStmt(.{ .assign_list = .{
                     .target = assign.target,
                     .elems = assign.elems,
@@ -1270,7 +1291,7 @@ const Inserter = struct {
                 } });
             },
             .assign_struct => |assign| {
-                next = try self.retainSpanExcept(assign.fields, frame.transfer_mask, next);
+                next = try self.retainSpanExceptPositions(assign.fields, frame.transfer_positions, next);
                 cloned = try self.store.addCFStmt(.{ .assign_struct = .{
                     .target = assign.target,
                     .fields = assign.fields,
@@ -1292,7 +1313,7 @@ const Inserter = struct {
                 } });
             },
             .store_struct => |assign| {
-                next = try self.retainSpanExcept(assign.fields, frame.transfer_mask, next);
+                next = try self.retainSpanExceptPositions(assign.fields, frame.transfer_positions, next);
                 cloned = try self.store.addCFStmt(.{ .store_struct = .{
                     .dest = assign.dest,
                     .struct_layout = assign.struct_layout,
@@ -2003,13 +2024,13 @@ const Inserter = struct {
                     segment.cursor = assign.next;
                 },
                 .assign_list => |assign| {
-                    _ = try self.transferForAggregate(&segment.owned, assign.elems, assign.target, assign.next, segment.ctx.loop_keep);
+                    _ = try self.transferForAggregate(&segment.owned, assign.elems, assign.target, assign.next, segment.ctx.loop_keep, null);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&segment.owned, &singles, assign.elems, assign.next, segment.ctx.loop_keep, null);
                     segment.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
-                    _ = try self.transferForAggregate(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep);
+                    _ = try self.transferForAggregate(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep, null);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&segment.owned, &singles, assign.fields, assign.next, segment.ctx.loop_keep, null);
                     segment.cursor = assign.next;
@@ -2021,7 +2042,7 @@ const Inserter = struct {
                     segment.cursor = assign.next;
                 },
                 .store_struct => |assign| {
-                    _ = try self.spanTransferMask(assign.fields, ~@as(u64, 0), assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep);
+                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep, null);
                     try self.postStmtDeaths(&segment.owned, &.{}, assign.fields, assign.next, segment.ctx.loop_keep, null);
                     segment.cursor = assign.next;
                 },
@@ -2501,6 +2522,9 @@ const Inserter = struct {
             if (frame.post_release.len != 0) {
                 self.store.allocator.free(frame.post_release);
             }
+            if (frame.transfer_positions.len != 0) {
+                self.store.allocator.free(frame.transfer_positions);
+            }
         }
         frames.deinit(self.store.allocator);
     }
@@ -2784,9 +2808,6 @@ const Inserter = struct {
     }
 
     const AggregateTransfer = struct {
-        /// Span-indexed operand positions whose unit moves into the
-        /// constructed value instead of being retained.
-        transfer_mask: u64,
         release_old_target: bool,
     };
 
@@ -2800,11 +2821,12 @@ const Inserter = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
         loop_keep: ?*const OwnedSet,
+        transfer_positions: ?*std.ArrayList(u32),
     ) ResourceError!AggregateTransfer {
-        const transfer_mask = try self.spanTransferMask(operands, ~@as(u64, 0), next, target, owned, loop_keep);
+        try self.spanTransferPositions(operands, next, target, owned, loop_keep, transfer_positions);
         const release_old_target = self.takeRebindTarget(owned, target);
         self.placeUnit(owned, target);
-        return .{ .transfer_mask = transfer_mask, .release_old_target = release_old_target };
+        return .{ .release_old_target = release_old_target };
     }
 
     const SingleTransfer = struct {
@@ -2908,7 +2930,7 @@ const Inserter = struct {
         return try self.releaseLocalIfRc(target, next);
     }
 
-    /// Computes which operand positions in `span` (restricted to
+    /// Computes which low-level argument positions in `span` (restricted to
     /// `position_mask`) can move their ownership unit into the value being
     /// constructed: the operand is owned and its liveness group has no use
     /// after this statement. Transferred operands leave the owned set.
@@ -2937,6 +2959,35 @@ const Inserter = struct {
             transfer |= bit;
         }
         return transfer;
+    }
+
+    /// Aggregate variant of `spanTransferMask`. Aggregate spans are not
+    /// low-level argument vectors and can be wider than a u64 mask, so the
+    /// rewrite path records transferred positions in an owned slice while
+    /// the analysis path passes null and keeps only the ownership-state
+    /// transition.
+    fn spanTransferPositions(
+        self: *Inserter,
+        span: LIR.LocalSpan,
+        next: LIR.CFStmtId,
+        target: LIR.LocalId,
+        owned: *OwnedSet,
+        loop_keep: ?*const OwnedSet,
+        transferred_positions: ?*std.ArrayList(u32),
+    ) ResourceError!void {
+        if (!self.localContainsRefcounted(target)) return;
+        const locals = self.store.getLocalSpan(span);
+        for (0..GuardedList.borrowLen(locals)) |i| {
+            const local = GuardedList.at(locals, i);
+            if (local == target) continue;
+            if (!self.localContainsRefcounted(local)) continue;
+            if (!self.ownsUnit(owned, local)) continue;
+            if (try self.groupUsedInPath(next, local, loop_keep)) continue;
+            self.unsetOwnedUnit(owned, local);
+            if (transferred_positions) |positions| {
+                try positions.append(self.store.allocator, @intCast(i));
+            }
+        }
     }
 
     /// Single-operand variant of `spanTransferMask` for tag payloads and
@@ -3041,6 +3092,11 @@ const Inserter = struct {
     fn takePostReleases(self: *Inserter, deaths: *std.ArrayList(LIR.LocalId)) ResourceError![]const LIR.LocalId {
         if (deaths.items.len == 0) return &.{};
         return try deaths.toOwnedSlice(self.store.allocator);
+    }
+
+    fn takeTransferPositions(self: *Inserter, positions: *std.ArrayList(u32)) ResourceError![]const u32 {
+        if (positions.items.len == 0) return &.{};
+        return try positions.toOwnedSlice(self.store.allocator);
     }
 
     fn canMoveSetLocalValue(
@@ -4221,13 +4277,22 @@ const Inserter = struct {
         return self.groupUsedFromTable(reads, local);
     }
 
-    fn retainSpanExcept(self: *Inserter, span: LIR.LocalSpan, skip_mask: u64, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+    fn retainSpanExceptPositions(
+        self: *Inserter,
+        span: LIR.LocalSpan,
+        skip_positions: []const u32,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         var current = next;
         const locals = self.store.getLocalSpan(span);
+        var skip_index = skip_positions.len;
         var i = locals.len;
         while (i > 0) {
             i -= 1;
-            if (i < 64 and (skip_mask & argMaskBit(i)) != 0) continue;
+            if (skip_index > 0 and @as(usize, skip_positions[skip_index - 1]) == i) {
+                skip_index -= 1;
+                continue;
+            }
             current = try self.retainLocalIfRc(GuardedList.at(locals, i), current);
         }
         return current;
@@ -7101,6 +7166,36 @@ test "RC move into aggregate at final use" {
     try f.run();
     // Both operands move into the pair; the pair moves out on return.
     try testing.expectEqual(@as(usize, 0), f.countAllRc());
+}
+
+test "RC move into wide aggregate transfers operands past mask width" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const row_count = 70;
+    var rows: [row_count]LIR.LocalId = undefined;
+    for (&rows) |*row| {
+        row.* = try f.local(f.list_i64);
+    }
+    const matrix_layout = try f.layouts.insertList(f.list_i64);
+    const matrix = try f.local(matrix_layout);
+
+    const ret = try f.ret(matrix);
+    var next = try f.assignList(matrix, &rows, ret);
+    var i = rows.len;
+    while (i > 0) {
+        i -= 1;
+        next = try f.assignList(rows[i], &.{}, next);
+    }
+
+    _ = try f.addProc(&.{}, next, matrix_layout);
+    try f.run();
+    // Every row list moves into the outer list, including operands beyond the
+    // 64-bit low-level argument mask width. The outer list then moves out.
+    try f.expectRc(rows[0], 0, 0, 0);
+    try f.expectRc(rows[63], 0, 0, 0);
+    try f.expectRc(rows[64], 0, 0, 0);
+    try f.expectRc(rows[69], 0, 0, 0);
+    try f.expectRc(matrix, 0, 0, 0);
 }
 
 test "RC early drop places the release right after the last use" {

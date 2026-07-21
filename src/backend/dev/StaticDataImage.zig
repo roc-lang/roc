@@ -24,7 +24,7 @@ pub const Error = Allocator.Error || error{
 /// Resolves one explicit function-symbol relocation to an in-process address.
 pub const FunctionResolver = struct {
     context: ?*anyopaque = null,
-    resolve: *const fn (?*anyopaque, []const u8) ?usize,
+    resolve: *const fn (?*anyopaque, StaticDataRelocation) ?usize,
 };
 
 /// One owned, target-aligned immutable data image for in-process execution.
@@ -138,7 +138,7 @@ pub const StaticDataImage = struct {
         for (self.symbols) |symbol| {
             for (symbol.data_export.relocations) |relocation| {
                 if (relocation.kind != .function_pointer) continue;
-                const target = resolver.resolve(resolver.context, relocation.target_symbol_name) orelse
+                const target = resolver.resolve(resolver.context, relocation) orelse
                     return error.UnresolvedStaticFunction;
                 try self.writeRelocation(symbol, relocation, target);
             }
@@ -224,6 +224,7 @@ test "static data image resolves function relocations explicitly" {
         .target_symbol_name = "roc__proc_1",
         .kind = .function_pointer,
         .callable_capture_offset = 16,
+        .procedure = @enumFromInt(1),
     }};
     const exports = [_]StaticDataExport{.{
         .symbol_name = "callable",
@@ -235,8 +236,10 @@ test "static data image resolves function relocations explicitly" {
     var image = try StaticDataImage.init(allocator, &exports);
     defer image.deinit();
     const Resolver = struct {
-        fn resolve(_: ?*anyopaque, name: []const u8) ?usize {
-            if (!std.mem.eql(u8, name, "roc__proc_1")) return null;
+        fn resolve(_: ?*anyopaque, relocation: StaticDataRelocation) ?usize {
+            if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__proc_1")) return null;
+            if (relocation.callable_capture_offset != 16) return null;
+            if (@intFromEnum(relocation.procedure orelse return null) != 1) return null;
             return 0x1234;
         }
     };

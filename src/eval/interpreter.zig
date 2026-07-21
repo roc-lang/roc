@@ -598,6 +598,16 @@ pub const Interpreter = struct {
         return @intFromPtr(&interpreterErasedCallableTrampoline);
     }
 
+    /// Function address stored in static erased-callable `on_drop` slots while
+    /// interpreting in-process. Frozen capture graphs are rooted entirely in
+    /// allocations marked `REFCOUNT_STATIC_DATA`, so their final-drop action is
+    /// exactly a no-op.
+    pub fn staticErasedCallableOnDropAddress() usize {
+        return @intFromPtr(&staticErasedCallableOnDrop);
+    }
+
+    fn staticErasedCallableOnDrop(_: ?[*]u8, _: *RocOps) callconv(.c) void {}
+
     fn deinitFramePlans(allocator: Allocator, frame_plans: []FramePlan) void {
         for (frame_plans) |*plan| {
             plan.deinit(allocator);

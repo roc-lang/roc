@@ -13805,11 +13805,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             for (proc_specs, 0..) |proc, i| {
+                if (proc.is_static_initializer) continue;
                 try self.compileProcSpec(@enumFromInt(i), proc);
             }
 
             try self.patchPendingCalls();
             try self.patchPendingProcAddrs();
+        }
+
+        /// Compile the exact atomic RC helpers named by static-data
+        /// relocations. Static erased-callable `on_drop` slots make no
+        /// thread-confinement claim, so their explicit helper always belongs
+        /// to the atomic family.
+        pub fn compileStaticDataRcHelpers(
+            self: *Self,
+            helpers: []const RcHelperKey,
+        ) Allocator.Error!void {
+            for (helpers) |helper_key| {
+                if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
+                    if (builtin.mode == .Debug) {
+                        std.debug.panic(
+                            "Dev/codegen invariant violated: static data requested noop RC helper for layout {d}",
+                            .{@intFromEnum(helper_key.layout_idx)},
+                        );
+                    }
+                    unreachable;
+                }
+                try self.scheduleRcHelper(.{ .key = helper_key, .atomicity = .atomic });
+            }
+            try self.maybeDrainRcHelpers();
+        }
+
+        /// Code offset of an atomic helper previously requested by static data.
+        pub fn compiledStaticDataRcHelperOffset(self: *const Self, helper_key: RcHelperKey) ?usize {
+            return self.compiled_rc_helpers.get((RcHelperVariant{
+                .key = helper_key,
+                .atomicity = .atomic,
+            }).encode());
+        }
+
+        /// Unwind and range metadata for an atomic helper previously requested
+        /// by static data.
+        pub fn compiledStaticDataRcHelperInfo(self: *const Self, helper_key: RcHelperKey) ?coff.FunctionInfo {
+            const offset = self.compiledStaticDataRcHelperOffset(helper_key) orelse return null;
+            for (self.unwind_functions.items) |function| {
+                if (function.start_offset == offset) return function;
+            }
+            return null;
         }
 
         /// Returns object-file symbol metadata for a compiled LIR procedure.

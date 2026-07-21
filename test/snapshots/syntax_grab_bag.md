@@ -2297,7 +2297,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1842)
+						(e-interpolation (constraint-fn-var 1842) (dispatcher-var 374)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

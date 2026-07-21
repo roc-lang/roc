@@ -352,27 +352,14 @@ fn rootRequests(
 
 fn collectLayoutRequests(
     allocator: Allocator,
-    root: *const checked.Module,
+    _: *const checked.Module,
     explicit: []const checked.CheckedTypeId,
-    include_provided_data_exports: bool,
+    _: bool,
 ) Allocator.Error![]checked.CheckedTypeId {
     var requests = std.ArrayList(checked.CheckedTypeId).empty;
     errdefer requests.deinit(allocator);
 
     try requests.appendSlice(allocator, explicit);
-    if (!include_provided_data_exports) return try requests.toOwnedSlice(allocator);
-
-    const types = root.checked_types.view();
-    for (root.provided_exports.exports) |provided| {
-        switch (provided) {
-            .data => |data| {
-                if (!try checkedTypeContainsFunction(allocator, types, data.checked_type)) {
-                    try requests.append(allocator, data.checked_type);
-                }
-            },
-            .procedure => {},
-        }
-    }
     return try requests.toOwnedSlice(allocator);
 }
 
@@ -422,97 +409,16 @@ fn collectStaticDataRequests(
     for (root.provided_exports.exports) |provided| {
         switch (provided) {
             .data => |data| {
-                if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
-                    try requests.append(allocator, .{
-                        .const_locator = data.const_ref,
-                        .checked_type = data.checked_type,
-                    });
-                }
+                try requests.append(allocator, .{
+                    .const_locator = data.const_ref,
+                    .checked_type = data.checked_type,
+                });
             },
             .procedure => {},
         }
     }
 
     return try requests.toOwnedSlice(allocator);
-}
-
-fn checkedTypeContainsFunction(
-    allocator: Allocator,
-    types: checked.CheckedTypeStoreView,
-    root: checked.CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(checked.CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    return try checkedTypeContainsFunctionInner(types, root, &active);
-}
-
-fn checkedTypeContainsFunctionInner(
-    types: checked.CheckedTypeStoreView,
-    root: checked.CheckedTypeId,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    if (active.contains(root)) return false;
-    try active.put(root, {});
-    defer _ = active.remove(root);
-
-    const index: usize = @intFromEnum(root);
-    if (index >= types.payloadCount()) checkedPipelineInvariant("checked type function scan referenced a missing type");
-    return switch (types.payload(root)) {
-        .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
-        .err => false,
-        .function => true,
-        .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
-            try checkedTypeSliceContainsFunction(types, alias.args, active),
-        .nominal => |nominal| blk: {
-            if (try checkedTypeSliceContainsFunction(types, nominal.args, active)) break :blk true;
-            const backing = types.nominalBackingTemplateForPayload(nominal) orelse break :blk false;
-            break :blk try checkedTypeContainsFunctionInner(types, backing, active);
-        },
-        .record => |record| (try checkedFieldsContainFunction(types, record.fields, active)) or
-            try checkedTypeContainsFunctionInner(types, record.ext, active),
-        .record_unbound => |fields| checkedFieldsContainFunction(types, fields, active),
-        .tuple => |items| checkedTypeSliceContainsFunction(types, items, active),
-        .tag_union => |tag_union| (try checkedTagsContainFunction(types, tag_union.tags, active)) or
-            try checkedTypeContainsFunctionInner(types, tag_union.ext, active),
-        .flex,
-        .rigid,
-        .empty_record,
-        .empty_tag_union,
-        => false,
-    };
-}
-
-fn checkedTypeSliceContainsFunction(
-    types: checked.CheckedTypeStoreView,
-    items: []const checked.CheckedTypeId,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (items) |item| {
-        if (try checkedTypeContainsFunctionInner(types, item, active)) return true;
-    }
-    return false;
-}
-
-fn checkedFieldsContainFunction(
-    types: checked.CheckedTypeStoreView,
-    fields: []const checked.CheckedRecordField,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (fields) |field| {
-        if (try checkedTypeContainsFunctionInner(types, field.ty, active)) return true;
-    }
-    return false;
-}
-
-fn checkedTagsContainFunction(
-    types: checked.CheckedTypeStoreView,
-    tags: []const checked.CheckedTag,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (tags) |tag| {
-        if (try checkedTypeSliceContainsFunction(types, tag.argsSlice(types), active)) return true;
-    }
-    return false;
 }
 
 fn convertRuntimeSchemas(

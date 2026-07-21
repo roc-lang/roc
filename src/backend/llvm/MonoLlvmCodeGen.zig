@@ -187,6 +187,9 @@ pub const MonoLlvmCodeGen = struct {
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
+    /// Atomic helpers explicitly required by static-data relocations in the
+    /// separately emitted readonly-data object.
+    static_data_rc_helpers: []const layout.RcHelperKey = &.{},
     join_points: std.AutoHashMap(u32, JoinInfo),
     compiled_joins: std.AutoHashMap(u32, void),
     stmt_incoming_counts: std.AutoHashMap(u32, u32),
@@ -638,6 +641,9 @@ pub const MonoLlvmCodeGen = struct {
 
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
+        for (self.static_data_rc_helpers) |helper_key| {
+            _ = try self.declareRcHelper(helper_key, .atomic);
+        }
         try self.compilePendingRcHelpers();
 
         for (entrypoints) |entrypoint| {
@@ -1199,11 +1205,13 @@ pub const MonoLlvmCodeGen = struct {
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         for (procs, 0..) |proc, i| {
+            if (proc.is_static_initializer) continue;
             try self.declareProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
         for (procs, 0..) |proc, i| {
+            if (proc.is_static_initializer) continue;
             try self.compileProcBody(@enumFromInt(@as(u32, @intCast(i))), proc);
         }
     }
@@ -7228,6 +7236,18 @@ pub const MonoLlvmCodeGen = struct {
         return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
     }
 
+    fn staticDataRequiresRcHelper(
+        self: *const MonoLlvmCodeGen,
+        helper_key: layout.RcHelperKey,
+        atomicity: RcAtomicity,
+    ) bool {
+        if (atomicity != .atomic) return false;
+        for (self.static_data_rc_helpers) |required| {
+            if (required.op == helper_key.op and required.layout_idx == helper_key.layout_idx) return true;
+        }
+        return false;
+    }
+
     fn declareRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!?LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.layouts().rcHelperPlan(helper_key) == .noop) return null;
@@ -7241,16 +7261,21 @@ pub const MonoLlvmCodeGen = struct {
             .decref, .free => &.{ ptr_ty, ptr_ty },
         };
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
-        const fn_name = builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
-            @tagName(helper_key.op),
-            @intFromEnum(helper_key.layout_idx),
-            switch (atomicity) {
-                .atomic => "",
-                .single_thread => "_single_thread",
-            },
-        }) catch return error.OutOfMemory;
+        const is_static_data_helper = self.proc_symbol_mode == .lir_symbol and
+            self.staticDataRequiresRcHelper(helper_key, atomicity);
+        const fn_name = if (is_static_data_helper)
+            builder.strtabStringFmt("roc__rc_helper_{x}", .{cache_key}) catch return error.OutOfMemory
+        else
+            builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
+                @tagName(helper_key.op),
+                @intFromEnum(helper_key.layout_idx),
+                switch (atomicity) {
+                    .atomic => "",
+                    .single_thread => "_single_thread",
+                },
+            }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
+        func.setLinkage(if (is_static_data_helper) .external else .internal, builder);
         var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs);

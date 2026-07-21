@@ -149,7 +149,7 @@ match ... {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "country"))))
-						(e-interpolation (constraint-fn-var 289)
+						(e-interpolation (constraint-fn-var 289) (dispatcher-var 27)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -201,7 +201,7 @@ match ... {
 							(p-assign (ident "#interp_5"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-interpolation (constraint-fn-var 314)
+						(e-interpolation (constraint-fn-var 314) (dispatcher-var 59)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -236,7 +236,7 @@ match ... {
 							(p-assign (ident "#interp_6"))
 							(e-lookup-local
 								(p-assign (ident "value"))))
-						(e-interpolation (constraint-fn-var 335)
+						(e-interpolation (constraint-fn-var 335) (dispatcher-var 76)
 							(first
 								(e-literal (string "Deep nested: ")))
 							(parts
@@ -257,7 +257,7 @@ match ... {
 							(p-assign (ident "#interp_7"))
 							(e-lookup-local
 								(p-assign (ident "simple"))))
-						(e-interpolation (constraint-fn-var 354)
+						(e-interpolation (constraint-fn-var 354) (dispatcher-var 89)
 							(first
 								(e-literal (string "Simple: ")))
 							(parts

@@ -19,8 +19,12 @@ const const_store = check.ConstStore;
 pub const RequestedLayout = struct {
     ty: names.TypeDigest,
     checked_type: checked.CheckedTypeId,
+    const_locator: ?checked.ConstLocator = null,
     layout_idx: layout.Idx,
     plan: ConstPlanId,
+    /// Closed LIR procedure that constructs the exact target representation for
+    /// a provided static data export. Plain layout-only requests leave this null.
+    initializer: ?LIR.LirProcSpecId = null,
 };
 
 /// Identifier for a finite callable set in the LIR program.
@@ -130,13 +134,9 @@ pub const ConstRootPlan = struct {
     plan: ConstPlanId,
 };
 
-/// One checked value that is materialized as readonly target data.
+/// One exact LIR value construction that is frozen as readonly target data.
 pub const StaticDataValue = struct {
-    const_locator: checked.ConstLocator,
-    node: ?checked.ConstNodeId = null,
-    checked_type: checked.CheckedTypeId,
-    layout_idx: layout.Idx,
-    plan: ConstPlanId,
+    initializer: LIR.LirProcSpecId,
 };
 
 /// Deterministic symbol name for an internal static-data value.
