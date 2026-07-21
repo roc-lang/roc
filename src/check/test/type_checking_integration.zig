@@ -2255,6 +2255,58 @@ test "check type - record - update - fail 2" {
     );
 }
 
+test "check type - record - remove field - pass" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  a = { hello: 10.U8, world: 10.I8 }
+        \\  { hello, ..b } = a
+        \\  _ = hello
+        \\  b
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "test" } },
+        "{ world: I8 }",
+    );
+}
+
+test "check type - record - remove field - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  a = { hello: 10.U8, world: 10.I8 }
+        \\  { foo, ..b } = a
+        \\  _ = foo
+        \\  b
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**Type Mismatch**
+        \\This expression is used in an unexpected way.
+        \\**test:5:18:5:19:**
+        \\```roc
+        \\  { foo, ..b } = a
+        \\```
+        \\                 ^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: U8, world: I8 }
+        \\
+        \\But you are trying to use it as:
+        \\
+        \\    { foo: _field, .. }
+        \\
+        \\**Hint:** This record is missing the field: `foo`
+        \\
+        \\
+    );
+}
+
 test "check type - record - pattern destructure rest 1" {
     const source =
         \\strip_name = |{ name: _, ..rest}| rest
