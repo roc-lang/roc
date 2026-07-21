@@ -488,6 +488,11 @@ const LetCaseBuild = struct {
     joins: []LetCaseJoin,
 };
 
+const CallableWorkerKey = struct {
+    template: names.TypeDigest,
+    capture_abi: names.TypeDigest,
+};
+
 const Pass = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
@@ -519,10 +524,11 @@ const Pass = struct {
     /// Functions that directly call themselves. Let-substitution-aware call
     /// patterns are always relevant at these recursive worker boundaries.
     self_recursive_fns: []bool,
-    /// One rewritten callable body per stable Monotype template identity.
-    /// Lifted FnIds are transient products of traversal order; capture values
-    /// are explicit operands and therefore do not create new body identities.
-    callable_workers: std.AutoHashMap(names.TypeDigest, Ast.FnId),
+    /// One rewritten callable body per stable Monotype template identity and
+    /// exact capture ABI. Lifted FnIds are transient products of traversal
+    /// order, while the capture ABI is durable representation data: two uses
+    /// may share a body only when every CaptureId has the same exact type.
+    callable_workers: std.AutoHashMap(CallableWorkerKey, Ast.FnId),
     /// Reverse index from each rewritten callable body to its source function.
     /// This keeps later materialization rooted at the source instead of cloning
     /// an already-rewritten worker.
@@ -623,7 +629,7 @@ const Pass = struct {
             .whole_body_cloned = whole_body_cloned,
             .shape_demand_fns = shape_demand_fns,
             .self_recursive_fns = self_recursive_fns,
-            .callable_workers = std.AutoHashMap(names.TypeDigest, Ast.FnId).init(allocator),
+            .callable_workers = std.AutoHashMap(CallableWorkerKey, Ast.FnId).init(allocator),
             .callable_sources = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
             .next_join_point = 0,
         };
@@ -8587,12 +8593,21 @@ const Cloner = struct {
     fn materializeCallableWorker(self: *Cloner, callable: CallableValue) Common.LowerError!Ast.ExprId {
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
         const source_fn = self.pass.program.getFn(source_fn_id);
-        const source_identity = Mono.fnTemplateDigest(
-            source_fn.source orelse Common.invariant("rewritten callable source had no Monotype template identity"),
-            &self.pass.program.types,
-            &self.pass.program.names,
-        );
-        if (self.pass.callable_workers.get(source_identity)) |worker_fn_id| {
+        const source_captures = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+        defer self.pass.allocator.free(source_captures);
+        if (source_captures.len != callable.captures.len) {
+            Common.invariant("callable value capture count differed from lifted function capture count");
+        }
+
+        const worker_key: CallableWorkerKey = .{
+            .template = Mono.fnTemplateDigest(
+                source_fn.source orelse Common.invariant("rewritten callable source had no Monotype template identity"),
+                &self.pass.program.types,
+                &self.pass.program.names,
+            ),
+            .capture_abi = self.callableCaptureAbiDigest(source_captures, callable.captures),
+        };
+        if (self.pass.callable_workers.get(worker_key)) |worker_fn_id| {
             const worker = self.pass.program.getFn(worker_fn_id);
             return try self.materializeCallableWithCaptures(callable.ty, worker_fn_id, worker.captures, callable.captures);
         }
@@ -8601,15 +8616,26 @@ const Cloner = struct {
             .roc => |body| body,
             .hosted => Common.invariant("hosted callable value needed a rewritten body"),
         };
-        const source_captures = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
-        defer self.pass.allocator.free(source_captures);
-        if (source_captures.len != callable.captures.len) {
-            Common.invariant("callable value capture count differed from lifted function capture count");
+        // Capture locals are the worker's dynamic inputs. Preserve each
+        // source capture's complete identity, but give its slot the exact type
+        // of the rewritten operand that this worker body consumes.
+        const worker_captures = try self.pass.allocator.alloc(Ast.TypedLocal, source_captures.len);
+        defer self.pass.allocator.free(worker_captures);
+        for (source_captures, 0..) |source_capture, index| {
+            const id = self.pass.program.captureIdOfLocal(source_capture.local);
+            const capture_value = callableCaptureValueForId(callable.captures, id) orelse
+                Common.invariant("rewritten callable had no value for a source capture slot");
+            const capture_ty = valueType(self.pass.program, capture_value);
+            const source_local = self.pass.program.getLocal(source_capture.local);
+            const local = try self.pass.program.addLocalWithCaptureIdentity(
+                self.pass.symbols.fresh(),
+                capture_ty,
+                source_local.binder,
+                id,
+            );
+            worker_captures[index] = .{ .local = local, .ty = capture_ty };
         }
-
-        // Capture locals are the worker's dynamic inputs. Their values belong
-        // on each function reference, not in the worker identity or body.
-        const captures_span = source_fn.captures;
+        const captures_span = try self.pass.program.addTypedLocalSpan(worker_captures);
 
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -8633,17 +8659,17 @@ const Cloner = struct {
             .body = .hosted,
             .ret = source_fn.ret,
         });
-        try self.pass.callable_workers.put(source_identity, worker_fn_id);
+        try self.pass.callable_workers.put(worker_key, worker_fn_id);
         try self.pass.callable_sources.put(worker_fn_id, source_fn_id);
         try self.pass.copyProcDebugName(source_fn.symbol, symbol);
 
         const change_start = self.changes.items.len;
         defer self.restore(change_start);
 
-        for (source_captures) |source_capture| {
+        for (source_captures, worker_captures) |source_capture, worker_capture| {
             const local_expr = try self.addExpr(.{
-                .ty = source_capture.ty,
-                .data = .{ .local = source_capture.local },
+                .ty = worker_capture.ty,
+                .data = .{ .local = worker_capture.local },
             });
             const capture_value: Value = .{ .expr = local_expr };
             try self.putSubst(source_capture.local, capture_value);
@@ -8679,6 +8705,28 @@ const Cloner = struct {
             captures_span,
             callable.captures,
         );
+    }
+
+    fn callableCaptureAbiDigest(
+        self: *Cloner,
+        source_captures: []const Ast.TypedLocal,
+        values: []const CaptureValue,
+    ) names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("roc.spec_constr.callable_capture_abi.v1");
+        var word: [4]u8 = undefined;
+        std.mem.writeInt(u32, &word, @intCast(source_captures.len), .little);
+        hasher.update(&word);
+        for (source_captures) |capture| {
+            const id = self.pass.program.captureIdOfLocal(capture.local);
+            const value = callableCaptureValueForId(values, id) orelse
+                Common.invariant("rewritten callable had no value for a source capture slot");
+            std.mem.writeInt(u32, &word, @intFromEnum(id), .little);
+            hasher.update(&word);
+            const digest = self.pass.program.types.typeDigest(&self.pass.program.names, valueType(self.pass.program, value));
+            hasher.update(&digest.bytes);
+        }
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn materializeCallableWithCaptures(

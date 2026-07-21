@@ -829,6 +829,37 @@ pub const Program = struct {
         return id;
     }
 
+    /// Add a replacement local that retains a source capture's complete
+    /// identity while changing its monomorphic type. One-to-one capture ABI
+    /// rewrites must preserve both the checked binder and the CaptureId; only a
+    /// one-to-many split may mint a new generated identity.
+    pub fn addLocalWithCaptureIdentity(
+        self: *Program,
+        symbol: Common.Symbol,
+        ty: Type.TypeId,
+        binder: ?check.CheckedModule.PatternBinderId,
+        capture_id: check.CheckedModule.CaptureId,
+    ) std.mem.Allocator.Error!LocalId {
+        if (binder) |source_binder| {
+            if (capture_id != check.CheckedModule.CaptureId.fromBinder(source_binder)) {
+                Common.invariant("binder-backed replacement local changed its CaptureId");
+            }
+        } else if (capture_id.isCanonical()) {
+            Common.invariant("canonical replacement CaptureId had no checked binder");
+        }
+
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        try self.locals.append(self.allocator, .{
+            .id = id,
+            .symbol = symbol,
+            .ty = ty,
+            .binder = binder,
+            .capture_id = capture_id,
+        });
+        try self.local_names.append(self.allocator, "");
+        return id;
+    }
+
     /// Allocate the next generated `CaptureId` for a lift-synthesized capturable
     /// local (a free local with no checked binder). The counter lives on the
     /// program so the identity is stable across fixpoint rounds and unique
