@@ -873,6 +873,13 @@ MISSING METHOD - fuzz_crash_023.md:189:26:189:66
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── fuzz_crash_023.md:193:4 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import pf.Num
 
 
 ┌─────────────────┐

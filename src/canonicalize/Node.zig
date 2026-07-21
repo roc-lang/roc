@@ -408,6 +408,7 @@ pub const Payload = extern union {
     diag_single_value: DiagSingleValue,
     diag_two_idents: DiagTwoIdents,
     diag_three_idents: DiagThreeIdents,
+    diag_qualified_ident_does_not_exist: DiagQualifiedIdentDoesNotExist,
     diag_ident_with_region: DiagIdentWithRegion,
     diag_two_idents_extra: DiagTwoIdentsExtra,
     diag_single_ident_extra: DiagSingleIdentExtra,
@@ -1112,6 +1113,13 @@ pub const Payload = extern union {
         ident1: u32, // @bitCast(Ident.Idx)
         ident2: u32, // @bitCast(Ident.Idx)
         ident3: u32, // @bitCast(Ident.Idx)
+    };
+
+    /// An unresolved qualified identifier and its explicit lookup context.
+    pub const DiagQualifiedIdentDoesNotExist = extern struct {
+        ident: u32, // @bitCast(Ident.Idx)
+        context: u32, // @intFromEnum(QualifiedIdentDoesNotExistContext tag)
+        context_data_idx: u32, // index into qualified_ident_diagnostic_data
     };
 
     /// Diagnostics with an identifier and inline region offsets.

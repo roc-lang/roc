@@ -57,7 +57,8 @@ pub const Constants = struct {
     /// 32: Builtin indices include width-specific f32 conversion and math wrappers.
     /// 33: Builtin indices, identifiers, and checked layouts include integer SIMD vectors.
     /// 34: Platform provides entries include their exact platform-local definition.
-    pub const CACHE_VERSION = 34;
+    /// 35: Qualified-identifier diagnostics store explicit context side data.
+    pub const CACHE_VERSION = 35;
 };
 
 /// Configuration for the Roc cache system.

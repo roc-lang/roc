@@ -64,6 +64,13 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └───────────────────────────────────────── can_import_nested_mods.md:7:26 ┘
 
+    The name `Config` is not an imported mod or a type in scope.
+
+
+    If `Config` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Config
 
 
 ┌──────────────────┐
@@ -115,6 +122,13 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
  └───────────────────────────────────────── can_import_nested_mods.md:16:5 ┘
 
+    The name `Config` is not an imported mod or a type in scope.
+
+
+    If `Config` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Config
 
 
 ┌───────────────────┐
@@ -136,6 +150,13 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                 │
  └──────────────────────────────────────── can_import_nested_mods.md:20:37 ┘
 
+    The name `Config` is not an imported mod or a type in scope.
+
+
+    If `Config` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Config
 
 
 ┌──────────────────┐

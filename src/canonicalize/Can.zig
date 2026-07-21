@@ -264,6 +264,11 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of explicit imported module identifiers to their type information for import validation.
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+/// Package shorthand from this file's header to use when an error report
+/// suggests an import (the app header's platform shorthand, or the first
+/// package entry for package/platform headers). Null when the header declares
+/// no packages.
+header_suggested_package: ?Ident.Idx = null,
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
 /// Map from module identifier to Import.Idx for tracking unique imports.
@@ -4064,10 +4069,12 @@ pub fn canonicalizeFile(
         },
         .package => |h| {
             self.env.module_kind = .package;
+            self.header_suggested_package = self.firstHeaderPackageShorthand(h.packages);
             try self.createExposedScope(h.exposes);
         },
         .platform => |h| {
             self.env.module_kind = .platform;
+            self.header_suggested_package = self.firstHeaderPackageShorthand(h.packages);
             try self.createExposedScope(h.exposes);
             // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
             // These need to be in the exposed scope so they become exports
@@ -4085,6 +4092,8 @@ pub fn canonicalizeFile(
         },
         .app => |h| {
             self.env.module_kind = .app;
+            self.header_suggested_package = self.headerPackageShorthand(h.platform_idx) orelse
+                self.firstHeaderPackageShorthand(h.packages);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
             // App headers have 'provides' instead of 'exposes'
@@ -7183,6 +7192,21 @@ fn canonicalizeIdentExpr(
     }
 }
 
+/// Resolve a header package entry's shorthand name (e.g. `pf` in
+/// `pf: platform "..."`), for use in suggested-import error reports.
+fn headerPackageShorthand(self: *const Self, field_idx: AST.RecordField.Idx) ?Ident.Idx {
+    const field = self.parse_ir.store.getRecordField(field_idx);
+    return self.parse_ir.tokens.resolveIdentifier(field.name);
+}
+
+/// Resolve the first package shorthand in a header `packages` collection, if any.
+fn firstHeaderPackageShorthand(self: *const Self, packages: AST.Collection.Idx) ?Ident.Idx {
+    const coll = self.parse_ir.store.getCollection(packages);
+    const items = self.parse_ir.store.recordFieldSlice(.{ .span = coll.span });
+    if (items.len == 0) return null;
+    return self.headerPackageShorthand(items[0]);
+}
+
 fn canonicalizeQualifiedIdentExpr(
     self: *Self,
     e: @TypeOf(@as(AST.Expr, undefined).ident),
@@ -7266,8 +7290,21 @@ fn canonicalizeQualifiedIdentExpr(
             }
         }
 
+        // The leading qualifier resolved to nothing at all: not an imported
+        // module, not an available module env, and not a type in scope. The
+        // most likely cause is a missing `import`, so report that directly
+        // along with a suggested import statement.
+        const suggested_import = if (self.header_suggested_package) |package|
+            try self.insertQualifiedIdent(self.env.getIdent(package), self.env.getIdent(module_alias))
+        else
+            module_alias;
+
         return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = qualified_ident,
+            .context = .{ .missing_module_or_type = .{
+                .name = module_alias,
+                .suggested_import = suggested_import,
+            } },
             .region = region,
         } });
     };
@@ -7559,6 +7596,9 @@ fn canonicalizeUnqualifiedIdentExpr(
                 if (self.hasAvailableModuleEnv(exposed_info.module_name)) {
                     return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
                         .ident = ident,
+                        .context = .{ .missing_exposed_value = .{
+                            .module_name = exposed_info.module_name,
+                        } },
                         .region = region,
                     } });
                 }

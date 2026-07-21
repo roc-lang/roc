@@ -342,6 +342,13 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                              │
  └──────────────────────────────────────── can_import_exposing_types.md:43:23 ┘
 
+    The name `Error` is not an imported mod or a type in scope.
+
+
+    If `Error` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Error
 
 
 ┌─────────────────┐

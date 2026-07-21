@@ -104,6 +104,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:41:34 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐
@@ -114,6 +121,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:41:52 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐
@@ -124,6 +138,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:41:70 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐
@@ -134,6 +155,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:39 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐
@@ -144,6 +172,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:57 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐
@@ -154,6 +189,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:75 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐
@@ -164,6 +206,13 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:93 ┘
 
+    The name `Num` is not an imported mod or a type in scope.
+
+
+    If `Num` is a mod, you may need to import it at the top of the file. For
+    example:
+
+        import Num
 
 
 ┌────────────────┐

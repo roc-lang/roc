@@ -155,6 +155,13 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
  │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────── can_import_unresolved_qualified.md:19:10 ┘
 
+    The name `Unknown` is not an imported mod or a type in scope.
+
+
+    If `Unknown` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Unknown
 
 
 ┌───────────────────┐

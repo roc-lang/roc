@@ -182,6 +182,13 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
  │                        ‾‾‾‾‾‾‾‾‾                                           │
  └────────────────────────────────── qualified_type_canonicalization.md:16:23 ┘
 
+    The name `TypeC` is not an imported mod or a type in scope.
+
+
+    If `TypeC` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import TypeC
 
 
 ┌─────────────────────┐
@@ -284,6 +291,13 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
  │                 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
  └────────────────────────────────── qualified_type_canonicalization.md:35:24 ┘
 
+    The name `TypeC` is not an imported mod or a type in scope.
+
+
+    If `TypeC` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import TypeC
 
 
 ┌────────────────┐
@@ -294,6 +308,13 @@ UNUSED VARIABLE - qualified_type_canonicalization.md:36:17:36:20
  │                  ‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
  └────────────────────────────────── qualified_type_canonicalization.md:36:25 ┘
 
+    The name `TypeC` is not an imported mod or a type in scope.
+
+
+    If `TypeC` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import TypeC
 
 
 ┌─────────────────┐

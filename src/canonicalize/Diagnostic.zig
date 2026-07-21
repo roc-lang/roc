@@ -11,6 +11,16 @@ const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
 
+pub const QualifiedIdentDoesNotExistContext = union(enum) {
+    missing_module_or_type: struct {
+        name: Ident.Idx,
+        suggested_import: Ident.Idx,
+    },
+    missing_exposed_value: struct {
+        module_name: Ident.Idx,
+    },
+};
+
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -85,8 +95,12 @@ pub const Diagnostic = union(enum) {
     erroneous_value_expr: struct {
         region: Region,
     },
+    /// A qualified ident failed to resolve because its leading qualifier is
+    /// neither an imported module nor a type in scope (e.g. `Stdin.line!`
+    /// without `import pf.Stdin`).
     qualified_ident_does_not_exist: struct {
-        ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
+        ident: Ident.Idx, // The full qualified identifier (e.g., "Stdin.line!")
+        context: QualifiedIdentDoesNotExistContext,
         region: Region,
     },
     invalid_top_level_statement: struct {
