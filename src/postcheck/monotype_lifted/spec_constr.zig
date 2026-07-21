@@ -1454,7 +1454,7 @@ const Pass = struct {
                 for (0..branches.len) |index| try self.collectBranchBoundLocals(GuardedList.at(branches, index).body, out);
             },
             .nominal, .dbg, .expect => |child| try self.collectBranchBoundLocals(child, out),
-            .static_data_candidate => |candidate| try self.collectBranchBoundLocals(candidate.runtime_expr, out),
+            .static_data_candidate => {},
             .return_ => |ret| try self.collectBranchBoundLocals(ret.value, out),
             .comptime_branch_taken => |taken| try self.collectBranchBoundLocals(taken.body, out),
             else => {},
@@ -1522,7 +1522,7 @@ const Pass = struct {
                 for (0..branches.len) |index| try self.collectConstructionBoundLocals(GuardedList.at(branches, index).body, out);
             },
             .nominal, .dbg, .expect => |child| try self.collectConstructionBoundLocals(child, out),
-            .static_data_candidate => |candidate| try self.collectConstructionBoundLocals(candidate.runtime_expr, out),
+            .static_data_candidate => {},
             .return_ => |ret| try self.collectConstructionBoundLocals(ret.value, out),
             .comptime_branch_taken => |taken| try self.collectConstructionBoundLocals(taken.body, out),
             else => {},
@@ -1611,7 +1611,7 @@ const Pass = struct {
                 return false;
             },
             .nominal, .dbg, .expect => |child| return self.loopConsumesConstructionBoundLocal(child, set),
-            .static_data_candidate => |candidate| return self.loopConsumesConstructionBoundLocal(candidate.runtime_expr, set),
+            .static_data_candidate => return false,
             .return_ => |ret| return self.loopConsumesConstructionBoundLocal(ret.value, set),
             .comptime_branch_taken => |taken| return self.loopConsumesConstructionBoundLocal(taken.body, set),
             else => return false,
@@ -1661,7 +1661,7 @@ const Pass = struct {
                 if (self.program.stmtSpan(block.statements).len != 0) break :blk 0;
                 break :blk self.iteratorConstructionDepth(block.final_expr, known_depths, budget);
             },
-            .static_data_candidate => |candidate| self.iteratorConstructionDepth(candidate.runtime_expr, known_depths, budget),
+            .static_data_candidate => 0,
             .comptime_branch_taken => |taken| self.iteratorConstructionDepth(taken.body, known_depths, budget),
             else => 0,
         };
@@ -1714,7 +1714,7 @@ const Pass = struct {
                 return false;
             },
             .nominal, .dbg, .expect => |child| return self.loopConsumesBranchBoundLocal(child, set),
-            .static_data_candidate => |candidate| return self.loopConsumesBranchBoundLocal(candidate.runtime_expr, set),
+            .static_data_candidate => return false,
             .return_ => |ret| return self.loopConsumesBranchBoundLocal(ret.value, set),
             .comptime_branch_taken => |taken| return self.loopConsumesBranchBoundLocal(taken.body, set),
             else => return false,
@@ -2754,7 +2754,7 @@ const Pass = struct {
                 try self.collectKnownLoops(if_.final_else, out);
             },
             .nominal, .dbg, .expect => |child| try self.collectKnownLoops(child, out),
-            .static_data_candidate => |candidate| try self.collectKnownLoops(candidate.runtime_expr, out),
+            .static_data_candidate => {},
             .return_ => |ret| try self.collectKnownLoops(ret.value, out),
             .comptime_branch_taken => |taken| try self.collectKnownLoops(taken.body, out),
             .join_point => |join_point| {
@@ -3179,7 +3179,7 @@ const Pass = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| try self.constructorShape(expr),
-            .static_data_candidate => |candidate| try self.shapeFromValueBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => null,
             .tag => |tag| blk: {
                 const payloads = try self.arena.allocator().alloc(Shape, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
@@ -4258,7 +4258,7 @@ const Cloner = struct {
                 const value = itemFromValue(tuple, access.elem_index) orelse break :blk false;
                 break :blk (try self.pass.shapeFromValue(value)) != null;
             },
-            .static_data_candidate => |candidate| try self.exprHasKnownShape(candidate.runtime_expr),
+            .static_data_candidate => false,
             .comptime_branch_taken => |taken| try self.exprHasKnownShape(taken.body),
             .comptime_exhaustiveness_failed => false,
             else => false,
@@ -4301,7 +4301,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| self.exprCanSubstitute(expr),
-            .static_data_candidate => |candidate| self.valueCanSubstituteBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => true,
             .tag => |tag| blk: {
                 for (tag.payloads) |payload| {
                     if (!self.valueCanSubstituteBudgeted(payload, budget)) break :blk false;
@@ -4342,7 +4342,7 @@ const Cloner = struct {
             .bytes_lit,
             => true,
             .fn_ref => |fn_ref| self.captureOperandSpanCanSubstitute(fn_ref.captures),
-            .static_data_candidate => |candidate| self.exprCanSubstitute(candidate.runtime_expr),
+            .static_data_candidate => true,
             .field_access => |field| self.exprCanSubstitute(field.receiver),
             .tuple_access => |access| self.exprCanSubstitute(access.tuple),
             else => false,
@@ -4720,10 +4720,7 @@ const Cloner = struct {
     fn caseExprFromValue(self: *Cloner, value: Value) ?Ast.ExprId {
         const candidate = switch (value) {
             .expr => |expr| expr,
-            .static_data_candidate => |static_candidate| switch (static_candidate.runtime.*) {
-                .expr => |runtime| runtime,
-                else => return null,
-            },
+            .static_data_candidate => return null,
             else => return null,
         };
         return switch (self.pass.program.getExpr(candidate).data) {
@@ -5884,10 +5881,7 @@ const Cloner = struct {
         value: Value,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!void {
-        const structural_value = switch (value) {
-            .static_data_candidate => |candidate| candidate.runtime.*,
-            else => value,
-        };
+        const structural_value = value;
         switch (shape) {
             .any => {
                 try out.append(self.pass.allocator, try self.materialize(value));
@@ -6469,7 +6463,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => 0,
-            .static_data_candidate => |candidate| self.knownConstructorSizeBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => 0,
             .tag => |tag| blk: {
                 var count: usize = 1;
                 for (tag.payloads) |payload| count += self.knownConstructorSizeBudgeted(payload, budget);
@@ -6516,7 +6510,7 @@ const Cloner = struct {
                 const receiver = self.peekKnownValue(access.tuple) orelse break :blk null;
                 break :blk itemFromValue(receiver, access.elem_index);
             },
-            .static_data_candidate => |candidate| self.peekKnownValue(candidate.runtime_expr),
+            .static_data_candidate => null,
             else => null,
         };
     }
@@ -6567,7 +6561,7 @@ const Cloner = struct {
         budget.* -= 1;
         return switch (value) {
             .expr => |expr| if (self.exprCanSubstitute(expr)) 0 else 1,
-            .static_data_candidate => |candidate| self.unsafeLeafCountBudgeted(candidate.runtime.*, budget),
+            .static_data_candidate => 0,
             .tag => |tag| blk: {
                 var count: usize = 0;
                 for (tag.payloads) |payload| count += self.unsafeLeafCountBudgeted(payload, budget);
@@ -8009,7 +8003,7 @@ fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId
             break :blk false;
         },
         .tag => |tag| exprSpanCallsFn(program, tag.payloads, fn_id),
-        .static_data_candidate => |candidate| exprCallsFn(program, candidate.runtime_expr, fn_id),
+        .static_data_candidate => false,
         .nominal, .dbg, .expect => |child| exprCallsFn(program, child, fn_id),
         .return_ => |ret| exprCallsFn(program, ret.value, fn_id),
         .expect_err => |expect_err| exprCallsFn(program, expect_err.msg, fn_id),
@@ -8120,7 +8114,7 @@ fn exprMayCrash(program: *const Ast.Program, fn_may_crash: []const bool, expr_id
             break :blk false;
         },
         .tag => |tag| exprSpanMayCrash(program, fn_may_crash, tag.payloads),
-        .static_data_candidate => |candidate| exprMayCrash(program, fn_may_crash, candidate.runtime_expr),
+        .static_data_candidate => false,
         .nominal,
         .dbg,
         .expect,
@@ -8257,7 +8251,7 @@ fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
             return false;
         },
         .tag => |tag| exprSpanContainsReturn(program, tag.payloads),
-        .static_data_candidate => |candidate| exprContainsReturn(program, candidate.runtime_expr),
+        .static_data_candidate => false,
         .nominal,
         .dbg,
         .expect,
@@ -8376,7 +8370,7 @@ fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id:
             break :blk count;
         },
         .tag => |tag| localUseCountInExprSpan(program, local, tag.payloads),
-        .static_data_candidate => |candidate| localUseCountInExpr(program, local, candidate.runtime_expr),
+        .static_data_candidate => 0,
         .nominal,
         .dbg,
         .expect,
@@ -8679,7 +8673,7 @@ fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: 
             }
         },
         .tag => |tag| scanLocalUseInExprSpan(program, local, tag.payloads, scan),
-        .static_data_candidate => |candidate| scanLocalUseInExpr(program, local, candidate.runtime_expr, scan),
+        .static_data_candidate => {},
         .nominal => |child| scanLocalUseInExpr(program, local, child, scan),
         .return_ => |ret| {
             scanLocalUseInExpr(program, local, ret.value, scan);
@@ -9003,10 +8997,13 @@ fn shapeEql(program: *const Ast.Program, lhs: Shape, rhs: Shape) bool {
 }
 
 fn shapeMatchesValue(program: *const Ast.Program, shape: Shape, value: Value) bool {
-    const structural_value = switch (value) {
-        .static_data_candidate => |candidate| candidate.runtime.*,
-        else => value,
-    };
+    if (value == .static_data_candidate) {
+        return switch (shape) {
+            .any => true,
+            else => false,
+        };
+    }
+    const structural_value = value;
     return switch (shape) {
         .any => true,
         .tag => |tag| blk: {
@@ -9086,7 +9083,7 @@ fn callableTargetMatches(program: *const Ast.Program, expected: Ast.FnId, actual
 
 fn fieldFromValue(program: *const Ast.Program, value: Value, name: names.RecordFieldNameId) ?Value {
     return switch (value) {
-        .static_data_candidate => |candidate| fieldFromValue(program, candidate.runtime.*, name),
+        .static_data_candidate => null,
         .record => |record| fieldFromRecord(program, record, name),
         .nominal => |nominal| fieldFromValue(program, nominal.backing.*, name),
         else => null,
@@ -9110,7 +9107,7 @@ fn recordPatField(program: *const Ast.Program, fields: anytype, name: names.Reco
 
 fn itemFromValue(value: Value, index: u32) ?Value {
     return switch (value) {
-        .static_data_candidate => |candidate| itemFromValue(candidate.runtime.*, index),
+        .static_data_candidate => null,
         .tuple => |tuple| if (index < tuple.items.len) tuple.items[index] else null,
         .nominal => |nominal| itemFromValue(nominal.backing.*, index),
         else => null,
@@ -9119,7 +9116,7 @@ fn itemFromValue(value: Value, index: u32) ?Value {
 
 fn tagFromValue(value: Value) ?TagValue {
     return switch (value) {
-        .static_data_candidate => |candidate| tagFromValue(candidate.runtime.*),
+        .static_data_candidate => null,
         .tag => |tag| tag,
         .nominal => |nominal| tagFromValue(nominal.backing.*),
         else => null,
@@ -9128,7 +9125,7 @@ fn tagFromValue(value: Value) ?TagValue {
 
 fn recordFromValue(value: Value) ?RecordValue {
     return switch (value) {
-        .static_data_candidate => |candidate| recordFromValue(candidate.runtime.*),
+        .static_data_candidate => null,
         .record => |record| record,
         .nominal => |nominal| recordFromValue(nominal.backing.*),
         else => null,
@@ -9137,7 +9134,7 @@ fn recordFromValue(value: Value) ?RecordValue {
 
 fn tupleFromValue(value: Value) ?TupleValue {
     return switch (value) {
-        .static_data_candidate => |candidate| tupleFromValue(candidate.runtime.*),
+        .static_data_candidate => null,
         .tuple => |tuple| tuple,
         .nominal => |nominal| tupleFromValue(nominal.backing.*),
         else => null,
