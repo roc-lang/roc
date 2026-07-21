@@ -282,6 +282,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(named.def.iterator_representation));
                 writeBytes(hasher, @tagName(named.def.iterator_kind));
                 writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -407,6 +408,25 @@ fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeD
     } else {
         hasher.update(&[_]u8{0});
     }
+}
+
+fn writeIteratorTopology(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    name_store: *const names.NameStore,
+    topology: ?MonoType.IteratorTopology,
+) void {
+    const value = topology orelse {
+        writeBytes(hasher, "no-iterator-topology");
+        return;
+    };
+    writeBytes(hasher, "iterator-topology");
+    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
+    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
 }
 
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {

@@ -679,6 +679,7 @@ const Lifter = struct {
                 self.output.setExprData(expr_id, .{ .call_proc = .{
                     .callee = rewritten.callee,
                     .args = call.args,
+                    .iterator_procedure = call.iterator_procedure,
                     .captures = rewritten.captures,
                     .is_cold = call.is_cold,
                 } });
@@ -1355,6 +1356,7 @@ const CaptureSet = struct {
                     self.program.setExprData(expr_id, .{ .call_proc = .{
                         .callee = call.callee,
                         .args = call.args,
+                        .iterator_procedure = call.iterator_procedure,
                         .captures = finalized,
                         .is_cold = call.is_cold,
                     } });
@@ -1934,6 +1936,7 @@ const CaptureDependencyGraph = struct {
                     self.program.setExprData(expr_id, .{ .call_proc = .{
                         .callee = call.callee,
                         .args = call.args,
+                        .iterator_procedure = call.iterator_procedure,
                         .captures = try self.finalizedSpan(edge_id, expr_id),
                         .is_cold = call.is_cold,
                     } });

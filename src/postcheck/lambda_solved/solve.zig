@@ -1886,7 +1886,8 @@ fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
         optionalDigestEql(left.generated, right.generated) and
         left.iterator_representation == right.iterator_representation and
         left.iterator_kind == right.iterator_kind and
-        left.iterator_depth == right.iterator_depth;
+        left.iterator_depth == right.iterator_depth and
+        std.meta.eql(left.iterator_topology, right.iterator_topology);
 }
 
 fn iteratorLikeOwnerFromPair(

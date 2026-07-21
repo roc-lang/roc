@@ -1578,6 +1578,15 @@ const Lowerer = struct {
             .iterator_representation = @enumFromInt(@intFromEnum(def.iterator_representation)),
             .iterator_kind = @enumFromInt(@intFromEnum(def.iterator_kind)),
             .iterator_depth = def.iterator_depth,
+            .iterator_topology = if (def.iterator_topology) |topology| .{
+                .len_field = try self.constRecordFieldName(topology.len_field),
+                .step_field = try self.constRecordFieldName(topology.step_field),
+                .done_tag = try self.constTagName(topology.done_tag),
+                .one_tag = try self.constTagName(topology.one_tag),
+                .skip_tag = try self.constTagName(topology.skip_tag),
+                .item_field = try self.constRecordFieldName(topology.item_field),
+                .rest_field = try self.constRecordFieldName(topology.rest_field),
+            } else null,
         };
     }
 

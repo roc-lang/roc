@@ -51,6 +51,17 @@ pub const OwnerHead = union(enum(u8)) {
     named_type: TypeDef,
 };
 
+/// Checker-authored identities for the public iterator representation.
+pub const IteratorTopology = struct {
+    len_field: names.RecordFieldNameId,
+    step_field: names.RecordFieldNameId,
+    done_tag: names.TagNameId,
+    one_tag: names.TagNameId,
+    skip_tag: names.TagNameId,
+    item_field: names.RecordFieldNameId,
+    rest_field: names.RecordFieldNameId,
+};
+
 /// Named type definition owner.
 pub const TypeDef = struct {
     /// Deep content identity of the declaring module (dense id in the owning
@@ -73,6 +84,10 @@ pub const TypeDef = struct {
     iterator_kind: IteratorKind = .none,
     /// Producer-computed minted-chain depth. Meaningful only for `.minted`.
     iterator_depth: u8 = 0,
+    /// Checker-authored semantic identities for the iterator representation.
+    /// Generated iterator types retain these so post-check consumers never
+    /// recover representation roles from display text or structural guesses.
+    iterator_topology: ?IteratorTopology = null,
 };
 
 /// Explicit representation tier assigned when an iterator nominal is created.
@@ -948,6 +963,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(named.def.iterator_representation));
                 writeBytes(hasher, @tagName(named.def.iterator_kind));
                 writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -1107,6 +1123,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(named.def.iterator_representation));
                 writeBytes(hasher, @tagName(named.def.iterator_kind));
                 writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -1332,6 +1349,7 @@ fn namedTypeViewEql(
     if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
     if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
     if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanViewEql(type_view, name_store, lhs.args, rhs.args, visited)) return false;
 
@@ -1651,6 +1669,7 @@ fn namedTypeEqlAcrossStores(
     if (lhs.def.iterator_representation != rhs.def.iterator_representation) return false;
     if (lhs.def.iterator_kind != rhs.def.iterator_kind) return false;
     if (lhs.def.iterator_depth != rhs.def.iterator_depth) return false;
+    if (!std.meta.eql(lhs.def.iterator_topology, rhs.def.iterator_topology)) return false;
     if (lhs.builtin_owner != rhs.builtin_owner) return false;
     if (!try typeSpanEqlAcrossStores(name_store, lhs_view, lhs.args, rhs_view, rhs.args, visited)) return false;
 
@@ -2237,6 +2256,25 @@ fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeD
     } else {
         writeBytes(hasher, "no-digest");
     }
+}
+
+fn writeIteratorTopology(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    name_store: *const names.NameStore,
+    topology: ?IteratorTopology,
+) void {
+    const value = topology orelse {
+        writeBytes(hasher, "no-iterator-topology");
+        return;
+    };
+    writeBytes(hasher, "iterator-topology");
+    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
+    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
 }
 
 fn optionalDigestEql(lhs: ?names.TypeDigest, rhs: ?names.TypeDigest) bool {

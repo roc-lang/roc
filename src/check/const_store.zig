@@ -49,6 +49,17 @@ pub const CaptureId = checked_ids.CaptureId;
 /// circular file import (`checked_artifact.zig` itself imports this file).
 pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
 
+/// Checker-authored identities for the public iterator representation.
+pub const IteratorTopology = struct {
+    len_field: names.RecordFieldNameId,
+    step_field: names.RecordFieldNameId,
+    done_tag: names.TagNameId,
+    one_tag: names.TagNameId,
+    skip_tag: names.TagNameId,
+    item_field: names.RecordFieldNameId,
+    rest_field: names.RecordFieldNameId,
+};
+
 /// Named type definition owner for stored monomorphic type evidence.
 pub const TypeDef = struct {
     /// Deep content identity of the declaring module (dense id in the owning
@@ -65,6 +76,7 @@ pub const TypeDef = struct {
     iterator_representation: IteratorRepresentation = .none,
     iterator_kind: IteratorKind = .none,
     iterator_depth: u8 = 0,
+    iterator_topology: ?IteratorTopology = null,
 };
 
 /// Target-independent Monotype iterator tier preserved across constant storage.
@@ -551,6 +563,15 @@ pub const ConstTypeStore = struct {
             .iterator_representation = def.iterator_representation,
             .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
+            .iterator_topology = if (def.iterator_topology) |topology| .{
+                .len_field = try translateRecordFieldName(name_translation, topology.len_field),
+                .step_field = try translateRecordFieldName(name_translation, topology.step_field),
+                .done_tag = try translateTagName(name_translation, topology.done_tag),
+                .one_tag = try translateTagName(name_translation, topology.one_tag),
+                .skip_tag = try translateTagName(name_translation, topology.skip_tag),
+                .item_field = try translateRecordFieldName(name_translation, topology.item_field),
+                .rest_field = try translateRecordFieldName(name_translation, topology.rest_field),
+            } else null,
         };
     }
 

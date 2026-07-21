@@ -7240,6 +7240,7 @@ const DraftProcCallee = union(enum(u8)) {
 const DraftCallProc = struct {
     callee: DraftProcCallee,
     args: DraftSpan(DraftExprId),
+    iterator_procedure: ?static_dispatch.IteratorProcedureId = null,
     captures: DraftSpan(DraftExprId) = DraftSpan(DraftExprId).empty(),
     is_cold: bool = false,
 };
@@ -8983,6 +8984,7 @@ const BodyDraftStore = struct {
                 break :blk .{ .call_proc = .{
                     .callee = ids.procCallee(call.callee),
                     .args = ids.exprSpan(call.args),
+                    .iterator_procedure = call.iterator_procedure,
                     .captures = Ast.Span(Ast.CaptureOperand).empty(),
                     .is_cold = call.is_cold,
                 } };
@@ -14958,15 +14960,7 @@ const BodyContext = struct {
         return named.args[1..];
     }
 
-    const IteratorRepresentationNames = struct {
-        len_field: names.RecordFieldNameId,
-        step_field: names.RecordFieldNameId,
-        done_tag: names.TagNameId,
-        one_tag: names.TagNameId,
-        skip_tag: names.TagNameId,
-        item_field: names.RecordFieldNameId,
-        rest_field: names.RecordFieldNameId,
-    };
+    const IteratorRepresentationNames = Type.IteratorTopology;
 
     fn iteratorRepresentationNames(self: *BodyContext) Allocator.Error!IteratorRepresentationNames {
         const topologies = self.view.static_dispatch_plans.iterator_topologies;
@@ -15062,6 +15056,7 @@ const BodyContext = struct {
                 def.iterator_representation = .minted;
                 def.iterator_kind = ctx.kind;
                 def.iterator_depth = 0;
+                def.iterator_topology = try ctx.body.iteratorRepresentationNames();
                 return .{ .named = .{
                     .named_type = ctx.public_source.named_type,
                     .def = def,
@@ -19616,6 +19611,7 @@ const BodyContext = struct {
                     .data = .{ .call_proc = .{
                         .callee = .{ .func = callee },
                         .args = args,
+                        .iterator_procedure = iterator_procedure,
                     } },
                 };
             }
@@ -19625,6 +19621,7 @@ const BodyContext = struct {
                 .data = .{ .call_proc = .{
                     .callee = .{ .func = callee },
                     .args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args),
+                    .iterator_procedure = iterator_procedure,
                 } },
             };
         }
@@ -21982,6 +21979,15 @@ const BodyContext = struct {
             .iterator_representation = @enumFromInt(@intFromEnum(def.iterator_representation)),
             .iterator_kind = @enumFromInt(@intFromEnum(def.iterator_kind)),
             .iterator_depth = def.iterator_depth,
+            .iterator_topology = if (def.iterator_topology) |topology| .{
+                .len_field = try self.constRecordFieldName(store_view, topology.len_field),
+                .step_field = try self.constRecordFieldName(store_view, topology.step_field),
+                .done_tag = try self.constTagName(store_view, topology.done_tag),
+                .one_tag = try self.constTagName(store_view, topology.one_tag),
+                .skip_tag = try self.constTagName(store_view, topology.skip_tag),
+                .item_field = try self.constRecordFieldName(store_view, topology.item_field),
+                .rest_field = try self.constRecordFieldName(store_view, topology.rest_field),
+            } else null,
         };
     }
 
@@ -26700,6 +26706,7 @@ const BodyContext = struct {
                 try self.evidenceForDispatchTarget(plan),
             )),
             .args = args,
+            .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
         } };
     }
 
@@ -34058,6 +34065,7 @@ const BodyContext = struct {
             .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(lookup, callable_node, try self.evidenceForIteratorCall(plan))),
                 .args = try self.addExprSpan(args),
+                .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
             } },
         );
     }
