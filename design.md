@@ -111,7 +111,7 @@ specific question: a substitution check answers "cannot substitute" (a missed
 optimization), and a minted-chain depth walk reports the cap (the chain takes
 the explicit `forced_dynamic` representation). Two standing instances: Monotype bounds
 minted iterator chain depth at the single construction choke point
-(`generatedIteratorType`), which is what guarantees specialization terminates
+(`generatedIteratorNode` plus graph finalization), which is what guarantees specialization terminates
 for recursively-constructed chains regardless of call structure; and
 constructor specialization bounds its substitution-candidate value walk
 (`valueCanSubstitute`), because a loop-carried value can reference itself and
@@ -2088,8 +2088,13 @@ additional nominal arguments. Each adapter layer therefore embeds its concrete
 predecessor by value. A bounded chain is a finite tower of distinct nominal
 identities rather than one public nominal with a recursive self edge.
 
-The representation producer is `generatedIteratorType` in
-`src/postcheck/monotype/lower.zig`. It computes:
+The representation producer is `generatedIteratorNode` in
+`src/postcheck/monotype/lower.zig`, together with
+`InstGraph.finalizeGeneratedIteratorRepresentations` in
+`src/postcheck/monotype/solve.zig`. Construction records the exact public
+source, producer kind, component nodes, callable evidence, and private backing
+in the active instantiation graph. Finalization consumes that complete graph
+before any durable Monotype type is sealed. Together they compute:
 
 - `List.iter` as a first-class source representation rather than a public
   recursive `Iter` boundary;
@@ -2118,10 +2123,30 @@ finite type fixed point. The bounded walk reports the cap when its own budget is
 exhausted, so exhaustion selects the explicit dynamic tier rather than allowing
 the minted type universe to grow without bound.
 
-This cap is a type-universe bound, not a call-depth or specialization-request
-counter. Every path that mints an iterator passes through the same producer, so
-recursive functions, loops, and ordinary calls all receive the same finite
-representation decision.
+Recursive specialization contributes an explicit second proof of the dynamic
+tier. Each in-progress specialization records the permanent ordered argument
+nodes from its initial request. When a recursive edge reaches that
+specialization, a request argument whose permanent node differs from its
+initial slot is recorded as a representation-growing recursive slot before the
+two function interfaces are related. If that slot subsequently joins distinct
+minted iterator identities, the graph records that the resulting iterator
+class must use the forced-dynamic fixed point. Recursion over the same permanent
+argument node is not representation growth and remains eligible for the minted
+tier. This makes the distinction producer-authored: finalization consumes the
+recorded recursive edge and minted join instead of inferring recursion from a
+finished type shape or from call-stack depth.
+
+Finalization rebuilds a selected forced-dynamic class with exactly one public
+item argument and an exact self-recursive backing before identity sealing.
+It does not restamp a minted backing whose component arguments still encode the
+growing chain. Once representation finalization, identity sealing, and graph
+freezing finish, the durable Monotype is immutable and no consumer may reopen,
+widen, or reinterpret it.
+
+The cap is a type-universe bound, not a call-depth or specialization-request
+counter. Every generated iterator passes through the same graph-owned producer
+and pre-seal finalizer, so recursive functions, loops, and ordinary calls all
+receive the same finite representation decision.
 
 #### Tier Unification And Callable Flow
 

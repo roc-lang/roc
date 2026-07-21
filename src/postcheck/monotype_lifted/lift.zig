@@ -327,9 +327,8 @@ fn checkOperandSpan(program: *const Ast.Program, fn_id: Ast.FnId, operand_span: 
         // give the operand value and its slot distinct interned TypeIds for the
         // same type.
         const value_ty = program.getExpr(operand.value).ty;
-        if (!try program.types.typeEql(&program.names, value_ty, slot.ty)) {
+        if (!try program.types.typeEql(&program.names, value_ty, slot.ty))
             return "operand value type differed from its capture slot type";
-        }
     }
     return null;
 }
@@ -989,11 +988,11 @@ fn rebuildCaptureOperandSpan(
                 else => break :blk candidate,
             };
             if (program.getLocal(candidate_local).capture_id != id) break :blk candidate;
-            const active = bound.bindingFor(program, candidate_local) orelse break :blk candidate;
+            const active = (try bound.bindingFor(program, candidate_local)) orelse break :blk candidate;
             if (active == candidate_local) break :blk candidate;
             break :blk try program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
         } else blk: {
-            const active = bound.bindingFor(program, slot.local) orelse slot.local;
+            const active = (try bound.bindingFor(program, slot.local)) orelse slot.local;
             break :blk try program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
         };
         operands[index] = .{ .id = id, .value = value };
@@ -1095,19 +1094,26 @@ const BoundSet = struct {
         self.locals.deinit();
     }
 
-    fn contains(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) bool {
-        return self.bindingFor(input, local) != null;
+    fn contains(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!bool {
+        return (try self.bindingFor(input, local)) != null;
     }
 
     fn binderIdentity(input: *const Ast.Program, local: Mono.LocalId) ?checked.PatternBinderId {
         return input.getLocal(local).binder;
     }
 
-    fn bindingFor(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) ?Mono.LocalId {
+    fn bindingFor(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!?Mono.LocalId {
         if (self.locals.contains(local)) return local;
         const identity = binderIdentity(input, local) orelse return null;
-        const entry = self.binder_heads.get(identity) orelse return null;
-        return self.binder_entries.items[entry].local;
+        const wanted_ty = input.getLocal(local).ty;
+        var maybe_entry = self.binder_heads.get(identity);
+        while (maybe_entry) |entry_index| {
+            const entry = self.binder_entries.items[entry_index];
+            const candidate_ty = input.getLocal(entry.local).ty;
+            if (try input.types.typeEql(&input.names, wanted_ty, candidate_ty)) return entry.local;
+            maybe_entry = entry.previous;
+        }
+        return null;
     }
 
     fn put(self: *BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!void {
@@ -1198,7 +1204,7 @@ const CaptureSet = struct {
     }
 
     fn addIfFree(self: *CaptureSet, local: Mono.LocalId, bound: *const BoundSet) Allocator.Error!void {
-        if (bound.contains(self.program, local) or self.seen.contains(local)) return;
+        if (try bound.contains(self.program, local) or self.seen.contains(local)) return;
         try self.seen.put(local, {});
         // Every capture slot needs a stable CaptureId. Binder-backed and
         // compile-time-synthesized locals already carry one; a local that is
@@ -1701,14 +1707,20 @@ const CaptureDependencyGraph = struct {
         return id;
     }
 
-    fn scopeBindingFor(self: *const CaptureDependencyGraph, scope: ?CaptureScopeId, local: Ast.LocalId) ?Ast.LocalId {
-        const binder = self.program.getLocal(local).binder;
+    fn scopeBindingFor(self: *const CaptureDependencyGraph, scope: ?CaptureScopeId, local: Ast.LocalId) Allocator.Error!?Ast.LocalId {
+        const local_data = self.program.getLocal(local);
+        const binder = local_data.binder;
         var current = scope;
         while (current) |id| {
             const entry = self.scopes.items[@intFromEnum(id)];
             if (entry.local == local) return entry.local;
             if (binder) |identity| {
-                if (self.program.getLocal(entry.local).binder == identity) return entry.local;
+                const candidate = self.program.getLocal(entry.local);
+                if (candidate.binder == identity and
+                    try self.program.types.typeEql(&self.program.names, local_data.ty, candidate.ty))
+                {
+                    return entry.local;
+                }
             }
             current = entry.parent;
         }
@@ -1836,7 +1848,7 @@ const CaptureDependencyGraph = struct {
             return;
         }
         const edge = self.edges.items[@intFromEnum(edge_id)];
-        if (self.scopeBindingFor(edge.scope, capture.local) == null) {
+        if (try self.scopeBindingFor(edge.scope, capture.local) == null) {
             try self.addCaptureUpdate(edge.owner, capture);
         }
     }
@@ -1874,11 +1886,11 @@ const CaptureDependencyGraph = struct {
                 else => return supply.value,
             };
             if (self.program.getLocal(candidate_local).capture_id != id) return supply.value;
-            const active = self.scopeBindingFor(edge.scope, candidate_local) orelse return supply.value;
+            const active = (try self.scopeBindingFor(edge.scope, candidate_local)) orelse return supply.value;
             if (active == candidate_local) return supply.value;
             return try self.program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
         }
-        const active = self.scopeBindingFor(edge.scope, slot.local) orelse slot.local;
+        const active = (try self.scopeBindingFor(edge.scope, slot.local)) orelse slot.local;
         return try self.program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
     }
 
@@ -2037,7 +2049,7 @@ const CaptureGraphBuilder = struct {
     }
 
     fn addDirect(self: *CaptureGraphBuilder, node_id: CaptureNodeId, local: Ast.LocalId) Allocator.Error!void {
-        if (self.bound.contains(self.graph.program, local)) return;
+        if (try self.bound.contains(self.graph.program, local)) return;
         _ = self.graph.program.ensureLiftCaptureId(local);
         const local_data = self.graph.program.getLocal(local);
         try self.graph.nodes.items[@intFromEnum(node_id)].direct.append(self.graph.allocator, .{

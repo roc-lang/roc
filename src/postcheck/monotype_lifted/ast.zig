@@ -845,7 +845,7 @@ pub const Program = struct {
                 Common.invariant("binder-backed replacement local changed its CaptureId");
             }
         } else if (capture_id.isCanonical()) {
-            Common.invariant("canonical replacement CaptureId had no checked binder");
+            Common.invariant("capture replacement CaptureId had no checked binder");
         }
 
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));

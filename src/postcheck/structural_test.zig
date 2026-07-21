@@ -105,7 +105,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     const lower_lookup_at_type = sourceSliceBetween(lower_source, "fn lowerLookupExprAtType", "fn lowerProcedureUseValue");
 
     try expectContains(lower_call, "if (try self.indirectCalleeMonoType(call.func, call.args, expected_ret_ty)) |fn_ty| {");
-    try expectContains(lower_call, "const fn_node = try call_ctx.instantiateCallNodeFromCallerAtType(");
+    try expectContains(lower_call, "const fn_node = try call_ctx.instantiateCallNodeFromCallerAtNode(");
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerExprType(call.func)") == null);
     try std.testing.expect(std.mem.find(u8, lower_call, "try self.lowerType(call.source_fn_ty_payload)") == null);
 
@@ -409,7 +409,7 @@ test "Monotype divergent results and unexecutable dispatches retain graph cells"
     const divergent_call = sourceSliceBetween(
         lower_source,
         "fn lowerDivergentCallOperand",
-        "fn instantiateCallNodeFromCallerAtType",
+        "fn instantiateCallNodeFromCallerAtNode",
     );
     try expectContains(divergent_call, "lowerDivergentExprAtTypeCell(operand, ret_cell)");
     try expectNotContains(divergent_call, "lowerTypeView");
@@ -537,7 +537,7 @@ test "Monotype indirect calls retain graph-native function provenance" {
         "fn lowerCallAtType(",
         "fn lowerDirectCallWithUninhabitedArgument(",
     );
-    try expectContains(call_source, "instantiateCallNodeFromCallerAtType");
+    try expectContains(call_source, "instantiateCallNodeFromCallerAtNode");
     try expectContains(call_source, "const fn_nodes = try self.graph.functionNodes(fn_node)");
     try expectContains(call_source, "try self.prepareExprSpanAtNodes(call.args, fn_nodes.args)");
     try expectContains(call_source, ".callee = try self.lowerExprAtTypeCell(call.func, DraftTypeCell.fromGraphNode(fn_node))");
@@ -572,7 +572,8 @@ test "Monotype open specialization lookup covers the complete function interface
         try expectContains(lookup_source, "source_ctx.runtimeDemandGuardFrameAddresses()");
         try expectContains(lookup_source, "if (!selection.add(raw_spec, exact_interface))");
         try expectContains(lookup_source, "if (selection.selected()) |raw_spec|");
-        try expectContains(lookup_source, "try source_ctx.graph.unify(spec.request_fn_node, request_fn_node)");
+        try expectContains(lookup_source, "try source_ctx.graph.unifyRecursiveFunctionInterface(");
+        try expectContains(lookup_source, "spec.initial_request_args");
         try expectContains(lookup_source, "indexed_nodes.getOrPut(interface_node)");
         try expectContains(lookup_source, "draftOpenRequestKey(interface_node)");
         try expectNotContains(lookup_source, "functionInterfaceAnchor");
@@ -810,11 +811,11 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
         "fn iteratorOneBranch(",
         "fn uninhabitedIteratorOneBranch(",
     );
-    try expectContains(iterator, "self.constrainTypeToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
+    try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
     try expectContains(iterator, "try self.graph.drainDirty()");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
     try expectContains(iterator, "defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames");
-    const relate = std.mem.find(u8, iterator, "self.constrainTypeToCell").?;
+    const relate = std.mem.find(u8, iterator, "self.constrainCheckedInterfaceToCell").?;
     const frame = std.mem.find(u8, iterator, "self.withIteratorOneRuntimeDemandGuardFrame").?;
     try std.testing.expect(relate < frame);
 

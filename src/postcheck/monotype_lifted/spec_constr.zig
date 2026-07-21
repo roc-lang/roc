@@ -488,7 +488,7 @@ const LetCaseBuild = struct {
     joins: []LetCaseJoin,
 };
 
-const CallableWorkerKey = struct {
+const CallableWorkerIdentity = struct {
     template: names.TypeDigest,
     capture_abi: names.TypeDigest,
 };
@@ -528,7 +528,7 @@ const Pass = struct {
     /// exact capture ABI. Lifted FnIds are transient products of traversal
     /// order, while the capture ABI is durable representation data: two uses
     /// may share a body only when every CaptureId has the same exact type.
-    callable_workers: std.AutoHashMap(CallableWorkerKey, Ast.FnId),
+    callable_workers: std.AutoHashMap(CallableWorkerIdentity, Ast.FnId),
     /// Reverse index from each rewritten callable body to its source function.
     /// This keeps later materialization rooted at the source instead of cloning
     /// an already-rewritten worker.
@@ -629,7 +629,7 @@ const Pass = struct {
             .whole_body_cloned = whole_body_cloned,
             .shape_demand_fns = shape_demand_fns,
             .self_recursive_fns = self_recursive_fns,
-            .callable_workers = std.AutoHashMap(CallableWorkerKey, Ast.FnId).init(allocator),
+            .callable_workers = std.AutoHashMap(CallableWorkerIdentity, Ast.FnId).init(allocator),
             .callable_sources = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
             .next_join_point = 0,
         };
@@ -8599,7 +8599,7 @@ const Cloner = struct {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
 
-        const worker_key: CallableWorkerKey = .{
+        const worker_key: CallableWorkerIdentity = .{
             .template = Mono.fnTemplateDigest(
                 source_fn.source orelse Common.invariant("rewritten callable source had no Monotype template identity"),
                 &self.pass.program.types,

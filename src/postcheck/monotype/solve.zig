@@ -300,6 +300,16 @@ pub const InstGraph = struct {
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
     request_source_interfaces: std.AutoHashMap(NodeId, NodeId),
+    /// Minted iterator roots whose relation graph proved that retaining the
+    /// minted tier would create a recursive component identity. The raw node
+    /// remains valid across later unions; finalization resolves it to the live
+    /// class and constructs the single forced-dynamic fixed point.
+    forced_dynamic_iterator_roots: std.ArrayList(NodeId),
+    /// Permanent request-argument nodes that differ from the corresponding
+    /// initial slot on an explicitly recursive function edge. A later minted
+    /// join touching one of these slots proves that recursion grows the
+    /// representation rather than merely recurring over a fixed iterator.
+    recursive_argument_slots: std.ArrayList(NodeId),
     pub fn create(
         allocator: Allocator,
         types: *Type.Store,
@@ -327,6 +337,8 @@ pub const InstGraph = struct {
             .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingCacheContext, 80).init(allocator),
             .request_source_interfaces = std.AutoHashMap(NodeId, NodeId).init(allocator),
+            .forced_dynamic_iterator_roots = .empty,
+            .recursive_argument_slots = .empty,
         };
         return graph;
     }
@@ -348,6 +360,8 @@ pub const InstGraph = struct {
         }
         self.nominal_backings.deinit();
         self.request_source_interfaces.deinit();
+        self.forced_dynamic_iterator_roots.deinit(allocator);
+        self.recursive_argument_slots.deinit(allocator);
         self.row_parents.deinit();
         self.row_exts.deinit();
         self.dirty_set.deinit();
@@ -457,11 +471,352 @@ pub const InstGraph = struct {
         self.relation_state = .frozen;
     }
 
+    pub fn unifyRecursiveFunctionInterface(
+        self: *InstGraph,
+        active_fn: NodeId,
+        initial_active_args: []const NodeId,
+        recursive_request: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const request = try self.functionNodes(recursive_request);
+        if (initial_active_args.len != request.args.len) {
+            Common.invariant("recursive function interface changed argument arity");
+        }
+        for (initial_active_args, request.args) |active_arg, request_arg| {
+            if (active_arg != request_arg) {
+                try self.recursive_argument_slots.append(self.allocator, request_arg);
+            }
+        }
+        try self.unify(active_fn, recursive_request);
+    }
+
+    const generated_iterator_mint_depth_limit: u8 = 16;
+    const generated_iterator_walk_budget: usize = 64;
+    const generated_iterator_forced_depth: u8 = generated_iterator_mint_depth_limit + 1;
+
+    /// Decide every graph-owned iterator representation after relation
+    /// production has supplied its complete component graph, but before any
+    /// durable Monotype is sealed. The bounded structural walk follows
+    /// values only: function bodies and named backings cannot store an iterator
+    /// value and therefore do not contribute depth.
+    pub fn finalizeGeneratedIteratorRepresentations(self: *InstGraph) Allocator.Error!void {
+        self.requireRelationProduction();
+        try self.drainDirty();
+
+        const Pending = struct {
+            node: NodeId,
+            depth: u8,
+            force_dynamic: bool,
+        };
+        var pending = std.ArrayList(Pending).empty;
+        defer pending.deinit(self.allocator);
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var visiting = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visiting.deinit();
+
+        for (self.nodes.items, 0..) |_, raw_index| {
+            const node = self.find(@enumFromInt(@as(u32, @intCast(raw_index))));
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            const named = switch (self.content(node)) {
+                .named => |named| named,
+                else => continue,
+            };
+            if (named.generated_iterator == null) continue;
+
+            var remaining: usize = generated_iterator_walk_budget;
+            visiting.clearRetainingCapacity();
+            const depth = try self.generatedIteratorDepth(node, &remaining, &visiting);
+            try pending.append(self.allocator, .{
+                .node = node,
+                .depth = depth,
+                .force_dynamic = self.iteratorRootRequiresForcedDynamic(node),
+            });
+        }
+
+        for (pending.items) |item| {
+            const node = self.find(item.node);
+            var named = switch (self.content(node)) {
+                .named => |named| named,
+                else => Common.invariant("generated iterator representation target stopped being named"),
+            };
+            named.def.generated = null;
+            if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
+                if (named.args.len == 0) {
+                    Common.invariant("generated iterator representation had no item argument");
+                }
+                if (self.findGeneratedIterator(node, .forced_dynamic, &.{}, null)) |existing| {
+                    if (self.find(existing) != node) {
+                        try self.unify(node, existing);
+                        continue;
+                    }
+                }
+                try self.rewriteGeneratedIteratorAsForcedDynamic(node, named);
+            } else {
+                if (item.depth == 0) {
+                    Common.invariant("minted iterator representation had zero producer depth");
+                }
+                named.def.iterator_representation = .minted;
+                named.def.iterator_depth = item.depth;
+                try self.setContent(node, .{ .named = named });
+            }
+        }
+        try self.drainDirty();
+    }
+
+    fn iteratorRootRequiresForcedDynamic(self: *InstGraph, node: NodeId) bool {
+        const root = self.find(node);
+        for (self.forced_dynamic_iterator_roots.items) |candidate| {
+            if (self.find(candidate) == root) return true;
+        }
+        return false;
+    }
+
+    fn rewriteGeneratedIteratorAsForcedDynamic(
+        self: *InstGraph,
+        node: NodeId,
+        source_named: InstNamed,
+    ) Allocator.Error!void {
+        const provenance = source_named.generated_iterator orelse
+            Common.invariant("forced-dynamic iterator rewrite lacked producer provenance");
+        if (source_named.args.len == 0) {
+            Common.invariant("forced-dynamic iterator rewrite had no item argument");
+        }
+        const topology = source_named.def.iterator_topology orelse
+            Common.invariant("forced-dynamic iterator rewrite lacked producer topology");
+        const item_node = source_named.args[0];
+        const dynamic_args = try self.arena().alloc(NodeId, 1);
+        dynamic_args[0] = item_node;
+        var def = provenance.public_source.def;
+        def.generated = null;
+        def.iterator_representation = .forced_dynamic;
+        def.iterator_kind = .forced_dynamic;
+        def.iterator_depth = 0;
+        def.iterator_topology = topology;
+        try self.setContent(node, .{ .named = .{
+            .named_type = provenance.public_source.named_type,
+            .def = def,
+            .kind = provenance.public_source.kind,
+            .builtin_owner = provenance.public_source.builtin_owner,
+            .args = dynamic_args,
+            .backing = .{
+                .node = try self.forcedDynamicIteratorBackingNode(
+                    provenance.public_source.backing.node,
+                    node,
+                    item_node,
+                    topology,
+                ),
+                .use = provenance.public_source.backing.use,
+                .authority = .generated_private,
+            },
+            .generated_iterator = .{
+                .callable_evidence = null,
+                .public_source = provenance.public_source,
+            },
+            .declared_order = provenance.public_source.declared_order,
+        } });
+    }
+
+    fn forcedDynamicIteratorBackingNode(
+        self: *InstGraph,
+        public_backing: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+        topology: Type.IteratorTopology,
+    ) Allocator.Error!NodeId {
+        const public_fields = (try self.recordNodes(public_backing)).fields;
+        const fields = try self.arena().alloc(InstField, public_fields.len);
+        for (public_fields, fields) |field, *out| {
+            out.* = .{
+                .name = field.name,
+                .ty = if (field.name == topology.step_field)
+                    try self.forcedDynamicIteratorStepFunctionNode(field.ty, self_node, item_node, topology)
+                else
+                    field.ty,
+            };
+        }
+        return try self.newNode(.{ .record = .{
+            .fields = fields,
+            .ext = try self.newNode(.empty_record),
+        } });
+    }
+
+    fn forcedDynamicIteratorStepFunctionNode(
+        self: *InstGraph,
+        public_step: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+        topology: Type.IteratorTopology,
+    ) Allocator.Error!NodeId {
+        const step = try self.functionNodes(public_step);
+        return try self.newNode(.{ .func = .{
+            .args = try self.arena().dupe(NodeId, step.args),
+            .ret = try self.forcedDynamicIteratorStepResultNode(step.ret, self_node, item_node, topology),
+        } });
+    }
+
+    fn forcedDynamicIteratorStepResultNode(
+        self: *InstGraph,
+        public_result: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+        topology: Type.IteratorTopology,
+    ) Allocator.Error!NodeId {
+        const public_tags = (try self.tagRowNodes(public_result)).tags;
+        const tags = try self.arena().alloc(InstTag, public_tags.len);
+        for (public_tags, tags) |tag, *out| {
+            const payloads = try self.arena().alloc(NodeId, tag.payloads.len);
+            for (tag.payloads, payloads) |payload, *payload_out| {
+                payload_out.* = try self.forcedDynamicIteratorStepPayloadNode(
+                    tag.name,
+                    payload,
+                    self_node,
+                    item_node,
+                    topology,
+                );
+            }
+            out.* = .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = payloads,
+            };
+        }
+        return try self.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.newNode(.empty_tag_union),
+        } });
+    }
+
+    fn forcedDynamicIteratorStepPayloadNode(
+        self: *InstGraph,
+        tag_name: names.TagNameId,
+        public_payload: NodeId,
+        self_node: NodeId,
+        item_node: NodeId,
+        topology: Type.IteratorTopology,
+    ) Allocator.Error!NodeId {
+        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return public_payload;
+        const public_fields = (try self.recordNodes(public_payload)).fields;
+        const fields = try self.arena().alloc(InstField, public_fields.len);
+        for (public_fields, fields) |field, *out| {
+            out.* = .{
+                .name = field.name,
+                .ty = if (field.name == topology.rest_field)
+                    self_node
+                else if (field.name == topology.item_field)
+                    item_node
+                else
+                    field.ty,
+            };
+        }
+        return try self.newNode(.{ .record = .{
+            .fields = fields,
+            .ext = try self.newNode(.empty_record),
+        } });
+    }
+
+    fn generatedIteratorDepth(
+        self: *InstGraph,
+        raw_node: NodeId,
+        remaining: *usize,
+        visiting: *std.AutoHashMap(NodeId, void),
+    ) Allocator.Error!u8 {
+        if (remaining.* == 0) return generated_iterator_forced_depth;
+        remaining.* -= 1;
+
+        const node = self.find(raw_node);
+        const entry = try visiting.getOrPut(node);
+        if (entry.found_existing) return generated_iterator_forced_depth;
+        defer _ = visiting.remove(node);
+
+        return switch (self.nodes.items[@intFromEnum(node)]) {
+            .redirect => unreachable,
+            .unresolved => |variable| switch (variable.origin) {
+                .checked_variable, .row_extension => 0,
+                .placeholder => Common.invariant("placeholder reached generated iterator representation finalization"),
+            },
+            .primitive, .empty_tag_union, .empty_record, .erased, .zst => 0,
+            .list => |elem| try self.generatedIteratorDepth(elem, remaining, visiting),
+            .box => |elem| try self.generatedIteratorDepth(elem, remaining, visiting),
+            .tuple => |items| try self.generatedIteratorDepthSpan(items, remaining, visiting),
+            .func => 0,
+            .tag_union => |row| blk: {
+                var depth = try self.generatedIteratorDepth(row.ext, remaining, visiting);
+                for (row.tags) |tag| {
+                    depth = @max(depth, try self.generatedIteratorDepthSpan(tag.payloads, remaining, visiting));
+                }
+                break :blk depth;
+            },
+            .record => |row| blk: {
+                var depth = try self.generatedIteratorDepth(row.ext, remaining, visiting);
+                for (row.fields) |field| {
+                    depth = @max(depth, try self.generatedIteratorDepth(field.ty, remaining, visiting));
+                }
+                break :blk depth;
+            },
+            .named => |named| blk: {
+                if (named.generated_iterator != null) {
+                    break :blk switch (named.def.iterator_kind) {
+                        .custom,
+                        .list,
+                        .single,
+                        .range_exclusive,
+                        .range_inclusive,
+                        => 1,
+                        .map,
+                        .keep_if,
+                        .drop_if,
+                        .take_first,
+                        .drop_first,
+                        .concat,
+                        .append,
+                        => adapter: {
+                            if (named.args.len == 0) {
+                                Common.invariant("generated iterator adapter had no item argument");
+                            }
+                            const component_depth = try self.generatedIteratorDepthSpan(named.args[1..], remaining, visiting);
+                            if (component_depth >= generated_iterator_mint_depth_limit) {
+                                break :adapter generated_iterator_forced_depth;
+                            }
+                            break :adapter component_depth + 1;
+                        },
+                        .forced_dynamic => generated_iterator_forced_depth,
+                        .none => Common.invariant("generated iterator had no producer kind"),
+                    };
+                }
+                break :blk switch (named.def.iterator_representation) {
+                    .forced_dynamic => generated_iterator_forced_depth,
+                    .minted => if (named.def.iterator_depth == 0)
+                        Common.invariant("finished minted iterator had zero producer depth")
+                    else
+                        named.def.iterator_depth,
+                    .none => try self.generatedIteratorDepthSpan(named.args, remaining, visiting),
+                };
+            },
+        };
+    }
+
+    fn generatedIteratorDepthSpan(
+        self: *InstGraph,
+        nodes: []const NodeId,
+        remaining: *usize,
+        visiting: *std.AutoHashMap(NodeId, void),
+    ) Allocator.Error!u8 {
+        var depth: u8 = 0;
+        for (nodes) |node| {
+            depth = @max(depth, try self.generatedIteratorDepth(node, remaining, visiting));
+            if (depth > generated_iterator_mint_depth_limit) return depth;
+        }
+        return depth;
+    }
+
     /// Seal producer identities for graph-owned iterator representations only
-    /// after all type relations have been applied. Active TypeIds are used as
-    /// transient final views here; they remain graph-owned and never enter
-    /// completed Monotype output. All digests are computed before any node is
-    /// stamped, so dependency order cannot affect identity.
+    /// after all type relations and representation decisions have been
+    /// applied. Active TypeIds are used as transient final views here; they
+    /// remain graph-owned and never enter completed Monotype output. All
+    /// digests are computed before any node is stamped, so dependency order
+    /// cannot affect identity.
     pub fn finalizeGeneratedIteratorIdentities(self: *InstGraph) Allocator.Error!void {
         self.requireRelationProduction();
         try self.drainDirty();
@@ -480,14 +835,24 @@ pub const InstGraph = struct {
                 else => continue,
             };
             const provenance = named.generated_iterator orelse continue;
-            const active = try self.activeTypeViewForNode(node);
-            const shape = self.types.typeDigest(self.name_store, active);
             var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-            hasher.update("roc.generated_iterator.final_identity");
-            hasher.update(&shape.bytes);
-            if (provenance.callable_evidence) |evidence| {
-                hasher.update("callable_evidence");
-                hasher.update(&evidence.bytes);
+            if (named.def.iterator_representation == .forced_dynamic) {
+                if (named.args.len != 1) {
+                    Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
+                }
+                const item = try self.activeTypeViewForNode(named.args[0]);
+                const item_digest = self.types.typeDigest(self.name_store, item);
+                hasher.update("roc.generated_iterator.forced_dynamic_identity");
+                hasher.update(&item_digest.bytes);
+            } else {
+                const active = try self.activeTypeViewForNode(node);
+                const shape = self.types.typeDigest(self.name_store, active);
+                hasher.update("roc.generated_iterator.final_identity");
+                hasher.update(&shape.bytes);
+                if (provenance.callable_evidence) |evidence| {
+                    hasher.update("callable_evidence");
+                    hasher.update(&evidence.bytes);
+                }
             }
             try pending.append(self.allocator, .{
                 .node = node,
@@ -1292,7 +1657,14 @@ pub const InstGraph = struct {
             .named => |named| named,
             else => Common.invariant("opaque public interface relation received a non-named public node"),
         };
-        if (Type.iteratorRelation(public_named, private_named) == .public_minted) {
+        const iterator_relation = Type.iteratorRelation(public_named, private_named);
+        if (iterator_relation == .public_minted or iterator_relation == .forced_dynamic) {
+            if (public_named.def.iterator_representation != .none or
+                (private_named.def.iterator_representation != .minted and
+                    private_named.def.iterator_representation != .forced_dynamic))
+            {
+                Common.invariant("iterator interface relation did not receive a checked-public/private pair");
+            }
             const public_backing = public_named.backing orelse
                 Common.invariant("iterator interface relation received a public type without backing");
             const private_backing = private_named.backing orelse
@@ -1890,6 +2262,13 @@ pub const InstGraph = struct {
                                 });
                             } else if (right_named.backing != null) {
                                 Common.invariant("minted iterator join found backing on only one side");
+                            }
+
+                            for (self.recursive_argument_slots.items) |slot| {
+                                const slot_root = self.find(slot);
+                                if (slot_root == left or slot_root == right) {
+                                    try self.forced_dynamic_iterator_roots.append(self.allocator, left);
+                                }
                             }
 
                             // Close recursive `rest` references before the
@@ -4298,6 +4677,62 @@ test "opaque interface relation preserves distinct public and generated-private 
     const projected = try graph.recordNodes(structural_record);
     try std.testing.expectEqual(@as(usize, 1), projected.fields.len);
     try std.testing.expectEqual(field_name, projected.fields[0].name);
+}
+
+test "opaque interface relation preserves forced-dynamic iterator identity" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xFE} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(4) };
+    const public_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const private_item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) });
+    const public_backing = try graph.newNode(.empty_record);
+    const private_backing = try graph.newNode(.empty_record);
+    const public = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{public_item}),
+        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
+    } });
+    const private = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_representation = .forced_dynamic,
+            .iterator_kind = .forced_dynamic,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{private_item}),
+        .backing = .{
+            .node = private_backing,
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+
+    try graph.relateOpaqueInterface(public, private);
+    try graph.drainDirty();
+
+    try std.testing.expect(!graph.sameClass(public, private));
+    try std.testing.expect(graph.sameClass(public_item, private_item));
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private).named.backing.?.authority);
+    try std.testing.expectEqual(Type.IteratorRepresentation.none, graph.content(public).named.def.iterator_representation);
+    try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, graph.content(private).named.def.iterator_representation);
 }
 
 test "opaque interface relation preserves nested generated-private backing" {

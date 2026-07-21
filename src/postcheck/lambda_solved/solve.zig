@@ -1029,7 +1029,9 @@ const Solver = struct {
     fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         var cloner = TypeCloner.init(self);
         defer cloner.deinit();
-        return try cloner.lower(ty);
+        const lowered = try cloner.lower(ty);
+        try cloner.markForcedDynamicCallables();
+        return lowered;
     }
 
     fn listElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -1758,6 +1760,22 @@ const TypeCloner = struct {
         try self.map.put(ty, reserved);
         self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
         return reserved;
+    }
+
+    /// Apply the explicit dynamic boundary only after the entire requested
+    /// Monotype clone is complete. A forced iterator can be reached while an
+    /// enclosing function or payload clone still holds reservations, so doing
+    /// this per-node would let callable identity observe an unfinished graph.
+    fn markForcedDynamicCallables(self: *TypeCloner) Allocator.Error!void {
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| {
+            switch (self.solver.lifted.types.get(entry.key_ptr.*)) {
+                .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                    try self.solver.markErasedCallablesReachedByType(entry.value_ptr.*);
+                },
+                else => {},
+            }
+        }
     }
 
     /// Re-materializes a nominal record's declared field order from the monotype
