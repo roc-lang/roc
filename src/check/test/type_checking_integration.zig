@@ -2255,6 +2255,38 @@ test "check type - record - update - fail 2" {
     );
 }
 
+test "check type - record - add field - pass" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: 10.U8 }
+        \\  { ..r, ..{ world: 10.I8 } }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "test" } },
+        "{ hello: U8, world: I8 }",
+    );
+}
+
+test "check type - record - add field - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: 10.U8 }
+        \\  { ..r, ..{ hello: 10.I8 } }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        "TODO",
+    );
+}
+
 test "check type - record - remove field - pass" {
     const source =
         \\main! = |_| {}
