@@ -25017,7 +25017,6 @@ const BodyContext = struct {
                         target_node,
                         callable_node,
                         plan_args,
-                        expected_ret_ty,
                     )) |private_node| {
                         callable_node = private_node;
                     }
@@ -25872,7 +25871,6 @@ const BodyContext = struct {
                         target_node,
                         callable_node,
                         plan_args,
-                        expected_ret_ty,
                     )) |private_node| {
                         callable_node = private_node;
                     }
@@ -26277,9 +26275,7 @@ const BodyContext = struct {
         public_target_node: NodeId,
         request_node: NodeId,
         operands: []const static_dispatch.StaticDispatchOperand,
-        expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
-        _ = expected_ret_ty;
         const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
         const checked_args = try self.checkedExprDispatchOperands(operands) orelse return null;
         defer self.allocator.free(checked_args);
