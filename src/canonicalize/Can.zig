@@ -10048,6 +10048,18 @@ fn runExprKernel(
                 .record => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const fields_slice = self.parse_ir.store.recordFieldSlice(e.fields);
+                    const exts_slice = self.parse_ir.store.recordExtSlice(&e.exts);
+
+                    if (exts_slice.len > 1) {
+                        const feature = try self.env.insertString("multiple record extensions");
+                        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                            .feature = feature,
+                            .region = region,
+                        } });
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
+                    }
+                    const ext: ?AST.Expr.Idx = if (exts_slice.len == 1) exts_slice[0] else null;
 
                     const seen_fields_top = self.scratch_seen_record_fields.top();
                     defer self.scratch_seen_record_fields.clearFrom(seen_fields_top);
@@ -10098,19 +10110,19 @@ fn runExprKernel(
                     try stacks.pushFinishRecord(frame_allocator, .{
                         .region = region,
                         .free_vars_start = self.scratch_free_vars.top(),
-                        .ext = e.ext,
+                        .ext = ext,
                         .fields = fields,
                     });
 
                     var child_count = fields.len;
-                    if (e.ext != null) child_count += 1;
+                    if (ext != null) child_count += 1;
                     var child_i = child_count;
                     while (child_i > 0) {
                         child_i -= 1;
-                        if (e.ext != null and child_i == 0) {
-                            try stacks.pushParse(frame_allocator, .{ .idx = e.ext.?, .target = .scratch });
+                        if (ext != null and child_i == 0) {
+                            try stacks.pushParse(frame_allocator, .{ .idx = ext.?, .target = .scratch });
                         } else {
-                            const field_i = if (e.ext != null) child_i - 1 else child_i;
+                            const field_i = if (ext != null) child_i - 1 else child_i;
                             try stacks.pushParse(frame_allocator, .{ .idx = fields[field_i].value_expr_idx, .target = .scratch });
                         }
                     }

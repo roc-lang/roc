@@ -148,6 +148,49 @@ test "NodeStore preserves explicit collection layout" {
     try testing.expectEqual(AST.CollectionLayout.expanded, store.getCollectionLayout(expr));
 }
 
+test "NodeStore keeps zero and one record extension inline" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 3);
+    defer store.deinit();
+
+    const fields = AST.RecordField.Span{ .span = .{ .start = 0, .len = 0 } };
+    const region = AST.TokenizedRegion{ .start = 1, .end = 4 };
+    const initial_extra_len = store.extra_data.items.len;
+
+    const empty_idx = try store.addExpr(.{ .record = .{
+        .fields = fields,
+        .exts = .none,
+        .region = region,
+    } });
+    try testing.expectEqual(initial_extra_len, store.extra_data.items.len);
+    try testing.expectEqualDeep(AST.Expr.RecordExts.none, store.getExpr(empty_idx).record.exts);
+
+    const single_ext: AST.Expr.Idx = @enumFromInt(11);
+    const single_idx = try store.addExpr(.{ .record = .{
+        .fields = fields,
+        .exts = .{ .single = single_ext },
+        .region = region,
+    } });
+    try testing.expectEqual(initial_extra_len, store.extra_data.items.len);
+    const single = store.getExpr(single_idx).record;
+    try testing.expectEqualDeep(AST.Expr.RecordExts{ .single = single_ext }, single.exts);
+    try testing.expectEqualSlices(AST.Expr.Idx, &.{single_ext}, store.recordExtSlice(&single.exts));
+
+    const exts_scratch_top = store.scratchExprTop();
+    try store.addScratchExpr(@enumFromInt(12));
+    try store.addScratchExpr(@enumFromInt(13));
+    const ext_span = try store.exprSpanFrom(exts_scratch_top);
+    const before_multiple_record = store.extra_data.items.len;
+    const multiple_idx = try store.addExpr(.{ .record = .{
+        .fields = fields,
+        .exts = .{ .multiple = ext_span },
+        .region = region,
+    } });
+    try testing.expectEqual(before_multiple_record + 2, store.extra_data.items.len);
+    const multiple = store.getExpr(multiple_idx).record;
+    try testing.expectEqualSlices(AST.Expr.Idx, &.{ @enumFromInt(12), @enumFromInt(13) }, store.recordExtSlice(&multiple.exts));
+}
+
 test "NodeStore round trip - Statement" {
     var prng = std.Random.DefaultPrng.init(0x53544154454d454e);
     const random = prng.random();
@@ -721,7 +764,7 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .record = .{
-            .ext = rand_idx(random, AST.Expr.Idx),
+            .exts = .{ .single = rand_idx(random, AST.Expr.Idx) },
             .fields = AST.RecordField.Span{ .span = rand_span(random) },
             .region = rand_region(random),
         },

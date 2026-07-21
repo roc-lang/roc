@@ -508,7 +508,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expr_unexpected_token => reportParseProblem(ctx, "Unexpected Expression Syntax", "I was parsing an expression, and this token cannot start an expression here.", "Expressions can be names, literals, tags, records, lists, tuples, lambdas, blocks, conditionals, matches, or function calls.", .{ .example = "add(1, 2)" }),
         .crash_statement_in_expr_position => reportParseProblem(ctx, "Crash Statement In Expression", "I was parsing an expression, but `crash` starts a statement.", "If you need to crash in expression position, wrap the crash statement in a block expression.", .{ .example = "{\n    crash \"unreachable\"\n}" }),
         .return_outside_function => reportParseProblem(ctx, "Return Outside Function", "I was parsing a statement, and `return` appeared outside a function body.", "`return` exits from the current function. Move it inside a function body, or remove it if this code is already the final expression.", .{ .example = "foo = |x| {\n    if x < 0 { return Err(Negative) }\n    Ok(x)\n}" }),
-        .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name.", "Record fields start with lowercase names. After the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ name: \"Ada\", age }" }),
+        .expected_expr_record_field_name => reportParseProblem(ctx, "Expected Record Field", "I was parsing a record expression, and I expected a lowercase field name or a record spread.", "Record spreads come before named fields and are written `..record`. Named fields start with lowercase names; after the name, either write `: value` or omit the value to use field punning.", .{ .example = "{ ..defaults, ..details, name: \"Ada\", age }" }),
+        .record_spread_after_field => reportParseProblem(ctx, "Record Spread Not Allowed Here", "I was parsing a record expression and found a spread after a named field.", "Record spreads must come before every named field. Move this spread before the named fields so all record spreads appear first.", .{ .example = "{ ..r, ..s, value: 42 }", .show_found = false }),
         .record_field_name_cannot_be_var => reportParseProblem(ctx, "Invalid Record Field Name", "Record field names cannot start with a dollar sign.", "Names that start with `$` are reassignable variables declared with the `var` keyword, so they cannot be used as record field names.", .{ .show_found = false }),
         .expected_ty_apply_close_round => reportParseProblem(ctx, "Expected Type Argument End", "I was parsing type arguments, and I expected `)`.", "Type applications put their arguments inside parentheses.", .{ .example = "Dict(Str, U64)" }),
         .expected_expr_apply_close_round => reportParseProblem(ctx, "Expected Call Argument End", "I was parsing function or method call arguments, and I expected `)`.", "Function call arguments go inside parentheses and are separated with commas.", .{ .example = "add(1, 2)" }),
@@ -640,6 +641,7 @@ pub const Diagnostic = struct {
         crash_statement_in_expr_position,
         return_outside_function,
         expected_expr_record_field_name,
+        record_spread_after_field,
         /// `$name` idents are reassignable variables and cannot name record fields
         record_field_name_cannot_be_var,
         expected_ty_apply_close_round,
@@ -2757,8 +2759,8 @@ pub const Expr = union(enum) {
     },
     record: struct {
         fields: RecordField.Span,
-        /// Record extension: { ..person, field: value }
-        ext: ?Expr.Idx,
+        /// Ordered record extensions: `{ ..defaults, ..person, field: value }`
+        exts: RecordExts,
         region: TokenizedRegion,
     },
     tag: TagExpr,
@@ -2877,6 +2879,29 @@ pub const Expr = union(enum) {
 
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
+
+    /// A small-vector representation for record extensions. The common
+    /// zero/one-extension cases stay inline in the record node; only multiple
+    /// extensions use an out-of-line expression span.
+    pub const RecordExts = union(enum) {
+        none,
+        single: Expr.Idx,
+        multiple: Expr.Span,
+
+        pub fn len(self: @This()) u32 {
+            return switch (self) {
+                .none => 0,
+                .single => 1,
+                .multiple => |span| span.span.len,
+            };
+        }
+    };
+
+    comptime {
+        if (@sizeOf(RecordExts) != 3 * @sizeOf(u32)) {
+            @compileError("Expr.RecordExts must remain a three-word small-vector value");
+        }
+    }
 
     pub fn as_string_part_region(self: @This()) Allocator.Error!TokenizedRegion {
         switch (self) {
@@ -3076,8 +3101,7 @@ pub const Expr = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
-                // Add extension if present
-                if (a.ext) |ext_idx| {
+                for (ast.store.recordExtSlice(&a.exts)) |ext_idx| {
                     const ext_wrapper = tree.beginNode();
                     try tree.pushStaticAtom("ext");
                     try ast.store.getExpr(ext_idx).pushToSExprTree(gpa, env, ast, tree);
@@ -3440,7 +3464,9 @@ pub const PatternRecordField = struct {
 
 /// TODO
 pub const RecordField = struct {
+    /// The lowercase field-name token.
     name: Token.Idx,
+    /// The field value, or `null` for punning.
     value: ?Expr.Idx,
     region: TokenizedRegion,
 

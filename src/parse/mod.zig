@@ -175,6 +175,63 @@ test "deeply nested parentheses parse stack-safely" {
     try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
 }
 
+test "record spreads parse into one ordered extension list" {
+    const gpa = std.testing.allocator;
+    const source = "{ ..r, ..{ hello: 10.I8 } }";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ast.parse_diagnostics.items.len);
+
+    const root_idx: AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+    const root = ast.store.getExpr(root_idx);
+    try std.testing.expect(root == .record);
+
+    const record = root.record;
+    const exts = ast.store.recordExtSlice(&record.exts);
+    try std.testing.expectEqual(@as(usize, 2), exts.len);
+
+    const first_ext = ast.store.getExpr(exts[0]);
+    try std.testing.expect(first_ext == .ident);
+    try std.testing.expectEqualStrings("r", ast.resolve(first_ext.ident.token));
+
+    const fields = ast.store.recordFieldSlice(record.fields);
+    try std.testing.expectEqual(@as(usize, 0), fields.len);
+
+    const second_ext = ast.store.getExpr(exts[1]);
+    try std.testing.expect(second_ext == .record);
+    try std.testing.expectEqual(@as(u32, 0), second_ext.record.exts.len());
+    const spread_fields = ast.store.recordFieldSlice(second_ext.record.fields);
+    try std.testing.expectEqual(@as(usize, 1), spread_fields.len);
+    const hello = ast.store.getRecordField(spread_fields[0]);
+    try std.testing.expectEqualStrings("hello", ast.resolve(hello.name));
+}
+
+test "record spread after a named field is rejected" {
+    const gpa = std.testing.allocator;
+    const source = "{ ..r, value: 42, ..s }";
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    const ast = try expr(gpa, &env);
+    defer ast.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ast.tokenize_diagnostics.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ast.parse_diagnostics.items.len);
+
+    const diagnostic = ast.parse_diagnostics.items[0];
+    try std.testing.expectEqual(AST.Diagnostic.Tag.record_spread_after_field, diagnostic.tag);
+
+    const region = ast.tokenizedRegionToRegion(diagnostic.region);
+    try std.testing.expectEqualStrings("..s", source[region.start.offset..region.end.offset]);
+}
+
 test "dollar-prefixed record field names are rejected with a single diagnostic" {
     const gpa = std.testing.allocator;
 

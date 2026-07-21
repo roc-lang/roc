@@ -399,11 +399,20 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     tuple,
-    /// DESCRIPTION
-    /// Example: EXAMPLE
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
+    /// A record with no extension expressions.
+    /// * lhs - record-field span start
+    /// * rhs - record-field span length
     record,
+    /// A record with one inline extension expression.
+    /// * main_token - extension expression node index
+    /// * lhs - record-field span start
+    /// * rhs - record-field span length
+    record_single_ext,
+    /// A record with multiple extension expressions.
+    /// * main_token - extra_data index holding [extension span start, extension span length]
+    /// * lhs - record-field span start
+    /// * rhs - record-field span length
+    record_exts,
     /// DESCRIPTION
     /// Example: EXAMPLE
     /// * lhs - LHS DESCRIPTION

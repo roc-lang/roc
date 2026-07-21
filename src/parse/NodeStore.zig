@@ -15,6 +15,12 @@ const Token = @import("tokenize.zig").Token;
 const Region = AST.TokenizedRegion;
 const Diagnostic = AST.Diagnostic;
 
+comptime {
+    if (@sizeOf(AST.Expr.Idx) != @sizeOf(Token.Idx)) {
+        @compileError("an Expr.Idx must fit exactly in a Node main_token word");
+    }
+}
+
 const TargetConfigValueNodeTag = enum(u32) {
     int_literal,
     string_literal,
@@ -941,21 +947,25 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.rhs = t.items.span.len;
         },
         .record => |r| {
-            node.tag = .record;
             node.region = r.region;
+            node.data.lhs = r.fields.span.start;
+            node.data.rhs = r.fields.span.len;
 
-            // Store all record data in flat format:
-            // [fields.span.start, fields.span.len, ext_or_zero]
-            const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, r.fields.span.start);
-            try store.extra_data.append(store.gpa, r.fields.span.len);
-
-            // Store ext value or 0 for null
-            const ext_value = if (r.ext) |ext| @intFromEnum(ext) else 0;
-            try store.extra_data.append(store.gpa, ext_value);
-
-            node.data.lhs = data_start;
-            node.data.rhs = 0; // Not used
+            switch (r.exts) {
+                .none => node.tag = .record,
+                .single => |ext| {
+                    node.tag = .record_single_ext;
+                    node.main_token = @intFromEnum(ext);
+                },
+                .multiple => |exts| {
+                    std.debug.assert(exts.span.len >= 2);
+                    node.tag = .record_exts;
+                    const data_start = try store.reserveExtraDataStart(2);
+                    store.extra_data.appendAssumeCapacity(exts.span.start);
+                    store.extra_data.appendAssumeCapacity(exts.span.len);
+                    node.main_token = data_start;
+                },
+            }
         },
         .lambda => |l| {
             node.tag = .lambda;
@@ -2050,21 +2060,23 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .record => {
-            const extra_data_pos = node.data.lhs;
-            const fields_start = store.extra_data.items[extra_data_pos];
-            const fields_len = store.extra_data.items[extra_data_pos + 1];
-            const ext_value = store.extra_data.items[extra_data_pos + 2];
-
-            // Convert 0 back to null, otherwise create the Idx
-            const ext = if (ext_value == 0) null else @as(AST.Expr.Idx, @enumFromInt(ext_value));
+        .record, .record_single_ext, .record_exts => {
+            const exts: AST.Expr.RecordExts = switch (node.tag) {
+                .record => .none,
+                .record_single_ext => .{ .single = @enumFromInt(node.main_token) },
+                .record_exts => .{ .multiple = .{ .span = .{
+                    .start = store.extra_data.items[node.main_token],
+                    .len = store.extra_data.items[node.main_token + 1],
+                } } },
+                else => unreachable,
+            };
 
             return .{ .record = .{
                 .fields = .{ .span = .{
-                    .start = fields_start,
-                    .len = fields_len,
+                    .start = node.data.lhs,
+                    .len = node.data.rhs,
                 } },
-                .ext = ext,
+                .exts = exts,
                 .region = node.region,
             } };
         },
@@ -2553,6 +2565,16 @@ pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
 /// all items in the span.
 pub fn exprSlice(store: *const NodeStore, span: AST.Expr.Span) []AST.Expr.Idx {
     return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+}
+
+/// Returns the logical ordered extension list regardless of whether its
+/// storage is empty, inline, or out of line.
+pub fn recordExtSlice(store: *const NodeStore, exts: *const AST.Expr.RecordExts) []const AST.Expr.Idx {
+    return switch (exts.*) {
+        .none => &.{},
+        .single => |*ext| ext[0..1],
+        .multiple => |span| store.exprSlice(span),
+    };
 }
 
 /// Returns the start position for a new Span of AST.Statement.Idxs in scratch

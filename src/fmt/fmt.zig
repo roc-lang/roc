@@ -1565,14 +1565,16 @@ const Formatter = struct {
             .record => |r| {
                 try fmt.push('{');
 
+                const exts = fmt.ast.store.recordExtSlice(&r.exts);
                 const fields = fmt.ast.store.recordFieldSlice(r.fields);
-                var has_extension = false;
+                const item_count = exts.len + fields.len;
                 const record_multiline = fmt.ast.store.getCollectionLayout(ei) == .expanded or
-                    fmt.nodesWillBeMultiline(AST.RecordField.Idx, fields) or fmt.regionHasInteriorComment(r.region);
-                const empty_has_comment = r.ext == null and fields.len == 0 and fmt.regionHasInteriorComment(r.region);
+                    fmt.nodesWillBeMultiline(AST.Expr.Idx, exts) or
+                    fmt.nodesWillBeMultiline(AST.RecordField.Idx, fields) or
+                    fmt.regionHasInteriorComment(r.region);
+                const empty_has_comment = item_count == 0 and fmt.regionHasInteriorComment(r.region);
 
-                // Handle extension if present
-                if (r.ext) |ext| {
+                if (item_count > 0) {
                     if (record_multiline) {
                         fmt.curr_indent += 1;
                         try fmt.flushCommentsAfterDiscard(r.region.start);
@@ -1581,31 +1583,33 @@ const Formatter = struct {
                     } else {
                         try fmt.push(' ');
                     }
-                    try fmt.pushAll("..");
-                    const ext_region = try fmt.formatExpr(ext);
-                    has_extension = true;
+                }
 
-                    try fmt.push(',');
-                    if (record_multiline and fields.len > 0) {
-                        try fmt.flushCommentsAfterDiscard(ext_region.end);
+                var item_i: usize = 0;
+                for (exts) |ext| {
+                    try fmt.pushAll("..");
+                    const formatted_ext = try fmt.formatExprWithInfo(ext);
+                    item_i += 1;
+                    if (record_multiline) {
+                        if (formatted_ext.ends_with_multiline_string_line or fmt.has_multiline_string) {
+                            try fmt.ensureNewline();
+                            try fmt.pushIndent();
+                        }
+                        try fmt.push(',');
+                        try fmt.flushCommentsAfterDiscard(formatted_ext.region.end);
+                        if (item_i == item_count) {
+                            fmt.curr_indent -= 1;
+                        }
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
+                    } else if (item_i < item_count) {
+                        try fmt.pushAll(", ");
                     }
                 }
 
-                // Format fields
-                if (record_multiline and !has_extension and fields.len > 0) {
-                    fmt.curr_indent += 1;
-                    try fmt.flushCommentsAfterDiscard(r.region.start);
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-
-                for (fields, 0..) |field_idx, i| {
-                    if (!record_multiline) {
-                        try fmt.push(' ');
-                    }
+                for (fields) |field_idx| {
                     const formatted_field = try fmt.formatRecordFieldWithInfo(field_idx);
+                    item_i += 1;
                     if (record_multiline) {
                         if (formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string) {
                             try fmt.ensureNewline();
@@ -1613,13 +1617,13 @@ const Formatter = struct {
                         }
                         try fmt.push(',');
                         try fmt.flushCommentsAfterDiscard(formatted_field.region.end);
-                        if (i == fields.len - 1) {
+                        if (item_i == item_count) {
                             fmt.curr_indent -= 1;
                         }
                         try fmt.ensureNewline();
                         try fmt.pushIndent();
-                    } else if (i < fields.len - 1) {
-                        try fmt.pushAll(",");
+                    } else if (item_i < item_count) {
+                        try fmt.pushAll(", ");
                     }
                 }
 
@@ -1631,7 +1635,7 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
 
-                if ((has_extension or fields.len > 0) and !record_multiline) {
+                if (item_count > 0 and !record_multiline) {
                     try fmt.push(' ');
                 }
                 try fmt.push('}');
@@ -3419,10 +3423,8 @@ const Formatter = struct {
                     },
                     .record => |r| {
                         if (fmt.ast.store.getCollectionLayout(item) == .expanded) return true;
-                        if (r.ext) |ext| {
-                            if (fmt.nodeWillBeMultiline(AST.Expr.Idx, ext)) {
-                                return true;
-                            }
+                        if (fmt.nodesWillBeMultiline(AST.Expr.Idx, fmt.ast.store.recordExtSlice(&r.exts))) {
+                            return true;
                         }
 
                         return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields));
@@ -3664,7 +3666,7 @@ const Formatter = struct {
         return multiline;
     }
 
-    fn nodesWillBeMultiline(fmt: *Formatter, comptime T: type, items: []T) bool {
+    fn nodesWillBeMultiline(fmt: *Formatter, comptime T: type, items: []const T) bool {
         for (items) |item| {
             if (fmt.nodeWillBeMultiline(T, item)) {
                 return true;
@@ -3784,6 +3786,17 @@ test "issue 10140: nested record function type formatting is idempotent" {
         \\}=>U}=>r
     , false);
     defer std.testing.allocator.free(result);
+}
+
+test "record spread expressions format idempotently" {
+    const result = try moduleFmtsStable(
+        std.testing.allocator,
+        "test = { ..r, ..{ hello: 10.I8 } }",
+        false,
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expectEqualStrings("test = { ..r, ..{ hello: 10.I8 } }\n", result);
 }
 
 test "compact function argument collections ignore removable source newlines" {

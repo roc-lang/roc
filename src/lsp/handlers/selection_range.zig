@@ -376,15 +376,15 @@ fn collectContainingRegionsFromExpr(
             try collectContainingRegionsFromExpr(allocator, ast, ta.expr, target_offset, regions);
         },
         .record => |r| {
+            for (ast.store.recordExtSlice(&r.exts)) |ext| {
+                try collectContainingRegionsFromExpr(allocator, ast, ext, target_offset, regions);
+            }
             const fields = ast.store.recordFieldSlice(r.fields);
             for (fields) |field_idx| {
                 const field = ast.store.getRecordField(field_idx);
                 if (field.value) |value| {
                     try collectContainingRegionsFromExpr(allocator, ast, value, target_offset, regions);
                 }
-            }
-            if (r.ext) |ext| {
-                try collectContainingRegionsFromExpr(allocator, ast, ext, target_offset, regions);
             }
         },
         .lambda => |l| {

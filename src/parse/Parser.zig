@@ -2276,15 +2276,20 @@ const ExprRecordExtState = struct {
     start: Token.Idx,
     record_start: Token.Idx,
     min_bp: u8,
+    fields_scratch_top: u32,
+    exts_scratch_top: u32,
+    first_ext: ?AST.Expr.Idx,
     nominal_mapper: ?AST.Expr.Idx,
+    requires_comma: bool,
 };
 
 const ExprRecordState = struct {
     start: Token.Idx,
     record_start: Token.Idx,
     min_bp: u8,
-    scratch_top: u32,
-    ext: ?AST.Expr.Idx,
+    fields_scratch_top: u32,
+    exts_scratch_top: u32,
+    first_ext: ?AST.Expr.Idx,
     nominal_mapper: ?AST.Expr.Idx,
 };
 
@@ -2292,8 +2297,9 @@ const ExprRecordFieldState = struct {
     start: Token.Idx,
     record_start: Token.Idx,
     min_bp: u8,
-    scratch_top: u32,
-    ext: ?AST.Expr.Idx,
+    fields_scratch_top: u32,
+    exts_scratch_top: u32,
+    first_ext: ?AST.Expr.Idx,
     nominal_mapper: ?AST.Expr.Idx,
     field_start: Token.Idx,
     name: Token.Idx,
@@ -3146,8 +3152,9 @@ fn runExprStatementKernel(
                             .start = start,
                             .record_start = start,
                             .min_bp = expr_state.min_bp,
-                            .scratch_top = self.store.scratchRecordFieldTop(),
-                            .ext = null,
+                            .fields_scratch_top = self.store.scratchRecordFieldTop(),
+                            .exts_scratch_top = self.store.scratchExprTop(),
+                            .first_ext = null,
                             .nominal_mapper = null,
                         };
                         continue :expr_kernel .record_finish;
@@ -3157,7 +3164,11 @@ fn runExprStatementKernel(
                             .start = start,
                             .record_start = start,
                             .min_bp = expr_state.min_bp,
+                            .fields_scratch_top = self.store.scratchRecordFieldTop(),
+                            .exts_scratch_top = self.store.scratchExprTop(),
+                            .first_ext = null,
                             .nominal_mapper = null,
+                            .requires_comma = true,
                         });
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
                         continue :expr_kernel .prefix;
@@ -3201,8 +3212,9 @@ fn runExprStatementKernel(
                             .start = start,
                             .record_start = start,
                             .min_bp = expr_state.min_bp,
-                            .scratch_top = self.store.scratchRecordFieldTop(),
-                            .ext = null,
+                            .fields_scratch_top = self.store.scratchRecordFieldTop(),
+                            .exts_scratch_top = self.store.scratchExprTop(),
+                            .first_ext = null,
                             .nominal_mapper = null,
                         };
                         continue :expr_kernel .record_fields_next;
@@ -3394,8 +3406,9 @@ fn runExprStatementKernel(
                     .start = expr_finish_state.start,
                     .record_start = record_start,
                     .min_bp = expr_finish_state.min_bp,
-                    .scratch_top = self.store.scratchRecordFieldTop(),
-                    .ext = null,
+                    .fields_scratch_top = self.store.scratchRecordFieldTop(),
+                    .exts_scratch_top = self.store.scratchExprTop(),
+                    .first_ext = null,
                     .nominal_mapper = expr_finish_state.expr,
                 };
 
@@ -3408,7 +3421,11 @@ fn runExprStatementKernel(
                         .start = expr_finish_state.start,
                         .record_start = record_start,
                         .min_bp = expr_finish_state.min_bp,
+                        .fields_scratch_top = expr_record_state.fields_scratch_top,
+                        .exts_scratch_top = expr_record_state.exts_scratch_top,
+                        .first_ext = expr_record_state.first_ext,
                         .nominal_mapper = expr_finish_state.expr,
+                        .requires_comma = true,
                     });
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
@@ -3673,21 +3690,38 @@ fn runExprStatementKernel(
                     .expr_record_ext => {
                         const state = open_syntax.popExprPayload(.expr_record_ext, ExprRecordExtState);
                         last_expr = null;
-                        if (self.peek() != .Comma) {
-                            const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_comma, self.pos);
-                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
-                            continue :expr_kernel .suffix;
+                        var first_ext = state.first_ext;
+                        if (first_ext) |first| {
+                            if (self.store.scratchExprTop() == state.exts_scratch_top) {
+                                try self.store.addScratchExpr(first);
+                            }
+                            try self.store.addScratchExpr(completed);
+                        } else {
+                            first_ext = completed;
                         }
-                        self.advance();
                         expr_record_state = .{
                             .start = state.start,
                             .record_start = state.record_start,
                             .min_bp = state.min_bp,
-                            .scratch_top = self.store.scratchRecordFieldTop(),
-                            .ext = completed,
+                            .fields_scratch_top = state.fields_scratch_top,
+                            .exts_scratch_top = state.exts_scratch_top,
+                            .first_ext = first_ext,
                             .nominal_mapper = state.nominal_mapper,
                         };
-                        continue :expr_kernel .record_fields_next;
+                        if (self.peek() == .Comma) {
+                            self.advance();
+                            continue :expr_kernel .record_fields_next;
+                        }
+                        if (!state.requires_comma and self.peek() == .CloseCurly) {
+                            continue :expr_kernel .record_finish;
+                        }
+
+                        self.store.clearScratchRecordFieldsFrom(state.fields_scratch_top);
+                        self.store.clearScratchExprsFrom(state.exts_scratch_top);
+                        const diagnostic: AST.Diagnostic.Tag = if (state.requires_comma) .expected_expr_comma else .expected_expr_close_curly_or_comma;
+                        const expr = try self.pushMalformed(AST.Expr.Idx, diagnostic, self.pos);
+                        expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
+                        continue :expr_kernel .suffix;
                     },
                     .expr_record_field => {
                         const state = open_syntax.popExprPayload(.expr_record_field, ExprRecordFieldState);
@@ -3702,8 +3736,9 @@ fn runExprStatementKernel(
                             .start = state.start,
                             .record_start = state.record_start,
                             .min_bp = state.min_bp,
-                            .scratch_top = state.scratch_top,
-                            .ext = state.ext,
+                            .fields_scratch_top = state.fields_scratch_top,
+                            .exts_scratch_top = state.exts_scratch_top,
+                            .first_ext = state.first_ext,
                             .nominal_mapper = state.nominal_mapper,
                         };
                         if (self.peek() == .Comma) {
@@ -4262,8 +4297,9 @@ fn runExprStatementKernel(
                         .start = expr_record_state.start,
                         .record_start = expr_record_state.record_start,
                         .min_bp = expr_record_state.min_bp,
-                        .scratch_top = expr_record_state.scratch_top,
-                        .ext = expr_record_state.ext,
+                        .fields_scratch_top = expr_record_state.fields_scratch_top,
+                        .exts_scratch_top = expr_record_state.exts_scratch_top,
+                        .first_ext = expr_record_state.first_ext,
                         .nominal_mapper = expr_record_state.nominal_mapper,
                         .field_start = field_start,
                         .name = name,
@@ -4283,8 +4319,40 @@ fn runExprStatementKernel(
                 }
                 continue :expr_kernel .record_finish;
             },
+            .DoubleDot => {
+                if (self.store.scratchRecordFieldTop() != expr_record_state.fields_scratch_top) {
+                    const spread_start = self.pos;
+                    while (self.peek() != .EndOfFile and self.peek() != .CloseCurly and self.peek() != .Comma) {
+                        self.advance();
+                    }
+                    try self.pushDiagnostic(.record_spread_after_field, .{ .start = spread_start, .end = self.pos });
+                    if (self.peek() == .CloseCurly) {
+                        self.advance();
+                    }
+                    self.store.clearScratchRecordFieldsFrom(expr_record_state.fields_scratch_top);
+                    self.store.clearScratchExprsFrom(expr_record_state.exts_scratch_top);
+                    const expr = try self.store.addMalformed(AST.Expr.Idx, .record_spread_after_field, .{ .start = expr_record_state.start, .end = self.pos });
+                    expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
+                    continue :expr_kernel .suffix;
+                }
+
+                self.advance();
+                try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
+                    .start = expr_record_state.start,
+                    .record_start = expr_record_state.record_start,
+                    .min_bp = expr_record_state.min_bp,
+                    .fields_scratch_top = expr_record_state.fields_scratch_top,
+                    .exts_scratch_top = expr_record_state.exts_scratch_top,
+                    .first_ext = expr_record_state.first_ext,
+                    .nominal_mapper = expr_record_state.nominal_mapper,
+                    .requires_comma = false,
+                });
+                expr_state = .{ .start = self.pos, .min_bp = 0 };
+                continue :expr_kernel .prefix;
+            },
             .EndOfFile => {
-                self.store.clearScratchRecordFieldsFrom(expr_record_state.scratch_top);
+                self.store.clearScratchRecordFieldsFrom(expr_record_state.fields_scratch_top);
+                self.store.clearScratchExprsFrom(expr_record_state.exts_scratch_top);
                 const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
@@ -4298,6 +4366,8 @@ fn runExprStatementKernel(
                 if (self.peek() == .CloseCurly) {
                     self.advance();
                 }
+                self.store.clearScratchRecordFieldsFrom(expr_record_state.fields_scratch_top);
+                self.store.clearScratchExprsFrom(expr_record_state.exts_scratch_top);
                 const expr = try self.store.addMalformed(AST.Expr.Idx, .expected_expr_record_field_name, .{ .start = expr_record_state.start, .end = self.pos });
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
@@ -4307,13 +4377,20 @@ fn runExprStatementKernel(
             .CloseCurly => {
                 const layout = self.directCollectionLayout();
                 self.advance();
-                const fields = try self.store.recordFieldSpanFrom(expr_record_state.scratch_top);
-                const expr = try self.finishRecordExpr(expr_record_state.start, expr_record_state.record_start, fields, expr_record_state.ext, expr_record_state.nominal_mapper, layout);
+                const fields = try self.store.recordFieldSpanFrom(expr_record_state.fields_scratch_top);
+                const exts: AST.Expr.RecordExts = if (expr_record_state.first_ext) |first_ext| blk: {
+                    if (self.store.scratchExprTop() == expr_record_state.exts_scratch_top) {
+                        break :blk .{ .single = first_ext };
+                    }
+                    break :blk .{ .multiple = try self.store.exprSpanFrom(expr_record_state.exts_scratch_top) };
+                } else .none;
+                const expr = try self.finishRecordExpr(expr_record_state.start, expr_record_state.record_start, fields, exts, expr_record_state.nominal_mapper, layout);
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
             },
             else => {
-                self.store.clearScratchRecordFieldsFrom(expr_record_state.scratch_top);
+                self.store.clearScratchRecordFieldsFrom(expr_record_state.fields_scratch_top);
+                self.store.clearScratchExprsFrom(expr_record_state.exts_scratch_top);
                 const expr = try self.pushMalformed(AST.Expr.Idx, .expected_expr_close_curly_or_comma, self.pos);
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
@@ -5437,8 +5514,9 @@ fn runExprStatementKernel(
                         .start = start,
                         .record_start = start,
                         .min_bp = 0,
-                        .scratch_top = self.store.scratchRecordFieldTop(),
-                        .ext = null,
+                        .fields_scratch_top = self.store.scratchRecordFieldTop(),
+                        .exts_scratch_top = self.store.scratchExprTop(),
+                        .first_ext = null,
                         .nominal_mapper = null,
                     };
                     continue :expr_kernel .record_fields_next;
@@ -6470,14 +6548,14 @@ fn finishRecordExpr(
     start: Token.Idx,
     record_start: Token.Idx,
     fields: AST.RecordField.Span,
-    ext: ?AST.Expr.Idx,
+    exts: AST.Expr.RecordExts,
     nominal_mapper: ?AST.Expr.Idx,
     layout: AST.CollectionLayout,
 ) std.mem.Allocator.Error!AST.Expr.Idx {
     if (nominal_mapper) |mapper| {
         const record_expr = try self.store.addExpr(.{ .record = .{
             .fields = fields,
-            .ext = ext,
+            .exts = exts,
             .region = .{ .start = record_start, .end = self.pos },
         } });
         self.store.setCollectionLayout(record_expr, layout);
@@ -6489,7 +6567,7 @@ fn finishRecordExpr(
         } });
     }
 
-    if (ext == null and self.peek() == .NoSpaceDotUpperIdent) {
+    if (exts.len() == 0 and self.peek() == .NoSpaceDotUpperIdent) {
         const suffix_start = self.pos;
         var final_token = self.pos;
         self.advance();
@@ -6518,7 +6596,7 @@ fn finishRecordExpr(
 
     const record_expr = try self.store.addExpr(.{ .record = .{
         .fields = fields,
-        .ext = ext,
+        .exts = exts,
         .region = .{ .start = start, .end = self.pos },
     } });
     self.store.setCollectionLayout(record_expr, layout);
