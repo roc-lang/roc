@@ -11783,30 +11783,6 @@ fn checkStoredValueExpr(
     };
 }
 
-/// Type-check a record expression containing more than one spread.
-///
-/// Canonicalization preserves every spread in source order. The typing rule for
-/// combining those rows is intentionally left for the record-spread type-checking
-/// change; do not collapse the list to the legacy single-update behavior here.
-fn checkRecordWithMultipleExtensions(
-    self: *Self,
-    fields: CIR.RecordField.Span,
-    extensions: []const CIR.Expr.Idx,
-    expr_var: Var,
-    env: *Env,
-    expected: Expected,
-    region: Region,
-) std.mem.Allocator.Error!bool {
-    _ = self;
-    _ = fields;
-    _ = extensions;
-    _ = expr_var;
-    _ = env;
-    _ = expected;
-    _ = region;
-    @panic("TODO: type check record expressions with multiple extensions");
-}
-
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -12162,14 +12138,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_record => |e| {
             const extensions = self.cir.store.sliceExpr(e.exts);
             if (extensions.len > 1) {
-                does_fx = try self.checkRecordWithMultipleExtensions(
-                    e.fields,
-                    extensions,
-                    expr_var,
-                    env,
-                    child_expected,
-                    expr_region,
-                ) or does_fx;
+                // Check the record being updated
+                const record_being_updated_expr = extensions[0];
+                does_fx = try self.checkExpr(record_being_updated_expr, env, child_expected) or does_fx;
+
+                for (extensions[1..]) |ext| {
+                    // TODO
+
+                }
             } else if (extensions.len == 1) {
                 const record_being_updated_expr = extensions[0];
                 // Create a record type in the type system and assign it the expr_var
