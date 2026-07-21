@@ -3769,7 +3769,7 @@ fn canonicalizeAssociatedItems(
                     break :blk false; // No matching decl found
                 } else false; // No next statement
 
-                // If there's no matching decl, create an anno-only def and
+                // If there's no matching decl, create an annotation-backed def and
                 // expose the same pattern under the unqualified, type-qualified,
                 // and fully-qualified names so siblings that reference this item
                 // (and possibly satisfy a pre-existing forward reference for
@@ -3781,6 +3781,10 @@ fn canonicalizeAssociatedItems(
                     }
                     const parent_text = self.env.getIdent(parent_name);
                     const name_text = self.env.getIdent(name_ident);
+                    const derived_method_kind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
+                        self.derivedMethodKind(name_ident)
+                    else
+                        null;
                     const qualified_idx = try self.insertQualifiedIdent(parent_text, name_text);
                     const assoc_key: ?AST.DeclIndex.AssocValue = if (owner_type_path) |owner|
                         .{ .owner = owner, .item = name_ident }
@@ -3789,8 +3793,8 @@ fn canonicalizeAssociatedItems(
 
                     // Adopt any pre-existing forward-reference placeholder keyed by
                     // the type-qualified name (e.g. `Str.count_utf8_bytes` inside
-                    // `Builtin.Str`) so reference sites and the anno def share one
-                    // Pattern.Idx. `createAnnoOnlyDef` already handles the
+                    // `Builtin.Str`) so reference sites and the annotation def share one
+                    // Pattern.Idx. `createAnnotationDef` already handles the
                     // qualified-form key; do the type-qualified form here.
                     const adopted_pattern_idx: ?CIR.Pattern.Idx = blk_adopt: {
                         if (assoc_key) |key| {
@@ -3829,9 +3833,9 @@ fn canonicalizeAssociatedItems(
                     };
 
                     const def_idx = if (adopted_pattern_idx) |adopted|
-                        try self.createAnnoOnlyDefWithPattern(adopted, qualified_idx, type_anno_idx, where_clauses, region)
+                        try self.createAnnotationDefWithPattern(adopted, qualified_idx, type_anno_idx, derived_method_kind, where_clauses, region)
                     else
-                        try self.createAnnoOnlyDef(qualified_idx, type_anno_idx, where_clauses, region);
+                        try self.createAnnotationDef(qualified_idx, type_anno_idx, derived_method_kind, where_clauses, region);
 
                     if (owner_is_module_visible) {
                         try self.env.setExposedValueNodeIndexById(qualified_idx, @intFromEnum(def_idx));
@@ -3856,7 +3860,7 @@ fn canonicalizeAssociatedItems(
                         qualified_idx
                     else blk_atq: {
                         // Re-fetch the ident texts here — earlier calls
-                        // (createAnnoOnlyDef, setExposedValueNodeIndexById, …) may
+                        // (createAnnotationDef, setExposedValueNodeIndexById, …) may
                         // have grown the interner and invalidated the slices
                         // captured before this point.
                         const type_text_now = self.env.getIdent(type_name);
@@ -4309,7 +4313,7 @@ pub fn canonicalizeFile(
                             } else {
                                 // Names don't match - create an anno-only def for this annotation
                                 // and let the next iteration handle the decl normally
-                                const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                                const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region);
                                 try self.env.store.addScratchDef(def_idx);
                                 try self.recordGlobalValueDef(def_idx);
 
@@ -4324,7 +4328,7 @@ pub fn canonicalizeFile(
                         else => {
                             // If the next non-malformed stmt is not a decl,
                             // create a Def with an e_anno_only body
-                            const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                            const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region);
                             try self.env.store.addScratchDef(def_idx);
                             try self.recordGlobalValueDef(def_idx);
 
@@ -4342,7 +4346,7 @@ pub fn canonicalizeFile(
                 // If we didn't find any next statement, create an anno-only def
                 // (This handles the case where the type annotation is the last statement in the file)
                 if (next_i >= ast_stmt_idxs.len) {
-                    const def_idx = try self.createAnnoOnlyDef(name_ident, type_anno_idx, where_clauses, region);
+                    const def_idx = try self.createAnnotationDef(name_ident, type_anno_idx, null, where_clauses, region);
                     try self.env.store.addScratchDef(def_idx);
                     try self.recordGlobalValueDef(def_idx);
 
@@ -4483,9 +4487,32 @@ fn poisonRecursiveNonFunctionDefs(
 
 fn isRecursiveFunctionDefExpr(expr: CIR.Expr) bool {
     return switch (expr) {
-        .e_closure, .e_lambda, .e_anno_only, .e_hosted_lambda => true,
+        .e_closure, .e_lambda, .e_anno_only, .e_derived_method, .e_hosted_lambda => true,
         else => false,
     };
+}
+
+fn derivedMethodKind(self: *const Self, ident: Ident.Idx) ?CIR.DerivedMethodKind {
+    const common = self.env.idents;
+    if (ident.eql(common.is_eq)) return .equality;
+    if (ident.eql(common.to_hash)) return .hash;
+    if (ident.eql(common.parser_for)) return .parser;
+    if (ident.eql(common.encoder_for)) return .encoder;
+    if (ident.eql(common.map)) return .map;
+    if (ident.eql(common.map_bang)) return .map_effectful;
+    return null;
+}
+
+fn addAnnotationExpr(
+    self: *Self,
+    ident: Ident.Idx,
+    derived_method_kind: ?CIR.DerivedMethodKind,
+    region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    return self.env.addExpr(if (derived_method_kind) |kind|
+        Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } }
+    else
+        Expr{ .e_anno_only = .{ .ident = ident } }, region);
 }
 
 fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?Ident.Idx {
@@ -4598,11 +4625,12 @@ pub fn validateForExecution(self: *Self) std.mem.Allocator.Error!void {
     try self.env.publishScratchDiagnostics();
 }
 
-/// Creates an annotation-only def for a standalone type annotation with no implementation
-fn createAnnoOnlyDef(
+/// Creates a definition for a standalone annotation with no Roc implementation.
+fn createAnnotationDef(
     self: *Self,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
+    derived_method_kind: ?CIR.DerivedMethodKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
@@ -4681,10 +4709,7 @@ fn createAnnoOnlyDef(
     // (canonicalizeAssociatedItems) will update all three identifiers (qualified,
     // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
-    // Create the e_anno_only expression
-    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
-        .ident = ident,
-    } }, region);
+    const annotation_expr = try self.addAnnotationExpr(ident, derived_method_kind, region);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -4696,28 +4721,27 @@ fn createAnnoOnlyDef(
     // Create and return the def
     return try self.env.addDef(.{
         .pattern = pattern_idx,
-        .expr = anno_only_expr,
+        .expr = annotation_expr,
         .annotation = annotation_idx,
         .kind = .let,
     }, region);
 }
 
-/// Build an anno-only def reusing a pre-existing pattern (typically a
+/// Build an annotation-only or derived-method def reusing a pre-existing pattern (typically a
 /// forward-reference placeholder adopted by the caller), so lookup sites that
 /// already point at that placeholder pattern resolve to this def.
-fn createAnnoOnlyDefWithPattern(
+fn createAnnotationDefWithPattern(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     ident: base.Ident.Idx,
     type_anno_idx: TypeAnno.Idx,
+    derived_method_kind: ?CIR.DerivedMethodKind,
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CIR.Def.Idx {
     try self.scopes.items[self.scopes.items.len - 1].idents.put(self.env.gpa, ident, pattern_idx);
 
-    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
-        .ident = ident,
-    } }, region);
+    const annotation_expr = try self.addAnnotationExpr(ident, derived_method_kind, region);
 
     const annotation = CIR.Annotation{
         .anno = type_anno_idx,
@@ -4727,7 +4751,7 @@ fn createAnnoOnlyDefWithPattern(
 
     return try self.env.addDef(.{
         .pattern = pattern_idx,
-        .expr = anno_only_expr,
+        .expr = annotation_expr,
         .annotation = annotation_idx,
         .kind = .let,
     }, region);
@@ -8270,6 +8294,7 @@ const DefiniteInitAnalyzer = struct {
             .e_runtime_error,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             => true,
             .e_str => |str| try self.analyzeExprSpan(str.span, state, breaks),
             .e_list => |list| try self.analyzeExprSpan(list.elems, state, breaks),
@@ -8533,7 +8558,7 @@ fn createBlockAnnoOnlyStatement(
     where_clauses: ?WhereClause.Span,
     region: Region,
 ) std.mem.Allocator.Error!CanonicalizedStatement {
-    const def_idx = try self.createAnnoOnlyDef(ident, type_anno_idx, where_clauses, region);
+    const def_idx = try self.createAnnotationDef(ident, type_anno_idx, null, where_clauses, region);
     try self.env.store.addScratchDef(def_idx);
 
     const def = self.env.store.getDef(def_idx);
@@ -9554,6 +9579,7 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .e_runtime_error,
                     .e_ellipsis,
                     .e_anno_only,
+                    .e_derived_method,
                     => {},
                 }
             },
@@ -19363,7 +19389,7 @@ pub fn scopeIntroduceInternal(
     }
 
     // Forward-reference draining is the caller's responsibility — see
-    // `canonicalizePattern` and `createAnnoOnlyDef`, which fetch the
+    // `canonicalizePattern` and `createAnnotationDef`, which fetch the
     // forward-reference pattern and use it as the def's pattern so existing
     // e_lookup_local nodes stay consistent. By the time we get here, any
     // such drain has already happened, so we don't try again.

@@ -61,6 +61,45 @@ packages can define and require their own methods with `where` clauses.
 | `next` | `for` loop iteration steps | Usually provided by `Iter`; collection authors usually implement `iter`. |
 | `parser_for : encoding -> (state -> Try({ value : T, rest : state }, err))` | Generic parser APIs such as JSON parsing | A format should be able to parse the type. |
 | `encoder_for : encoding -> (T, state -> Try(state, err))` | Generic encoder APIs such as JSON encoding | A format should be able to encode the type. |
+| `map` | Mapping a selected payload in an eligible tag union | The type should support a pure payload transformation. |
+| `map!` | Mapping a selected payload in an eligible tag union | The type should support an effectful payload transformation. |
+
+### Compiler-Derived Methods
+
+Roc can derive implementations of `is_eq`, `to_hash`, `parser_for`,
+`encoder_for`, `map`, and `map!`. Structural types receive each derived method
+automatically when their shape supports it. A nominal or opaque type must opt in
+to each desired implementation by declaring the associated method with `_` as
+its annotation:
+
+```roc
+Model := { value : Str }.{
+    is_eq : _
+    to_hash : _
+    parser_for : _
+    encoder_for : _
+}
+```
+
+Here, `_` asks the compiler to infer the method's type and synthesize its
+implementation. It is only recognized for these six associated method names;
+other declarations without bodies are errors unless they are host-provided
+platform declarations. Derived method opt-ins behave the same in application,
+package, and platform modules.
+
+Providing a method body defines an ordinary custom implementation instead of
+requesting derivation. For example, a type can define custom equality while
+still deriving its hash and codec methods.
+
+Derived `map` and `map!` apply to eligible tag unions with one selected direct
+payload. `map` takes a pure transformation, while `map!` takes an effectful one:
+
+```roc
+Maybe(a) := [Just(a), Nothing].{
+    map : _
+    map! : _
+}
+```
 
 ### `to_inspect`
 

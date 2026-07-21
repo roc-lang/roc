@@ -89,6 +89,7 @@ If you're looking for a beginner tutorial, check out [roc-lang.org/tutorial](htt
   - [Type Aliases](types#type-aliases)
 - [Static Dispatch](static-dispatch)
   - [Methods](static-dispatch#methods)
+  - [Compiler-Derived Methods](static-dispatch#compiler-derived-methods)
   - [Where Clauses](static-dispatch#where-clauses)
   - [Aliases](static-dispatch#aliases)
 - [Operators](operators)

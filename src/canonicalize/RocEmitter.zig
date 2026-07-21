@@ -545,6 +545,7 @@ fn emitExprFrame(
         },
         .e_ellipsis => try self.write("..."),
         .e_anno_only => try self.write("<anno_only>"),
+        .e_derived_method => try self.write("<derived_method>"),
         .e_return => |ret| {
             try frames.append(allocator, .{ .expr = ret.expr });
             try frames.append(allocator, .{ .write = "return " });

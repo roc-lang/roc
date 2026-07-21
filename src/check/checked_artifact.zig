@@ -8784,6 +8784,7 @@ const CheckedSourceNodes = struct {
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_break,
             => {},
         }
@@ -10673,6 +10674,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_expect => |expect| .{ .expect = self.checkedExpr(expect.body) },
             .e_ellipsis => .ellipsis,
             .e_anno_only => .anno_only,
+            .e_derived_method => .anno_only,
             .e_break => .break_,
             .e_return => |ret| .{ .return_ = .{
                 .expr = self.checkedExpr(ret.expr),
@@ -12468,6 +12470,7 @@ fn categorizeValueRef(
         .e_expect,
         .e_ellipsis,
         .e_anno_only,
+        .e_derived_method,
         .e_break,
         .e_return,
         .e_for,

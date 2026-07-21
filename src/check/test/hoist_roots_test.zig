@@ -868,6 +868,7 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_runtime_error,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_crash,
             .e_closure,
             .e_lambda,

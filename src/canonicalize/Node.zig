@@ -111,6 +111,7 @@ pub const Tag = enum {
     expr_block,
     expr_ellipsis,
     expr_anno_only,
+    expr_derived_method,
     expr_hosted_lambda,
     expr_low_level,
     expr_run_low_level,
@@ -355,6 +356,7 @@ pub const Payload = extern union {
     expr_dbg: ExprDbg,
     expr_expect_err: ExprExpectErr,
     expr_anno_only: ExprAnnoOnly,
+    expr_derived_method: ExprDerivedMethod,
     expr_return: ExprReturn,
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
@@ -815,6 +817,13 @@ pub const Payload = extern union {
     pub const ExprAnnoOnly = extern struct {
         ident: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// expr_derived_method: compiler-derived associated method marker
+    pub const ExprDerivedMethod = extern struct {
+        ident: u32,
+        kind: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_return: return expression

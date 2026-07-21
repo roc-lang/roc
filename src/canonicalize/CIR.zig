@@ -20,6 +20,7 @@ const TypeVar = types_mod.Var;
 pub const NodeStore = @import("NodeStore.zig");
 pub const Node = @import("Node.zig");
 pub const Expr = @import("Expression.zig").Expr;
+pub const DerivedMethodKind = @import("Expression.zig").DerivedMethodKind;
 pub const Pattern = @import("Pattern.zig").Pattern;
 pub const Statement = @import("Statement.zig").Statement;
 pub const TypeAnno = @import("TypeAnnotation.zig").TypeAnno;

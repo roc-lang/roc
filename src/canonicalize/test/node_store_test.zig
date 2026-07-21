@@ -517,6 +517,12 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_derived_method = .{
+            .ident = rand_ident_idx(),
+            .kind = .encoder,
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_hosted_lambda = .{
             .symbol_name = rand_ident_idx(),
             .args = CIR.Pattern.Span{ .span = rand_span() },

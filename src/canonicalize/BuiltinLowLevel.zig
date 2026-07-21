@@ -70,18 +70,6 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
     return intrinsicAnnotation(env, ident) != null;
 }
 
-/// Returns whether an annotation-only declaration opts into a compiler-derived method.
-pub fn isDerivedMethodMarker(env: *const ModuleEnv, ident: base.Ident.Idx, annotation: CIR.Annotation.Idx) bool {
-    if (env.store.getTypeAnno(env.store.getAnnotation(annotation).anno) != .underscore) return false;
-    const text = env.getIdent(ident);
-    return base.Ident.textEndsWith(text, ".is_eq") or
-        base.Ident.textEndsWith(text, ".to_hash") or
-        base.Ident.textEndsWith(text, ".parser_for") or
-        base.Ident.textEndsWith(text, ".encoder_for") or
-        base.Ident.textEndsWith(text, ".map") or
-        base.Ident.textEndsWith(text, ".map!");
-}
-
 /// Replaces Builtin.roc annotation-only primitive declarations with low-level operation lambdas.
 pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
     var new_def_indices = try replaceProvidedByCompilerLowLevels(env);
@@ -1413,7 +1401,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 // Check if this identifier matches a low-level operation
                 const entry = low_level_map.fetchRemove(ident) orelse {
                     if (isIntrinsicAnnotation(env, ident)) continue;
-                    if (isDerivedMethodMarker(env, ident, def.annotation.?)) continue;
 
                     return error.UnsupportedBuiltinAnnotationOnly;
                 };

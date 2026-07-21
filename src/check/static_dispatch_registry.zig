@@ -313,7 +313,7 @@ pub const MethodRegistry = struct {
             };
             const def_idx = entry.value.def_idx;
             var referenced_callable_var: ?Var = null;
-            const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value, entry.key.methodIdent())) |generated|
+            const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
             else if (local_templates.entryForDef(def_idx)) |template_entry| blk: {
                 const template = template_entry.template;
@@ -386,54 +386,20 @@ fn methodTargetCallableVar(
 fn generatedStructuralTargetForMethodBinding(
     module: TypedCIR.Module,
     binding: ModuleEnv.MethodBinding,
-    method_ident: Ident.Idx,
 ) ?StructuralKind {
     const expr_idx = methodBindingExpr(module, binding) orelse return null;
-    switch (module.expr(expr_idx).data) {
-        .e_anno_only,
-        .e_hosted_lambda,
-        => {},
+    const kind = switch (module.expr(expr_idx).data) {
+        .e_derived_method => |derived| derived.kind,
         else => return null,
-    }
-    const annotation_idx = methodBindingAnnotation(module, binding) orelse return null;
-    if (module.moduleEnvConst().store.getTypeAnno(module.moduleEnvConst().store.getAnnotation(annotation_idx).anno) != .underscore) return null;
+    };
 
-    const common = module.commonIdents();
-    if (method_ident.eql(common.is_eq)) return .equality;
-    if (method_ident.eql(common.to_hash)) return .hash;
-    if (method_ident.eql(common.parser_for)) return .parser;
-    if (method_ident.eql(common.encoder_for)) return .encoder;
-    if (method_ident.eql(common.map)) return .map;
-    if (method_ident.eql(common.map_bang)) return .map_effectful;
-    return null;
-}
-
-fn methodBindingAnnotation(
-    module: TypedCIR.Module,
-    binding: ModuleEnv.MethodBinding,
-) ?CIR.Annotation.Idx {
-    const raw_node = @intFromEnum(binding.type_node_idx);
-    if (raw_node >= module.nodeCount()) {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.panic(
-                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
-                .{raw_node},
-            );
-        }
-        unreachable;
-    }
-
-    return switch (module.nodeTag(binding.type_node_idx)) {
-        .def => module.moduleEnvConst().store.getDef(binding.def_idx).annotation,
-        .statement_decl => blk: {
-            const statement: CIR.Statement.Idx = @enumFromInt(raw_node);
-            const decl = switch (module.getStatement(statement)) {
-                .s_decl => |decl| decl,
-                else => return null,
-            };
-            break :blk decl.anno;
-        },
-        else => null,
+    return switch (kind) {
+        .equality => .equality,
+        .hash => .hash,
+        .parser => .parser,
+        .encoder => .encoder,
+        .map => .map,
+        .map_effectful => .map_effectful,
     };
 }
 

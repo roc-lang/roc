@@ -39,6 +39,17 @@ const TypeVar = types.Var;
 
 const Self = Expr;
 
+/// A compiler-generated implementation requested by an underscore annotation
+/// on one of the language's recognized associated methods.
+pub const DerivedMethodKind = enum(u8) {
+    equality,
+    hash,
+    parser,
+    encoder,
+    map,
+    map_effectful,
+};
+
 /// An expression in the Roc language.
 pub const Expr = union(enum) {
     /// An number literal with a specific value.
@@ -509,6 +520,14 @@ pub const Expr = union(enum) {
     e_anno_only: struct {
         /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
         ident: Ident.Idx,
+    },
+
+    /// An explicit request for a compiler-derived associated method.
+    /// Canonicalization records the exact method kind so later phases never
+    /// need to infer compiler intent from an annotation or identifier text.
+    e_derived_method: struct {
+        ident: Ident.Idx,
+        kind: DerivedMethodKind,
     },
 
     /// Early return expression that exits the enclosing function with a value.
@@ -1490,6 +1509,15 @@ pub const Expr = union(enum) {
             .e_anno_only => {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-anno-only");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_derived_method => |derived| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-derived-method");
+                try tree.pushStringPair("kind", @tagName(derived.kind));
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
