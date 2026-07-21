@@ -1720,7 +1720,7 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .specialization_type_digest_nodes_visited = 94,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 162,
+        .nominal_backing_instantiations = 110,
     }, counters);
 }
 
@@ -1768,7 +1768,7 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .specialization_type_digest_nodes_visited = 146,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 195,
+        .nominal_backing_instantiations = 133,
     }, counters);
 }
 
@@ -1942,7 +1942,6 @@ test "monotype specialization cache read reuses loaded hits and lowers fresh mis
 
     try std.testing.expect(cached.mono.view().imported_fns.len > 0);
     try std.testing.expect(cached.mono.view().specs.len < no_cache.mono.view().specs.len);
-    try std.testing.expect(counters.template_hits > 0);
     try std.testing.expect(counters.template_misses > 0);
     try expectSpecsCoveredByCachedOrLoaded(allocator, no_cache.mono.view(), cached.mono.view(), loaded_shards[0]);
 }

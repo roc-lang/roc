@@ -12107,6 +12107,7 @@ pub const PlatformRequiredConstResolvedRef = struct {
 pub const PlatformRequiredProcedureResolvedRef = struct {
     binding: PlatformRequiredBindingId,
     procedure: ProcedureUseTemplate,
+    root_evidence: ?CheckedEvidenceSpan = null,
 };
 
 /// Public `SelectedHoistedConstUse` declaration.
@@ -12839,6 +12840,7 @@ fn categorizeRequiredValueRef(
         .procedure_value => |procedure_use| .{ .platform_required_proc = .{
             .binding = binding.id,
             .procedure = procedure_use.procedure,
+            .root_evidence = procedure_use.root_evidence,
         } },
     };
 }
@@ -24333,7 +24335,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 41;
+    const serialized_layout_version: u32 = 42;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29365,8 +29367,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE0, 0x3C, 0xCD, 0xDB, 0xDD, 0x8B, 0x05, 0x98, 0x8F, 0x7E, 0x27, 0xED, 0x14, 0x94, 0x31, 0x5B,
-        0x3B, 0x40, 0x29, 0xB3, 0x55, 0xDC, 0xEA, 0x01, 0xE0, 0x8D, 0xB0, 0x6F, 0x33, 0x60, 0xC5, 0xBC,
+        0xAC, 0xE8, 0x35, 0x7C, 0xF6, 0xBC, 0x0B, 0x76, 0x74, 0x56, 0x7A, 0xD3, 0x11, 0x7E, 0x43, 0xF0,
+        0x85, 0xF0, 0xB9, 0x67, 0x8B, 0x1F, 0x41, 0xE1, 0x8A, 0x6C, 0x1B, 0xC0, 0xCA, 0xE1, 0x55, 0xA0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -3518,6 +3518,14 @@ const Builder = struct {
             .encoder_for_runtime,
             => Common.invariant("root procedure evidence referenced a non-checked procedure template"),
         };
+        return try self.materializeCheckedProcedureEvidence(template_ref, evidence_span);
+    }
+
+    fn materializeCheckedProcedureEvidence(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        evidence_span: checked.CheckedEvidenceSpan,
+    ) Allocator.Error![]const SpecEvidence {
         const view = self.moduleForId(evidence_span.checked_module);
         if (!moduleBytesEqual(view.key.bytes, names.procTemplateModuleDigest(template_ref).bytes)) {
             Common.invariant("root procedure evidence and procedure template belonged to different checked modules");
@@ -14902,6 +14910,16 @@ const BodyContext = struct {
         };
     }
 
+    fn isGeneratedPrivateRootNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .named => |named| if (named.backing) |backing|
+                backing.authority == .generated_private
+            else
+                false,
+            else => false,
+        };
+    }
+
     /// Build an exact iterator procedure request entirely in the active
     /// instantiation graph. No durable Monotype TypeId is created until the
     /// graph has received all evidence and is sealed.
@@ -20176,17 +20194,25 @@ const BodyContext = struct {
                 request_args[index] = formal_node;
             }
         }
-        const caller_ret = try caller.instNode(checked_ret_ty);
-        if (try self.graph.containsGeneratedPrivate(caller_ret)) {
-            // The checked result is only the call's public interface. A prior
-            // occurrence may already have refined its cached cell to a private
-            // producer representation; do not let that representation select
-            // this call's producer before the call itself has done so.
+        if (expected_ret_node != null) {
+            // An explicit request owns the call's exact result evidence. Keep
+            // the checked result as a fresh public interface: its cached cell
+            // may already contain private evidence from another occurrence.
             const public_ret = try caller.freshInstNode(checked_ret_ty);
-            try self.graph.relateOpaqueInterface(public_ret, caller_ret);
             try self.graph.unify(fn_graph.ret, public_ret);
         } else {
-            try self.graph.unify(fn_graph.ret, caller_ret);
+            const caller_ret = try caller.instNode(checked_ret_ty);
+            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
+                // A prior occurrence may already have refined this cached cell
+                // to a private producer representation. Preserve its public
+                // interface without letting that representation select this
+                // call's producer before the call itself has done so.
+                const public_ret = try caller.freshInstNode(checked_ret_ty);
+                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
+                try self.graph.unify(fn_graph.ret, public_ret);
+            } else {
+                try self.graph.unify(fn_graph.ret, caller_ret);
+            }
         }
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
@@ -20259,15 +20285,20 @@ const BodyContext = struct {
             switch (operand) {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-                    const public_node = try caller.instNode(arg_ty);
-                    try self.graph.unify(formal_node, public_node);
                     if (phase == .expression_lowering) {
                         const evidence_node = try caller.lowerExprTypeNode(checked_arg);
-                        request_arg.* = try checkedMonoRequestNode(
-                            self.graph,
-                            public_node,
-                            evidence_node,
-                        );
+                        if (try self.graph.containsGeneratedPrivate(evidence_node)) {
+                            const public_node = try caller.freshInstNode(arg_ty);
+                            try self.graph.relateOpaqueInterface(public_node, evidence_node);
+                            try self.graph.unify(formal_node, public_node);
+                            request_arg.* = evidence_node;
+                        } else {
+                            const public_node = try caller.instNode(arg_ty);
+                            try self.graph.unify(formal_node, public_node);
+                            try self.graph.unify(formal_node, evidence_node);
+                        }
+                    } else {
+                        try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                     }
                 },
                 .generated_interpolation_iter,
@@ -20276,14 +20307,23 @@ const BodyContext = struct {
                 => {},
             }
         }
-        try self.graph.unify(fn_graph.ret, try caller.instNode(checked_ret_ty));
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
+            try self.graph.unify(fn_graph.ret, try caller.freshInstNode(checked_ret_ty));
             request_ret = try checkedMonoRequestNode(
                 self.graph,
                 fn_graph.ret,
                 expected,
             );
+        } else {
+            const caller_ret = try caller.instNode(checked_ret_ty);
+            if (try self.graph.containsGeneratedPrivate(caller_ret)) {
+                const public_ret = try caller.freshInstNode(checked_ret_ty);
+                try self.graph.relateOpaqueInterface(public_ret, caller_ret);
+                try self.graph.unify(fn_graph.ret, public_ret);
+            } else {
+                try self.graph.unify(fn_graph.ret, caller_ret);
+            }
         }
         try self.graph.drainDirty();
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
@@ -20791,8 +20831,15 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .promoted_top_level_proc,
-            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence),
-            .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(proc.procedure, source_fn_ty, source_fn_key, request_fn_node, evidence),
+            => |proc| try self.draftFnSlotForProcedureUseAtNode(proc, source_fn_ty, source_fn_key, request_fn_node, evidence, null),
+            .platform_required_proc => |proc| try self.draftFnSlotForProcedureUseAtNode(
+                proc.procedure,
+                source_fn_ty,
+                source_fn_key,
+                request_fn_node,
+                evidence,
+                proc.root_evidence,
+            ),
             else => Common.invariant("checked direct call target was not a procedure"),
         };
     }
@@ -20804,6 +20851,7 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         evidence: []const SpecEvidence,
+        root_evidence: ?checked.CheckedEvidenceSpan,
     ) Allocator.Error!DraftFnSlot {
         const template_ref = switch (proc.binding) {
             .top_level => |top_level| blk: {
@@ -20848,13 +20896,17 @@ const BodyContext = struct {
                 };
             },
         };
+        const requested_evidence = if (root_evidence) |producer_evidence|
+            try self.builder.materializeCheckedProcedureEvidence(template_ref, producer_evidence)
+        else
+            evidence;
         return try self.builder.lowerDraftTemplateFromContext(
             self,
             template_ref,
             source_fn_ty,
             source_fn_key,
             request_fn_node,
-            evidence,
+            requested_evidence,
         );
     }
 
@@ -21286,6 +21338,7 @@ const BodyContext = struct {
             proc.source_fn_ty_template,
             request_fn_node,
             evidence,
+            null,
         );
         const fn_id = try self.requireLocalDraftSlot(slot);
         return try self.addExprWithTypeCell(
@@ -24056,6 +24109,7 @@ const BodyContext = struct {
             .call => |call| call,
             else => Common.invariant("call-at-node lowering received a non-call expression"),
         };
+        const producer_request = if (self.isGeneratedPrivateRootNode(expected_node)) expected_node else null;
         const lowered = if (try self.lowerInspectOnlyCall(
             expr.ty,
             call,
@@ -24065,13 +24119,19 @@ const BodyContext = struct {
             rendered
         else if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored|
             restored
-        else if (try self.lowerParseIntrinsicCallExprAtNode(checked_expr, expr.ty, call, expected_node)) |intrinsic|
+        else if (if (producer_request) |request|
+            try self.lowerParseIntrinsicCallExprAtNode(checked_expr, expr.ty, call, request)
+        else
+            try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, null)) |intrinsic|
             intrinsic
         else lowered: {
             // Preserve the expected result as an active graph relation. It may
             // contain unresolved payload cells here, so materializing it as a
             // Monotype TypeId would emit an incomplete output.
-            const call_data = try self.lowerCallAtNode(expr.ty, call, expected_node);
+            const call_data = if (producer_request) |request|
+                try self.lowerCallAtNode(expr.ty, call, request)
+            else
+                try self.lowerCall(expr.ty, call);
             break :lowered try self.addExprWithTypeCell(call_data.ret_ty, call_data.data);
         };
         try relateRequestComponent(
