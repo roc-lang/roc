@@ -9945,9 +9945,25 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                 try self.declareOwnedStaticDispatchConstraint(where_idx, anno_var, env);
             }
 
+            var constraint_representatives = std.AutoHashMap(Ident.Idx, usize).init(self.gpa);
+            defer constraint_representatives.deinit();
+            try constraint_representatives.ensureTotalCapacity(@intCast(owned_where_clauses.len));
+
+            // A dispatcher's requirements are a method-keyed set. Keep the
+            // first source occurrence as its stable evidence position, and
+            // share its callable type with every repeated source constraint.
             const static_dispatch_constraints_start = self.types.static_dispatch_constraints.len();
             for (0..owned_where_clauses.len) |offset| {
-                const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_constraints_start + offset];
+                const scratch_index = scratch_constraints_start + offset;
+                const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_index];
+                const representative = try constraint_representatives.getOrPut(scratch_constraint.constraint.fn_name);
+                if (representative.found_existing) {
+                    const representative_constraint = self.scratch_static_dispatch_constraints.items.items[representative.value_ptr.*];
+                    _ = try self.unify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env);
+                    continue;
+                }
+
+                representative.value_ptr.* = scratch_index;
                 _ = try self.types.static_dispatch_constraints.append(self.types.gpa, scratch_constraint.constraint);
             }
             const static_dispatch_constraints_end = self.types.static_dispatch_constraints.len();
