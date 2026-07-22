@@ -133,22 +133,12 @@ jobs:
           # Caching just that under a stable build.zig.zon-hash key keeps deps
           # present across runs: it is read every run, so it stays warm and is
           # not evicted by the setup action's churnier per-run cache. A cold runner then no
-          # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while the setup action's own cache still handles build artifacts for speed.
+          # longer re-downloads deps from GitHub and hits HttpConnectionClosing.
+          # MiniCI build outputs are passed to shards by a short-lived artifact.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Restore or save MiniCI build cache
-        id: minici-build-cache
-        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
-        with:
-          path: |
-            .zig-cache
-            zig-out/bin
-            zig-out/lib
-          key: minici-build-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
 
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
@@ -160,16 +150,30 @@ jobs:
           arch: x64
 
       # Dep fetching and compilation happen here, where network flakes surface
-      # on stdout for flaky-retry to match. The minici run below then hits a
-      # warm cache and goes straight to the run steps, so its failures are
-      # genuine and never retried.
+      # on stdout for flaky-retry to match. The minici shards below then consume
+      # the build artifact and go straight to the run steps, so their failures
+      # are genuine and never retried.
       - name: Build MiniCI binaries
-        if: steps.minici-build-cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build build-ci
           error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
+
+      - name: Pack MiniCI build artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -cf minici-build.tar .zig-cache zig-out/bin zig-out/lib
+
+      - name: Upload MiniCI build artifact
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
+        with:
+          name: minici-build-${{ runner.os }}-${{ runner.arch }}
+          path: minici-build.tar
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
   zig-minici:
     needs: [check-changes, zig-minici-build]
@@ -178,9 +182,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
-      # Warning threshold for the explicit MiniCI build cache. This is a
-      # sanity check for the cache artifact size, not a setup-zig setting.
-      MINICI_BUILD_CACHE_WARN_MB: '10240'
+      # Warning threshold for the explicit MiniCI build artifact. This is a
+      # sanity check for the artifact size, not a setup-zig setting.
+      MINICI_BUILD_ARTIFACT_WARN_MB: '10240'
     strategy:
       fail-fast: false
       matrix:
@@ -222,15 +226,18 @@ jobs:
           version: 0.16.0
           use-cache: false
 
-      - name: Restore MiniCI build cache
-        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+      - name: Download MiniCI build artifact
+        uses: actions/download-artifact@v8.0.1 # ratchet:actions/download-artifact@v8.0.1
         with:
-          path: |
-            .zig-cache
-            zig-out/bin
-            zig-out/lib
-          key: minici-build-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-          fail-on-cache-miss: true
+          name: minici-build-${{ runner.os }}-${{ runner.arch }}
+          path: .
+
+      - name: Unpack MiniCI build artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xf minici-build.tar
+          rm minici-build.tar
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
@@ -252,9 +259,9 @@ jobs:
         run: zig build minici -- --minici-skip-build ${{ join(matrix.minici_args, ' ') }}
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
-      # build temp dir. It is now restored from the explicit MiniCI build cache,
-      # so report the composition after each shard to measure cache size and
-      # growth from run-time build work.
+      # build temp dir. It is restored from the MiniCI build artifact, so report
+      # the composition after each shard to measure artifact size and growth
+      # from run-time build work.
       # One level deep on purpose: o/, h/, p/, tmp/ is the whole question.
       - name: Report .zig-cache composition
         if: always() && runner.os != 'Windows'
@@ -263,7 +270,7 @@ jobs:
         run: |
           set -uo pipefail
           root="${ZIG_LOCAL_CACHE_DIR:-$GITHUB_WORKSPACE/.zig-cache}"
-          limit_mb="$MINICI_BUILD_CACHE_WARN_MB"
+          limit_mb="$MINICI_BUILD_ARTIFACT_WARN_MB"
           echo "root=$root  TMPDIR=${TMPDIR:-unset}"
           if [ ! -d "$root" ]; then echo "(no .zig-cache)"; exit 0; fi
           # `du -sk`, not `-sh`/`--block-size`: -k is POSIX and identical on BSD
@@ -276,7 +283,7 @@ jobs:
           awk -v k="$total_kb" -v l="$limit_mb" \
             'BEGIN { printf "%10.1f MB  TOTAL (limit %s MB)\n", k/1024, l }'
           if [ "$total_kb" -gt "$(( limit_mb * 1024 ))" ]; then
-            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB, over the ${limit_mb} MB MiniCI build-cache warning threshold."
+            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB, over the ${limit_mb} MB MiniCI build-artifact warning threshold."
           fi
 
       - name: Report .zig-cache composition (Windows)
@@ -286,7 +293,7 @@ jobs:
         run: |
           $root = if ($env:ZIG_LOCAL_CACHE_DIR) { $env:ZIG_LOCAL_CACHE_DIR }
                   else { Join-Path $env:GITHUB_WORKSPACE '.zig-cache' }
-          $limitMb = [int]$env:MINICI_BUILD_CACHE_WARN_MB
+          $limitMb = [int]$env:MINICI_BUILD_ARTIFACT_WARN_MB
           Write-Host "root=$root  TEMP=$env:TEMP"
           if (-not (Test-Path -LiteralPath $root)) { Write-Host '(no .zig-cache)'; exit 0 }
           # -Force is required, or dotted/hidden subdirs are silently missed.
@@ -306,7 +313,7 @@ jobs:
           $totalFiles = ($rows | Measure-Object Files -Sum).Sum
           Write-Host ("TOTAL {0} MB across {1} files (limit {2} MB)" -f $totalMb, $totalFiles, $limitMb)
           if ($totalMb -gt $limitMb) {
-            Write-Host ("::warning::.zig-cache is {0} MB, over the {1} MB MiniCI build-cache warning threshold." -f $totalMb, $limitMb)
+            Write-Host ("::warning::.zig-cache is {0} MB, over the {1} MB MiniCI build-artifact warning threshold." -f $totalMb, $limitMb)
           }
 
       - name: Upload MiniCI report and logs

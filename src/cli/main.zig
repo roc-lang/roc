@@ -8279,8 +8279,6 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
 }
 
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) std.zig.system.DetectError!std.Target {
-    if (target == RocTarget.detectNative() and target.toOsTag() != .macos) return builtin.target;
-
     var query = std.Target.Query{
         .cpu_arch = target.toCpuArch(),
         .os_tag = target.toOsTag(),
@@ -8289,6 +8287,37 @@ fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) std.zig.system.DetectE
     if (target.toOsTag() == .macos) {
         query.os_version_min = roc_target.macos_deployment.query_os_version;
     }
+
+    // Raise the LLVM codegen floor above Zig's most-conservative per-arch
+    // baseline (2003-era x86-64 with only SSE2; ARMv8.0 for aarch64) so Roc
+    // programs may use the last two decades of instructions. The floor is an
+    // explicit, portable minimum applied to every Roc-program LLVM compile,
+    // native and cross alike, so it is independent of the CPU that the compiler
+    // binary itself targets.
+    switch (target.toCpuArch()) {
+        .x86_64 => {
+            // x86-64-v3 (Intel Haswell 2013+ / any AMD Zen) enables AVX2, BMI2,
+            // POPCNT, FMA, and more. The v-levels deliberately exclude the AES
+            // and PCLMULQDQ crypto instructions, so add those two explicitly.
+            query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
+            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
+        },
+        .aarch64, .aarch64_be => {
+            // Zig's baseline for aarch64-macos is already apple_m1, and a native
+            // macOS host detects its actual (>= M1) CPU, so macOS needs no
+            // explicit model. Linux/Windows baseline to generic ARMv8.0, so pin
+            // Cortex-A76 (ARMv8.2 + crypto extension), which covers
+            // Neoverse-N1/Graviton2+, Ampere, Snapdragon, and Raspberry Pi 5.
+            if (target.toOsTag() != .macos) {
+                query.cpu_model = .{ .explicit = &std.Target.aarch64.cpu.cortex_a76 };
+            }
+        },
+        // arm32 and wasm keep their existing baselines: wasm codegen is handled
+        // by Roc's own wasm backend, not this LLVM baseline.
+        else => {},
+    }
+
     return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
 }
 
