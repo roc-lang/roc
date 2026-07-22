@@ -14,6 +14,7 @@ const Plan = @import("plan.zig");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
+const checked_names = check.CanonicalNames;
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 
@@ -70,6 +71,15 @@ pub const RootLayouts = struct {
     host_value: ?RuntimeLayout = null,
 };
 
+/// Fixed compiler-owned layouts used by generated parser evidence values.
+pub const GeneratedEvidenceLayouts = struct {
+    field: layout.Idx,
+    field_list: layout.Idx,
+    field_names: layout.Idx,
+    field_names_list: layout.Idx,
+    tag_union_spec: layout.Idx,
+};
+
 /// Complete target-specific layout assignment for a Boxy program plan.
 pub const LayoutPlan = struct {
     allocator: Allocator,
@@ -79,6 +89,7 @@ pub const LayoutPlan = struct {
     roots: std.ArrayList(RootLayouts),
     root_layout_values: std.ArrayList(RuntimeLayout),
     dynamic_storage_layout: layout.Idx,
+    generated_evidence: GeneratedEvidenceLayouts,
 
     pub fn deinit(self: *LayoutPlan) void {
         self.root_layout_values.deinit(self.allocator);
@@ -154,6 +165,11 @@ const Builder = struct {
     root_layouts: std.ArrayList(RootLayouts),
     root_layout_values: std.ArrayList(RuntimeLayout),
     dynamic_storage_layout: ?layout.Idx = null,
+    generated_field_layout: ?layout.Idx = null,
+    generated_field_list_layout: ?layout.Idx = null,
+    generated_field_names_layout: ?layout.Idx = null,
+    generated_field_names_list_layout: ?layout.Idx = null,
+    generated_tag_union_spec_layout: ?layout.Idx = null,
 
     fn init(allocator: Allocator, program: *const Plan.ProgramPlan, store: *layout.Store) Builder {
         return .{
@@ -206,6 +222,13 @@ const Builder = struct {
         }
 
         const dynamic_storage_layout = try self.dynamicStorageLayout();
+        const generated_evidence = GeneratedEvidenceLayouts{
+            .field = try self.generatedFieldLayout(),
+            .field_list = try self.generatedFieldListLayout(),
+            .field_names = try self.generatedFieldNamesLayout(),
+            .field_names_list = try self.generatedFieldNamesListLayout(),
+            .tag_union_spec = try self.generatedTagUnionSpecLayout(),
+        };
         const worker_layout_values = self.worker_layout_values;
         const roots = self.root_layouts;
         const root_layout_values = self.root_layout_values;
@@ -221,6 +244,7 @@ const Builder = struct {
             .roots = roots,
             .root_layout_values = root_layout_values,
             .dynamic_storage_layout = dynamic_storage_layout,
+            .generated_evidence = generated_evidence,
         };
     }
 
@@ -427,6 +451,9 @@ const Builder = struct {
             .bool_tag_union => .{ .concrete = .bool },
             .empty_record, .empty_tag_union => .{ .concrete = .zst },
             .erased_callable => .{ .concrete = try self.store.insertErasedCallable() },
+            .generated_field => .{ .concrete = try self.generatedFieldLayout() },
+            .generated_field_names => .{ .concrete = try self.generatedFieldNamesLayout() },
+            .generated_tag_union_spec => .{ .concrete = try self.generatedTagUnionSpecLayout() },
             .box => try self.immediateBoxLayout(mode, rep_id),
             .nominal => |kind| switch (kind) {
                 .opaque_nominal => .{ .concrete = try self.dynamicStorageLayout() },
@@ -444,6 +471,52 @@ const Builder = struct {
             .tag_union,
             => null,
         };
+    }
+
+    fn generatedFieldLayout(self: *Builder) Allocator.Error!layout.Idx {
+        if (self.generated_field_layout) |existing| return existing;
+        const committed = try self.store.putStructFields(&.{
+            .{ .index = 0, .layout = .str },
+            .{ .index = 1, .layout = .u64 },
+            .{ .index = 2, .layout = .u64 },
+        });
+        self.generated_field_layout = committed;
+        return committed;
+    }
+
+    fn generatedFieldNamesLayout(self: *Builder) Allocator.Error!layout.Idx {
+        if (self.generated_field_names_layout) |existing| return existing;
+        const committed = try self.store.putStructFields(&.{
+            .{ .index = 0, .layout = try self.generatedFieldListLayout() },
+            .{ .index = 1, .layout = .u64 },
+            .{ .index = 2, .layout = .u64 },
+        });
+        self.generated_field_names_layout = committed;
+        return committed;
+    }
+
+    fn generatedTagUnionSpecLayout(self: *Builder) Allocator.Error!layout.Idx {
+        if (self.generated_tag_union_spec_layout) |existing| return existing;
+        const committed = try self.store.putStructFields(&.{
+            .{ .index = 0, .layout = try self.generatedFieldNamesListLayout() },
+            .{ .index = 1, .layout = .u64 },
+        });
+        self.generated_tag_union_spec_layout = committed;
+        return committed;
+    }
+
+    fn generatedFieldListLayout(self: *Builder) Allocator.Error!layout.Idx {
+        if (self.generated_field_list_layout) |existing| return existing;
+        const committed = try self.store.insertList(try self.generatedFieldLayout());
+        self.generated_field_list_layout = committed;
+        return committed;
+    }
+
+    fn generatedFieldNamesListLayout(self: *Builder) Allocator.Error!layout.Idx {
+        if (self.generated_field_names_list_layout) |existing| return existing;
+        const committed = try self.store.insertList(try self.generatedFieldNamesLayout());
+        self.generated_field_names_list_layout = committed;
+        return committed;
     }
 
     fn immediateBoxLayout(self: *Builder, mode: LayoutMode, rep_id: Plan.TypeRepId) Allocator.Error!?RuntimeLayout {
@@ -671,6 +744,9 @@ const GraphBuilder = struct {
             .primitive,
             .bool_tag_union,
             .erased_callable,
+            .generated_field,
+            .generated_field_names,
+            .generated_tag_union_spec,
             .empty_record,
             .empty_tag_union,
             => boxyLayoutInvariant("non-aggregate representation reached graph layout"),
@@ -1067,8 +1143,40 @@ test "boxy layout planner records private worker function arg and return layouts
             .procedure_binding = @enumFromInt(fixtureTableIndex(0)),
         },
     };
+    const template_ref = checked_names.ProcedureTemplateRef{
+        .proc_base = @enumFromInt(fixtureTableIndex(0)),
+        .template = @enumFromInt(fixtureTableIndex(0)),
+    };
+    var templates = [_]checked.CheckedProcedureTemplate{.{
+        .proc_base = template_ref.proc_base,
+        .template_id = template_ref.template,
+        .body = .{ .checked_body = @enumFromInt(fixtureTableIndex(0)) },
+        .checked_fn_scheme = .{},
+        .checked_fn_root = @enumFromInt(2),
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = .roc,
+    }};
+    var template_table = checked.CheckedProcedureTemplateTable{ .templates = &templates };
+    var bindings = [_]checked.TopLevelProcedureBinding{.{
+        .source_scheme = .{},
+        .body = .{ .direct_template = .{
+            .proc_value = .{
+                .proc_base = template_ref.proc_base,
+            },
+            .template = .{ .checked = template_ref },
+        } },
+    }};
+    var binding_table = checked.TopLevelProcedureBindingTable{ .bindings = &bindings };
+    const root_view = Plan.ModuleView{
+        .checked_types = view,
+        .checked_procedure_templates = &template_table,
+        .top_level_procedure_bindings = &binding_table,
+    };
 
-    var program = try Plan.analyzeProgram(gpa, .{ .checked_types = view, .roots = &roots }, .{});
+    var program = try Plan.analyzeProgram(gpa, .{ .root_view = root_view, .roots = &roots }, .{});
     defer program.deinit();
     const extra_source = program.workers.items[0].source;
     const extra_rep = program.root_reps.items[0];

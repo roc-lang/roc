@@ -854,6 +854,15 @@ pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
     }
 }
 
+/// First byte after all linked static-data segments.
+pub fn dataEnd(self: *const Self) u32 {
+    var end = self.data_offset;
+    for (self.data_segments.items) |segment| {
+        end = @max(end, segment.offset + @as(u32, @intCast(segment.data.len)));
+    }
+    return end;
+}
+
 /// Add a data segment to linear memory. Returns the offset where the data
 /// will be placed. The data is copied and aligned to `align_bytes`.
 pub fn addDataSegment(self: *Self, data: []const u8, align_bytes: u32) Allocator.Error!u32 {
@@ -1473,6 +1482,7 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         var matched: ?u32 = null;
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
+                if (self_imp.type_idx != remapped_type) return error.FunctionTypeMismatch;
                 matched = @intCast(self_idx);
                 break;
             }
@@ -5439,6 +5449,22 @@ test "mergeModule — type deduplication: identical signatures share index" {
     // Builtins had 2 types: (i32,i32)->void (dup), (i32)->i32 (new)
     // After merge: 3 types total (one deduplicated)
     try std.testing.expectEqual(host_types_before + 1, host.func_types.items.len);
+}
+
+test "mergeModule rejects same-name imports with different signatures" {
+    const allocator = std.testing.allocator;
+
+    var host = Self.init(allocator);
+    defer host.deinit();
+    const host_type = try host.addFuncType(&.{.i32}, &.{});
+    _ = try host.addImport("env", "roc_crashed", host_type);
+
+    var source = Self.init(allocator);
+    defer source.deinit();
+    const source_type = try source.addFuncType(&.{ .i32, .i32 }, &.{});
+    _ = try source.addImport("env", "roc_crashed", source_type);
+
+    try std.testing.expectError(error.FunctionTypeMismatch, host.mergeModule(&source));
 }
 
 test "mergeModule — function indices remapped correctly" {

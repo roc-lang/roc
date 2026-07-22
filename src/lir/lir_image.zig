@@ -35,7 +35,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v15: SafeMultiList layout tables use portable typed column arrays.
 /// v16: procedure specs carry explicit Boxy return descriptor sources.
 /// v17: dictionary method adapters carry exact call descriptor spans.
-pub const FORMAT_VERSION: u32 = 17;
+/// v18: erased calls carry exact keyed argument descriptor metadata.
+/// v19: erased calls and workers carry ordered runtime argument layouts.
+pub const FORMAT_VERSION: u32 = 20;
 
 /// Public `ImageError` declaration.
 pub const ImageError = error{
@@ -101,6 +103,10 @@ pub const ProgramView = struct {
     boxy_method_slots: []Program.BoxyMethodSlot,
     boxy_method_arg_layouts: []layout_mod.Idx,
     boxy_method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
+    boxy_erased_arg_layouts: []layout_mod.Idx,
+    boxy_erased_arg_desc_keys: []LIR.ErasedArgDescKey,
+    boxy_erased_arg_desc_offsets: []LIR.ErasedArgDescOffset,
+    boxy_erased_arg_desc_params: []LIR.ErasedArgDescParam,
     target_usize: base.target.TargetUsize,
     scratch_allocator: std.mem.Allocator,
 
@@ -341,22 +347,52 @@ pub const BoxyTablesImage = extern struct {
     method_slots: ArrayRef,
     method_arg_layouts: ArrayRef,
     method_hidden_desc_sources: ArrayRef,
+    erased_arg_layouts: ArrayRef,
+    erased_arg_desc_keys: ArrayRef,
+    erased_arg_desc_offsets: ArrayRef,
+    erased_arg_desc_params: ArrayRef,
 
     fn fromProgram(base_ptr: [*]align(1) const u8, image_size: usize, lowered: *const Program.Result) ImageError!BoxyTablesImage {
+        return fromView(base_ptr, image_size, .{
+            .type_descs = lowered.boxy_type_descs.items,
+            .dicts = lowered.boxy_dicts.items,
+            .adapters = lowered.boxy_adapters.items,
+            .desc_refs = lowered.boxy_desc_refs.items,
+            .dict_refs = lowered.boxy_dict_refs.items,
+            .tag_variants = lowered.boxy_tag_variants.items,
+            .tag_payload_descs = lowered.boxy_tag_payload_descs.items,
+            .field_names = lowered.boxy_field_names.items,
+            .adapt_steps = lowered.boxy_adapt_steps.items,
+            .payload_steps = lowered.boxy_payload_steps.items,
+            .method_slots = lowered.boxy_method_slots.items,
+            .method_arg_layouts = lowered.boxy_method_arg_layouts.items,
+            .method_hidden_desc_sources = lowered.boxy_method_hidden_desc_sources.items,
+            .erased_arg_layouts = lowered.boxy_erased_arg_layouts.items,
+            .erased_arg_desc_keys = lowered.boxy_erased_arg_desc_keys.items,
+            .erased_arg_desc_offsets = lowered.boxy_erased_arg_desc_offsets.items,
+            .erased_arg_desc_params = lowered.boxy_erased_arg_desc_params.items,
+        });
+    }
+
+    fn fromView(base_ptr: [*]align(1) const u8, image_size: usize, tables: BoxyTablesView) ImageError!BoxyTablesImage {
         return .{
-            .type_descs = try arrayRef(base_ptr, image_size, lowered.boxy_type_descs.items),
-            .dicts = try arrayRef(base_ptr, image_size, lowered.boxy_dicts.items),
-            .adapters = try arrayRef(base_ptr, image_size, lowered.boxy_adapters.items),
-            .desc_refs = try arrayRef(base_ptr, image_size, lowered.boxy_desc_refs.items),
-            .dict_refs = try arrayRef(base_ptr, image_size, lowered.boxy_dict_refs.items),
-            .tag_variants = try arrayRef(base_ptr, image_size, lowered.boxy_tag_variants.items),
-            .tag_payload_descs = try arrayRef(base_ptr, image_size, lowered.boxy_tag_payload_descs.items),
-            .field_names = try arrayRef(base_ptr, image_size, lowered.boxy_field_names.items),
-            .adapt_steps = try arrayRef(base_ptr, image_size, lowered.boxy_adapt_steps.items),
-            .payload_steps = try arrayRef(base_ptr, image_size, lowered.boxy_payload_steps.items),
-            .method_slots = try arrayRef(base_ptr, image_size, lowered.boxy_method_slots.items),
-            .method_arg_layouts = try arrayRef(base_ptr, image_size, lowered.boxy_method_arg_layouts.items),
-            .method_hidden_desc_sources = try arrayRef(base_ptr, image_size, lowered.boxy_method_hidden_desc_sources.items),
+            .type_descs = try arrayRef(base_ptr, image_size, tables.type_descs),
+            .dicts = try arrayRef(base_ptr, image_size, tables.dicts),
+            .adapters = try arrayRef(base_ptr, image_size, tables.adapters),
+            .desc_refs = try arrayRef(base_ptr, image_size, tables.desc_refs),
+            .dict_refs = try arrayRef(base_ptr, image_size, tables.dict_refs),
+            .tag_variants = try arrayRef(base_ptr, image_size, tables.tag_variants),
+            .tag_payload_descs = try arrayRef(base_ptr, image_size, tables.tag_payload_descs),
+            .field_names = try arrayRef(base_ptr, image_size, tables.field_names),
+            .adapt_steps = try arrayRef(base_ptr, image_size, tables.adapt_steps),
+            .payload_steps = try arrayRef(base_ptr, image_size, tables.payload_steps),
+            .method_slots = try arrayRef(base_ptr, image_size, tables.method_slots),
+            .method_arg_layouts = try arrayRef(base_ptr, image_size, tables.method_arg_layouts),
+            .method_hidden_desc_sources = try arrayRef(base_ptr, image_size, tables.method_hidden_desc_sources),
+            .erased_arg_layouts = try arrayRef(base_ptr, image_size, tables.erased_arg_layouts),
+            .erased_arg_desc_keys = try arrayRef(base_ptr, image_size, tables.erased_arg_desc_keys),
+            .erased_arg_desc_offsets = try arrayRef(base_ptr, image_size, tables.erased_arg_desc_offsets),
+            .erased_arg_desc_params = try arrayRef(base_ptr, image_size, tables.erased_arg_desc_params),
         };
     }
 
@@ -375,6 +411,10 @@ pub const BoxyTablesImage = extern struct {
             .method_slots = try sliceFromRef(Program.BoxyMethodSlot, base_ptr, image_size, self.method_slots),
             .method_arg_layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.method_arg_layouts),
             .method_hidden_desc_sources = try sliceFromRef(Program.BoxyMethodHiddenDescSource, base_ptr, image_size, self.method_hidden_desc_sources),
+            .erased_arg_layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.erased_arg_layouts),
+            .erased_arg_desc_keys = try sliceFromRef(LIR.ErasedArgDescKey, base_ptr, image_size, self.erased_arg_desc_keys),
+            .erased_arg_desc_offsets = try sliceFromRef(LIR.ErasedArgDescOffset, base_ptr, image_size, self.erased_arg_desc_offsets),
+            .erased_arg_desc_params = try sliceFromRef(LIR.ErasedArgDescParam, base_ptr, image_size, self.erased_arg_desc_params),
         };
     }
 };
@@ -394,6 +434,10 @@ pub const BoxyTablesView = struct {
     method_slots: []Program.BoxyMethodSlot,
     method_arg_layouts: []layout_mod.Idx,
     method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
+    erased_arg_layouts: []layout_mod.Idx,
+    erased_arg_desc_keys: []LIR.ErasedArgDescKey,
+    erased_arg_desc_offsets: []LIR.ErasedArgDescOffset,
+    erased_arg_desc_params: []LIR.ErasedArgDescParam,
 };
 
 /// The boxy runtime's table subset of a LIR image: the descriptor tables,
@@ -425,6 +469,20 @@ pub const BoxySidecar = extern struct {
             .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &lowered.layouts),
             .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, &lowered.store.strings),
             .boxy_tables = try BoxyTablesImage.fromProgram(base_ptr, image_size, lowered),
+        };
+    }
+
+    fn fromStores(
+        base_ptr: [*]align(1) const u8,
+        image_size: usize,
+        layouts: *const layout_mod.Store,
+        strings: *const base.StringLiteral.Store,
+        tables: BoxyTablesView,
+    ) ImageError!BoxySidecar {
+        return .{
+            .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, layouts),
+            .strings = try StringLiteralStoreImage.fromStore(base_ptr, image_size, strings),
+            .boxy_tables = try BoxyTablesImage.fromView(base_ptr, image_size, tables),
         };
     }
 
@@ -478,8 +536,46 @@ pub const SidecarBlob = struct {
 
 fn cloneStdArrayList(comptime T: type, gpa: std.mem.Allocator, list: std.ArrayList(T)) std.mem.Allocator.Error!std.ArrayList(T) {
     var out: std.ArrayList(T) = .empty;
-    try out.appendSlice(gpa, list.items);
+    try out.ensureTotalCapacity(gpa, list.items.len);
+    for (list.items) |item| {
+        out.appendAssumeCapacity(item);
+        collections.CompactWriter.zeroValuePadding(T, @ptrCast(&out.items[out.items.len - 1]));
+    }
     return out;
+}
+
+fn cloneSafeList(comptime T: type, gpa: std.mem.Allocator, list: collections.SafeList(T)) std.mem.Allocator.Error!collections.SafeList(T) {
+    return .{ .items = try cloneStdArrayList(T, gpa, list.items) };
+}
+
+fn cloneStructFields(
+    gpa: std.mem.Allocator,
+    source: *const layout_mod.StructField.SafeMultiList,
+) std.mem.Allocator.Error!layout_mod.StructField.SafeMultiList {
+    const indices = source.field(.index);
+    const layouts = source.field(.layout);
+    const padding = source.field(.is_padding);
+    var result = try layout_mod.StructField.SafeMultiList.initCapacity(gpa, indices.len);
+    for (indices, layouts, padding) |index, layout_idx, is_padding| {
+        _ = result.appendAssumeCapacity(.{
+            .index = index,
+            .layout = layout_idx,
+            .is_padding = is_padding,
+        });
+    }
+    return result;
+}
+
+fn cloneTagUnionVariants(
+    gpa: std.mem.Allocator,
+    source: *const layout_mod.TagUnionVariant.SafeMultiList,
+) std.mem.Allocator.Error!layout_mod.TagUnionVariant.SafeMultiList {
+    const payload_layouts = source.field(.payload_layout);
+    var result = try layout_mod.TagUnionVariant.SafeMultiList.initCapacity(gpa, payload_layouts.len);
+    for (payload_layouts) |payload_layout| {
+        _ = result.appendAssumeCapacity(.{ .payload_layout = payload_layout });
+    }
+    return result;
 }
 
 fn serializeSidecarInto(
@@ -487,33 +583,58 @@ fn serializeSidecarInto(
     buffer: []align(16) u8,
     lowered: *const Program.Result,
 ) (ImageError || std.mem.Allocator.Error)!BoxySidecar {
-    var shell = try Program.Result.init(gpa, lowered.layouts.target_usize);
+    const layouts: layout_mod.Store = .{
+        .allocator = gpa,
+        .layouts = try cloneSafeList(layout_mod.Layout, gpa, lowered.layouts.layouts),
+        .resolved_list_layouts = try cloneStdArrayList(?layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
+        .tuple_elems = try cloneSafeList(layout_mod.Idx, gpa, lowered.layouts.tuple_elems),
+        .struct_fields = try cloneStructFields(gpa, &lowered.layouts.struct_fields),
+        .struct_data = try cloneSafeList(layout_mod.StructData, gpa, lowered.layouts.struct_data),
+        .tag_union_variants = try cloneTagUnionVariants(gpa, &lowered.layouts.tag_union_variants),
+        .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
+        .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
+        .scratch_intern_key = .empty,
+        .target_usize = lowered.layouts.target_usize,
+    };
+    const strings = try lowered.store.strings.clone(gpa);
 
-    shell.layouts.layouts = try lowered.layouts.layouts.clone(gpa);
-    shell.layouts.resolved_list_layouts = try cloneStdArrayList(?layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts);
-    shell.layouts.tuple_elems = try lowered.layouts.tuple_elems.clone(gpa);
-    shell.layouts.struct_fields = try lowered.layouts.struct_fields.clone(gpa);
-    shell.layouts.struct_data = try lowered.layouts.struct_data.clone(gpa);
-    shell.layouts.tag_union_variants = try lowered.layouts.tag_union_variants.clone(gpa);
-    shell.layouts.tag_union_data = try lowered.layouts.tag_union_data.clone(gpa);
+    const type_descs = try cloneStdArrayList(Program.BoxyTypeDesc, gpa, lowered.boxy_type_descs);
+    const dicts = try cloneStdArrayList(Program.BoxyDict, gpa, lowered.boxy_dicts);
+    const adapters = try cloneStdArrayList(Program.BoxyAdapter, gpa, lowered.boxy_adapters);
+    const desc_refs = try cloneStdArrayList(Program.BoxyDescRef, gpa, lowered.boxy_desc_refs);
+    const dict_refs = try cloneStdArrayList(Program.BoxyDictRef, gpa, lowered.boxy_dict_refs);
+    const tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
+    const tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
+    const field_names = try cloneStdArrayList(base.StringLiteral.Idx, gpa, lowered.boxy_field_names);
+    const adapt_steps = try cloneStdArrayList(Program.BoxyAdaptStep, gpa, lowered.boxy_adapt_steps);
+    const payload_steps = try cloneStdArrayList(Program.BoxyPayloadStep, gpa, lowered.boxy_payload_steps);
+    const method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
+    const method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
+    const method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
+    const erased_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_erased_arg_layouts);
+    const erased_arg_desc_keys = try cloneStdArrayList(LIR.ErasedArgDescKey, gpa, lowered.boxy_erased_arg_desc_keys);
+    const erased_arg_desc_offsets = try cloneStdArrayList(LIR.ErasedArgDescOffset, gpa, lowered.boxy_erased_arg_desc_offsets);
+    const erased_arg_desc_params = try cloneStdArrayList(LIR.ErasedArgDescParam, gpa, lowered.boxy_erased_arg_desc_params);
 
-    shell.store.strings = try lowered.store.strings.clone(gpa);
-
-    shell.boxy_type_descs = try cloneStdArrayList(Program.BoxyTypeDesc, gpa, lowered.boxy_type_descs);
-    shell.boxy_dicts = try cloneStdArrayList(Program.BoxyDict, gpa, lowered.boxy_dicts);
-    shell.boxy_adapters = try cloneStdArrayList(Program.BoxyAdapter, gpa, lowered.boxy_adapters);
-    shell.boxy_desc_refs = try cloneStdArrayList(Program.BoxyDescRef, gpa, lowered.boxy_desc_refs);
-    shell.boxy_dict_refs = try cloneStdArrayList(Program.BoxyDictRef, gpa, lowered.boxy_dict_refs);
-    shell.boxy_tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
-    shell.boxy_tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
-    shell.boxy_field_names = try cloneStdArrayList(base.StringLiteral.Idx, gpa, lowered.boxy_field_names);
-    shell.boxy_adapt_steps = try cloneStdArrayList(Program.BoxyAdaptStep, gpa, lowered.boxy_adapt_steps);
-    shell.boxy_payload_steps = try cloneStdArrayList(Program.BoxyPayloadStep, gpa, lowered.boxy_payload_steps);
-    shell.boxy_method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
-    shell.boxy_method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
-    shell.boxy_method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
-
-    return BoxySidecar.fromProgram(buffer.ptr, buffer.len, &shell);
+    return BoxySidecar.fromStores(buffer.ptr, buffer.len, &layouts, &strings, .{
+        .type_descs = type_descs.items,
+        .dicts = dicts.items,
+        .adapters = adapters.items,
+        .desc_refs = desc_refs.items,
+        .dict_refs = dict_refs.items,
+        .tag_variants = tag_variants.items,
+        .tag_payload_descs = tag_payload_descs.items,
+        .field_names = field_names.items,
+        .adapt_steps = adapt_steps.items,
+        .payload_steps = payload_steps.items,
+        .method_slots = method_slots.items,
+        .method_arg_layouts = method_arg_layouts.items,
+        .method_hidden_desc_sources = method_hidden_desc_sources.items,
+        .erased_arg_layouts = erased_arg_layouts.items,
+        .erased_arg_desc_keys = erased_arg_desc_keys.items,
+        .erased_arg_desc_offsets = erased_arg_desc_offsets.items,
+        .erased_arg_desc_params = erased_arg_desc_params.items,
+    });
 }
 
 /// Serialize the boxy sidecar (layout store, string store, and boxy tables) of
@@ -526,9 +647,16 @@ pub fn buildSidecarBlob(
     var capacity: usize = 1 << 16;
     while (true) {
         const bytes = try gpa.alignedAlloc(u8, .@"16", capacity);
+        @memset(bytes, 0);
         var fba = std.heap.FixedBufferAllocator.init(bytes);
         if (serializeSidecarInto(fba.allocator(), bytes, lowered)) |sidecar| {
-            return .{ .bytes = bytes, .sidecar = sidecar };
+            const compact = gpa.alignedAlloc(u8, .@"16", fba.end_index) catch |err| {
+                gpa.free(bytes);
+                return err;
+            };
+            @memcpy(compact, bytes[0..fba.end_index]);
+            gpa.free(bytes);
+            return .{ .bytes = compact, .sidecar = sidecar };
         } else |err| switch (err) {
             error.OutOfMemory => {
                 gpa.free(bytes);
@@ -645,6 +773,10 @@ pub fn viewMappedImageWithAllocator(
         .boxy_method_slots = boxy_tables.method_slots,
         .boxy_method_arg_layouts = boxy_tables.method_arg_layouts,
         .boxy_method_hidden_desc_sources = boxy_tables.method_hidden_desc_sources,
+        .boxy_erased_arg_layouts = boxy_tables.erased_arg_layouts,
+        .boxy_erased_arg_desc_keys = boxy_tables.erased_arg_desc_keys,
+        .boxy_erased_arg_desc_offsets = boxy_tables.erased_arg_desc_offsets,
+        .boxy_erased_arg_desc_params = boxy_tables.erased_arg_desc_params,
         .target_usize = target_usize,
         .scratch_allocator = allocator,
     };
@@ -783,6 +915,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_slots.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_arg_layouts.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_hidden_desc_sources.len);
+    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_erased_arg_layouts.len);
 
     try lowered.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
     try lowered.boxy_payload_steps.append(allocator, .{ .dynamic = .{
@@ -790,11 +923,13 @@ test "LIR image views empty and populated boxy tables" {
         .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     } });
     try lowered.boxy_method_arg_layouts.append(allocator, .zst);
+    try lowered.boxy_erased_arg_layouts.append(allocator, .u64);
     try lowered.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
     try lowered.boxy_dict_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
     try lowered.boxy_tag_variants.append(allocator, .{
         .name = try lowered.store.insertString("Ok"),
         .discriminant = 0,
+        .payload_count = 1,
         .payload_layout = .zst,
         .payload_descs = .{ .start = 0, .len = 1 },
     });
@@ -876,6 +1011,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_slots.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_arg_layouts.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_hidden_desc_sources.len);
+    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_erased_arg_layouts.len);
     try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_type_descs[0].inspect_method.?));
     try std.testing.expectEqual(@as(u16, 0), populated_view.boxy_tag_variants[0].discriminant);
@@ -885,6 +1021,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.boxy_adapt_steps[0].copy_bytes.layout_idx);
     try std.testing.expectEqual(Program.BoxyPayloadOp.copy, populated_view.boxy_payload_steps[0].dynamic.op);
     try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
+    try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.boxy_erased_arg_layouts[0]);
     try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_method_hidden_desc_sources[0].slot);
     try std.testing.expectEqual(@as(u16, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));

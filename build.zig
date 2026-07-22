@@ -2618,6 +2618,29 @@ pub fn build(b: *std.Build) void {
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
     const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
+    const wasm32_boxy_runtime_obj = buildBoxyRuntimeObject(
+        b,
+        roc_modules,
+        wasm32_resolved_target,
+        optimize,
+        strip,
+        omit_frame_pointer,
+        "roc_boxy_runtime_wasm32_eval",
+        b.path("src/boxy_runtime/eval_main.zig"),
+    );
+    const wasm32_boxy_runtime_files = b.addWriteFiles();
+    _ = wasm32_boxy_runtime_files.addCopyFile(
+        wasmObjectArtifact(b, wasm32_boxy_runtime_obj),
+        "roc_boxy_runtime.o",
+    );
+    const wasm32_boxy_runtime_module = b.createModule(.{
+        .root_source_file = wasm32_boxy_runtime_files.add(
+            "wasm32_boxy_runtime.zig",
+            "pub const bytes = @embedFile(\"roc_boxy_runtime.o\");\n",
+        ),
+    });
+    roc_modules.eval.addImport("wasm32_boxy_runtime", wasm32_boxy_runtime_module);
+
     const wasm32_builtins_obj = b.addObject(.{
         .name = "roc_builtins_wasm32_eval",
         .root_module = b.createModule(.{
@@ -2690,6 +2713,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
     });
     llvm_codegen_module.addImport("layout", roc_modules.layout);
+    llvm_codegen_module.addImport("backend", roc_modules.backend);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
     llvm_codegen_module.addImport("ctx", roc_modules.ctx);
     llvm_codegen_module.addImport("builtins", roc_modules.builtins);
@@ -5324,11 +5348,9 @@ fn addMacosAflFuzzExe(
     return exe.getEmittedBin();
 }
 
-/// Build the standalone boxy runtime object for `target`: the `roc_boxy_*`
-/// C-ABI wrappers plus `roc_boxy_init_embedded`, compiled under the extern
-/// symbol ABI so host operations resolve as linker symbols. `roc build
-/// --opt=dev` links this beside the app and builtins objects for programs that
-/// emit boxy statements.
+/// Build a Boxy runtime object for `target`: the `roc_boxy_*` C-ABI wrappers
+/// plus `roc_boxy_init_embedded`. The selected root configures standalone
+/// extern-symbol calls or evaluator-vtable calls.
 fn buildBoxyRuntimeObject(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -5337,11 +5359,12 @@ fn buildBoxyRuntimeObject(
     strip: bool,
     omit_frame_pointer: ?bool,
     name: []const u8,
+    root_source_file: std.Build.LazyPath,
 ) *Step.Compile {
     const obj = b.addObject(.{
         .name = name,
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/boxy_runtime/main.zig"),
+            .root_source_file = root_source_file,
             .target = target,
             .optimize = optimize,
             .strip = strip,
@@ -5349,9 +5372,21 @@ fn buildBoxyRuntimeObject(
             .pic = true,
         }),
     });
-    roc_modules.addAll(obj);
-    obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    const boxy_eval_module = b.createModule(.{
+        .root_source_file = b.path("src/eval/boxy_runtime_module.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    boxy_eval_module.addImport("base", roc_modules.base);
+    boxy_eval_module.addImport("layout", roc_modules.layout);
+    boxy_eval_module.addImport("lir", roc_modules.lir);
+    boxy_eval_module.addImport("builtins", roc_modules.builtins);
+    boxy_eval_module.addImport("build_options", roc_modules.build_options);
+
+    obj.root_module.addImport("base", roc_modules.base);
+    obj.root_module.addImport("builtins", roc_modules.builtins);
+    obj.root_module.addImport("eval", boxy_eval_module);
+    obj.root_module.addImport("lir", roc_modules.lir);
     obj.root_module.addImport("shim_io", b.addModule(
         b.fmt("shim_io_{s}", .{name}),
         .{ .root_source_file = b.path("src/shim_io.zig") },
@@ -5362,6 +5397,13 @@ fn buildBoxyRuntimeObject(
     obj.bundle_compiler_rt = target.result.os.tag != .macos and !target.result.cpu.arch.isWasm();
     configureBackend(obj, target);
     return obj;
+}
+
+/// Zig's wasm object build places the relocatable code in the emitted
+/// directory beside an empty nominal output.
+fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
+    const zcu_name = b.fmt("{s}_zcu.o", .{std.fs.path.stem(obj.out_filename)});
+    return obj.getEmittedBinDirectory().path(b, zcu_name);
 }
 
 fn addMainExe(
@@ -5788,16 +5830,13 @@ fn addMainExe(
                 strip,
                 omit_frame_pointer,
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
+                b.path("src/boxy_runtime/main.zig"),
             );
             add_tracy(b, roc_modules.build_options, cross_boxy_runtime_obj, b.graph.host, false, flag_enable_tracy);
-            const boxy_runtime_artifact = if (cross_is_wasm) blk: {
-                // Zig emits wasm object code beside its nominal output as a
-                // `_zcu.o` file when compiler-rt is not bundled. The nominal
-                // output is empty; the ZCU object is the relocatable PIC input
-                // the surgical linker needs, including its GOT imports.
-                const zcu_name = b.fmt("{s}_zcu.o", .{std.fs.path.stem(cross_boxy_runtime_obj.out_filename)});
-                break :blk cross_boxy_runtime_obj.getEmittedBinDirectory().path(b, zcu_name);
-            } else cross_boxy_runtime_obj.getEmittedBin();
+            const boxy_runtime_artifact = if (cross_is_wasm)
+                wasmObjectArtifact(b, cross_boxy_runtime_obj)
+            else
+                cross_boxy_runtime_obj.getEmittedBin();
             const copy_cross_boxy_runtime = b.addUpdateSourceFiles();
             copy_cross_boxy_runtime.addCopyFileToSource(
                 boxy_runtime_artifact,

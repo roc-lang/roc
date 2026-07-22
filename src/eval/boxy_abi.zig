@@ -7,7 +7,9 @@
 //! layouts and tag names are their `u32` ids, and results are written through
 //! caller-provided out-pointers.
 //!
-//! One process-global runtime backs every wrapper. Embedders initialize it
+//! One selected runtime backs each wrapper invocation. Ordinary embedders
+//! install a process-global default; the hot-reload shim temporarily selects
+//! the runtime owned by the executing code image.
 //! once before calling entrypoints — either from live stores
 //! (`initGlobal`) or from a mapped image's boxy sidecar
 //! (`initGlobalFromSidecarView`) — and register a native callee per worker
@@ -22,6 +24,7 @@
 //! through `ret_desc`.
 
 const std = @import("std");
+const base = @import("base");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const builtins = @import("builtins");
@@ -69,9 +72,50 @@ const RegisteredProc = struct {
 };
 
 const RegisteredErasedProc = struct {
+    proc_id: u32,
     ret_layout: layout_mod.Idx,
     metadata_offset: u32,
+    arg_layouts: LIR.BoxySpan,
+    arg_desc_offsets: LIR.BoxySpan,
+    capture_offset_base: u32,
 };
+
+const DescCopyCacheKey = struct {
+    desc_id: u32,
+    capture_ids: []const u32,
+    capture_descs: []const ?*const BoxyTypeDesc,
+};
+
+const DescCopyCache = std.HashMapUnmanaged(DescCopyCacheKey, *const BoxyTypeDesc, struct {
+    pub fn hash(_: @This(), key: DescCopyCacheKey) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, key.desc_id);
+        std.hash.autoHash(&hasher, key.capture_ids.len);
+        for (key.capture_ids) |capture_id| std.hash.autoHash(&hasher, capture_id);
+        std.hash.autoHash(&hasher, key.capture_descs.len);
+        for (key.capture_descs) |desc| {
+            const address: usize = if (desc) |ptr| @intFromPtr(ptr) else 0;
+            std.hash.autoHash(&hasher, address);
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: DescCopyCacheKey, b: DescCopyCacheKey) bool {
+        if (a.desc_id != b.desc_id or
+            a.capture_ids.len != b.capture_ids.len or
+            a.capture_descs.len != b.capture_descs.len)
+        {
+            return false;
+        }
+        for (a.capture_ids, b.capture_ids) |a_id, b_id| {
+            if (a_id != b_id) return false;
+        }
+        for (a.capture_descs, b.capture_descs) |a_desc, b_desc| {
+            if (a_desc != b_desc) return false;
+        }
+        return true;
+    }
+}, 80);
 
 /// The process-global boxy runtime state behind the C-ABI wrappers.
 pub const GlobalBoxyRuntime = struct {
@@ -81,6 +125,9 @@ pub const GlobalBoxyRuntime = struct {
     /// a sidecar view; the runtime reads tag and field names through it.
     store_shell: LirStore,
     runtime_boxy_type_descs: std.ArrayList(*const BoxyTypeDesc) = .empty,
+    runtime_boxy_desc_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    adapter_desc_specializations: std.AutoHashMapUnmanaged(boxy_runtime.AdapterDescMergeKey, *const BoxyTypeDesc) = .empty,
+    desc_copy_cache: DescCopyCache = .empty,
     runtime_boxy_desc_refs: std.ArrayList(LirProgram.BoxyDescRef) = .empty,
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
@@ -105,21 +152,32 @@ pub const GlobalBoxyRuntime = struct {
 };
 
 var global: ?*GlobalBoxyRuntime = null;
+threadlocal var active_runtime: ?*GlobalBoxyRuntime = null;
 
-fn requireGlobal() *GlobalBoxyRuntime {
-    return global orelse @panic("boxy ABI wrapper called before roc_boxy runtime initialization");
+fn currentRuntime() ?*GlobalBoxyRuntime {
+    return active_runtime orelse global;
 }
 
-/// Initialize the process-global boxy runtime from live stores. `store`,
-/// `layout_store`, the table slices, and `roc_ops` must outlive the global.
-pub fn initGlobal(
+fn requireGlobal() *GlobalBoxyRuntime {
+    return currentRuntime() orelse @panic("boxy ABI wrapper called before roc_boxy runtime initialization");
+}
+
+/// Select `runtime` for boxy ABI calls on the current thread and return the
+/// previously selected runtime. The machine-code shim uses this to keep each
+/// hot-reload generation paired with its own sidecar tables.
+pub fn swapActiveRuntime(runtime: ?*GlobalBoxyRuntime) ?*GlobalBoxyRuntime {
+    const previous = active_runtime;
+    active_runtime = runtime;
+    return previous;
+}
+
+fn createRuntime(
     gpa: Allocator,
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     tables: BoxyTables,
     roc_ops: *RocOps,
-) error{ OutOfMemory, AlreadyInitialized }!void {
-    if (global != null) return error.AlreadyInitialized;
+) error{OutOfMemory}!*GlobalBoxyRuntime {
     const g = try gpa.create(GlobalBoxyRuntime);
     errdefer gpa.destroy(g);
     g.* = .{
@@ -133,29 +191,48 @@ pub fn initGlobal(
             .helper = lir_value.LayoutHelper.init(layout_store),
             .boxy_tables = tables,
             .runtime_boxy_type_descs = undefined,
+            .runtime_boxy_desc_ids = undefined,
+            .adapter_desc_specializations = undefined,
             .runtime_boxy_desc_refs = undefined,
             .runtime_boxy_tag_variants = undefined,
             .runtime_boxy_tag_payload_descs = undefined,
             .runtime_boxy_payload_steps = undefined,
             .roc_ops = roc_ops,
             .scratch = gpa,
+            .descriptor_arena = undefined,
             .eval_arena = undefined,
         },
     };
     g.runtime.runtime_boxy_type_descs = &g.runtime_boxy_type_descs;
+    g.runtime.runtime_boxy_desc_ids = &g.runtime_boxy_desc_ids;
+    g.runtime.adapter_desc_specializations = &g.adapter_desc_specializations;
     g.runtime.runtime_boxy_desc_refs = &g.runtime_boxy_desc_refs;
     g.runtime.runtime_boxy_tag_variants = &g.runtime_boxy_tag_variants;
     g.runtime.runtime_boxy_tag_payload_descs = &g.runtime_boxy_tag_payload_descs;
     g.runtime.runtime_boxy_payload_steps = &g.runtime_boxy_payload_steps;
+    g.runtime.descriptor_arena = g.desc_arena.allocator();
     g.runtime.eval_arena = g.desc_arena.allocator();
-    global = g;
+    return g;
+}
+
+/// Initialize the process-global boxy runtime from live stores. `store`,
+/// `layout_store`, the table slices, and `roc_ops` must outlive the global.
+pub fn initGlobal(
+    gpa: Allocator,
+    store: *const LirStore,
+    layout_store: *const layout_mod.Store,
+    tables: BoxyTables,
+    roc_ops: *RocOps,
+) error{ OutOfMemory, AlreadyInitialized }!void {
+    if (global != null) return error.AlreadyInitialized;
+    global = try createRuntime(gpa, store, layout_store, tables, roc_ops);
 }
 
 /// Update the host services used by wrappers whose ABI does not take `RocOps`
 /// as an explicit argument. In-process evaluators call this before each root
 /// when several roots share one installed boxy runtime.
 pub fn setGlobalRocOps(roc_ops: *RocOps) void {
-    const g = global orelse return;
+    const g = currentRuntime() orelse return;
     g.runtime.roc_ops = roc_ops;
 }
 
@@ -168,6 +245,17 @@ pub fn initGlobalFromSidecarView(
     roc_ops: *RocOps,
 ) error{ OutOfMemory, AlreadyInitialized }!void {
     if (global != null) return error.AlreadyInitialized;
+    global = try createRuntimeFromSidecarView(gpa, view, roc_ops);
+}
+
+/// Create a boxy runtime from one mapped sidecar without installing it as the
+/// process-global default. The returned runtime borrows `view` and its backing
+/// image until `deinitRuntime`.
+pub fn createRuntimeFromSidecarView(
+    gpa: Allocator,
+    view: *const lir.LirImage.BoxySidecar.View,
+    roc_ops: *RocOps,
+) error{OutOfMemory}!*GlobalBoxyRuntime {
     const tables = BoxyTables{
         .type_descs = view.tables.type_descs,
         .dicts = view.tables.dicts,
@@ -182,18 +270,23 @@ pub fn initGlobalFromSidecarView(
         .method_slots = view.tables.method_slots,
         .method_arg_layouts = view.tables.method_arg_layouts,
         .method_hidden_desc_sources = view.tables.method_hidden_desc_sources,
+        .erased_arg_layouts = view.tables.erased_arg_layouts,
+        .erased_arg_desc_keys = view.tables.erased_arg_desc_keys,
+        .erased_arg_desc_offsets = view.tables.erased_arg_desc_offsets,
+        .erased_arg_desc_params = view.tables.erased_arg_desc_params,
     };
-    try initGlobal(gpa, undefined, &view.layouts, tables, roc_ops);
-    const g = global.?;
+    const g = try createRuntime(gpa, undefined, &view.layouts, tables, roc_ops);
     g.store_shell.strings = view.strings;
     g.runtime.store = &g.store_shell;
+    return g;
 }
 
-/// Tear down the process-global boxy runtime. The embedder owns the stores
-/// and buffers the global pointed at.
-pub fn deinitGlobal() void {
-    const g = global orelse return;
-    global = null;
+/// Tear down one boxy runtime. The embedder owns the stores and buffers it
+/// points at.
+pub fn deinitRuntime(g: *GlobalBoxyRuntime) void {
+    g.desc_copy_cache.deinit(g.gpa);
+    g.adapter_desc_specializations.deinit(g.gpa);
+    g.runtime_boxy_desc_ids.deinit(g.gpa);
     g.runtime_boxy_payload_steps.deinit(g.gpa);
     g.runtime_boxy_tag_payload_descs.deinit(g.gpa);
     g.runtime_boxy_tag_variants.deinit(g.gpa);
@@ -204,6 +297,14 @@ pub fn deinitGlobal() void {
     g.desc_arena.deinit();
     g.value_scratch.deinit();
     g.gpa.destroy(g);
+}
+
+/// Tear down the process-global boxy runtime. The embedder owns the stores
+/// and buffers the global pointed at.
+pub fn deinitGlobal() void {
+    const g = global orelse return;
+    global = null;
+    deinitRuntime(g);
 }
 
 /// Engine services for wrapper-initiated boxy operations: descriptor and
@@ -225,10 +326,10 @@ const AbiHooks = struct {
             .local => |local| blk: {
                 for (self.g.capture_ids, self.g.capture_descs) |capture_id, capture_desc| {
                     if (capture_id == @intFromEnum(local)) {
-                        break :blk capture_desc orelse return error.RuntimeError;
+                        break :blk capture_desc orelse abiCrashMissingDescriptorCapture(self.g, local, true);
                     }
                 }
-                return error.RuntimeError;
+                abiCrashMissingDescriptorCapture(self.g, local, false);
             },
             .dict_method_arg, .dict_method_hidden => return error.RuntimeError,
         };
@@ -373,6 +474,71 @@ fn abiCrash(g: *GlobalBoxyRuntime, comptime what: []const u8) noreturn {
     unreachable;
 }
 
+fn abiCrashMissingDescriptorCapture(
+    g: *GlobalBoxyRuntime,
+    local: LIR.LocalId,
+    supplied_null: bool,
+) noreturn {
+    var buffer: [256]u8 = undefined;
+    const message = std.fmt.bufPrint(
+        &buffer,
+        "boxy runtime descriptor capture local {d} was {s}; supplied capture ids={any}",
+        .{
+            @intFromEnum(local),
+            if (supplied_null) "null" else "missing",
+            g.capture_ids,
+        },
+    ) catch "boxy runtime descriptor capture binding failed";
+    g.runtime.roc_ops.crash(message);
+    unreachable;
+}
+
+fn abiCrashNullErasedArgDescriptor(
+    g: *GlobalBoxyRuntime,
+    proc_id: u32,
+    key: LIR.ErasedArgDescKey,
+) noreturn {
+    var buffer: [192]u8 = undefined;
+    const message = std.fmt.bufPrint(
+        &buffer,
+        "boxy runtime erased call supplied a null descriptor to proc {d} for key ({d}, {d})",
+        .{ proc_id, key.arg_index, key.descriptor_index },
+    ) catch "boxy runtime erased call supplied a null argument descriptor";
+    g.runtime.roc_ops.crash(message);
+    unreachable;
+}
+
+fn abiCrashMissingErasedArgDescriptor(
+    g: *GlobalBoxyRuntime,
+    proc_id: u32,
+    key: LIR.ErasedArgDescKey,
+    supplied_keys: []const LIR.ErasedArgDescKey,
+) noreturn {
+    var buffer: [256]u8 = undefined;
+    const message = std.fmt.bufPrint(
+        &buffer,
+        "boxy runtime erased proc {d} required descriptor key ({d}, {d}); supplied keys={any}",
+        .{ proc_id, key.arg_index, key.descriptor_index, supplied_keys },
+    ) catch "boxy runtime erased call omitted a required argument descriptor";
+    g.runtime.roc_ops.crash(message);
+    unreachable;
+}
+
+fn abiCrashDuplicateErasedArgDescriptor(
+    g: *GlobalBoxyRuntime,
+    proc_id: u32,
+    key: LIR.ErasedArgDescKey,
+) noreturn {
+    var buffer: [192]u8 = undefined;
+    const message = std.fmt.bufPrint(
+        &buffer,
+        "boxy runtime erased call supplied duplicate descriptors to proc {d} for key ({d}, {d})",
+        .{ proc_id, key.arg_index, key.descriptor_index },
+    ) catch "boxy runtime erased call supplied duplicate argument descriptors";
+    g.runtime.roc_ops.crash(message);
+    unreachable;
+}
+
 fn layoutIdx(raw: u32) layout_mod.Idx {
     return @enumFromInt(raw);
 }
@@ -451,7 +617,7 @@ pub fn roc_boxy_register_proc(
     ret_borrowed: bool,
     ret_lenders: u64,
 ) callconv(.c) void {
-    const g = global orelse return;
+    const g = currentRuntime() orelse return;
     g.procs.put(g.gpa, proc_id, .{
         .callee = callee,
         .ret_layout = layoutIdx(ret_layout),
@@ -466,13 +632,206 @@ pub fn roc_boxy_register_proc(
 /// worker whose actual return layout differs from the call site's expected
 /// layout. Registration happens as each erased callable value is built, so the
 /// address is the relocated runtime address.
-pub fn roc_boxy_register_erased_proc(fn_ptr: ?*const anyopaque, ret_layout: u32, metadata_offset: u32) callconv(.c) void {
-    const g = global orelse return;
+pub fn roc_boxy_register_erased_proc(
+    fn_ptr: ?*const anyopaque,
+    proc_id: u32,
+    ret_layout: u32,
+    metadata_offset: u32,
+    arg_layouts_start: u32,
+    arg_layouts_len: u32,
+    arg_desc_offsets_start: u32,
+    arg_desc_offsets_len: u32,
+    capture_offset_base: u32,
+) callconv(.c) void {
+    const g = currentRuntime() orelse return;
     const ptr = fn_ptr orelse return;
+    const offsets_end = @as(usize, arg_desc_offsets_start) + arg_desc_offsets_len;
+    if (offsets_end > g.runtime.boxy_tables.erased_arg_desc_offsets.len) {
+        abiCrash(g, "erased proc descriptor-offset registration");
+    }
+    const layouts_end = @as(usize, arg_layouts_start) + arg_layouts_len;
+    if (layouts_end > g.runtime.boxy_tables.erased_arg_layouts.len) {
+        abiCrash(g, "erased proc argument-layout registration");
+    }
     g.erased_procs.put(g.gpa, @intFromPtr(ptr), .{
+        .proc_id = proc_id,
         .ret_layout = layoutIdx(ret_layout),
         .metadata_offset = metadata_offset,
+        .arg_layouts = .{
+            .start = arg_layouts_start,
+            .len = arg_layouts_len,
+        },
+        .arg_desc_offsets = .{
+            .start = arg_desc_offsets_start,
+            .len = arg_desc_offsets_len,
+        },
+        .capture_offset_base = capture_offset_base,
     }) catch abiCrash(g, "erased proc registration");
+}
+
+fn erasedInvocationCapture(
+    g: *GlobalBoxyRuntime,
+    registered: RegisteredErasedProc,
+    capture: [*]u8,
+    arg_descs: ?[*]const ?*const BoxyTypeDesc,
+    arg_desc_keys_start: u32,
+    arg_desc_keys_len: u32,
+) [*]u8 {
+    const keys_end = @as(usize, arg_desc_keys_start) + arg_desc_keys_len;
+    if (keys_end > g.runtime.boxy_tables.erased_arg_desc_keys.len) {
+        abiCrash(g, "erased call descriptor keys");
+    }
+    const keys = g.runtime.boxy_tables.erased_arg_desc_keys[arg_desc_keys_start..keys_end];
+    const offsets_start: usize = registered.arg_desc_offsets.start;
+    const offsets_end = offsets_start + registered.arg_desc_offsets.len;
+    if (offsets_end > g.runtime.boxy_tables.erased_arg_desc_offsets.len) {
+        abiCrash(g, "erased proc descriptor offsets");
+    }
+    const offsets = g.runtime.boxy_tables.erased_arg_desc_offsets[offsets_start..offsets_end];
+    if (offsets.len == 0) return capture;
+    const descs = arg_descs orelse abiCrash(g, "erased call descriptor operands");
+
+    const capture_len: usize = registered.metadata_offset;
+    const invocation = g.value_scratch.allocator().alignedAlloc(
+        u8,
+        std.mem.Alignment.fromByteUnits(builtins.erased_callable.capture_alignment),
+        capture_len,
+    ) catch abiCrash(g, "erased invocation capture allocation");
+    @memcpy(invocation, capture[0..capture_len]);
+
+    for (offsets) |offset| {
+        var matching_desc_index: ?usize = null;
+        for (keys, 0..) |key, desc_index| {
+            if (!std.meta.eql(key, offset.key)) continue;
+            if (matching_desc_index != null) {
+                abiCrashDuplicateErasedArgDescriptor(g, registered.proc_id, offset.key);
+            }
+            matching_desc_index = desc_index;
+        }
+        const desc_index = matching_desc_index orelse
+            abiCrashMissingErasedArgDescriptor(g, registered.proc_id, offset.key, keys);
+        const destination = @as(usize, registered.capture_offset_base) + offset.offset;
+        if (destination + @sizeOf(?*const BoxyTypeDesc) > invocation.len) {
+            abiCrash(g, "erased invocation descriptor destination");
+        }
+        const desc = descs[desc_index] orelse
+            abiCrashNullErasedArgDescriptor(g, registered.proc_id, offset.key);
+        const payload_index = @intFromEnum(desc.payload_layout);
+        if (payload_index >= g.runtime.layout_store.layoutCount()) {
+            abiCrash(g, "erased invocation descriptor payload layout");
+        }
+        @memcpy(
+            invocation[destination..][0..@sizeOf(?*const BoxyTypeDesc)],
+            std.mem.asBytes(&@as(?*const BoxyTypeDesc, desc)),
+        );
+    }
+    return invocation.ptr;
+}
+
+fn erasedArgLayouts(
+    g: *GlobalBoxyRuntime,
+    span: LIR.BoxySpan,
+    comptime what: []const u8,
+) []const layout_mod.Idx {
+    const end = @as(usize, span.start) + span.len;
+    if (end > g.runtime.boxy_tables.erased_arg_layouts.len) abiCrash(g, what);
+    return g.runtime.boxy_tables.erased_arg_layouts[span.start..end];
+}
+
+fn erasedCallDescKeys(
+    g: *GlobalBoxyRuntime,
+    start: u32,
+    len: u32,
+) []const LIR.ErasedArgDescKey {
+    const end = @as(usize, start) + len;
+    if (end > g.runtime.boxy_tables.erased_arg_desc_keys.len) {
+        abiCrash(g, "erased call descriptor keys");
+    }
+    return g.runtime.boxy_tables.erased_arg_desc_keys[start..end];
+}
+
+fn erasedRootArgDesc(
+    g: *GlobalBoxyRuntime,
+    arg_index: usize,
+    arg_descs: ?[*]const ?*const BoxyTypeDesc,
+    keys: []const LIR.ErasedArgDescKey,
+) ?*const BoxyTypeDesc {
+    if (keys.len == 0) return null;
+    const descs = arg_descs orelse abiCrash(g, "erased call descriptor operands");
+    var result: ?*const BoxyTypeDesc = null;
+    for (keys, 0..) |key, index| {
+        if (key.arg_index != arg_index or key.descriptor_index != 0) continue;
+        if (result != null) abiCrash(g, "duplicate erased root argument descriptor");
+        result = descs[index];
+    }
+    return result;
+}
+
+fn prepareErasedInvocationArgs(
+    g: *GlobalBoxyRuntime,
+    registered: RegisteredErasedProc,
+    args: ?[*]const u8,
+    call_layouts_span: LIR.BoxySpan,
+    arg_descs: ?[*]const ?*const BoxyTypeDesc,
+    arg_desc_keys_start: u32,
+    arg_desc_keys_len: u32,
+) ?[*]const u8 {
+    const source_layouts = erasedArgLayouts(g, call_layouts_span, "erased call argument layouts");
+    const target_layouts = erasedArgLayouts(g, registered.arg_layouts, "erased proc argument layouts");
+    if (source_layouts.len != target_layouts.len) {
+        abiCrash(g, "erased call argument-layout arity");
+    }
+    if (source_layouts.len == 0) return null;
+
+    var layouts_match = true;
+    for (source_layouts, target_layouts) |source_layout, target_layout| {
+        layouts_match = layouts_match and source_layout == target_layout;
+    }
+    if (layouts_match) return args;
+
+    const keys = erasedCallDescKeys(g, arg_desc_keys_start, arg_desc_keys_len);
+    var target_size: u32 = 0;
+    for (target_layouts) |target_layout| {
+        const sa = g.runtime.helper.sizeAlignOf(target_layout);
+        target_size = std.mem.alignForward(u32, target_size, @intCast(@max(sa.alignment.toByteUnits(), 1)));
+        target_size += sa.size;
+    }
+    const packed_args = g.value_scratch.allocator().alignedAlloc(
+        u8,
+        .@"16",
+        @max(target_size, 1),
+    ) catch abiCrash(g, "erased argument buffer allocation");
+    @memset(packed_args, 0);
+
+    var source_offset: u32 = 0;
+    var target_offset: u32 = 0;
+    for (source_layouts, target_layouts, 0..) |source_layout, target_layout, arg_index| {
+        const source_sa = g.runtime.helper.sizeAlignOf(source_layout);
+        const target_sa = g.runtime.helper.sizeAlignOf(target_layout);
+        source_offset = std.mem.alignForward(u32, source_offset, @intCast(@max(source_sa.alignment.toByteUnits(), 1)));
+        target_offset = std.mem.alignForward(u32, target_offset, @intCast(@max(target_sa.alignment.toByteUnits(), 1)));
+
+        const source_value = if (source_sa.size == 0)
+            Value.zst
+        else
+            Value{ .ptr = @constCast((args orelse abiCrash(g, "erased call argument buffer")) + source_offset) };
+        const target_value = if (source_layout == target_layout)
+            source_value
+        else
+            g.runtime.materializeErasedCallArgument(
+                hooks(g),
+                source_value,
+                source_layout,
+                erasedRootArgDesc(g, arg_index, arg_descs, keys),
+                target_layout,
+            ) catch abiCrash(g, "erased call argument materialization");
+        if (target_sa.size > 0) {
+            @memcpy(packed_args[target_offset..][0..target_sa.size], target_value.readBytes(target_sa.size));
+        }
+        source_offset += source_sa.size;
+        target_offset += target_sa.size;
+    }
+    return packed_args.ptr;
 }
 
 /// Invoke an erased callable and deliver its result in the caller's expected
@@ -491,6 +850,11 @@ pub fn roc_boxy_call_erased(
     out_desc: *?*const BoxyTypeDesc,
     result_desc: ?*const BoxyTypeDesc,
     expected_layout: u32,
+    arg_descs: ?[*]const ?*const BoxyTypeDesc,
+    arg_desc_keys_start: u32,
+    arg_desc_keys_len: u32,
+    arg_layouts_start: u32,
+    arg_layouts_len: u32,
 ) callconv(.c) void {
     const raw = fn_ptr orelse @panic("boxy erased call with null function pointer");
     const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
@@ -498,7 +862,7 @@ pub fn roc_boxy_call_erased(
 
     // Without an installed runtime there are no registered erased procs, so
     // every erased result already uses the caller's exact layout.
-    const g = global orelse {
+    const g = currentRuntime() orelse {
         var returned_desc: ?*const anyopaque = @ptrCast(result_desc);
         callable(ops, ret, args, capture, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
@@ -516,20 +880,37 @@ pub fn roc_boxy_call_erased(
     const capture_ptr = capture orelse @panic("registered boxy erased callable had no capture pointer");
     const metadata = builtins.erased_callable.compilerMetadataPtr(capture_ptr, actual.?.metadata_offset);
     const metadata_desc: ?*const BoxyTypeDesc = if (metadata.result_desc) |ptr| @ptrCast(@alignCast(ptr)) else null;
+    enter(g);
+    defer leave(g);
+    const invocation_capture = erasedInvocationCapture(
+        g,
+        actual.?,
+        capture_ptr,
+        arg_descs,
+        arg_desc_keys_start,
+        arg_desc_keys_len,
+    );
+    const invocation_args = prepareErasedInvocationArgs(
+        g,
+        actual.?,
+        args,
+        .{ .start = arg_layouts_start, .len = arg_layouts_len },
+        arg_descs,
+        arg_desc_keys_start,
+        arg_desc_keys_len,
+    );
     if (actual.?.ret_layout == expected and result_desc == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-        callable(g.runtime.roc_ops, ret, args, capture, &returned_desc);
+        callable(g.runtime.roc_ops, ret, invocation_args, invocation_capture, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
 
     const actual_layout = actual.?.ret_layout;
-    enter(g);
-    defer leave(g);
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-    callable(g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), args, capture, &returned_desc);
+    callable(g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, &returned_desc);
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
@@ -614,6 +995,18 @@ pub fn roc_boxy_adapt(
     defer leave(g);
     const adapter: LIR.BoxyAdapterId = @enumFromInt(adapter_id);
     const planned = g.runtime.requireBoxyAdapter(adapter);
+    if (source_desc) |desc| {
+        const payload_index = @intFromEnum(desc.payload_layout);
+        if (payload_index >= g.runtime.layout_store.layoutCount()) {
+            abiCrash(g, "adapter source descriptor payload layout");
+        }
+    }
+    if (target_desc) |desc| {
+        const payload_index = @intFromEnum(desc.payload_layout);
+        if (payload_index >= g.runtime.layout_store.layoutCount()) {
+            abiCrash(g, "adapter target descriptor payload layout");
+        }
+    }
     const adapted = g.runtime.boxyAdaptValue(
         hooks(g),
         valueAt(source),
@@ -757,10 +1150,19 @@ pub fn roc_boxy_drop(
     const rc_atomicity: builtins.utils.RcAtomicity = @enumFromInt(atomicity);
     const val: Value = if (value) |p| .{ .ptr = p } else Value.zst;
     const layout_idx = layoutIdx(value_layout);
+    const layout_value = g.runtime.layout_store.getLayout(layout_idx);
     switch (rc_op) {
-        .incref => {
+        .incref => if (layout_value.tag == .box or layout_value.tag == .box_of_zst) {
             g.runtime.performConcreteRc(hooks(g), .incref, layout_idx, val, count, rc_atomicity);
-        },
+        } else g.runtime.performBoxyLayoutDrop(
+            hooks(g),
+            val,
+            layout_idx,
+            desc,
+            .incref,
+            count,
+            rc_atomicity,
+        ) catch abiCrash(g, "incref"),
         .decref, .free => g.runtime.performBoxyLayoutDrop(
             hooks(g),
             val,
@@ -1154,15 +1556,33 @@ pub fn roc_boxy_desc_copy(
     const g = requireGlobal();
     enter(g);
     defer leave(g);
-    g.capture_ids = if (capture_ids) |ids| ids[0..capture_count] else &.{};
-    g.capture_descs = if (capture_descs) |descs| descs[0..capture_count] else &.{};
+    const ids = if (capture_ids) |supplied| supplied[0..capture_count] else &.{};
+    const descs = if (capture_descs) |supplied| supplied[0..capture_count] else &.{};
+    const cache_key = DescCopyCacheKey{
+        .desc_id = desc_id,
+        .capture_ids = ids,
+        .capture_descs = descs,
+    };
+    if (g.desc_copy_cache.get(cache_key)) |cached| return cached;
+
+    g.capture_ids = ids;
+    g.capture_descs = descs;
     defer {
         g.capture_ids = &.{};
         g.capture_descs = &.{};
     }
     const desc_ref = LIR.BoxyDescRef{ .static = @enumFromInt(desc_id) };
     const captures = LIR.LocalSpan{ .start = 0, .len = @intCast(capture_count) };
-    return g.runtime.materializeBoxyDescRefValueWithCaptures(hooks(g), desc_ref, captures) catch abiCrash(g, "descriptor materialization");
+    const result = g.runtime.materializeBoxyDescRefValueWithCaptures(hooks(g), desc_ref, captures) catch abiCrash(g, "descriptor materialization");
+    const cache_allocator = g.desc_arena.allocator();
+    const owned_ids = cache_allocator.dupe(u32, ids) catch abiCrash(g, "descriptor materialization cache ids");
+    const owned_descs = cache_allocator.dupe(?*const BoxyTypeDesc, descs) catch abiCrash(g, "descriptor materialization cache descriptors");
+    g.desc_copy_cache.put(g.gpa, .{
+        .desc_id = desc_id,
+        .capture_ids = owned_ids,
+        .capture_descs = owned_descs,
+    }, result) catch abiCrash(g, "descriptor materialization cache");
+    return result;
 }
 
 /// Resolve a static descriptor id to its descriptor pointer in the global
@@ -1259,7 +1679,35 @@ pub fn roc_boxy_nested_desc(desc: *const BoxyTypeDesc, nested_index: u32) callco
     defer leave(g);
     const nested = g.runtime.requireBoxyDescRefs(desc.nested_descs);
     if (nested_index >= nested.len) abiCrash(g, "nested descriptor navigation");
-    return hooks(g).resolveDescRef(nested[nested_index]) catch abiCrash(g, "nested descriptor resolution");
+    const result = hooks(g).resolveDescRef(nested[nested_index]) catch abiCrash(g, "nested descriptor resolution");
+    return result;
+}
+
+/// Resolve the allocation payload descriptor for a value in a committed Box
+/// layout. The descriptor may use either the box-self or payload-direct
+/// convention; the layout makes this projection explicit.
+pub fn roc_boxy_box_payload_desc(desc: *const BoxyTypeDesc, box_layout: u32) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    return (g.runtime.boxyBoxAllocationPayloadDesc(hooks(g), @enumFromInt(box_layout), desc) catch
+        abiCrash(g, "Box payload descriptor resolution")) orelse
+        abiCrash(g, "Box payload descriptor missing");
+}
+
+/// Resolve one payload descriptor by exact tag identity and payload index.
+pub fn roc_boxy_tag_payload_desc(
+    desc: *const BoxyTypeDesc,
+    tag_name: u32,
+    payload_index: u32,
+) callconv(.c) *const BoxyTypeDesc {
+    const g = requireGlobal();
+    enter(g);
+    defer leave(g);
+    const name: base.StringLiteral.Idx = @enumFromInt(tag_name);
+    const variant = g.runtime.findLocalBoxyTagVariant(desc, name) orelse abiCrash(g, "tag-payload descriptor variant navigation");
+    const payload_desc = g.runtime.findBoxyPayloadDesc(variant, payload_index) orelse abiCrash(g, "tag-payload descriptor navigation");
+    return hooks(g).resolveDescRef(payload_desc) catch abiCrash(g, "tag-payload descriptor resolution");
 }
 
 /// Resolve the descriptor of a tag union's row extension.

@@ -102,6 +102,10 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
     pub fn runWasmStrWithStats(_: std.mem.Allocator, _: []const u8, _: bool) EvalError!RunWasmStrResult {
         return error.WasmExecFailed;
     }
+
+    pub fn runWasmStrWithStatsAtHeapBase(_: std.mem.Allocator, _: []const u8, _: bool, _: u32) EvalError!RunWasmStrResult {
+        return error.WasmExecFailed;
+    }
 } else @import("wasm_runner.zig");
 /// Shared eval test helpers routed through checked artifacts.
 pub const test_helpers = @import("test_helpers.zig");

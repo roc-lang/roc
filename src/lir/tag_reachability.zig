@@ -524,6 +524,8 @@ const Pass = struct {
                 if (s.dict.localOrNull()) |local| self.noteUse(local);
                 const args = self.store.getLocalSpan(s.args);
                 for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
+                const arg_descs = self.store.getLocalSpan(s.arg_descs);
+                for (0..arg_descs.len) |index| self.noteUse(GuardedList.at(arg_descs, index));
                 const hidden_args = self.store.getLocalSpan(s.hidden_args);
                 for (0..hidden_args.len) |index| self.noteUse(GuardedList.at(hidden_args, index));
             },

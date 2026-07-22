@@ -112,6 +112,10 @@ pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
 pub const BoxyTagVariant = struct {
     name: base.StringLiteral.Idx,
     discriminant: u16,
+    /// Number of source-language payloads carried by this tag. A single
+    /// aggregate payload is distinct from a multi-payload tag whose runtime
+    /// payload is also a struct.
+    payload_count: u32 = 0,
     payload_layout: layout.Idx,
     payload_descs: BoxySpan = .{},
 };
@@ -189,10 +193,14 @@ pub const BoxyMethodAdapter = struct {
 pub const BoxyMethodHiddenDescSource = union(enum) {
     slot: u32,
     call: u32,
+    argument: u32,
 };
 
 /// One callable slot in a boxy dictionary.
 pub const BoxyMethodSlot = struct {
+    /// False for an unimplemented program-wide method slot in a dictionary
+    /// that requires only a subset of the program's semantic methods.
+    present: bool = true,
     method: names.MethodNameId,
     proc: LIR.LirProcSpecId,
     hidden_descs: BoxySpan = .{},
@@ -276,6 +284,10 @@ pub const Result = struct {
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),
     boxy_method_arg_layouts: std.ArrayList(layout.Idx),
     boxy_method_hidden_desc_sources: std.ArrayList(BoxyMethodHiddenDescSource),
+    boxy_erased_arg_layouts: std.ArrayList(layout.Idx),
+    boxy_erased_arg_desc_keys: std.ArrayList(LIR.ErasedArgDescKey),
+    boxy_erased_arg_desc_offsets: std.ArrayList(LIR.ErasedArgDescOffset),
+    boxy_erased_arg_desc_params: std.ArrayList(LIR.ErasedArgDescParam),
     const_plans: std.ArrayList(ConstPlan),
     const_roots: std.ArrayList(ConstRootPlan),
     comptime_sites: std.ArrayList(LIR.ComptimeSite),
@@ -304,6 +316,10 @@ pub const Result = struct {
             .boxy_method_slots = .empty,
             .boxy_method_arg_layouts = .empty,
             .boxy_method_hidden_desc_sources = .empty,
+            .boxy_erased_arg_layouts = .empty,
+            .boxy_erased_arg_desc_keys = .empty,
+            .boxy_erased_arg_desc_offsets = .empty,
+            .boxy_erased_arg_desc_params = .empty,
             .const_plans = .empty,
             .const_roots = .empty,
             .comptime_sites = .empty,
@@ -321,6 +337,10 @@ pub const Result = struct {
         self.const_plans.deinit(allocator);
         deinitFnSets(allocator, self.fn_sets.items);
         deinitErasedFns(allocator, self.erased_fns.items);
+        self.boxy_erased_arg_desc_params.deinit(allocator);
+        self.boxy_erased_arg_desc_offsets.deinit(allocator);
+        self.boxy_erased_arg_desc_keys.deinit(allocator);
+        self.boxy_erased_arg_layouts.deinit(allocator);
         self.boxy_method_hidden_desc_sources.deinit(allocator);
         self.boxy_method_arg_layouts.deinit(allocator);
         self.boxy_method_slots.deinit(allocator);

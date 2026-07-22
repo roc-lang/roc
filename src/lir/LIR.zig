@@ -201,6 +201,39 @@ pub const BoxySpan = extern struct {
     }
 };
 
+/// Exact tag payload selected while navigating a runtime descriptor.
+pub const BoxyTagPayloadRead = struct {
+    tag_name: StringLiteral.Idx,
+    payload_index: u32,
+};
+
+/// Stable identity of one erased-call argument descriptor. `descriptor_index`
+/// is the pre-order position among descriptor requirements rooted at the
+/// explicit argument.
+pub const ErasedArgDescKey = extern struct {
+    arg_index: u16,
+    descriptor_index: u16,
+};
+
+/// Capture-storage destination for one keyed erased-call argument descriptor.
+pub const ErasedArgDescOffset = extern struct {
+    key: ErasedArgDescKey,
+    offset: u32,
+};
+
+/// Hidden erased-procedure parameter initialized from one keyed call-site
+/// descriptor operand.
+pub const ErasedArgDescParam = extern struct {
+    key: ErasedArgDescKey,
+    local: LocalId,
+    /// For a projected parameter, the descriptor index of its already-bound
+    /// parent within the same explicit argument.
+    source_descriptor_index: u16,
+    /// Nested descriptor slot read from the parent. `maxInt(u16)` means the
+    /// parameter consumes its exact call-site key directly.
+    source_nested_index: u16,
+};
+
 /// How a boxy operation observes or transfers its source value.
 pub const BoxyTransferMode = enum {
     borrow,
@@ -601,6 +634,10 @@ pub const CFStmt = union(enum) {
         proc: LirProcSpecId,
         args: LocalSpan,
         result_desc: ?BoxyDescRef = null,
+        /// Fresh descriptor local initialized with the descriptor governing
+        /// the value written to `target` when the callee produces that
+        /// descriptor during execution.
+        out_desc: ?LocalId = null,
         is_cold: bool = false,
         next: CFStmtId,
     },
@@ -608,6 +645,14 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
+        /// Ordered runtime layouts of the explicit arguments packed into the
+        /// erased-call argument buffer.
+        arg_layouts: BoxySpan = BoxySpan.empty(),
+        /// Exact descriptors for descriptor-bearing explicit arguments, in
+        /// the callee function representation's traversal order.
+        arg_descs: LocalSpan = LocalSpan.empty(),
+        /// Keys parallel to `arg_descs` in the program's Boxy key table.
+        arg_desc_keys: BoxySpan = BoxySpan.empty(),
         /// Descriptor requested by the callable type at this call site.
         result_desc: ?BoxyDescRef = null,
         /// Fresh descriptor local initialized with the descriptor governing
@@ -630,6 +675,12 @@ pub const CFStmt = union(enum) {
         target: LocalId,
         desc: BoxyDescRef,
         nested_index: ?u32 = null,
+        /// Resolve the descriptor governing the allocation payload of a value
+        /// stored in this committed Box layout. This is distinct from an
+        /// ordinary nested read because Box descriptors may be box-self or
+        /// payload-direct.
+        box_payload_layout: ?layout.Idx = null,
+        tag_payload: ?BoxyTagPayloadRead = null,
         tag_ext: bool = false,
         tag_residual_for: ?BoxyDescRef = null,
         captures: LocalSpan = .{ .start = 0, .len = 0 },
@@ -721,6 +772,8 @@ pub const CFStmt = union(enum) {
         method: names.MethodNameId,
         method_slot: u32,
         args: LocalSpan,
+        /// Descriptor pointer locals parallel to `args`.
+        arg_descs: LocalSpan = .empty(),
         hidden_args: LocalSpan = .empty(),
         result_desc: ?BoxyDescRef = null,
         is_cold: bool = false,
@@ -925,6 +978,20 @@ pub const LirProcSpec = struct {
     /// Dictionary dispatch thunks consume this directly; backends never derive
     /// it by inspecting the procedure body.
     ret_desc: ?BoxyDescRef = null,
+    /// Frame-local descriptor source produced while this procedure executes.
+    /// Internal direct calls expose it through `assign_call.out_desc`; it is
+    /// intentionally separate from externally resolvable `ret_desc`.
+    runtime_ret_desc: ?LocalId = null,
+    /// Keyed byte offsets of hidden descriptor fields in this erased worker's
+    /// capture value.
+    erased_arg_desc_offsets: BoxySpan = .{},
+    /// Ordered runtime layouts expected in this erased worker's explicit
+    /// argument buffer.
+    erased_arg_layouts: BoxySpan = .{},
+    /// Hidden descriptor parameters supplied for this erased invocation.
+    erased_arg_desc_params: BoxySpan = .{},
+    /// Hidden capture-pointer parameter for an erased callable procedure.
+    erased_capture_arg: ?LocalId = null,
     abi: ProcAbi = .roc,
     /// This callable can be invoked as an external function pointer before a
     /// normal Roc root runs, so its entry must initialize the embedded Boxy

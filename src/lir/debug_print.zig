@@ -118,6 +118,7 @@ const Printer = struct {
                         try writer.writeAll(" result_desc=");
                         try writeBoxyDescRef(result_desc, writer);
                     }
+                    if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
                     try writer.writeByte('\n');
                     current = s.next;
@@ -159,6 +160,16 @@ const Printer = struct {
                     try writeBoxyDescRef(s.desc, writer);
                     if (s.nested_index) |nested_index| {
                         try writer.print(" nested={d}", .{nested_index});
+                    }
+                    if (s.box_payload_layout) |box_layout| {
+                        try writer.writeAll(" box_payload=");
+                        try writeLayout(self.layouts, box_layout, writer);
+                    }
+                    if (s.tag_payload) |payload| {
+                        try writer.print(" tag_payload={{ name={d}, index={d} }}", .{
+                            @intFromEnum(payload.tag_name),
+                            payload.payload_index,
+                        });
                     }
                     if (s.tag_ext) try writer.writeAll(" tag_ext");
                     if (s.tag_residual_for) |target_desc| {
@@ -292,6 +303,8 @@ const Printer = struct {
                     try writeBoxyDictRef(s.dict, writer);
                     try writer.print(" method={d} slot={d} args=[", .{ @intFromEnum(s.method), s.method_slot });
                     try self.writeLocals(s.args, writer);
+                    try writer.writeAll("] arg_descs=[");
+                    try self.writeLocals(s.arg_descs, writer);
                     try writer.writeAll("] hidden=[");
                     try self.writeLocals(s.hidden_args, writer);
                     try writer.writeAll("]");
@@ -771,5 +784,5 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.find(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
+    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] arg_descs=[] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
 }

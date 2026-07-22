@@ -1267,7 +1267,13 @@ fn generatePlatformHostShimFromLirData(
     // function); they all carry the same symbol.
     const hosted_symbols = checked_hosted_symbols orelse try hostedSymbolsFromLirDispatch(ctx.arena, store);
 
-    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(ctx.gpa, store, std_target);
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
+        ctx.gpa,
+        store,
+        &.{},
+        &.{},
+        std_target,
+    );
     codegen.layout_store = layouts;
     defer codegen.deinit();
 
@@ -5262,6 +5268,8 @@ fn writeDevRunImageToSharedMemory(
             store,
             layouts,
             static_strings.entries,
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
@@ -7096,9 +7104,7 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
 }
 
 fn lirResultUsesBoxy(result: *const lir.Program.Result) bool {
-    return result.boxy_type_descs.items.len != 0 or
-        result.boxy_dicts.items.len != 0 or
-        result.boxy_adapters.items.len != 0;
+    return eval.boxy_runtime.BoxyTables.fromResult(result).needsRuntime();
 }
 
 /// Add the boxy runtime object and its embedded sidecar to a standalone
@@ -7162,33 +7168,14 @@ fn mergeBoxyRuntimeWasm(
 
     var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
     defer sidecar_blob.deinit(ctx.gpa);
-    const blob_len: u64 = @intCast(sidecar_blob.bytes.len);
-    const exports = [_]backend.StaticDataExport{
-        .{ .symbol_name = "roc_boxy_sidecar_blob", .bytes = sidecar_blob.bytes, .alignment = 16, .is_global = true },
-        .{ .symbol_name = "roc_boxy_sidecar_blob_len", .bytes = std.mem.asBytes(&blob_len), .alignment = 8, .is_global = true },
-        .{ .symbol_name = "roc_boxy_sidecar_desc", .bytes = std.mem.asBytes(&sidecar_blob.sidecar), .alignment = 8, .is_global = true },
-    };
-    var sidecar_module = try backend.wasm.WasmModule.staticDataModule(ctx.gpa, &exports);
-    defer sidecar_module.deinit();
-    var sidecar_merge = switch (mode) {
-        .final_link => try module.mergeModule(&sidecar_module),
-        .relocatable_object => try module.mergeModuleForObject(&sidecar_module),
-    };
-    sidecar_merge.deinit();
-
-    // Merge the definitions before the PIC runtime. In final-link mode this
-    // lets runtime GOT globals resolve directly to the sidecar data symbols;
-    // object mode preserves the corresponding GOT imports for wasm-ld.
-    var runtime_module = backend.wasm.WasmModule.preload(ctx.gpa, runtime_bytes, true) catch |err| {
-        std.log.err("Failed to preload wasm Boxy runtime: {}", .{err});
+    backend.wasm.BoxyRuntimeLink.merge(ctx.gpa, module, .{
+        .runtime_object = runtime_bytes,
+        .sidecar_blob = sidecar_blob.bytes,
+        .sidecar_desc = sidecar_blob.sidecar,
+    }, mode) catch |err| {
+        std.log.err("Failed to merge wasm Boxy runtime: {}", .{err});
         return err;
     };
-    defer runtime_module.deinit();
-    var runtime_merge = switch (mode) {
-        .final_link => try module.mergeModule(&runtime_module),
-        .relocatable_object => try module.mergeModuleForObject(&runtime_module),
-    };
-    runtime_merge.deinit();
 }
 
 /// The host inputs of a link, in link order.
@@ -7558,6 +7545,8 @@ fn writeDevWasmObject(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         &wasm_module,
     );
     wasm_module_owned_here = false;
@@ -7733,6 +7722,8 @@ fn rocBuildWasmSurgical(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         &wasm_module,
     );
     defer codegen.deinit();
@@ -7961,6 +7952,8 @@ fn compileLlvmAppObject(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
         &lowered.lir_result.store,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         std_target,
     );
     codegen.layout_store = &lowered.lir_result.layouts;
@@ -8831,6 +8824,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         entrypoints,
         static_data_exports,
         lowered.lir_result.store.getProcSpecs(),
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
         target,
         obj_path,
         ctx.coreCtx(),
@@ -10031,6 +10026,7 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
             .size,
         ),
@@ -10038,6 +10034,7 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
+            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
             bool_roots,
             .speed,
         ),

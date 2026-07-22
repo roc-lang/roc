@@ -6,9 +6,9 @@
 //! `roc_boxy_init_embedded` entry that installs that runtime from a boxy sidecar
 //! embedded in the linked program. Each machine-code backend emits a call to
 //! `roc_boxy_init_embedded` at the top of each exported entrypoint, so the
-//! runtime is ready before any Roc procedure runs. Host operations reach the
-//! program through linker-resolved symbols (the extern symbol ABI), matching the
-//! app and builtins objects this runtime links beside.
+//! runtime is ready before any Roc procedure runs. Standalone output reaches
+//! host operations through linker-resolved symbols; evaluator Wasm receives its
+//! host operation table explicitly at initialization.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -24,17 +24,15 @@ const BoxySidecar = lir.LirImage.BoxySidecar;
 
 /// Host operations resolve through linker-provided symbols.
 pub const roc_host_call_mode: builtins.host_abi.HostCallMode = .extern_symbols;
-/// This standalone wasm object bundles Zig's compiler-rt. The ordinary wasm
-/// builtins object supplies Roc's decomposed i128 replacements instead.
+/// The wasm builtins object owns compiler-rt symbols in standalone programs.
+/// Suppress the duplicate exports pulled in through `compiler_rt_128` here.
 pub const roc_omit_wasm_compiler_rt_exports = true;
 
 /// Route runtime panics through the Roc host crash callback.
 pub const panic = std.debug.FullPanic(panicImpl);
 
-extern fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void;
-
 fn panicImpl(msg: []const u8, _: ?usize) noreturn {
-    roc_crashed(msg.ptr, msg.len);
+    startup_ops.crash(msg);
     unreachable;
 }
 pub const std_options_elf_debug_info_search_paths = shim_io.elfDebugInfoSearchPaths;
@@ -54,12 +52,9 @@ extern var roc_boxy_sidecar_blob: u8;
 extern const roc_boxy_sidecar_blob_len: u64;
 extern const roc_boxy_sidecar_desc: BoxySidecar;
 
-/// Backing `RocOps` for the global runtime. Under the extern symbol ABI its
-/// methods dispatch to linker-resolved host symbols and never read this value,
-/// so the runtime only needs a stable address to store. It backs the runtime's
-/// refcounted application allocations (`allocRocDataWithRc`), which the host's
-/// allocation tracker balances against the reference-counting drops the program
-/// emits.
+/// Backing `RocOps` for the global runtime. The evaluator runtime copies the
+/// table supplied at initialization; under the standalone extern-symbol ABI
+/// the methods ignore this value.
 var startup_ops: RocOps = undefined;
 
 /// A bump allocator for the runtime's own bookkeeping — the descriptor tables,
@@ -138,7 +133,11 @@ var initialized = false;
 /// entrypoint wrappers call this before invoking any Roc procedure; the first
 /// call installs the runtime and later calls return early. The decoded sidecar
 /// view lives for the process, so it is intentionally leaked.
-export fn roc_boxy_init_embedded() callconv(.c) void {
+pub export fn roc_boxy_init_embedded(roc_ops: *const RocOps) callconv(.c) void {
+    if (comptime builtins.host_abi.host_call_mode == .vtable) {
+        startup_ops = roc_ops.*;
+    }
+
     if (initialized) return;
 
     const blob_len: usize = @intCast(roc_boxy_sidecar_blob_len);
@@ -175,12 +174,21 @@ export fn roc_boxy_init_embedded() callconv(.c) void {
 // in `src/eval/boxy_abi.zig` and the `BoxyBuiltinFn` symbol names the dev
 // backend emits.
 comptime {
+    // Evaluator Wasm is merged without the standalone builtins object, so it
+    // carries the small self-contained libcall set. Standalone Wasm resolves
+    // these symbols from the builtins object linked before this runtime.
+    if (builtin.cpu.arch.isWasm() and builtins.host_abi.host_call_mode == .vtable) {
+        builtins.native_runtime_libcalls.exportLibcalls();
+    }
+
     const names = [_][:0]const u8{
         "roc_boxy_static_desc",
         "roc_boxy_static_dict",
         "roc_boxy_dict_method_arg_desc",
         "roc_boxy_dict_method_hidden_desc",
         "roc_boxy_nested_desc",
+        "roc_boxy_box_payload_desc",
+        "roc_boxy_tag_payload_desc",
         "roc_boxy_tag_ext_desc",
         "roc_boxy_tag_residual_desc",
         "roc_boxy_inspect",

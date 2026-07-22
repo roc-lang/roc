@@ -308,6 +308,8 @@ pub const Interpreter = struct {
     frame_plans: []FramePlan,
     boxy_tables: BoxyTables,
     runtime_boxy_type_descs: std.ArrayList(*const LirProgram.BoxyTypeDesc) = .empty,
+    runtime_boxy_desc_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+    adapter_desc_specializations: std.AutoHashMapUnmanaged(boxy_runtime.AdapterDescMergeKey, *const LirProgram.BoxyTypeDesc) = .empty,
     runtime_boxy_desc_refs: std.ArrayList(LirProgram.BoxyDescRef) = .empty,
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
@@ -569,6 +571,8 @@ pub const Interpreter = struct {
             .frame_plans = frame_plans,
             .boxy_tables = boxy_tables,
             .runtime_boxy_type_descs = .empty,
+            .runtime_boxy_desc_ids = .empty,
+            .adapter_desc_specializations = .empty,
             .runtime_boxy_desc_refs = .empty,
             .runtime_boxy_tag_variants = .empty,
             .runtime_boxy_tag_payload_descs = .empty,
@@ -579,12 +583,15 @@ pub const Interpreter = struct {
                 .helper = LayoutHelper.init(layout_store),
                 .boxy_tables = boxy_tables,
                 .runtime_boxy_type_descs = undefined,
+                .runtime_boxy_desc_ids = undefined,
+                .adapter_desc_specializations = undefined,
                 .runtime_boxy_desc_refs = undefined,
                 .runtime_boxy_tag_variants = undefined,
                 .runtime_boxy_tag_payload_descs = undefined,
                 .runtime_boxy_payload_steps = undefined,
                 .roc_ops = undefined,
                 .scratch = allocator,
+                .descriptor_arena = undefined,
                 .eval_arena = undefined,
             },
             .call_stack = .empty,
@@ -602,6 +609,8 @@ pub const Interpreter = struct {
         self.runtime_boxy_tag_variants.deinit(self.allocator);
         self.runtime_boxy_desc_refs.deinit(self.allocator);
         self.runtime_boxy_type_descs.deinit(self.allocator);
+        self.runtime_boxy_desc_ids.deinit(self.allocator);
+        self.adapter_desc_specializations.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.static_strings.deinit();
@@ -785,11 +794,14 @@ pub const Interpreter = struct {
     /// the runtime valid for every boxy operation reached from it.
     fn bindBoxyRuntime(self: *LirInterpreter) void {
         self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
+        self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
+        self.boxy_runtime.adapter_desc_specializations = &self.adapter_desc_specializations;
         self.boxy_runtime.runtime_boxy_desc_refs = &self.runtime_boxy_desc_refs;
         self.boxy_runtime.runtime_boxy_tag_variants = &self.runtime_boxy_tag_variants;
         self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
         self.boxy_runtime.runtime_boxy_payload_steps = &self.runtime_boxy_payload_steps;
         self.boxy_runtime.roc_ops = &self.roc_ops;
+        self.boxy_runtime.descriptor_arena = self.evalAllocator();
         self.boxy_runtime.eval_arena = self.evalAllocator();
     }
 
@@ -1578,7 +1590,6 @@ pub const Interpreter = struct {
             "LIR/interpreter stmt chain from {d}:\n",
             .{@intFromEnum(start_stmt)},
         );
-
         var current = start_stmt;
         var remaining = limit;
         while (remaining > 0) : (remaining -= 1) {
@@ -1898,13 +1909,14 @@ pub const Interpreter = struct {
         }
 
         trace.log(
-            "enter proc={d} name={d} depth={d} args={d} ret_layout={d}",
+            "enter proc={d} name={d} depth={d} args={d} ret_layout={d} ret_desc={any}",
             .{
                 @intFromEnum(proc_id),
                 proc_spec.name.raw(),
                 self.call_depth,
                 args.len,
                 @intFromEnum(proc_spec.ret_layout),
+                proc_spec.ret_desc,
             },
         );
         self.call_depth += 1;
@@ -1939,7 +1951,6 @@ pub const Interpreter = struct {
                 .{ proc_spec.name.raw(), params.len, arg_layouts.len },
             );
         }
-
         for (0..params.len) |i| {
             const param = GuardedList.at(params, i);
             const arg = args[i];
@@ -2008,10 +2019,13 @@ pub const Interpreter = struct {
                 );
                 const raw_result = try self.getLocalChecked(&frame, ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
-                const result_desc = frame.localDesc(ret_local) orelse if (self.store.getLocal(ret_local).boxy_desc) |desc_ref|
-                    try self.resolveBoxyDescRef(&frame, desc_ref)
+                const result_desc = if (proc_spec.runtime_ret_desc) |runtime_ret_desc|
+                    try self.resolveBoxyDescRef(&frame, .{ .local = runtime_ret_desc })
                 else
-                    null;
+                    frame.localDesc(ret_local) orelse if (self.store.getLocal(ret_local).boxy_desc) |desc_ref|
+                        try self.resolveBoxyDescRef(&frame, desc_ref)
+                    else
+                        null;
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
@@ -2128,6 +2142,11 @@ pub const Interpreter = struct {
                         const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, target_layout);
                         self.setLocalChecked(frame, current, assign.target, boxed);
                         frame.setLocalDesc(assign.target, desc);
+                        if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
+                            if (target_desc.localOrNull()) |desc_local| {
+                                self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                            }
+                        }
                         current = assign.next;
                         continue;
                     }
@@ -2139,6 +2158,11 @@ pub const Interpreter = struct {
                         const boxed = try self.evalBoxyDynamicFracLiteral(lit.dec_bits, desc, target_layout);
                         self.setLocalChecked(frame, current, assign.target, boxed);
                         frame.setLocalDesc(assign.target, desc);
+                        if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
+                            if (target_desc.localOrNull()) |desc_local| {
+                                self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                            }
+                        }
                         current = assign.next;
                         continue;
                     }
@@ -2192,18 +2216,62 @@ pub const Interpreter = struct {
                         materialized_result.value,
                     );
                     frame.setLocalDesc(assign.target, materialized_result.desc);
+                    if (assign.out_desc) |out_desc| {
+                        const desc = materialized_result.desc orelse {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: direct call declared a descriptor output but produced no descriptor",
+                                .{},
+                            );
+                        };
+                        self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)));
+                    }
                     current = assign.next;
                 },
                 .assign_call_erased => |assign| {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
+                    const arg_layouts_end = @as(usize, assign.arg_layouts.start) + assign.arg_layouts.len;
+                    if (arg_layouts_end > self.boxy_runtime.boxy_tables.erased_arg_layouts.len or
+                        assign.arg_layouts.len != arg_locals.len)
+                    {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: erased-call argument layout span was invalid",
+                            .{},
+                        );
+                    }
+                    const arg_layouts = self.boxy_runtime.boxy_tables.erased_arg_layouts[assign.arg_layouts.start..arg_layouts_end];
+                    for (arg_layouts, 0..) |arg_layout, index| {
+                        const local_layout = self.store.getLocal(GuardedList.at(arg_locals, index)).layout_idx;
+                        if (arg_layout != self.layout_store.runtimeRepresentationLayoutIdx(local_layout)) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: erased-call argument {d} layout metadata disagreed with its local",
+                                .{index},
+                            );
+                        }
+                    }
+                    const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
+                    const arg_desc_keys = self.boxy_runtime.boxy_tables.erased_arg_desc_keys[assign.arg_desc_keys.start..][0..assign.arg_desc_keys.len];
+                    if (arg_desc_keys.len != arg_desc_locals.len) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: erased-call argument descriptor locals and keys disagreed",
+                            .{},
+                        );
+                    }
+                    const arg_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, arg_desc_locals.len);
+                    for (0..arg_desc_locals.len) |index| {
+                        const local = GuardedList.at(arg_desc_locals, index);
+                        const raw_ptr = self.readPointerInt(try self.getLocalChecked(frame, local));
+                        arg_descs[index] = @ptrFromInt(raw_ptr);
+                    }
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const result = self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
-                        try self.localLayouts(arg_locals),
+                        arg_layouts,
+                        arg_descs,
+                        arg_desc_keys,
                         self.store.getLocal(assign.target).layout_idx,
                     ) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
@@ -2248,17 +2316,29 @@ pub const Interpreter = struct {
                     const dict = try self.resolveBoxyDictRef(frame, assign.dict);
                     const required_method = @intFromEnum(assign.method);
                     const arg_locals = self.store.getLocalSpan(assign.args);
+                    const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
                     const hidden_arg_locals = self.store.getLocalSpan(assign.hidden_args);
+                    if (arg_desc_locals.len != arg_locals.len) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: dictionary call had {d} argument descriptor locals for {d} arguments",
+                            .{ arg_desc_locals.len, arg_locals.len },
+                        );
+                    }
                     const call_args = try self.arena.allocator().alloc(boxy_runtime.DictCallArg, arg_locals.len);
                     for (0..arg_locals.len) |arg_index| {
                         const local = GuardedList.at(arg_locals, arg_index);
+                        const desc_local = GuardedList.at(arg_desc_locals, arg_index);
+                        const raw_desc_ptr = self.readPointerInt(try self.getLocalChecked(frame, desc_local));
+                        if (raw_desc_ptr == 0) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: dictionary call argument descriptor local {d} was null",
+                                .{@intFromEnum(desc_local)},
+                            );
+                        }
                         call_args[arg_index] = .{
                             .value = try self.getLocalChecked(frame, local),
                             .layout = self.store.getLocal(local).layout_idx,
-                            .source_desc = frame.localDesc(local) orelse if (self.store.getLocal(local).boxy_desc) |desc_ref|
-                                try self.resolveBoxyDescRef(frame, desc_ref)
-                            else
-                                null,
+                            .source_desc = @ptrFromInt(raw_desc_ptr),
                         };
                     }
                     const hidden_values = try self.arena.allocator().alloc(Value, hidden_arg_locals.len);
@@ -2321,6 +2401,17 @@ pub const Interpreter = struct {
                                 materialized_result.value,
                             );
                             frame.setLocalDesc(assign.target, materialized_result.desc);
+                            if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
+                                if (desc_ref.localOrNull()) |desc_local| {
+                                    const desc = materialized_result.desc orelse {
+                                        return self.invariantFailedError(
+                                            "LIR/interpreter invariant violated: dictionary call declared a descriptor output but produced no descriptor",
+                                            .{},
+                                        );
+                                    };
+                                    self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)));
+                                }
+                            }
                         },
                     }
                     current = assign.next;
@@ -2330,6 +2421,8 @@ pub const Interpreter = struct {
                         frame,
                         assign.desc,
                         assign.nested_index,
+                        assign.box_payload_layout,
+                        assign.tag_payload,
                         assign.tag_ext,
                         assign.tag_residual_for,
                         assign.captures,
@@ -2431,6 +2524,7 @@ pub const Interpreter = struct {
                 .assign_boxy_tag_payload => |assign| {
                     const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
                     const source_value = try self.getLocalChecked(frame, assign.source);
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const payload_read = try self.readBoxyTagPayloadByName(
                         frame,
                         source_value,
@@ -2438,7 +2532,7 @@ pub const Interpreter = struct {
                         source_desc,
                         assign.tag_name,
                         assign.payload_index,
-                        self.store.getLocal(assign.target).layout_idx,
+                        target_layout,
                         assign.source_mode,
                     );
                     self.setLocalChecked(frame, current, assign.target, payload_read.value);
@@ -2483,9 +2577,10 @@ pub const Interpreter = struct {
                 .assign_boxy_adapt => |assign| {
                     const source_desc = if (assign.source_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
                     const target_desc = if (assign.target_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
+                    const source_value = try self.getLocalChecked(frame, assign.source);
                     const adapted = try self.boxy_runtime.boxyAdaptValue(
                         self.boxyFrameHooks(frame),
-                        try self.getLocalChecked(frame, assign.source),
+                        source_value,
                         source_desc,
                         target_desc,
                         assign.adapter,
@@ -2544,13 +2639,14 @@ pub const Interpreter = struct {
                 },
                 .assign_tag => |assign| {
                     const target_desc = try self.resolveOptionalBoxyDescRef(frame, assign.target_desc);
-                    self.setLocalChecked(frame, current, assign.target, try self.evalTagLiteral(
+                    const tag_value = try self.evalTagLiteral(
                         frame,
                         assign.variant_index,
                         assign.discriminant,
                         assign.payload,
                         self.store.getLocal(assign.target).layout_idx,
-                    ));
+                    );
+                    self.setLocalChecked(frame, current, assign.target, tag_value);
                     frame.setLocalDesc(assign.target, target_desc);
                     current = assign.next;
                 },
@@ -2923,7 +3019,7 @@ pub const Interpreter = struct {
                         const arg_local = GuardedList.at(arg_locals, i);
                         debugPrint("{d} ", .{@intFromEnum(arg_local)});
                     }
-                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
+                    debugPrint("out_desc={any} next={d}\n", .{ assign.out_desc, @intFromEnum(assign.next) });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_call_erased => |assign| {
@@ -2954,8 +3050,20 @@ pub const Interpreter = struct {
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
-                inline .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
+                .assign_boxy_desc_ref => |assign| {
+                    debugPrint("    {d}: assign_boxy_desc_ref target={d} desc={any} captures=", .{
+                        @intFromEnum(stmt_id),
+                        @intFromEnum(assign.target),
+                        assign.desc,
+                    });
+                    const capture_locals = self.store.getLocalSpan(assign.captures);
+                    for (0..capture_locals.len) |i| {
+                        debugPrint("{d} ", .{@intFromEnum(GuardedList.at(capture_locals, i))});
+                    }
+                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
+                    stack.append(self.evalAllocator(), assign.next) catch return;
+                },
+                inline .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
@@ -3641,6 +3749,8 @@ pub const Interpreter = struct {
         closure_local: LocalId,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
         ret_layout: layout_mod.Idx,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
@@ -3665,7 +3775,6 @@ pub const Interpreter = struct {
             const proc_id = erasedCallableInterpreterProcId(closure_ptr);
             const context = erasedCallableInterpreterContextFromPayload(closure_ptr);
             const proc_spec = self.store.getProcSpec(proc_id);
-
             const proc_params = self.store.getLocalSpan(proc_spec.args);
             if (proc_params.len == 0) {
                 return self.invariantFailedError(
@@ -3673,30 +3782,74 @@ pub const Interpreter = struct {
                     .{@intFromEnum(proc_id)},
                 );
             }
-            const explicit_arg_count = proc_params.len - 1;
+            const desc_params = self.boxy_runtime.boxy_tables.erased_arg_desc_params[proc_spec.erased_arg_desc_params.start..][0..proc_spec.erased_arg_desc_params.len];
+            const capture_param = proc_spec.erased_capture_arg orelse {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased callable proc {d} had no capture parameter metadata",
+                    .{@intFromEnum(proc_id)},
+                );
+            };
+            const explicit_arg_count = proc_spec.erased_arg_layouts.len;
+            if (proc_params.len < explicit_arg_count + 1) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased callable proc {d} explicit argument metadata exceeded its parameters",
+                    .{@intFromEnum(proc_id)},
+                );
+            }
             if (args.len != explicit_arg_count or arg_layouts.len != explicit_arg_count) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} expected {d} explicit args but call provided {d} values and {d} layouts",
                     .{ @intFromEnum(proc_id), explicit_arg_count, args.len, arg_layouts.len },
                 );
             }
+            const worker_layouts_end = @as(usize, proc_spec.erased_arg_layouts.start) + proc_spec.erased_arg_layouts.len;
+            if (worker_layouts_end > self.boxy_runtime.boxy_tables.erased_arg_layouts.len or
+                proc_spec.erased_arg_layouts.len != explicit_arg_count)
+            {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased callable proc {d} argument layout span was invalid",
+                    .{@intFromEnum(proc_id)},
+                );
+            }
+            const worker_arg_layouts = self.boxy_runtime.boxy_tables.erased_arg_layouts[proc_spec.erased_arg_layouts.start..worker_layouts_end];
 
             const proc_args = try self.arena.allocator().alloc(Value, proc_params.len);
             const proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_params.len);
+            @memset(proc_args, undefined);
+            @memset(proc_arg_layouts, undefined);
             for (args, arg_layouts, 0..) |arg, arg_layout, index| {
                 const param_layout = self.store.getLocal(GuardedList.at(proc_params, index)).layout_idx;
+                const expected_layout = worker_arg_layouts[index];
+                if (expected_layout != self.layout_store.runtimeRepresentationLayoutIdx(param_layout)) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: erased callable proc {d} argument {d} layout metadata disagreed with its parameter",
+                        .{ @intFromEnum(proc_id), index },
+                    );
+                }
                 // A closure built in a providing module against an abstract type
                 // reads its arguments in an erased form; a caller that resolved
                 // the same argument to a concrete layout must box it into that
                 // erased form before the worker runs. Only the erased worker's
                 // param layout differs from the concrete call-site layout, so the
                 // conversion is confined to those args.
-                if (arg_layout != param_layout) {
-                    proc_args[index] = try self.boxy_runtime.materializeConcreteValueToErasedLayout(
+                if (arg_layout != expected_layout) {
+                    var arg_desc: ?*const LirProgram.BoxyTypeDesc = null;
+                    for (arg_desc_keys, arg_descs) |key, desc| {
+                        if (key.arg_index != index or key.descriptor_index != 0) continue;
+                        if (arg_desc != null) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: erased call supplied the root argument descriptor more than once",
+                                .{},
+                            );
+                        }
+                        arg_desc = desc;
+                    }
+                    proc_args[index] = try self.boxy_runtime.materializeErasedCallArgument(
                         self.boxyFrameHooks(frame),
                         arg,
                         arg_layout,
-                        param_layout,
+                        arg_desc,
+                        expected_layout,
                     );
                     proc_arg_layouts[index] = param_layout;
                 } else {
@@ -3704,8 +3857,78 @@ pub const Interpreter = struct {
                     proc_arg_layouts[index] = arg_layout;
                 }
             }
-            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
-            proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
+            if (arg_desc_keys.len != arg_descs.len) {
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased argument descriptor values and keys disagreed",
+                    .{},
+                );
+            }
+            const resolved_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, desc_params.len);
+            for (desc_params, 0..) |param, desc_param_index| {
+                const desc = if (param.source_nested_index == std.math.maxInt(u16)) direct: {
+                    var incoming_desc: ?*const LirProgram.BoxyTypeDesc = null;
+                    for (arg_desc_keys, arg_descs) |key, desc| {
+                        if (!std.meta.eql(key, param.key)) continue;
+                        if (incoming_desc != null) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: erased call supplied one descriptor key more than once",
+                                .{},
+                            );
+                        }
+                        incoming_desc = desc;
+                    }
+                    break :direct incoming_desc orelse
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: erased callable proc {d} required missing descriptor key ({d}, {d})",
+                            .{ @intFromEnum(proc_id), param.key.arg_index, param.key.descriptor_index },
+                        );
+                } else projected: {
+                    var parent_desc: ?*const LirProgram.BoxyTypeDesc = null;
+                    for (desc_params[0..desc_param_index], resolved_descs[0..desc_param_index]) |candidate, candidate_desc| {
+                        if (candidate.key.arg_index == param.key.arg_index and
+                            candidate.key.descriptor_index == param.source_descriptor_index)
+                        {
+                            parent_desc = candidate_desc;
+                            break;
+                        }
+                    }
+                    break :projected try self.boxy_runtime.nestedBoxyDesc(
+                        self.boxyFrameHooks(frame),
+                        parent_desc orelse return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
+                            .{},
+                        ),
+                        param.source_nested_index,
+                    );
+                };
+                resolved_descs[desc_param_index] = desc;
+                var param_index: ?usize = null;
+                for (0..proc_params.len) |index| {
+                    if (GuardedList.at(proc_params, index) == param.local) {
+                        param_index = index;
+                        break;
+                    }
+                }
+                const index = param_index orelse return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased descriptor parameter was absent from proc arguments",
+                    .{},
+                );
+                proc_args[index] = try self.allocPointerIntValue(@intFromPtr(desc));
+                proc_arg_layouts[index] = .opaque_ptr;
+            }
+            var capture_index: ?usize = null;
+            for (0..proc_params.len) |index| {
+                if (GuardedList.at(proc_params, index) == capture_param) {
+                    capture_index = index;
+                    break;
+                }
+            }
+            const hidden_capture_index = capture_index orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased capture parameter was absent from proc arguments",
+                .{},
+            );
+            proc_args[hidden_capture_index] = try self.allocPointerIntValue(@intFromPtr(erasedCallableInterpreterCaptureValuePtr(closure_ptr)));
+            proc_arg_layouts[hidden_capture_index] = .opaque_ptr;
 
             const proc_result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
             return .{
@@ -3896,11 +4119,15 @@ pub const Interpreter = struct {
         const allocated = try self.allocStructValue(struct_layout);
         const base_layout_val = self.layout_store.getLayout(allocated.base_layout);
         if (base_layout_val.tag != .struct_) {
-            if (field_locals.len != 0) {
-                self.invariantFailed(
-                    "LIR/interpreter invariant violated: boxed/zst struct literal for layout {d} had {d} fields but no struct base layout",
-                    .{ @intFromEnum(struct_layout), field_locals.len },
-                );
+            for (0..field_locals.len) |index| {
+                const field_local = GuardedList.at(field_locals, index);
+                const field_layout = self.store.getLocal(field_local).layout_idx;
+                if (self.helper.sizeOf(field_layout) != 0) {
+                    self.invariantFailed(
+                        "LIR/interpreter invariant violated: boxed/zst struct literal for layout {d} had non-ZST field {d}",
+                        .{ @intFromEnum(struct_layout), index },
+                    );
+                }
             }
             return allocated.outer;
         }
@@ -3934,9 +4161,11 @@ pub const Interpreter = struct {
                 base_layout_val.getStruct().idx,
                 @intCast(i),
             );
+            const source_value = try self.getLocalChecked(frame, field_local);
+            const source_layout = self.store.getLocal(field_local).layout_idx;
             const field_value = try self.coerceExplicitRefValueToLayout(
-                try self.getLocalChecked(frame, field_local),
-                self.store.getLocal(field_local).layout_idx,
+                source_value,
+                source_layout,
                 field_layout,
             );
             if (builtin.mode == .Debug and field_value.isZst()) {
@@ -3988,9 +4217,11 @@ pub const Interpreter = struct {
         if (payload_local) |local| {
             const payload_size = self.helper.sizeOf(payload_layout);
             if (payload_size > 0) {
+                const source_value = try self.getLocalChecked(frame, local);
+                const source_layout = self.store.getLocal(local).layout_idx;
                 const payload_value = try self.coerceExplicitRefValueToLayout(
-                    try self.getLocalChecked(frame, local),
-                    self.store.getLocal(local).layout_idx,
+                    source_value,
+                    source_layout,
                     payload_layout,
                 );
                 allocated.base.copyFrom(payload_value, payload_size);
@@ -4458,9 +4689,10 @@ pub const Interpreter = struct {
         count: u16,
         atomicity: RcAtomicity,
     ) Error!void {
+        const desc = try self.resolveBoxyDescRef(frame, desc_ref);
+        const layout_value = self.layout_store.getLayout(value_layout);
         switch (op) {
             .incref => {
-                const layout_value = self.layout_store.getLayout(value_layout);
                 if (layout_value.tag == .box or layout_value.tag == .box_of_zst) {
                     // Box values are heap-indirect; incref bumps only the outer
                     // allocation and the layout describes that pointer slot.
@@ -4468,15 +4700,12 @@ pub const Interpreter = struct {
                     self.performRcHelperIfNeeded(payload_helper, val, count, atomicity);
                     return;
                 }
-                const desc = try self.resolveBoxyDescRef(frame, desc_ref);
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .incref, count, atomicity);
             },
             .decref => {
-                const desc = try self.resolveBoxyDescRef(frame, desc_ref);
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .decref, count, atomicity);
             },
             .free => {
-                const desc = try self.resolveBoxyDescRef(frame, desc_ref);
                 try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .free, count, atomicity);
             },
         }
@@ -7963,11 +8192,15 @@ pub const Interpreter = struct {
         frame: *const Frame,
         desc_ref: LIR.BoxyDescRef,
         nested_index: ?u32,
+        box_payload_layout: ?layout_mod.Idx,
+        tag_payload: ?LIR.BoxyTagPayloadRead,
         tag_ext: bool,
         tag_residual_for: ?LIR.BoxyDescRef,
         captures: LIR.LocalSpan,
     ) Error!Value {
-        const projection_count = @intFromBool(tag_ext) + @intFromBool(nested_index != null) + @intFromBool(tag_residual_for != null);
+        const projection_count = @intFromBool(tag_ext) + @intFromBool(nested_index != null) +
+            @intFromBool(box_payload_layout != null) +
+            @intFromBool(tag_payload != null) + @intFromBool(tag_residual_for != null);
         if (projection_count > 1) {
             return self.invariantFailedError("LIR/interpreter invariant violated: descriptor materialization selected multiple projection paths", .{});
         }
@@ -7980,6 +8213,21 @@ pub const Interpreter = struct {
             )
         else if (tag_ext)
             try self.boxy_runtime.materializeTagExtBoxyDescRefValue(self.boxyFrameHooks(frame), desc_ref, captures)
+        else if (tag_payload) |payload|
+            try self.boxy_runtime.materializeTagPayloadBoxyDescRefValue(
+                self.boxyFrameHooks(frame),
+                desc_ref,
+                payload.tag_name,
+                payload.payload_index,
+                captures,
+            )
+        else if (box_payload_layout) |box_layout|
+            try self.boxy_runtime.materializeBoxPayloadBoxyDescRefValue(
+                self.boxyFrameHooks(frame),
+                desc_ref,
+                box_layout,
+                captures,
+            )
         else if (nested_index) |index|
             try self.materializeNestedBoxyDescRefValue(frame, desc_ref, index, captures)
         else

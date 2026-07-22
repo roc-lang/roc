@@ -645,6 +645,49 @@ pub const SchemeInstantiationPair = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One compiler-generated parser or encoder derivation validated by checking.
+/// The referenced vars remain checker-owned here; checked publication converts
+/// them to stable checked type ids before post-check compilation.
+pub const GeneratedCodecDerivation = extern struct {
+    kind: u32,
+    source_constraint_fn_var: u32,
+    source_runtime_fn_var: u32,
+    source_shape_var: u32,
+    source_encoding_var: u32,
+    source_state_var: u32,
+    source_error_var: u32,
+    constraint_fn_var: u32,
+    runtime_fn_var: u32,
+    shape_var: u32,
+    encoding_var: u32,
+    state_var: u32,
+    error_var: u32,
+    calls_start: u32,
+    calls_len: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+
+    pub const Kind = enum(u32) {
+        parser,
+        encoder,
+    };
+};
+
+/// One exact method callable used inside a checked generated codec.
+pub const GeneratedCodecCall = extern struct {
+    method_ident: u32,
+    dispatcher_var: u32,
+    callable_var: u32,
+    /// Instantiated method variable whose discharge record owns nested evidence.
+    evidence_var: u32,
+    /// The value shape this call handles, or `no_subject_var` when the method
+    /// has no shape-specific call contract.
+    subject_var: u32,
+
+    pub const no_subject_var = std.math.maxInt(u32);
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -806,6 +849,11 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_instantiations: SchemeInstantiationRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_instantiations`.
 scheme_instantiation_pairs: SchemeInstantiationPair.SafeList,
+/// Generated codec derivations validated by checking and consumed by checked
+/// artifact publication.
+generated_codec_derivations: GeneratedCodecDerivation.SafeList,
+/// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
+generated_codec_calls: GeneratedCodecCall.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -997,6 +1045,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_instantiations = try SchemeInstantiationRecord.SafeList.initCapacity(gpa, 8),
         .scheme_instantiation_pairs = try SchemeInstantiationPair.SafeList.initCapacity(gpa, 8),
+        .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
+        .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
     };
 }
 
@@ -1024,6 +1074,8 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_instantiations.deinit(self.gpa);
     self.scheme_instantiation_pairs.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1067,6 +1119,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_instantiations.deinit(self.gpa);
     self.scheme_instantiation_pairs.deinit(self.gpa);
+    self.generated_codec_derivations.deinit(self.gpa);
+    self.generated_codec_calls.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -3236,6 +3290,8 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_instantiations: SchemeInstantiationRecord.SafeList.Serialized,
     scheme_instantiation_pairs: SchemeInstantiationPair.SafeList.Serialized,
+    generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
+    generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3337,6 +3393,8 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_instantiations.serialize(&env.scheme_instantiations, allocator, writer);
         try self.scheme_instantiation_pairs.serialize(&env.scheme_instantiation_pairs, allocator, writer);
+        try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
+        try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3398,6 +3456,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_instantiations = self.scheme_instantiations.deserializeInto(base_addr),
             .scheme_instantiation_pairs = self.scheme_instantiation_pairs.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
         };
 
         return env;
@@ -3459,6 +3519,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_instantiations = self.scheme_instantiations.deserializeInto(base_addr),
             .scheme_instantiation_pairs = self.scheme_instantiation_pairs.deserializeInto(base_addr),
+            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
+            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
         };
     }
 
@@ -3522,6 +3584,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_instantiations = try self.scheme_instantiations.deserializeWithCopy(base_addr, gpa),
             .scheme_instantiation_pairs = try self.scheme_instantiation_pairs.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3716,6 +3780,67 @@ pub fn recordSchemeInstantiation(
         .pairs_start = pairs_start,
         .pairs_len = @intCast(pairs.len),
     });
+}
+
+/// Record one successfully checked generated codec derivation and its exact
+/// internal method callables.
+pub fn recordGeneratedCodecDerivation(
+    self: *Self,
+    kind: GeneratedCodecDerivation.Kind,
+    source_constraint_fn_var: TypeVar,
+    source_runtime_fn_var: TypeVar,
+    source_shape_var: TypeVar,
+    source_encoding_var: TypeVar,
+    source_state_var: TypeVar,
+    source_error_var: TypeVar,
+    constraint_fn_var: TypeVar,
+    runtime_fn_var: TypeVar,
+    shape_var: TypeVar,
+    encoding_var: TypeVar,
+    state_var: TypeVar,
+    error_var: TypeVar,
+    calls: []const GeneratedCodecCall,
+) std.mem.Allocator.Error!void {
+    var existing_index: ?usize = null;
+    for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
+        if (existing.kind == @intFromEnum(kind) and
+            existing.source_constraint_fn_var == @intFromEnum(source_constraint_fn_var))
+        {
+            existing_index = index;
+            break;
+        }
+    }
+    if (existing_index) |index| {
+        const existing = self.generated_codec_derivations.items.items[index];
+        if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
+            self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
+        }
+    }
+
+    const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
+    _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
+    const derivation = GeneratedCodecDerivation{
+        .kind = @intFromEnum(kind),
+        .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
+        .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
+        .source_shape_var = @intFromEnum(source_shape_var),
+        .source_encoding_var = @intFromEnum(source_encoding_var),
+        .source_state_var = @intFromEnum(source_state_var),
+        .source_error_var = @intFromEnum(source_error_var),
+        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .runtime_fn_var = @intFromEnum(runtime_fn_var),
+        .shape_var = @intFromEnum(shape_var),
+        .encoding_var = @intFromEnum(encoding_var),
+        .state_var = @intFromEnum(state_var),
+        .error_var = @intFromEnum(error_var),
+        .calls_start = calls_start,
+        .calls_len = @intCast(calls.len),
+    };
+    if (existing_index) |index| {
+        self.generated_codec_derivations.items.items[index] = derivation;
+        return;
+    }
+    _ = try self.generated_codec_derivations.append(self.gpa, derivation);
 }
 
 /// Return the checked `from_quote` function for a string literal node.

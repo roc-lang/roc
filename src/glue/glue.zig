@@ -506,6 +506,8 @@ fn runGlueSpecDev(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             static_strings.entries,
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
         ) catch return error.OutOfMemory;
         defer codegen.deinit();
 

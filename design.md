@@ -1351,13 +1351,33 @@ names.
 `result_mode` tells post-check lowering whether this is an ordinary value call,
 method equality, structural hashing, parser derivation, or encoding derivation.
 For method equality, the plan carries both `structural_allowed` and `negated`;
-boxy lowering consumes those fields directly. If structural equality is
-permitted and the dispatcher representation is structural or a builtin nominal
-whose equality is builtin, boxy lowering emits the same structural-equality LIR
-used by explicit `==`/`!=` structural nodes over the plan's two checked
+boxy lowering consumes those fields directly. `structural_allowed` is an
+authorization, not a preference over checked evidence. A constrained or
+otherwise unresolved method equality goes through the ordinary dispatch plan,
+which consumes its explicitly planned dictionary when one exists and chooses
+structural behavior only when that plan permits it without a dictionary. A
+concrete builtin equality may lower directly to the same structural-equality
+LIR used by explicit `==`/`!=` structural nodes over the plan's two checked
 expression operands. If the plan names or requires a user method, boxy lowering
 emits the direct or dictionary/vtable call named by the checked plan instead of
 searching the method registry at LIR time.
+
+Generic instantiation sites also carry one `CheckedEvidence` entry for every
+method requirement in checked scheme order. Direct evidence names the exact
+method target, concrete dispatcher checked type, concrete callable checked
+type, and the target's nested evidence. Compiler-derived structural evidence
+names its structural kind plus the same concrete dispatcher and callable
+identities. A forwarded requirement records its enclosing evidence index
+explicitly; checked errors and unreachable values remain distinct evidence
+kinds.
+
+Boxy dictionary planning consumes those entries one-for-one in dictionary slot
+order. Each planned slot records the selected worker or structural operation,
+the concrete callable type used by its adapter, and fully planned hidden
+dictionary arguments derived from the nested evidence. Static dictionary
+emission follows that plan directly. It must not look up the method again,
+infer a generated parser or encoder from method-name text, or treat a missing
+registry target as structural behavior.
 
 The method registry is an exact table keyed by `(MethodOwner, MethodNameId)`.
 It is not an owner-discovery mechanism. Post-check code may use it only after a
@@ -1374,6 +1394,48 @@ that explicit target kind and lower the structural parser/encoder from the
 dispatch plan's concrete callable type. It must not treat the marker as a
 procedure body, synthesize a fake source function, or infer generated behavior
 from a missing procedure template.
+
+The Boxy strategy represents compiler-owned opaque serialization evidence
+explicitly. `Encoding.FieldName.FieldNames(_shape)`,
+`Encoding.FieldName(_shape)`, and `Encoding.ParseTagUnionSpec(a)` are not the
+zero-sized source backings that keep their implementation hidden from Roc
+code. They have compiler-defined runtime representations whose complete shape
+is selected by checking and Boxy planning. Generic format workers can receive,
+store, and return those ordinary opaque values without specializing on the
+phantom `_shape` parameter. Their compiler intrinsics consume the committed
+representation directly; they do not recover a shape from source syntax or a
+type descriptor.
+
+A derived parser or encoder is still finite, shape-specific generated code.
+Boxy planning records a generated-codec worker from the checked structural
+target, concrete dispatcher type, callable type, and nested checked evidence.
+The constructor evaluates construction-time methods, builds the explicit
+opaque evidence values, and captures them in the returned runtime callable.
+The runtime worker contains direct field/tag branches and direct or dictionary
+calls selected by the checked evidence. It must not call a central descriptor-
+guided codec routine, interpret a runtime shape plan, or enter the LSS pipeline
+as a fallback. Stored generated callables retain their generated worker kind
+and compiler-assigned capture identities so restoration rebuilds the same
+ordinary Boxy callable from `ConstStore` data.
+
+Generated workers follow the same descriptor-production contract as source
+workers. Planning assigns the exact descriptor source for every descriptor-
+bearing output, including branch results, parser result tags, record fields,
+tuples, and captured opaque evidence. Lowering initializes a fresh descriptor
+local before constructing the associated value and emits aggregate construction
+with those planned child descriptors. It does not copy a concrete aggregate
+into erased storage and reconstruct its descriptor afterward. All successful
+branches of a generated worker must therefore produce both the committed value
+and the exact return descriptor required by its callable ABI.
+
+Compiler-generated operands and callables use this contract at polymorphic
+boundaries too. Quote conversion, numeral conversion, interpolation iterators,
+and generated codec constructors carry an explicit result descriptor source
+through callable packing. When they construct an aggregate, the aggregate's
+descriptor environment is the composition of the already-recorded environments
+of its fields or iterator state. Lowering must not recover that environment by
+inspecting the packed value or by selecting a descriptor from the contextual
+result type after construction.
 
 ### Structural Serialization Methods
 
@@ -2362,16 +2424,25 @@ module view available to post-check lowering, representation planning walks the
 reachable checked expressions, statements, and patterns in that body and records
 their checked types with that body's checked module id before layout planning
 runs. Callable-eval procedure bindings are resolved through the checked
-compile-time root table first. In completed runtime lowering, the root payload
-must be a finalized `ConstStore` function value; boxy reads its explicit
-`FnDef`, follows direct template references directly, and follows nested
-function identities through the checked `NestedProcSiteTable` to the lambda or
-closure expression that is the runtime callable body. It does not lower the
-compile-time entry-wrapper evaluator block as a runtime worker. A pending
-callable-eval root belongs to checking finalization, not runtime boxy lowering.
-Imported direct calls and restored const functions therefore keep imported type
-ids attached to the imported CheckedModule that owns them; they are not mapped
-into root-module type ids and they are not recovered by name. A type that
+compile-time root table first. A finalized root is read from its owning
+`ConstStore`: boxy reads its explicit `FnDef`, follows direct template references
+directly, and follows nested function identities through the checked
+`NestedProcSiteTable` to the lambda or closure expression that is the runtime
+callable body. It does not lower the compile-time entry-wrapper evaluator block
+as a runtime worker.
+
+If checking intentionally leaves a callable-eval root pending because the
+selected compile-time roots did not need it, but a runtime body references that
+binding, planning records a `RuntimeCallableEvalUsePlan` containing the exact
+module-qualified checked producer expression. Lowering evaluates that producer
+in its owning module with an isolated binder environment; caller-module binder
+ids and lambda arguments are unavailable there. This is explicit checked-stage
+data, not recovery from the lookup, name, or callable shape.
+
+Imported direct calls, pending callable producers, and restored const functions
+therefore keep imported type and expression ids attached to the imported
+CheckedModule that owns them; they are not mapped into root-module ids and they
+are not recovered by name. A type that
 appears only in a local aggregate, temporary receiver, nested expression, or
 destructuring pattern is therefore still present in the explicit representation
 table consumed by lowering.
@@ -2517,6 +2588,12 @@ method adapter to the nominal descriptor. A dictionary may contain:
 
 The dictionary is built from checked dispatch plans, checked method registries,
 and checked type information. It is not built by method-name search at LIR time.
+Boxy planning interns each checked method spelling into one program-wide runtime
+slot. Every static dictionary reserves that full slot shape: a method required
+by the dictionary occupies its interned slot, and every other slot is an
+explicit absent entry. Consequently a dictionary carrying a superset of checked
+requirements can satisfy a callee that uses a subset without remapping its
+pointer or searching by a module-local method id.
 If a polymorphic function requires a method dictionary, that dictionary is an
 explicit hidden parameter or capture. If a concrete call site invokes the
 function, the caller supplies the exact static dictionary for the concrete
@@ -2532,6 +2609,13 @@ checked dispatch behavior, do not look up methods by name, and do not reconstruc
 dictionaries. Seeing an indirect call is still useful to a backend because it
 can lower the call with the normal target calling convention, keep arguments in
 registers, and avoid a universal trampoline.
+
+The program-wide method slot is the runtime dispatch identity. `MethodNameId` values are
+module-local checked ids and may be retained on LIR statements or slots for
+diagnostics, but a runtime consumer must never compare them across modules or
+scan a dictionary by numeric method id. It indexes the exact slot selected by
+planning, requires that slot to be present, and validates only the slot bounds
+and explicit call shape.
 
 ### Boxy Host ABI Adapters
 
@@ -2673,6 +2757,16 @@ explicit calls or roots discovered while lowering the previous stage. In
 driven by explicit checked roots, checked type positions, checked dispatch
 plans, and LIR statements emitted by the boxy lowerer. They are not general
 post-demand repair lists.
+
+Boxy planning runs mutually dependent discovery phases to a fixed point. A
+phase that can append to a collection it traverses snapshots that collection's
+entry count before traversal; newly discovered entries are consumed by the next
+outer iteration. A phase may traverse a live, growing collection only when it
+cannot append to that same collection. The fixed-point termination check covers
+every collection whose growth can expose additional workers, substitutions,
+inspect methods, descriptors, or dictionaries. This prevents reallocation from
+invalidating the current traversal and makes discovery order irrelevant to the
+planned collection contents.
 
 ## Monotype IR
 
@@ -4268,6 +4362,17 @@ mapping model. The producer derives it from checked callable types and checked
 dispatch evidence. It does not inspect the expression variant to decide whether
 the expression type or parameter type is authoritative.
 
+Alias and nominal wrappers make substitution ordering explicit. Before the
+planner descends a wrapper backing, it records each checked `alias_arg` or
+`nominal_arg` pair from the worker and call representations. Every occurrence
+of that worker argument in the backing graph then uses the recorded call
+representation, independent of child traversal order. An identity observation
+cannot replace an already-recorded concrete instantiation, and two different
+concrete instantiations for one worker representation are an invariant failure.
+The descriptor source still names the original call operand root plus the exact
+instantiated descendant; it never changes to a sibling value merely because the
+substitution was learned from the wrapper's explicit argument child.
+
 The substitution is consumed to produce one exact source for every hidden
 descriptor, hidden dictionary, and erased-callable metadata capture. A source is
 one of static metadata, an argument descriptor, a nested descriptor read from an
@@ -4297,6 +4402,14 @@ the reservation when the enclosing descriptor is complete. It does not unroll
 the representation graph, impose a recursion-depth limit, or replace the child
 with a less precise descriptor.
 
+Reserve-then-fill metadata construction must also respect growable-table
+storage. Recursive descriptor or inspect-adapter emission may append to the same
+`ArrayList` that owns a reserved placeholder. The producer first constructs the
+entire descriptor or method-slot struct in a local variable, then reacquires the
+reserved element by id and writes that struct. It never retains an
+element pointer, slice, or evaluated assignment address across recursive work
+that can reallocate the table.
+
 Lowering consumes the planned boundary. It may emit a primitive box, unbox, tag,
 or local-flow statement when the adapter is exactly that primitive operation.
 All other boundaries emit `assign_boxy_adapt`. Lowering does not select a
@@ -4311,6 +4424,14 @@ a different local. Consequently the descriptor attached to a value is stable
 for the value's entire LIR lifetime, and ARC never scans for descriptor updates
 or releases values in anticipation of descriptor rebinding.
 
+Runtime-created descriptors use storage whose lifetime is the complete Boxy
+runtime, independently from operation-local value or inspect scratch. This
+remains true under re-entrant runtime calls: a custom inspect worker can invoke
+an adapter while inspect rendering owns temporary storage, but any descriptor
+created by that adapter still comes from the persistent descriptor arena.
+Descriptor tables and identity caches never retain pointers into resettable
+per-call scratch.
+
 A value's descriptor and an operation's boundary descriptor are distinct when
 the operation consumes a different representation. The value keeps the source
 descriptor that describes its bytes. The adapter, call, or match receives a
@@ -4318,6 +4439,14 @@ separately materialized target descriptor describing the bytes it will produce
 or consume. Argument binding, match-condition binding, result binding, and
 container element extraction copy descriptor identities into fresh locals; they
 never repurpose the source value's descriptor local as operation scratch space.
+
+Equal storage layouts do not make two descriptors interchangeable. When a
+boundary leaves the bytes unchanged, the value retains its source descriptor if
+that descriptor names the committed storage while the operation descriptor
+names a logical payload beneath that storage. The operation descriptor remains
+boundary metadata; it is not attached to unchanged bytes. A boundary may relabel
+an unchanged value only when the producer has proved that the source and target
+descriptors use the same complete storage convention.
 
 Tag-row reads are explicit descriptor operations. Nested payload descriptor
 read, row-extension descriptor read, and residual-row subtraction are separate
@@ -4328,6 +4457,17 @@ layouts, nested descriptors, and extension chain. Neither lowering nor a
 backend may infer one of these operations from an integer sentinel or from the
 shape of the descriptor it receives.
 
+Box payload reads are also an explicit descriptor operation. An
+`assign_boxy_desc_ref` Box-payload read names the committed layout of the
+Box value whose allocation payload is being described. The runtime uses that
+layout to normalize the two supported descriptor conventions: a box-self
+descriptor projects its first nested descriptor, while a payload-direct
+descriptor is already the result. Lowering must not encode this operation as an
+ordinary nested-index read, because values extracted from recursive containers
+can legitimately carry the payload-direct convention. The interpreter and all
+machine-code backends execute the same read through the shared Boxy ABI;
+backends do not inspect descriptor shape themselves.
+
 For every checked function value expression, the boxy lowerer emits an
 `assign_packed_erased_fn`-style LIR statement that creates an erased callable
 payload. The payload stores the function entry and capture bytes. Capture bytes
@@ -4337,6 +4477,14 @@ data selected before backend lowering. The statement also names the exact
 immutable result descriptor stored in compiler-private callable metadata. If a
 callable adapter boxes a result, the box carries the exact source payload
 descriptor, not an unspecified box template.
+
+When ordinary captured fields require nested descriptors, the producer builds
+one exact immutable contents descriptor for the complete capture aggregate and
+appends its pointer as a compiler-private final capture field. Both consumers use
+that same field: `on_drop` reads it to release the aggregate, while the erased
+worker projects each captured field's descriptor in planned field order before
+binding or using the value. No consumer reconstructs capture descriptors from
+capture bytes, layouts, or the worker's contextual types.
 
 For every checked call through a function value, the boxy lowerer emits an
 erased-call LIR statement. Its result descriptor operand is the call site's
@@ -4351,11 +4499,14 @@ as evidence about bytes returned by a compiler worker.
 
 Checked direct and function-value uses of the generic `Str.inspect` intrinsic
 produce inspect-method demands in the Boxy plan. Each demanded nominal
-representation records its exact `to_inspect` worker. Descriptor construction
-turns that plan into a method slot carrying the worker procedure, concrete
-argument layout and descriptor, hidden descriptor sources, and nested
-dictionaries. Transparent nominals may share their backing layout, but they
-retain a distinct descriptor identity when they carry an inspect method.
+representation records its exact `to_inspect` worker, owning checked module,
+and module-local `MethodNameId`. Descriptor construction consumes that identity
+directly; it does not rediscover a method from the representation's source
+module. It turns the plan into a method slot carrying the worker procedure,
+concrete argument layout and descriptor, hidden descriptor sources, and nested
+dictionaries. Transparent nominals may share their backing storage layout, but
+they retain a distinct checked descriptor identity when they carry an inspect
+method.
 Runtime recursive inspection checks this slot before opaque or structural
 rendering, adapts the borrowed value into the worker argument representation,
 and invokes the worker through the registered-procedure ABI. The prepared call
@@ -4377,6 +4528,10 @@ otherwise satisfies the direct-call checks, the match result binding receives a
 fresh descriptor local and the planned adapter materializes the worker's exact
 tag descriptor into it. Pattern lowering consumes that descriptor; it never
 interprets the bytes using only the match's contextual open-row descriptor.
+Layout compatibility for this decision uses storage representation identity;
+the result metadata itself uses checked descriptor identity. In particular,
+equal transparent-nominal backing storage cannot erase a descriptor-carried
+method or other nominal behavior.
 
 For every checked static-dispatch call, it emits either:
 
@@ -4384,6 +4539,11 @@ For every checked static-dispatch call, it emits either:
   current type representation make the operation statically concrete, or
 - an explicit dictionary/vtable indirect call when the checked plan requires
   polymorphic behavior.
+
+Method equality follows this rule without a separate preference for structural
+comparison. In particular, an unresolved constrained equality first consumes
+its planned dictionary; `structural_allowed` only authorizes the structural path
+selected by checked dispatch when no dictionary is required.
 
 The lowerer must not discover method owners by searching registries at LIR
 time. It consumes the checked dispatch plan and checked method registry entries
@@ -4516,6 +4676,24 @@ code. Dictionary worker thunks and erased-callable registrations expose only
 the proc ids, layouts, descriptor sources, and ownership metadata already
 present in LIR; backend code does not derive any of them from procedure bodies.
 
+List operations that can copy or release descriptor-governed elements use the
+corresponding `roc_boxy_list_*` ABI in dev, LLVM, and wasm. The call passes the
+exact descriptor attached to the input or result list plus the committed
+element layout; the runtime projects the element descriptor and performs the
+operation's internal ownership work. Concrete element layouts continue to use
+the ordinary builtin ABI with concrete RC helpers. A backend must never set an
+"elements are refcounted" flag while supplying a missing callback, derive a
+callback from erased storage, or inspect a descriptor to choose RC behavior.
+An erased-box list that reaches such an operation without its explicit list
+descriptor is a producer invariant failure.
+
+Every linked Wasm image has exactly one provider for compiler runtime libcalls.
+Standalone Wasm obtains them from the builtins object and the standalone Boxy
+runtime suppresses its copies. Evaluator Wasm has no companion builtins object,
+so its vtable-mode Boxy runtime exports the small required libcall set itself.
+Runtime-object construction must preserve this ownership split; duplicate weak
+or strong exports are not resolved by link order.
+
 Dynamic RC in boxy LIR is explicit. A local whose boxy runtime layout is a
 dynamic value has a pointer-sized committed storage layout, but its nested
 payload drop/copy behavior is not recoverable from that storage layout alone.
@@ -4540,6 +4718,13 @@ Boxy indirect calls are also explicit. A dictionary-call statement names the
 dictionary, method slot, argument span, result target, and hidden argument span.
 The backend lowers it as an indirect call with an explicit call shape. It does
 not know the checked method name or perform vtable lookup logic.
+
+Its `result_desc` is the exact descriptor for the call-site result
+representation, including descriptor-bearing descendants when the root layout
+itself is concrete. It is not merely an indication that the result root needs a
+descriptor. Method adapters and dictionary thunks use that exact descriptor to
+materialize the worker result; consumers attach the produced descriptor to the
+returned value without reconstructing nested descriptor positions.
 
 Every `LirProcSpec` whose result descriptor can be exposed by a dictionary
 worker records an exact `ret_desc`. The producer sets it only when every return

@@ -233,6 +233,7 @@ const Pass = struct {
 
     fn markBoxyTableProcs(self: *Pass) Allocator.Error!void {
         for (self.result.boxy_method_slots.items) |slot| {
+            if (!slot.present or slot.structural_eq) continue;
             try self.markProc(slot.proc);
         }
     }
@@ -499,6 +500,7 @@ const Pass = struct {
 
     fn remapBoxyTableProcs(self: *Pass) void {
         for (self.result.boxy_method_slots.items) |*slot| {
+            if (!slot.present or slot.structural_eq) continue;
             slot.proc = self.remapProc(slot.proc);
         }
     }

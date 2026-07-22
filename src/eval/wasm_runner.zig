@@ -113,7 +113,18 @@ pub fn runWasmStrWithStats(
     wasm_bytes: []const u8,
     has_imports: bool,
 ) WasmEvalError!RunWasmStrResult {
-    wasm_heap_ptr = 65536;
+    return runWasmStrWithStatsAtHeapBase(allocator, wasm_bytes, has_imports, 65536);
+}
+
+/// Execute a generated module whose compiler-selected host heap begins at
+/// `heap_base`, immediately after all statically linked data.
+pub fn runWasmStrWithStatsAtHeapBase(
+    allocator: std.mem.Allocator,
+    wasm_bytes: []const u8,
+    has_imports: bool,
+    heap_base: u32,
+) WasmEvalError!RunWasmStrResult {
+    wasm_heap_ptr = heap_base;
     wasm_allocation_count = 0;
     wasm_crash_state = .none;
 

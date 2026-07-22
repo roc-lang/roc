@@ -93,9 +93,11 @@ pub const ObjectFileCompiler = struct {
         entrypoints: []const Entrypoint,
         static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
+        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, target, self.enable_default_platform_runtime);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, target, self.enable_default_platform_runtime);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -108,6 +110,8 @@ pub const ObjectFileCompiler = struct {
         entrypoints: []const Entrypoint,
         static_data_exports: []const StaticDataExport,
         proc_specs: []const LirProcSpec,
+        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
         target: RocTarget,
         output_path: []const u8,
         roc_ctx: CoreCtx,
@@ -118,6 +122,8 @@ pub const ObjectFileCompiler = struct {
             entrypoints,
             static_data_exports,
             proc_specs,
+            erased_arg_desc_offsets,
+            erased_arg_desc_params,
             target,
         );
         defer result.deinit();
@@ -192,6 +198,8 @@ fn compileWithCodeGen(
     entrypoints: []const Entrypoint,
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
+    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
     target: RocTarget,
     enable_default_platform_runtime: bool,
 ) CompilationError!CompilationResult {
@@ -210,6 +218,8 @@ fn compileWithCodeGen(
         lir_store,
         layout_store,
         static_strings.entries,
+        erased_arg_desc_offsets,
+        erased_arg_desc_params,
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -593,6 +603,8 @@ fn crossCompileDispatch(
     entrypoints: []const Entrypoint,
     static_data_exports: []const StaticDataExport,
     proc_specs: []const LirProcSpec,
+    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
+    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
     target: RocTarget,
     enable_default_platform_runtime: bool,
 ) CompilationError!CompilationResult {
@@ -610,6 +622,8 @@ fn crossCompileDispatch(
                     entrypoints,
                     static_data_exports,
                     proc_specs,
+                    erased_arg_desc_offsets,
+                    erased_arg_desc_params,
                     comptime_target,
                     enable_default_platform_runtime,
                 );

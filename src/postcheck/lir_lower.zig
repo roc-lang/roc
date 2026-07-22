@@ -247,12 +247,19 @@ const Lowerer = struct {
             };
             const args_span = try self.result.store.addLocalSpan(arg_locals);
             const ret_layout = try self.layoutOfType(fn_.ret);
+            const erased_abi = self.usesErasedCallableAbi(fn_);
+            const explicit_arg_count = args.len - @intFromBool(erased_abi);
             const proc_id = try self.result.store.addProcSpec(.{
                 .name = lirSymbol(fn_.symbol),
                 .args = args_span,
                 .body = null,
                 .ret_layout = ret_layout,
-                .abi = if (self.usesErasedCallableAbi(fn_)) .erased_callable else .roc,
+                .erased_arg_layouts = if (erased_abi)
+                    try self.appendErasedArgumentLayouts(arg_locals[0..explicit_arg_count])
+                else
+                    .{},
+                .erased_capture_arg = if (erased_abi) arg_locals[explicit_arg_count] else null,
+                .abi = if (erased_abi) .erased_callable else .roc,
                 .hosted = try self.hostedProcForFn(fn_),
                 .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
             });
@@ -263,6 +270,19 @@ const Lowerer = struct {
             self.result.store.current_region = base.Region.zero();
             self.fn_map[index] = proc_id;
         }
+    }
+
+    fn appendErasedArgumentLayouts(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.BoxySpan {
+        if (args.len == 0) return .{};
+        const start = self.result.boxy_erased_arg_layouts.items.len;
+        for (args) |arg| {
+            const local_layout = self.result.store.getLocal(arg).layout_idx;
+            try self.result.boxy_erased_arg_layouts.append(
+                self.allocator,
+                self.result.layouts.runtimeRepresentationLayoutIdx(local_layout),
+            );
+        }
+        return .{ .start = @intCast(start), .len = @intCast(args.len) };
     }
 
     fn hostedProcForFn(self: *Lowerer, fn_: LambdaMono.Fn) Common.LowerError!?LIR.HostedProc {
@@ -1412,6 +1432,7 @@ const Lowerer = struct {
             .target = target,
             .closure = callee,
             .args = try self.result.store.addLocalSpan(args.ids),
+            .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
             .next = next,
         } });
         current = try self.prependExprs(args, current);

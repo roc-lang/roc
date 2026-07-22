@@ -41,6 +41,46 @@ fn firstLambdaBodyStatement(test_env: *TestEnv, expr_idx: CIR.Expr.Idx) WhileLoo
     return try firstBlockStatement(test_env, lambda.e_lambda.body);
 }
 
+fn expectInnerClosureCaptures(
+    test_env: *TestEnv,
+    expr_idx: CIR.Expr.Idx,
+    expected_names: []const []const u8,
+) WhileLoopTestError!void {
+    const outer = test_env.getCanonicalExpr(expr_idx);
+    const outer_lambda_idx = switch (outer) {
+        .e_lambda => expr_idx,
+        .e_closure => |closure| closure.lambda_idx,
+        else => return error.ExpectedLambda,
+    };
+    const outer_lambda = test_env.getCanonicalExpr(outer_lambda_idx);
+    try testing.expectEqual(.e_lambda, std.meta.activeTag(outer_lambda));
+
+    const outer_body = test_env.getCanonicalExpr(outer_lambda.e_lambda.body);
+    try testing.expectEqual(.e_block, std.meta.activeTag(outer_body));
+    const inner = test_env.getCanonicalExpr(outer_body.e_block.final_expr);
+    try testing.expectEqual(.e_closure, std.meta.activeTag(inner));
+
+    const captures = test_env.module_env.store.sliceCaptures(inner.e_closure.captures);
+    try testing.expectEqual(expected_names.len, captures.len);
+    for (expected_names) |expected_name| {
+        var found = false;
+        for (captures) |capture_idx| {
+            const capture = test_env.module_env.store.getCapture(capture_idx);
+            const pattern = test_env.module_env.store.getPattern(capture.pattern_idx);
+            const ident = switch (pattern) {
+                .assign => |assign| assign.ident,
+                .as => |as_pattern| as_pattern.ident,
+                else => continue,
+            };
+            if (std.mem.eql(u8, test_env.module_env.getIdent(ident), expected_name)) {
+                found = true;
+                break;
+            }
+        }
+        try testing.expect(found);
+    }
+}
+
 fn expectDiagnosticTag(test_env: *TestEnv, expected: std.meta.Tag(CIR.Diagnostic)) WhileLoopTestError!void {
     const diagnostics = try test_env.getDiagnostics();
     defer testing.allocator.free(diagnostics);
@@ -76,6 +116,42 @@ test "while True with an exit canonicalizes as infinite_loop" {
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
+}
+
+test "for statement propagates loop-body captures to an enclosing closure" {
+    const source =
+        \\|callback, count| {
+        \\    |state| {
+        \\        for _ in [] {
+        \\            callback(state)
+        \\        }
+        \\        count
+        \\    }
+        \\}
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    try expectInnerClosureCaptures(&test_env, canonical_expr.get_idx(), &.{ "callback", "count" });
+}
+
+test "while statement propagates loop captures to an enclosing closure" {
+    const source =
+        \\|callback, keep_going| {
+        \\    |state| {
+        \\        while keep_going {
+        \\            callback(state)
+        \\        }
+        \\        state
+        \\    }
+        \\}
+    ;
+    var test_env = try TestEnv.init(source);
+    defer test_env.deinit();
+
+    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    try expectInnerClosureCaptures(&test_env, canonical_expr.get_idx(), &.{ "keep_going", "callback" });
 }
 
 test "while parenthesized True canonicalizes as infinite_loop" {

@@ -743,6 +743,8 @@ const Pass = struct {
                     try self.noteDictUse(assign.dict);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..GuardedList.borrowLen(args)) |index| try self.noteUse(GuardedList.at(args, index));
+                    const arg_descs = self.store.getLocalSpan(assign.arg_descs);
+                    for (0..GuardedList.borrowLen(arg_descs)) |index| try self.noteUse(GuardedList.at(arg_descs, index));
                     const hidden_args = self.store.getLocalSpan(assign.hidden_args);
                     for (0..GuardedList.borrowLen(hidden_args)) |index| try self.noteUse(GuardedList.at(hidden_args, index));
                     try self.noteWrite(assign.target);

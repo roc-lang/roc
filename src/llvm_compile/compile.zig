@@ -335,19 +335,29 @@ fn markDefinitionsDsoLocal(module: *bindings.Module) void {
     var func = module.getFirstFunction();
     while (func) |value| : (func = value.getNextFunction()) {
         if (value.isDeclaration().toBool()) continue;
+        if (isLocallyLinked(value)) continue;
         value.setVisibility(llvm_protected_visibility);
     }
 
     var global = module.getFirstGlobal();
     while (global) |value| : (global = value.getNextGlobal()) {
         if (value.isDeclaration().toBool()) continue;
+        if (isLocallyLinked(value)) continue;
         value.setVisibility(llvm_protected_visibility);
     }
 
     var alias = module.getFirstGlobalAlias();
     while (alias) |value| : (alias = value.getNextGlobalAlias()) {
+        if (isLocallyLinked(value)) continue;
         value.setVisibility(llvm_protected_visibility);
     }
+}
+
+fn isLocallyLinked(value: *bindings.Value) bool {
+    return switch (value.getLinkage()) {
+        bindings.internal_linkage, bindings.private_linkage => true,
+        else => false,
+    };
 }
 
 fn removeBuiltinUsedRoots(module: *bindings.Module) void {

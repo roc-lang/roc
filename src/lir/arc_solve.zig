@@ -1039,6 +1039,10 @@ fn collectStmt(
                 if (!solver.rc_local[@intFromEnum(arg)]) continue;
                 noteDemand(solver, arg);
             }
+            const arg_descs = store.getLocalSpan(assign.arg_descs);
+            for (0..GuardedList.borrowLen(arg_descs)) |index| {
+                noteDemand(solver, GuardedList.at(arg_descs, index));
+            }
             const hidden_args = store.getLocalSpan(assign.hidden_args);
             for (0..GuardedList.borrowLen(hidden_args)) |index| {
                 const arg = GuardedList.at(hidden_args, index);
@@ -2003,6 +2007,10 @@ pub fn computeUniqueness(
                 for (0..GuardedList.borrowLen(args)) |index| {
                     const arg = GuardedList.at(args, index);
                     marks.destroy(&destroyed, arg);
+                }
+                const arg_descs = store.getLocalSpan(assign.arg_descs);
+                for (0..GuardedList.borrowLen(arg_descs)) |index| {
+                    marks.noteUse(&borrow_used, GuardedList.at(arg_descs, index));
                 }
                 const hidden_args = store.getLocalSpan(assign.hidden_args);
                 for (0..GuardedList.borrowLen(hidden_args)) |index| {

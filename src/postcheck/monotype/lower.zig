@@ -8393,6 +8393,14 @@ const BodyContext = struct {
                 return switch (wrapper.intrinsic) {
                     .str_inspect => try self.lowerStrInspectIntrinsic(fn_ty, ret_ty),
                     .structural_eq => Common.invariant("structural equality intrinsic wrapper must lower through checked dispatch plans"),
+                    .parse_tag_union_spec_parse,
+                    .field_names_rename_fields,
+                    .field_names_shortest_name,
+                    .field_names_longest_name,
+                    .field_names_iter,
+                    .field_names_for_size,
+                    .field_name_name,
+                    => Common.invariant("serialization intrinsic wrapper must lower at its checked direct call"),
                 };
             },
         }
@@ -16612,7 +16620,7 @@ const BodyContext = struct {
                 .checked_error => "method dispatch failed to check",
             });
         }
-        const lookup = self.dispatchTarget(plan, dispatcher_ty);
+        const lookup = self.dispatchTarget(plan);
         if (lookup == null) {
             return switch (plan.result_mode) {
                 // `.equality` and `.hash` are both handled by lowerStructuralEquality,
@@ -16710,12 +16718,9 @@ const BodyContext = struct {
 
         const callable_mono_ty = try call_ctx.instantiateNumeralPlanCallType(plan.callable_ty, self, checked_ret_ty, target_ty, plan_args);
         const plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked from_numeral plan had a non-function type");
-        const plan_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(plan_fn_data.args));
-        defer self.allocator.free(plan_arg_tys);
         const try_ty = plan_fn_data.ret;
 
-        const dispatcher_ty = try self.dispatcherMonoType(plan, plan_arg_tys);
-        const resolved = self.dispatchTarget(plan, dispatcher_ty) orelse
+        const resolved = self.dispatchTarget(plan) orelse
             Common.invariant("checked from_numeral dispatch unexpectedly resolved to structural equality");
 
         const target_mono_ty = try self.methodTargetMonoTypePreservingSourceArgsAndRet(resolved, try_ty);
@@ -17273,7 +17278,7 @@ const BodyContext = struct {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty);
             return plan_ret_ty;
         }
-        const resolved = self.dispatchTarget(plan, dispatcher_ty) orelse {
+        const resolved = self.dispatchTarget(plan) orelse {
             try self.constrainTypeToMono(checked_ret_ty, plan_ret_ty);
             return plan_ret_ty;
         };
@@ -17319,7 +17324,7 @@ const BodyContext = struct {
     }
 
     fn materializeEvidenceRef(self: *BodyContext, ref: static_dispatch.CheckedEvidence) Allocator.Error!SpecEvidence {
-        switch (ref) {
+        switch (ref.resolution) {
             .direct => |node_id| {
                 const node = self.view.static_dispatch_plans.evidenceNode(node_id);
                 return .{ .target = try self.materializeEvidenceTarget(node) };
@@ -17331,7 +17336,7 @@ const BodyContext = struct {
                 };
                 return entry;
             },
-            .structural => |kind| return .{ .structural = kind },
+            .structural => |evidence| return .{ .structural = evidence.kind },
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,
         }
@@ -17455,46 +17460,16 @@ const BodyContext = struct {
         };
     }
 
-    /// Iterator-call twin of `debugCompareDerivation`.
-    fn debugCompareIteratorDerivation(self: *BodyContext, dispatcher_ty: Type.TypeId, method: names.MethodNameId, consumed: MethodLookup) void {
-        const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse return;
-        const derived = self.builder.lookupMethodTarget(owner, self.view, method) orelse return;
-        if (!std.meta.eql(consumed.target, derived.target)) {
-            Common.invariant("iterator dispatch evidence target disagreed with the owner-derivation target");
-        }
-    }
-
     fn dispatchTarget(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
-        dispatcher_ty: Type.TypeId,
     ) ?MethodLookup {
         const resolution = self.evidenceResolution(plan, true) orelse
             Common.invariant("dispatch plan reached monotype lowering without a resolution");
-        // Debug audit: where owner derivation can still resolve the dispatch,
-        // it must agree with the consumed evidence.
-        if (@import("builtin").mode == .Debug) self.debugCompareDerivation(plan, dispatcher_ty, resolution);
         return switch (resolution) {
             .target => |lookup| lookup,
             .structural => null,
         };
-    }
-
-    /// Migration audit: where owner derivation can still resolve the dispatch,
-    /// it must agree with the consumed evidence. Derivation being blind (no
-    /// owner, or registry miss) while evidence resolves is the migration's
-    /// point, not a bug.
-    fn debugCompareDerivation(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan, dispatcher_ty: Type.TypeId, resolution: EvidenceResolved) void {
-        const owner = methodOwnerFromType(&self.builder.program.types, dispatcher_ty) orelse return;
-        const derived = self.builder.lookupMethodTarget(owner, self.view, plan.method) orelse return;
-        switch (resolution) {
-            .target => |lookup| {
-                if (!std.meta.eql(lookup.target, derived.target)) {
-                    Common.invariant("dispatch evidence target disagreed with the owner-derivation target");
-                }
-            },
-            .structural => Common.invariant("dispatch evidence chose structural but owner derivation found a target"),
-        }
     }
 
     fn structuralKindForMethodText(method_text: []const u8) ?static_dispatch.StructuralKind {
@@ -23116,14 +23091,12 @@ const BodyContext = struct {
             switch (plan.resolution) {
                 .direct => |node_id| {
                     const consumed = self.methodLookupForResolvedTarget(self.view.static_dispatch_plans.evidenceNode(node_id).target);
-                    if (@import("builtin").mode == .Debug) self.debugCompareIteratorDerivation(dispatcher_ty, plan.method, consumed);
                     break :blk consumed;
                 },
                 .constraint => |constraint_ref| {
                     if (self.evidence.at(constraint_ref)) |entry| switch (entry) {
                         .target => |target| {
                             const consumed: MethodLookup = .{ .view = target.view, .target = target.target };
-                            if (@import("builtin").mode == .Debug) self.debugCompareIteratorDerivation(dispatcher_ty, plan.method, consumed);
                             break :blk consumed;
                         },
                         .structural, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a callable target"),

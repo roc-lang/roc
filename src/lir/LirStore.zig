@@ -383,11 +383,6 @@ pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) vo
     local.boxy_desc = desc;
 }
 
-/// Attaches the immutable descriptor identity governing a local's value.
-pub fn replaceLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
-    self.setLocalBoxyDesc(id, desc);
-}
-
 /// Attaches descriptor metadata without mutating existing LIR statements.
 /// Stores local ids and returns the corresponding flat-storage span.
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {

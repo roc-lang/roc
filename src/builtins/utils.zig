@@ -504,15 +504,6 @@ pub fn decrefDataPtr(
 
     const data_ptr = @intFromPtr(bytes);
 
-    // Verify original pointer is properly aligned
-    // Use roc_ops.crash() instead of std.debug.panic for WASM compatibility
-    if (comptime builtin.mode == .Debug) {
-        if (data_ptr % @alignOf(usize) != 0) {
-            roc_ops.crash("decrefDataPtr: data pointer is not aligned");
-            return;
-        }
-    }
-
     const unmasked_ptr = data_ptr & ~tag_mask;
     if (unmasked_ptr == 0) return;
 

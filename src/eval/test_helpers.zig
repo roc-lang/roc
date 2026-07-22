@@ -11,6 +11,7 @@ const builtins = @import("builtins");
 const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const lir = @import("lir");
 const reporting = @import("reporting");
 
@@ -2060,7 +2061,7 @@ fn installBoxyGlobal(
     tables: boxy_runtime.BoxyTables,
     roc_ops: *builtins.host_abi.RocOps,
 ) Allocator.Error!bool {
-    if (tables.type_descs.len == 0 and tables.dicts.len == 0) return false;
+    if (!tables.needsRuntime()) return false;
     // Clear any runtime an earlier program left installed after longjmping past
     // its teardown on a crash.
     boxy_abi.deinitGlobal();
@@ -2089,7 +2090,14 @@ pub fn devEvalBoolRoots(
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.init(allocator, store, layouts, static_strings.entries);
+        var codegen = try HostLirCodeGen.init(
+            allocator,
+            store,
+            layouts,
+            static_strings.entries,
+            tables.erased_arg_desc_offsets,
+            tables.erased_arg_desc_params,
+        );
         defer codegen.deinit();
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
@@ -2151,10 +2159,11 @@ fn llvmCompileOptions(target_usize: base.target.TargetUsize, opt: LlvmTestOpt) @
 fn callLlvmBoolRoot(
     allocator: Allocator,
     layouts: *const LayoutStore,
-    entry: *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void,
+    entry: *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void,
     root: BoolRoot,
     runtime_env: *RuntimeHostEnv,
     expect_err_region: ?*[3]u32,
+    boxy_fns: *const BoxyNativeFnTable,
 ) TestHelperError!BoolRootEvalResult {
     runtime_env.resetObservation();
     runtime_env.resetAllocationTracker();
@@ -2174,6 +2183,7 @@ fn callLlvmBoolRoot(
             runtime_env.get_ops(),
             ret_buf.ptr,
             if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+            boxy_fns,
         );
     }
 
@@ -2199,13 +2209,19 @@ pub fn llvmEvalBoolRoots(
     allocator: Allocator,
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
+    tables: boxy_runtime.BoxyTables,
     roots: []const BoolRoot,
     opt: LlvmTestOpt,
 ) TestHelperError![]BoolRootEvalResult {
     if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
     const llvm_compile = @import("llvm_compile");
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, store);
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(
+        allocator,
+        store,
+        tables.erased_arg_desc_offsets,
+        tables.erased_arg_desc_params,
+    );
     codegen.layout_store = layouts;
     defer codegen.deinit();
 
@@ -2245,8 +2261,10 @@ pub fn llvmEvalBoolRoots(
     if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
         runtime_env.setLongjmpOnCrash(false);
     }
+    const boxy_installed = try installBoxyGlobal(allocator, store, layouts, tables, runtime_env.get_ops());
+    defer if (boxy_installed) boxy_abi.deinitGlobal();
 
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
     const results = try allocator.alloc(BoolRootEvalResult, roots.len);
     var result_len: usize = 0;
     errdefer deinitPartialBoolRootEvalResults(allocator, results, result_len);
@@ -2255,10 +2273,11 @@ pub fn llvmEvalBoolRoots(
     // by the generated code so the harness can point the failure report at
     // the `?` expression.
     const expect_err_region = lib.lookup(*[3]u32, "roc_expect_err_region");
+    const boxy_fns = boxyNativeFnTable();
 
     for (roots, 0..) |root, i| {
         const entry = lib.lookup(EntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable;
-        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env, expect_err_region);
+        results[i] = try callLlvmBoolRoot(allocator, layouts, entry, root, &runtime_env, expect_err_region, &boxy_fns);
         result_len += 1;
     }
 
@@ -2333,6 +2352,8 @@ pub fn devEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPro
             &lowered.view.store,
             &lowered.view.layouts,
             static_strings.entries,
+            lowered.view.boxy_erased_arg_desc_offsets,
+            lowered.view.boxy_erased_arg_desc_params,
         );
         defer codegen.deinit();
         var native_fns = boxyNativeFnTable();
@@ -2410,7 +2431,12 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     if (@import("builtin").target.os.tag == .freestanding) return error.LlvmBackendUnavailable;
 
     const llvm_compile = @import("llvm_compile");
-    var codegen = llvm_compile.MonoLlvmCodeGen.init(allocator, &lowered.view.store);
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(
+        allocator,
+        &lowered.view.store,
+        lowered.view.boxy_erased_arg_desc_offsets,
+        lowered.view.boxy_erased_arg_desc_params,
+    );
     codegen.layout_store = &lowered.view.layouts;
     defer codegen.deinit();
 
@@ -2443,7 +2469,7 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     var lib = try EvalDynLib.open(allocator, std.mem.sliceTo(dylib_path, 0));
     defer lib.close();
 
-    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque) callconv(.c) void;
+    const EntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const BoxyNativeFnTable) callconv(.c) void;
     const entry = lib.lookup(EntryFn, "roc_eval_test_main") orelse return error.LlvmBackendUnavailable;
 
     var runtime_env = RuntimeHostEnv.init(allocator);
@@ -2451,6 +2477,14 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
         runtime_env.setLongjmpOnCrash(false);
     }
+    const boxy_installed = try installBoxyGlobal(
+        allocator,
+        &lowered.view.store,
+        &lowered.view.layouts,
+        boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        runtime_env.get_ops(),
+    );
+    defer if (boxy_installed) boxy_abi.deinitGlobal();
 
     const arg_buffer = try zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
     defer if (arg_buffer) |buf| allocator.free(buf);
@@ -2466,10 +2500,12 @@ pub fn llvmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
     const sj = crash_boundary.set();
     if (sj != 0) return error.Crash;
 
+    const boxy_fns = boxyNativeFnTable();
     entry(
         runtime_env.get_ops(),
         ret_buf.ptr,
         if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
+        &boxy_fns,
     );
     switch (runtime_env.crashState()) {
         .did_not_crash => {},
@@ -2498,14 +2534,27 @@ pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPr
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
+        lowered.view.boxy_erased_arg_desc_offsets,
+        lowered.view.boxy_erased_arg_desc_params,
     );
     defer codegen.deinit();
 
     const proc = lowered.view.store.getProcSpec(lowered.mainProc());
-    const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout) catch return error.OutOfMemory;
+    const tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view);
+    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (tables.needsRuntime()) .{
+        .runtime_object = wasm32_boxy_runtime.bytes[0..],
+        .sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
+    } else null;
+    const wasm_result = codegen.generateModule(lowered.mainProc(), proc.ret_layout, runtime_input) catch return error.OutOfMemory;
     defer allocator.free(wasm_result.wasm_bytes);
 
-    const result = try @import("wasm_runner.zig").runWasmStrWithStats(allocator, wasm_result.wasm_bytes, wasm_result.has_imports);
+    const result = try @import("wasm_runner.zig").runWasmStrWithStatsAtHeapBase(
+        allocator,
+        wasm_result.wasm_bytes,
+        wasm_result.has_imports,
+        wasm_result.heap_base,
+    );
     return .{
         .output = result.output,
         .allocation_count = result.allocation_count,

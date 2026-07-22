@@ -290,12 +290,6 @@ fn computeLocalContainsRefcounted(
                 .assign_boxy_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
                 .assign_boxy_reuse_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
                 .assign_boxy_tag => |assign| changed = markLocalRc(contains, assign.target) or changed,
-                .assign_call_dict => |assign| if (assign.result_desc != null and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                },
-                .assign_call_erased => |assign| if ((assign.result_desc != null or assign.out_desc != null) and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                },
                 else => {},
             }
         }
@@ -1219,6 +1213,7 @@ const Inserter = struct {
                     errdefer deaths.deinit(self.store.allocator);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.options.loop_keep, &deaths);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.arg_descs, assign.next, path.options.loop_keep, &deaths);
                     try self.postStmtDeaths(&path.owned, &.{}, assign.hidden_args, assign.next, path.options.loop_keep, &deaths);
                     try path.frames.append(self.store.allocator, .{
                         .stmt = path.cursor,
@@ -1539,6 +1534,7 @@ const Inserter = struct {
                     .proc = frame.call_target_override orelse assign.proc,
                     .args = assign.args,
                     .result_desc = assign.result_desc,
+                    .out_desc = assign.out_desc,
                     .is_cold = assign.is_cold,
                     .next = next,
                 } });
@@ -1549,6 +1545,9 @@ const Inserter = struct {
                     .target = assign.target,
                     .closure = assign.closure,
                     .args = assign.args,
+                    .arg_layouts = assign.arg_layouts,
+                    .arg_descs = assign.arg_descs,
+                    .arg_desc_keys = assign.arg_desc_keys,
                     .result_desc = assign.result_desc,
                     .out_desc = assign.out_desc,
                     .next = next,
@@ -1570,6 +1569,8 @@ const Inserter = struct {
                     .target = assign.target,
                     .desc = assign.desc,
                     .nested_index = assign.nested_index,
+                    .box_payload_layout = assign.box_payload_layout,
+                    .tag_payload = assign.tag_payload,
                     .tag_ext = assign.tag_ext,
                     .tag_residual_for = assign.tag_residual_for,
                     .captures = assign.captures,
@@ -1682,6 +1683,7 @@ const Inserter = struct {
                     .method = assign.method,
                     .method_slot = assign.method_slot,
                     .args = assign.args,
+                    .arg_descs = assign.arg_descs,
                     .hidden_args = assign.hidden_args,
                     .result_desc = assign.result_desc,
                     .is_cold = assign.is_cold,
@@ -2631,6 +2633,7 @@ const Inserter = struct {
                     self.addOwnedIfRc(&path.owned, assign.target);
                     const singles = [_]LIR.LocalId{assign.target};
                     try self.postStmtDeaths(&path.owned, &singles, assign.args, assign.next, path.loop_keep, null);
+                    try self.postStmtDeaths(&path.owned, &.{}, assign.arg_descs, assign.next, path.loop_keep, null);
                     try self.postStmtDeaths(&path.owned, &.{}, assign.hidden_args, assign.next, path.loop_keep, null);
                     path.cursor = assign.next;
                 },
@@ -3570,7 +3573,7 @@ const Inserter = struct {
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |dict_local| if (dict_local == local) return false;
                     if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |desc_ref_local| if (desc_ref_local == local) return false;
-                    if (self.spanUsesLocal(assign.args, local) or self.spanUsesLocal(assign.hidden_args, local)) return false;
+                    if (self.spanUsesLocal(assign.args, local) or self.spanUsesLocal(assign.arg_descs, local) or self.spanUsesLocal(assign.hidden_args, local)) return false;
                     if (assign.target == local) return false;
                     cursor = assign.next;
                 },
@@ -4361,18 +4364,10 @@ const Inserter = struct {
         if (entry.found_existing) return entry.value_ptr.*;
 
         const source_spec = self.store.getProcSpec(callee);
-        const variant = try self.store.addProcSpec(.{
-            .name = self.store.freshSyntheticSymbol(),
-            .args = source_spec.args,
-            .frame_locals = source_spec.frame_locals,
-            .body = self.variants.original_bodies[@intFromEnum(callee)],
-            .ret_layout = source_spec.ret_layout,
-            .ret_desc = source_spec.ret_desc,
-            .abi = source_spec.abi,
-            .hosted = source_spec.hosted,
-            .tail_transform = source_spec.tail_transform,
-            .stack_probe = source_spec.stack_probe,
-        });
+        var variant_spec = source_spec;
+        variant_spec.name = self.store.freshSyntheticSymbol();
+        variant_spec.body = self.variants.original_bodies[@intFromEnum(callee)];
+        const variant = try self.store.addProcSpec(variant_spec);
         try self.store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
         try self.variants.sigs.append(self.store.allocator, demanded);
@@ -4879,6 +4874,7 @@ const Inserter = struct {
                         if (result_desc.localOrNull()) |local| noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, local);
                     }
                     self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
                     self.noteReadBeforeRebindSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -5206,7 +5202,7 @@ const Inserter = struct {
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| if (local == needle) return true;
                     if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (local == needle) return true;
-                    if (self.spanUsesLocal(assign.args, needle) or self.spanUsesLocal(assign.hidden_args, needle)) return true;
+                    if (self.spanUsesLocal(assign.args, needle) or self.spanUsesLocal(assign.arg_descs, needle) or self.spanUsesLocal(assign.hidden_args, needle)) return true;
                     if (assign.target == needle) continue;
                     try stack.append(self.store.allocator, assign.next);
                 },
@@ -5513,7 +5509,7 @@ const Inserter = struct {
                 .assign_call_dict => |assign| {
                     if (assign.dict.localOrNull()) |local| if (needles.contains(local)) return true;
                     if (assign.result_desc) |result_desc| if (result_desc.localOrNull()) |local| if (needles.contains(local)) return true;
-                    if (self.spanUsesAny(assign.args, needles) or self.spanUsesAny(assign.hidden_args, needles)) return true;
+                    if (self.spanUsesAny(assign.args, needles) or self.spanUsesAny(assign.arg_descs, needles) or self.spanUsesAny(assign.hidden_args, needles)) return true;
                     try stack.append(self.store.allocator, assign.next);
                 },
                 .assign_low_level => |assign| {
@@ -8482,6 +8478,7 @@ test "RC specialization: caller body survives variant proc append" {
     const callee_param = try f.local(.str);
     const callee_ret = try f.ret(callee_param);
     const callee = try f.addProc(&.{ callee_flag, callee_param }, callee_ret, .str);
+    f.store.getProcSpecPtr(callee).runtime_ret_desc = callee_flag;
 
     // Caller builds an owned string and passes it as its final use. The
     // variant turns the borrowed return into an owned return. It is appended
@@ -8509,6 +8506,7 @@ test "RC specialization: caller body survives variant proc append" {
 
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     const variant: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(base_proc_count)));
+    try testing.expectEqual(callee_flag, f.store.getProcSpec(variant).runtime_ret_desc.?);
 
     var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
     var remaining = f.store.cfStmtCount() + 1;
@@ -8801,6 +8799,41 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     try f.run();
     try f.expectRc(source, 1, 1, 0);
     try f.expectRc(adapted, 0, 1, 0);
+}
+
+test "RC does not treat a descriptor-bearing scalar dictionary result as refcounted" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const desc = LIR.BoxyDescRef{ .static = @enumFromInt(fixtureTableIndex(0)) };
+    const result = try f.local(.u32);
+    const adapted = try f.local(.u32);
+    f.store.setLocalBoxyDesc(result, desc);
+    f.store.setLocalBoxyDesc(adapted, desc);
+
+    const ret = try f.ret(result);
+    const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{
+        .target = adapted,
+        .source = result,
+        .adapter = @enumFromInt(fixtureTableIndex(0)),
+        .source_desc = desc,
+        .target_desc = desc,
+        .source_mode = .move,
+        .next = ret,
+    } });
+    const body = try f.store.addCFStmt(.{ .assign_call_dict = .{
+        .target = result,
+        .dict = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .method = @enumFromInt(fixtureTableIndex(0)),
+        .method_slot = 0,
+        .args = .empty(),
+        .result_desc = desc,
+        .next = adapt,
+    } });
+    _ = try f.addProc(&.{}, body, .u32);
+
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countAllRc());
 }
 
 test "RC alias passed as a dying call argument moves the leader unit" {

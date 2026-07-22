@@ -696,10 +696,6 @@ fn boxyNativeFnTable() BoxyNativeFnTable {
     return table;
 }
 
-fn boxyTablesNeedRuntime(tables: Interpreter.BoxyTables) bool {
-    return tables.type_descs.len != 0 or tables.dicts.len != 0;
-}
-
 const DevRootLabel = struct {
     module_name: []const u8,
     snippet: []u8,
@@ -922,6 +918,8 @@ fn lowerDevEvalAndFinishRoots(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
     );
     defer codegen.deinit();
     codegen.setComptimeHooks(.{
@@ -991,7 +989,7 @@ fn lowerDevEvalAndFinishRoots(
     }
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_global_installed = jobs_len != 0 and boxyTablesNeedRuntime(boxy_tables);
+    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntime();
     if (boxy_global_installed) {
         boxy_abi.deinitGlobal();
         boxy_abi.initGlobal(

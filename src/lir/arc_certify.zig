@@ -229,27 +229,12 @@ fn computeLocalContainsRefcounted(
                 .assign_boxy_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
                 .assign_boxy_reuse_box => |assign| changed = markLocalRc(contains, assign.target) or changed,
                 .assign_boxy_tag => |assign| changed = markLocalRc(contains, assign.target) or changed,
-                .assign_call => |assign| if (assign.result_desc != null and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                },
-                .assign_call_dict => |assign| if (assign.result_desc != null and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                },
-                .assign_call_erased => |assign| if ((assign.result_desc != null or assign.out_desc != null) and boxyDescForLocal(boxy_rc_descs, assign.target) != null) {
-                    changed = markLocalRc(contains, assign.target) or changed;
-                },
                 else => {},
             }
         }
     }
 
     return contains;
-}
-
-fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
-    const index = @intFromEnum(local);
-    if (index >= descs.len) return null;
-    return descs[index];
 }
 
 fn layoutMayContainBoxyDynamic(layouts: *const layout_mod.Store, layout_idx: layout_mod.Idx) bool {
@@ -653,6 +638,8 @@ fn writeFailureContext(
             .assign_call_dict => |a| {
                 context.append(" target={d} method={d} slot={d} args=", .{ @intFromEnum(a.target), @intFromEnum(a.method), a.method_slot });
                 appendLocalSpan(context, store, a.args);
+                context.append(" arg_descs=", .{});
+                appendLocalSpan(context, store, a.arg_descs);
                 context.append(" hidden=", .{});
                 appendLocalSpan(context, store, a.hidden_args);
                 if (a.result_desc) |result_desc| {
@@ -858,7 +845,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .assign_boxy_tag => |a| a.target == needle or boxyDescRefReadsLocal(a.target_desc, needle) or (a.payload != null and a.payload.? == needle) or (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
         .assign_boxy_tag_payload => |a| a.target == needle or (a.target_desc != null and a.target_desc.? == needle) or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
         .boxy_tag_match => |a| a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle),
-        .assign_call_dict => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)) or spanHasLocal(store, a.args, needle) or spanHasLocal(store, a.hidden_args, needle),
+        .assign_call_dict => |a| a.target == needle or boxyDictRefReadsLocal(a.dict, needle) or (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)) or spanHasLocal(store, a.args, needle) or spanHasLocal(store, a.arg_descs, needle) or spanHasLocal(store, a.hidden_args, needle),
         .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
@@ -1075,6 +1062,9 @@ const LocalSummary = struct {
     repr: u32,
     /// Ownership units on the value (owned class only).
     balance: u32,
+    /// Whether a borrowed procedure parameter roots this value for the full
+    /// call, independently of transient ownership units.
+    always_live: bool = false,
     /// For borrowed locals: dense position of the local anchoring the first
     /// unit-carrying value in the lender/holder chain. Equal to `repr` for
     /// ABI-borrowed parameters, which are self-anchored.
@@ -1273,7 +1263,18 @@ const Certifier = struct {
         units: i32,
         lenders: []const ValueId,
     ) CertifyError!ValueId {
-        const value = try self.newValue(local, lenders, false);
+        return self.bindFreshWithLifetime(state, local, units, lenders, false);
+    }
+
+    fn bindFreshWithLifetime(
+        self: *Certifier,
+        state: *State,
+        local: LIR.LocalId,
+        units: i32,
+        lenders: []const ValueId,
+        always_live: bool,
+    ) CertifyError!ValueId {
+        const value = try self.newValue(local, lenders, always_live);
         try state.addBalance(value, units);
         state.bindValue(local, value);
         return value;
@@ -1462,6 +1463,7 @@ const Certifier = struct {
                             .condition_mask = 0,
                         };
                     }
+                    summary.always_live = self.values.items[value].always_live;
                 }
             }
             self.summary_scratch.appendAssumeCapacity(summary);
@@ -1490,6 +1492,7 @@ const Certifier = struct {
             hasher.update(std.mem.asBytes(&entry.class));
             hasher.update(std.mem.asBytes(&entry.repr));
             hasher.update(std.mem.asBytes(&entry.balance));
+            hasher.update(std.mem.asBytes(&entry.always_live));
             hasher.update(std.mem.asBytes(&entry.lender_repr));
             hasher.update(std.mem.asBytes(&entry.condition));
             hasher.update(std.mem.asBytes(&entry.condition_mask));
@@ -1507,12 +1510,12 @@ const Certifier = struct {
         for (summary, 0..) |entry, dense| {
             if (entry.class != .owned or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
-            _ = try self.bindFresh(&state, local, @intCast(entry.balance), &.{});
+            _ = try self.bindFreshWithLifetime(&state, local, @intCast(entry.balance), &.{}, entry.always_live);
         }
         for (summary, 0..) |entry, dense| {
             if (entry.class != .conditional_owned or entry.repr != dense) continue;
             const local = self.proc_locals.items[dense];
-            const value = try self.bindFresh(&state, local, 1, &.{});
+            const value = try self.bindFreshWithLifetime(&state, local, 1, &.{}, entry.always_live);
             try state.setConditional(value, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
         }
         for (summary, 0..) |entry, dense| {
@@ -1618,6 +1621,7 @@ const Certifier = struct {
     fn modesCompatible(a: []const LocalSummary, b: []const LocalSummary) bool {
         for (a, b) |ga, sb| {
             if (ga.class != sb.class) return false;
+            if (ga.always_live != sb.always_live) return false;
             switch (ga.class) {
                 .unbound, .owned => {},
                 .conditional_owned => if (ga.condition != sb.condition or ga.condition_mask != sb.condition_mask) return false,
@@ -1941,6 +1945,7 @@ const Certifier = struct {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
                     try self.noteProcLocalSpan(assign.args);
+                    try self.noteProcLocalSpan(assign.arg_descs);
                     try self.noteProcLocalSpan(assign.hidden_args);
                     try stack.append(self.allocator, assign.next);
                 },
@@ -2322,6 +2327,7 @@ const Certifier = struct {
                         if (result_desc.localOrNull()) |local| self.noteExposedReadLocal(&graph.nodes.items[node_index].reads, local);
                     }
                     self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.args);
+                    self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.arg_descs);
                     self.noteExposedReadSpan(&graph.nodes.items[node_index].reads, assign.hidden_args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -2692,6 +2698,7 @@ const Certifier = struct {
                                 .condition_mask = 0,
                             };
                         }
+                        summary.always_live = self.values.items[value].always_live;
                     }
                 }
             }
@@ -2989,6 +2996,10 @@ const Certifier = struct {
                     try self.requireBoxyDictRef(&state, assign.dict);
                     if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    const arg_descs = self.store.getLocalSpan(assign.arg_descs);
+                    for (0..GuardedList.borrowLen(arg_descs)) |index| {
+                        _ = try self.requireLive(&state, GuardedList.at(arg_descs, index));
+                    }
                     const hidden_args = self.store.getLocalSpan(assign.hidden_args);
                     for (0..GuardedList.borrowLen(hidden_args)) |index| {
                         const hidden = GuardedList.at(hidden_args, index);
@@ -3883,6 +3894,43 @@ test "certify accepts a borrowed parameter used without RC statements" {
         .next = result_assign,
     } });
     _ = try f.addProc(&.{param}, use_param, .i64);
+
+    const sigs = [_]arc_sig.RcSig{arc_sig.RcSig.all_owned.withBorrowedParam(0)};
+    try f.certifyWith(.{ .sigs = &sigs });
+}
+
+test "certify preserves borrowed parameter lifetime through an owned alias join" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    const param = try f.local(.str);
+    const alias = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_replacement = try f.decrefStmt(alias, .str, result_assign);
+    const use_param = try f.store.addCFStmt(.{ .expect = .{
+        .condition = param,
+        .next = release_replacement,
+    } });
+    const replace_alias = try f.assignStr(alias, use_param);
+    const release_old_alias = try f.decrefStmt(alias, .str, replace_alias);
+
+    const join_id = f.freshJoinPointId();
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = LIR.LocalSpan.empty(),
+        .body = release_old_alias,
+        .remainder = jump,
+    } });
+    const retain_alias = try f.increfStmt(alias, .str, join_stmt);
+    const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .{ .local = param },
+        .next = retain_alias,
+    } });
+    _ = try f.addProc(&.{param}, bind_alias, .i64);
 
     const sigs = [_]arc_sig.RcSig{arc_sig.RcSig.all_owned.withBorrowedParam(0)};
     try f.certifyWith(.{ .sigs = &sigs });
