@@ -224,6 +224,12 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
         try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
     }
+    if (env.common.findIdent("str_get_utf8_byte_unsafe")) |ident| {
+        try low_level_map.put(ident, .str_get_utf8_byte_unsafe);
+    }
+    if (env.common.findIdent("str_substring_unsafe")) |ident| {
+        try low_level_map.put(ident, .str_substring_unsafe);
+    }
     if (env.common.findIdent("Builtin.Str.with_capacity")) |str_with_capacity_ident| {
         try low_level_map.put(str_with_capacity_ident, .str_with_capacity);
     }

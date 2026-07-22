@@ -2852,6 +2852,44 @@ test "RocStr.eq: utf8 content uses exact byte equality" {
     try std.testing.expect(!roc_str1.eql(roc_str3));
 }
 
+test "unchecked UTF-8 byte access reads SSO and heap strings" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const small = RocStr.fromSlice("A\x00\xc3\xa9", test_env.getOps());
+    const large = RocStr.fromSlice("012345678901234567890123456789\xf0\x9f\x8e\x89", test_env.getOps());
+    defer small.decref(test_env.getOps());
+    defer large.decref(test_env.getOps());
+
+    try std.testing.expect(small.isSmallStr());
+    try std.testing.expect(!large.isSmallStr());
+    try std.testing.expectEqual(@as(u8, 0), getUnsafeC(small, 1));
+    try std.testing.expectEqual(@as(u8, 0xc3), getUnsafeC(small, 2));
+    try std.testing.expectEqual(@as(u8, 0xf0), getUnsafeC(large, 30));
+    try std.testing.expectEqual(@as(u8, 0x89), getUnsafeC(large, 33));
+}
+
+test "unchecked substrings cover SSO and retained heap slices" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const small = RocStr.fromSlice("abcdef", test_env.getOps());
+    const small_middle = substringUnsafeC(small, 2, 3, test_env.getOps());
+    try std.testing.expect(small_middle.eqlSlice("cde"));
+    try std.testing.expect(small.eqlSlice("abcdef"));
+
+    const source = RocStr.fromSlice("012345678901234567890123456789", test_env.getOps());
+    source.incref(1, test_env.getOps());
+    const middle = substringUnsafeC(source, 5, 20, test_env.getOps());
+    try std.testing.expect(middle.isSeamlessSlice());
+    source.decref(test_env.getOps());
+    try std.testing.expect(middle.eqlSlice("56789012345678901234"));
+
+    const empty = substringUnsafeC(middle, middle.len(), 0, test_env.getOps());
+    try std.testing.expect(empty.isEmpty());
+    middle.decref(test_env.getOps());
+}
+
 test "RocStr.eq: boundary between small and heap strings" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();

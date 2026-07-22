@@ -2938,6 +2938,8 @@ pub const MonoLlvmCodeGen = struct {
             .str_ends_with => try self.emitStrEndsWith(target, arg_locals),
             .str_caseless_ascii_equals => try self.emitStrCaselessAsciiEquals(target, arg_locals),
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, GuardedList.at(arg_locals, 0)),
+            .str_get_utf8_byte_unsafe => try self.emitStrGetUtf8ByteUnsafe(target, arg_locals),
+            .str_substring_unsafe => try self.emitStrSubstringUnsafe(target, arg_locals),
             .str_find_first => try self.emitStrFindFirst(target, arg_locals),
             .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
             .str_concat => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_concat)), arg_locals, unique_args),
@@ -6001,6 +6003,48 @@ pub const MonoLlvmCodeGen = struct {
         else
             try self.emitRocStrLen(self.slot(arg).ptr);
         try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
+    }
+
+    fn emitStrGetUtf8ByteUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
+        defer call_args.deinit(self.allocator);
+        const index = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))),
+            .i64,
+            false,
+        );
+        try call_args.append(self.allocator, .i64, index);
+        const result = try self.callBuiltin(
+            builtinSymbol(LowLevelBuiltins.strOp(.str_get_utf8_byte_unsafe)),
+            .i8,
+            call_args.types.items,
+            call_args.values.items,
+        );
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+    }
+
+    fn emitStrSubstringUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
+        const start = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))),
+            .i64,
+            false,
+        );
+        const length = try self.coerceScalar(
+            try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))),
+            .i64,
+            false,
+        );
+        try call_args.append(self.allocator, .i64, start);
+        try call_args.append(self.allocator, .i64, length);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid(
+            builtinSymbol(LowLevelBuiltins.strOp(.str_substring_unsafe)),
+            call_args.types.items,
+            call_args.values.items,
+        );
     }
 
     fn emitStrFindFirst(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {

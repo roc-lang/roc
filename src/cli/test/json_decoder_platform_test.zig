@@ -115,6 +115,15 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try buildRocApp(allocator, &env.env_map, target_name, output_path, "test/json-decoder/app.roc");
     }
 
+    try runJsonDecoderAndCheckOutput(allocator, output_path, "42", "42\n");
+    try runJsonDecoderAndCheckOutput(allocator, output_path, " \t42\r\n", "42\n");
+    try runJsonDecoderAndCheckOutput(
+        allocator,
+        output_path,
+        "                                                                42                                                                ",
+        "42\n",
+    );
+
     for (0..8) |case_index| {
         const mask: u8 = @intCast(case_index);
         const status_index = case_index % status_values.len;

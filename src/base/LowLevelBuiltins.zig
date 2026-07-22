@@ -155,6 +155,8 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .str_drop_suffix => .str_drop_suffix,
         .str_find_first => .str_find_first,
         .str_count_utf8_bytes => .str_count_utf8_bytes,
+        .str_get_utf8_byte_unsafe => .str_get_utf8_byte_unsafe,
+        .str_substring_unsafe => .str_substring_unsafe,
         .str_with_capacity => .str_with_capacity,
         .str_reserve => .str_reserve,
         .str_release_excess_capacity => .str_release_excess_capacity,

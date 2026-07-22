@@ -2,6 +2,15 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 main! : Str => U64
 main! = |json| {
+	if !Str.starts_with(json, "{") {
+		scalar_result : Try(U64, [InvalidJson(Str)])
+		scalar_result = Json.parse(json)
+		return match scalar_result {
+			Ok(value) => value
+			Err(_) => 999999
+		}
+	}
+
 	decoded_result : Try(
 		{
 			explicit_optional : Try(Str, [Missing]),

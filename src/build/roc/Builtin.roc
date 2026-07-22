@@ -1232,14 +1232,13 @@ Builtin :: [].{
 
 			is_json_unsigned_int_literal : Str -> Bool
 			is_json_unsigned_int_literal = |value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 
 				if len == 0 {
 					return False
 				}
 
-				first = list_get_unsafe(bytes, 0)
+				first = str_get_utf8_byte_unsafe(value, 0)
 
 				if first == 48 {
 					return len == 1
@@ -1252,7 +1251,7 @@ Builtin :: [].{
 				var $index = 1
 
 				while $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if Json.is_json_digit(byte) {
 						$index = $index + 1
@@ -1325,35 +1324,41 @@ Builtin :: [].{
 			## keeps that delimiter. Both results are zero-copy slices.
 			split_json_scalar_tail : Str -> Try({ value : Str, after : Str }, [InvalidJson(Str), ..])
 			split_json_scalar_tail = |raw| {
-				bytes = Str.to_utf8(raw)
+				len = Str.count_utf8_bytes(raw)
+				var $index = 0
+				var $found = False
 
-				match List.find_first_index(bytes, is_json_scalar_delimiter) {
-					Ok(0) => {
-						# missing scalar value
-						Err(Json.invalid_json)
+				while $index < len {
+					if is_json_scalar_delimiter(str_get_utf8_byte_unsafe(raw, $index)) {
+						$found = True
+						break
+					} else {
+						$index = $index + 1
 					}
-					Ok(index) => {
-						value = match Str.from_utf8(List.take_first(bytes, index)) {
+				}
+
+				if $found {
+					if $index == 0 {
+						Err(Json.invalid_json)
+					} else {
+						value = match Str.drop_last_bytes(raw, len - $index) {
 							Ok(v) => v
-							# unreachable: the split point is an ASCII delimiter, so the prefix is always valid UTF-8
-							Err(_) => {
-								crash "Json scalar splitter invariant violated: split at a delimiter was not valid UTF-8"
+							Err(BadUtf8) => {
+								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
 							}
 						}
-
-						# `value` is a content-matched prefix of `raw`, so dropping it yields the
-						# tail beginning with the delimiter — a zero-copy slice operation.
-						Ok({ value, after: Str.drop_prefix(raw, value) })
-					}
-					Err(NotFound) => {
-						if Str.is_empty(raw) {
-							# missing scalar value (end of input)
-							Err(Json.invalid_json)
-						} else {
-							# the scalar runs to the end of the input
-							Ok({ value: raw, after: "" })
+						after = match Str.drop_first_bytes(raw, $index) {
+							Ok(v) => v
+							Err(BadUtf8) => {
+								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
+							}
 						}
+						Ok({ value, after })
 					}
+				} else if $index == 0 {
+					Err(Json.invalid_json)
+				} else {
+					Ok({ value: raw, after: "" })
 				}
 			}
 		}
@@ -2181,6 +2186,68 @@ Builtin :: [].{
 		## expect "Hello World".count_utf8_bytes() == 11
 		## ```
 		count_utf8_bytes : Str -> U64
+
+		## Iterate over this string's UTF-8 code units in byte order. The iterator's
+		## known length is the string's byte length. Iteration does not allocate.
+		iter_utf8 : Str -> Iter(U8)
+		iter_utf8 = |str| {
+			make = |index| {
+				len = Str.count_utf8_bytes(str)
+
+				iter_from_step(
+					Known(len - index),
+					||
+						if index == len {
+							Done
+						} else {
+							One({ item: str_get_utf8_byte_unsafe(str, index), rest: make(index + 1) })
+						},
+				)
+			}
+
+			make(0)
+		}
+
+		## Drop a byte count from the start of a string. Counts at or beyond the
+		## byte length return `Ok("")`; an in-range cut inside a UTF-8 code point
+		## returns `Err(BadUtf8)`. Valid slices do not allocate.
+		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
+		drop_first_bytes = |str, count| {
+			len = Str.count_utf8_bytes(str)
+			if count >= len {
+				Ok("")
+			} else {
+				byte = str_get_utf8_byte_unsafe(str, count)
+				if byte >= 128 and byte < 192 {
+					Err(BadUtf8)
+				} else {
+					Ok(str_substring_unsafe(str, count, len - count))
+				}
+			}
+		}
+
+		## Drop a byte count from the end of a string. Counts at or beyond the byte
+		## length return `Ok("")`; an in-range cut inside a UTF-8 code point returns
+		## `Err(BadUtf8)`. Valid slices do not allocate.
+		drop_last_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
+		drop_last_bytes = |str, count| {
+			if count == 0 {
+				Ok(str)
+			} else {
+				len = Str.count_utf8_bytes(str)
+				if count >= len {
+					Ok("")
+				} else {
+					end = len - count
+					byte = str_get_utf8_byte_unsafe(str, end)
+					if byte >= 128 and byte < 192 {
+						Err(BadUtf8)
+					} else {
+						Ok(str_substring_unsafe(str, 0, end))
+					}
+				}
+			}
+		}
 
 		## Returns a string of the specified capacity without any content.
 		##
@@ -17654,22 +17721,23 @@ is_json_whitespace = |byte|
 ## or revalidated, so a call costs O(leading whitespace).
 json_trim_start : Str -> Str
 json_trim_start = |s| {
-	bytes = Str.to_utf8(s)
-
-	index = match List.find_first_index(bytes, |byte| !is_json_whitespace(byte)) {
-		Ok(idx) => idx
-		Err(NotFound) => List.len(bytes)
+	len = Str.count_utf8_bytes(s)
+	var $index = 0
+	while $index < len {
+		if is_json_whitespace(str_get_utf8_byte_unsafe(s, $index)) {
+			$index = $index + 1
+		} else {
+			break
+		}
 	}
 
-	if index == 0 {
+	if $index == 0 {
 		s
 	} else {
-		match Str.from_utf8(List.take_first(bytes, index)) {
-			# the prefix is ASCII whitespace, so it is always valid UTF-8 and
-			# dropping it is a byte compare plus a zero-copy slice
-			Ok(prefix) => Str.drop_prefix(s, prefix)
-			Err(_) => {
-				crash "json_trim_start invariant violated: an ASCII whitespace prefix was not valid UTF-8"
+		match Str.drop_first_bytes(s, $index) {
+			Ok(trimmed) => trimmed
+			Err(BadUtf8) => {
+				crash "json_trim_start invariant violated: ASCII whitespace ended inside UTF-8"
 			}
 		}
 	}
@@ -17728,6 +17796,13 @@ str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
 # Implemented by the compiler. Returns a string slice after the prefix when the
 # source starts with the prefix using ASCII-caseless comparison.
 str_drop_prefix_caseless_ascii_raw : Str, Str -> { after : Str, found : Bool }
+
+# Implemented by the compiler. The caller guarantees the index is in bounds.
+str_get_utf8_byte_unsafe : Str, U64 -> U8
+
+# Implemented by the compiler. The caller guarantees the byte range is in bounds.
+# The result shares the source string's allocation.
+str_substring_unsafe : Str, U64, U64 -> Str
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element

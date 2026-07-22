@@ -760,6 +760,7 @@ pub const InstGraph = struct {
                     break :blk switch (named.def.iterator_kind) {
                         .custom,
                         .list,
+                        .str,
                         .single,
                         .range_exclusive,
                         .range_inclusive,

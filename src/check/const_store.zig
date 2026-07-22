@@ -91,6 +91,7 @@ pub const IteratorKind = enum(u8) {
     none,
     custom,
     list,
+    str,
     single,
     range_exclusive,
     range_inclusive,

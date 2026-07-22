@@ -57,7 +57,8 @@ pub const Constants = struct {
     /// 31: Canonical expression storage includes compiler-derived method nodes.
     /// 32: Combined the empty-row and interpolation checked-artifact layouts.
     /// 33: Platform requirement roots carry producer-authored dispatch evidence.
-    pub const CACHE_VERSION = 33;
+    /// 34: Checked iterator procedure identity includes Str.iter_utf8.
+    pub const CACHE_VERSION = 34;
 };
 
 /// Configuration for the Roc cache system.

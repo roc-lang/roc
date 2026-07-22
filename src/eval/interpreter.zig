@@ -4846,6 +4846,21 @@ pub const Interpreter = struct {
                 val.write(u64, result);
                 break :blk val;
             },
+            .str_get_utf8_byte_unsafe => blk: {
+                const result = builtins.str.getUnsafeC(valueToRocStr(args[0]), args[1].read(u64));
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, result);
+                break :blk val;
+            },
+            .str_substring_unsafe => blk: {
+                const result = builtins.str.substringUnsafeC(
+                    valueToRocStr(args[0]),
+                    args[1].read(u64),
+                    args[2].read(u64),
+                    &self.roc_ops,
+                );
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
             .str_to_utf8 => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();

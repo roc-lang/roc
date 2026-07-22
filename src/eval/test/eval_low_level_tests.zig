@@ -2699,6 +2699,80 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "4" },
     },
     .{
+        .name = "low_level - Str.iter_utf8 exact bytes and known length",
+        .source =
+        \\{
+        \\iter = Str.iter_utf8("A\u(0000)é🎉")
+        \\bytes = Iter.fold(iter, [], |list, byte| List.append(list, byte))
+        \\{ bytes, size: Iter.size_hint(Str.iter_utf8("A\u(0000)é🎉")) }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ bytes: [65, 0, 195, 169, 240, 159, 142, 137], size: Known(8) }" },
+    },
+    .{
+        .name = "low_level - Str.iter_utf8 empty SSO and heap strings",
+        .source =
+        \\{
+        \\small = Iter.fold(Str.iter_utf8("Roc"), 0, |sum, byte| sum + U8.to_u64(byte))
+        \\large = Iter.fold(Str.iter_utf8("abcdefghijklmnopqrstuvwxyz0123456789"), 0, |sum, byte| sum + U8.to_u64(byte))
+        \\{ empty: Iter.size_hint(Str.iter_utf8("")), small, large }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ empty: Known(0), large: 3372, small: 292 }" },
+    },
+    .{
+        .name = "low_level - Str.iter_utf8 repeated next and for consumption",
+        .source =
+        \\{
+        \\iter = Str.iter_utf8("AéZ")
+        \\first = Iter.next(iter)
+        \\{ first_byte, rest } = match first {
+        \\    One({ item, rest }) => { first_byte: item, rest }
+        \\    _ => { first_byte: 0, rest: Str.iter_utf8("") }
+        \\}
+        \\second = Iter.next(rest)
+        \\{ second_byte, tail } = match second {
+        \\    One({ item, rest: next }) => { second_byte: item, tail: next }
+        \\    _ => { second_byte: 0, tail: Str.iter_utf8("") }
+        \\}
+        \\var $sum = 0
+        \\for byte in tail { $sum = $sum + byte.to_u64() }
+        \\{ first_byte, second_byte, tail_sum: $sum }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ first_byte: 65, second_byte: 195, tail_sum: 259 }" },
+    },
+    .{
+        .name = "low_level - Str byte drops preserve source and slice at boundaries",
+        .source =
+        \\{
+        \\source = "aé🎉z"
+        \\first = Str.drop_first_bytes(source, 3)
+        \\last = Str.drop_last_bytes(source, 5)
+        \\whole = Str.drop_first_bytes(source, 8)
+        \\beyond = Str.drop_last_bytes(source, 100)
+        \\zero = Str.drop_last_bytes(source, 0)
+        \\{ source, first, last, whole, beyond, zero }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{ beyond: Ok(\"\"), first: Ok(\"🎉z\"), last: Ok(\"aé\"), source: \"aé🎉z\", whole: Ok(\"\"), zero: Ok(\"aé🎉z\") }" },
+    },
+    .{
+        .name = "low_level - Str byte drops reject cuts inside UTF-8 sequences",
+        .source =
+        \\{
+        \\is_bad = |result| match result { Err(BadUtf8) => True, Ok(_) => False }
+        \\is_bad(Str.drop_first_bytes("é", 1))
+        \\    and is_bad(Str.drop_first_bytes("€", 1))
+        \\    and is_bad(Str.drop_first_bytes("🎉", 2))
+        \\    and is_bad(Str.drop_last_bytes("é", 1))
+        \\    and is_bad(Str.drop_last_bytes("€", 2))
+        \\    and is_bad(Str.drop_last_bytes("🎉", 3))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         .name = "low_level - Str.with_capacity returns empty string",
         .source =
         \\{

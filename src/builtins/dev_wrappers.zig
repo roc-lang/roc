@@ -243,6 +243,18 @@ pub fn roc_builtins_str_count_utf8_bytes(str_bytes: ?[*]u8, str_len: usize, str_
     return countUtf8Bytes(s);
 }
 
+/// Read one in-bounds UTF-8 code unit without allocating or retaining the string.
+pub fn roc_builtins_str_get_utf8_byte_unsafe(str_bytes: ?[*]u8, str_len: usize, str_cap: usize, index: u64) callconv(.c) u8 {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    return str.getUnsafeC(s, index);
+}
+
+/// Build an in-bounds byte substring; ARC retains the shared source allocation.
+pub fn roc_builtins_str_substring_unsafe(out: *RocStr, str_bytes: ?[*]u8, str_len: usize, str_cap: usize, start: u64, length: u64, roc_ops: *RocOps) callconv(.c) void {
+    const s = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
+    out.* = str.substringUnsafeC(s, start, length, roc_ops);
+}
+
 /// Wrapper: findFirst(RocStr, RocStr, *RocOps) -> { before, found, after }
 pub fn roc_builtins_str_find_first(out: *anyopaque, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_bytes: ?[*]u8, b_len: usize, b_cap: usize, layout: *const StrFindFirstLayout, roc_ops: *RocOps) callconv(.c) void {
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };

@@ -15024,6 +15024,16 @@ const BodyContext = struct {
                     try self.generatedIteratorNode(.list, public_fn.ret, &.{request_fn.args[0]}, null),
                 );
             },
+            .str_iter_utf8 => {
+                if (checked_args.len != 1 or request_fn.args.len != 1) {
+                    Common.invariant("Str.iter_utf8 reached Monotype with an unexpected arity");
+                }
+                if (try self.generatedIteratorExpectedProducerFunctionNode(.str, request_fn.args, expected_ret)) |expected_fn| return expected_fn;
+                return try self.graphFunctionNode(
+                    request_fn.args,
+                    try self.generatedIteratorNode(.str, public_fn.ret, &.{request_fn.args[0]}, null),
+                );
+            },
             .iter_single => {
                 if (checked_args.len != 1 or request_fn.args.len != 1) {
                     Common.invariant("Iter.single reached Monotype with an unexpected arity");
@@ -15285,6 +15295,7 @@ const BodyContext = struct {
         switch (kind) {
             .custom,
             .list,
+            .str,
             .single,
             .range_exclusive,
             .range_inclusive,
