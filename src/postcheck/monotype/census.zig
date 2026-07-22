@@ -11,8 +11,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// All counting and the dump are compiled out unless this is a Debug build.
-pub const enabled = builtin.mode == .Debug;
+/// All counting and the dump are compiled out unless this is a Debug build
+/// on a 64-bit non-wasm target: the counters are 64-bit atomics and the dump
+/// reads an env var, neither of which the wasm builds support.
+pub const enabled = builtin.mode == .Debug and
+    !builtin.target.cpu.arch.isWasm() and
+    builtin.target.ptrBitWidth() >= 64 and
+    builtin.os.tag != .freestanding;
 
 const Counter = std.atomic.Value(u64);
 

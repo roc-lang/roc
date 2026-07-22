@@ -22,6 +22,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// All measurement is compiled out unless this is a Debug build on a 64-bit
+/// non-wasm target: the counters are 64-bit atomics and self-enabling reads
+/// an env var through libc, neither of which the wasm builds support.
+pub const enabled = builtin.mode == .Debug and
+    !builtin.target.cpu.arch.isWasm() and
+    builtin.target.ptrBitWidth() >= 64 and
+    builtin.os.tag != .freestanding;
+
 /// Number of divergent/violation identifications kept per category. The census
 /// measures counts exactly; it retains only the first few identities so a
 /// finding can be located in the corpus without an unbounded buffer.
@@ -54,6 +62,7 @@ var env_checked = std.atomic.Value(bool).init(false);
 // the census reads its env var itself the first time `active()` is asked,
 // rather than depending on every driver's constructor to call `enable`.
 fn checkEnvOnce() void {
+    if (comptime !enabled) return;
     if (env_checked.load(.acquire)) return;
     if (std.c.getenv("ROC_REUNIFY_CHECK_CENSUS")) |raw| {
         const path = raw[0..std.mem.len(raw)];
@@ -91,7 +100,7 @@ var divergent_detail_count: usize = 0;
 
 /// Retain one bounded detail line describing a divergent scheme-use pair.
 pub fn recordSchemeUseDivergentDetail(text: []const u8) void {
-    if (builtin.mode != .Debug) return;
+    if (comptime !enabled) return;
     lockBuffer();
     defer unlockBuffer();
     if (divergent_detail_count >= max_identifications) return;
@@ -112,7 +121,7 @@ var stored_path_len: usize = 0;
 /// dump without threading the path through its own state. A no-op outside Debug,
 /// and an empty path leaves the census disabled.
 pub fn enable(path: []const u8) void {
-    if (builtin.mode != .Debug) return;
+    if (comptime !enabled) return;
     if (path.len == 0) return;
     lockBuffer();
     defer unlockBuffer();
@@ -125,7 +134,7 @@ pub fn enable(path: []const u8) void {
 /// Whether census measurement should run. Folds to a comptime `false` outside
 /// Debug so gated call sites cost nothing in release.
 pub fn active() bool {
-    if (builtin.mode != .Debug) return false;
+    if (comptime !enabled) return false;
     checkEnvOnce();
     return active_flag.load(.monotonic);
 }
@@ -143,7 +152,7 @@ fn makeIdentification(module_name: []const u8, node_idx: u32, has_node: bool) Id
 /// structurally equal content. Divergent identities are retained (bounded) for
 /// later location.
 pub fn recordSchemeUseDuplicate(equivalent: bool, module_name: []const u8, node_idx: u32) void {
-    if (builtin.mode != .Debug) return;
+    if (comptime !enabled) return;
     _ = scheme_use_duplicate_edges.fetchAdd(1, .monotonic);
     if (equivalent) {
         _ = scheme_use_duplicates_equivalent.fetchAdd(1, .monotonic);
@@ -162,7 +171,7 @@ pub fn recordSchemeUseDuplicate(equivalent: bool, module_name: []const u8, node_
 /// payload (reunify.md 5.4/7.5). The identity is retained (bounded) for later
 /// location.
 pub fn recordErrReachableInLowerableModule(module_name: []const u8) void {
-    if (builtin.mode != .Debug) return;
+    if (comptime !enabled) return;
     _ = err_reachable_in_lowerable_module.fetchAdd(1, .monotonic);
     lockBuffer();
     defer unlockBuffer();
@@ -192,6 +201,7 @@ const Sink = struct {
 /// appended holds the run's final totals. A no-op when the census is disabled.
 /// Every failure is silent: the census must never perturb a compile.
 pub fn dumpAppend(io: std.Io) void {
+    if (comptime !enabled) return;
     if (!active()) return;
 
     lockBuffer();

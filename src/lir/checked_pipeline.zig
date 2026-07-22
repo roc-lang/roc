@@ -314,7 +314,7 @@ pub fn lowerCheckedModulesToLir(
     const lir_result = lowered.lir_result;
     lowered.lir_result = undefined;
 
-    if (builtin.mode == .Debug) {
+    if (comptime postcheck.Monotype.Census.enabled) {
         appendReunifyCensus(allocator);
     }
 
