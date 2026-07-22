@@ -13166,6 +13166,49 @@ const EvidencePass = struct {
         const module_env = self.module.moduleEnvConst();
         const duplicate = module_env.scheme_uses.items.items[duplicate_idx];
         reunify_census.recordSchemeUseDuplicate(equivalent, module_env.module_name, duplicate.node_idx);
+        if (!equivalent) self.censusSchemeUseDivergentDetail(kept_idx, duplicate_idx);
+    }
+
+    /// Bounded per-pair detail for a divergent duplicate: slot kind, node,
+    /// pair counts, and the pair indices whose resolved digests disagree
+    /// (with each side's fresh var), so the case can be located exactly.
+    fn censusSchemeUseDivergentDetail(self: *EvidencePass, kept_idx: u32, duplicate_idx: u32) void {
+        const module_env = self.module.moduleEnvConst();
+        const kept = module_env.scheme_uses.items.items[kept_idx];
+        const dup = module_env.scheme_uses.items.items[duplicate_idx];
+        var buffer: [1024]u8 = undefined;
+        var pos: usize = 0;
+        const head = std.fmt.bufPrint(buffer[pos..], "slot_kind={d} node={d} kept_pairs={d} dup_pairs={d} scheme_roots={d}/{d} slot_data={d}/{d}", .{
+            dup.slot_kind,
+            dup.node_idx,
+            kept.pairs_len,
+            dup.pairs_len,
+            kept.scheme_root,
+            dup.scheme_root,
+            kept.slot_data,
+            dup.slot_data,
+        }) catch return;
+        pos += head.len;
+        const shared = @min(kept.pairs_len, dup.pairs_len);
+        const kept_pairs = module_env.scheme_use_pairs.items.items[kept.pairs_start .. kept.pairs_start + kept.pairs_len];
+        const dup_pairs = module_env.scheme_use_pairs.items.items[dup.pairs_start .. dup.pairs_start + dup.pairs_len];
+        var type_writer = types.TypeWriter.initFromParts(self.allocator, self.types, module_env.getIdentStoreConst(), null) catch return;
+        defer type_writer.deinit();
+        for (0..shared) |i| {
+            const kept_key = canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(kept_pairs[i].fresh_var)) catch return;
+            const dup_key = canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(dup_pairs[i].fresh_var)) catch return;
+            if (!std.mem.eql(u8, &kept_key.bytes, &dup_key.bytes)) {
+                const kept_text = type_writer.writeGet(@enumFromInt(kept_pairs[i].fresh_var), .one_line) catch break;
+                const kept_shown = kept_text[0..@min(kept_text.len, 60)];
+                const item = std.fmt.bufPrint(buffer[pos..], " pair{d}:kept_var={d}<{s}>", .{ i, kept_pairs[i].fresh_var, kept_shown }) catch break;
+                pos += item.len;
+                const dup_text = type_writer.writeGet(@enumFromInt(dup_pairs[i].fresh_var), .one_line) catch break;
+                const dup_shown = dup_text[0..@min(dup_text.len, 60)];
+                const item2 = std.fmt.bufPrint(buffer[pos..], ",dup_var={d}<{s}>", .{ dup_pairs[i].fresh_var, dup_shown }) catch break;
+                pos += item2.len;
+            }
+        }
+        reunify_census.recordSchemeUseDivergentDetail(buffer[0..pos]);
     }
 
     fn schemeUseRecordsEquivalent(self: *EvidencePass, a_idx: u32, b_idx: u32) Allocator.Error!bool {
@@ -13175,9 +13218,13 @@ const EvidencePass = struct {
     }
 
     /// A structural digest of one scheme-use record: the resolved scheme root
-    /// followed by the resolved fresh var of each recorded pair, each hashed
-    /// through the canonical-type-key digest (which resolves union-find vars).
-    /// Two records for one edge that resolve to equal content share a digest.
+    /// followed by the record's pairs digested order-insensitively — each pair
+    /// hashes its resolved constrained-scheme var together with its resolved
+    /// fresh var, and the pair digests are sorted before entering the record
+    /// digest. Recorded pair order is hash-map iteration order today and
+    /// differs between re-checks of one edge, so a position-wise comparison
+    /// would report order noise as content divergence; the (binder content,
+    /// actual content) pairing is what must agree.
     fn schemeUseRecordDigest(self: *EvidencePass, record_idx: u32) Allocator.Error![32]u8 {
         const module_env = self.module.moduleEnvConst();
         const record = module_env.scheme_uses.items.items[record_idx];
@@ -13185,10 +13232,22 @@ const EvidencePass = struct {
         const root_key = try canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(record.scheme_root));
         hasher.update(&root_key.bytes);
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        var pair_digests = std.ArrayListUnmanaged([32]u8).empty;
+        defer pair_digests.deinit(self.allocator);
         for (pairs) |pair| {
+            var pair_hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            const old_key = try canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(pair.old_var));
+            pair_hasher.update(&old_key.bytes);
             const fresh_key = try canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(pair.fresh_var));
-            hasher.update(&fresh_key.bytes);
+            pair_hasher.update(&fresh_key.bytes);
+            try pair_digests.append(self.allocator, pair_hasher.finalResult());
         }
+        std.mem.sort([32]u8, pair_digests.items, {}, struct {
+            fn lessThan(_: void, a: [32]u8, b: [32]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        for (pair_digests.items) |digest| hasher.update(&digest);
         return hasher.finalResult();
     }
 

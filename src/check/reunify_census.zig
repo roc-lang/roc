@@ -47,6 +47,20 @@ const Identification = struct {
 // duplicate/violation records and a per-module dump), so a spin is enough.
 var buffer_lock = std.atomic.Value(bool).init(false);
 var active_flag = std.atomic.Value(bool).init(false);
+var env_checked = std.atomic.Value(bool).init(false);
+
+// Some checking drivers construct no PackageEnv or Coordinator (the snapshot
+// tool's file snapshots call `canonicalizeAndTypeCheckModule` directly), so
+// the census reads its env var itself the first time `active()` is asked,
+// rather than depending on every driver's constructor to call `enable`.
+fn checkEnvOnce() void {
+    if (env_checked.load(.acquire)) return;
+    if (std.c.getenv("ROC_REUNIFY_CHECK_CENSUS")) |raw| {
+        const path = raw[0..std.mem.len(raw)];
+        if (path.len > 0) enable(path);
+    }
+    env_checked.store(true, .release);
+}
 
 fn lockBuffer() void {
     while (buffer_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) {
@@ -67,6 +81,25 @@ var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} 
 var divergent_id_count: usize = 0;
 var err_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var err_id_count: usize = 0;
+
+/// Free-form detail lines for divergent scheme-use pairs, kept bounded so the
+/// dump can show exactly which recorded pairs disagreed.
+const detail_capacity = 1024;
+var divergent_details: [max_identifications][detail_capacity]u8 = undefined;
+var divergent_detail_lens: [max_identifications]usize = [_]usize{0} ** max_identifications;
+var divergent_detail_count: usize = 0;
+
+/// Retain one bounded detail line describing a divergent scheme-use pair.
+pub fn recordSchemeUseDivergentDetail(text: []const u8) void {
+    if (builtin.mode != .Debug) return;
+    lockBuffer();
+    defer unlockBuffer();
+    if (divergent_detail_count >= max_identifications) return;
+    const copied = @min(text.len, detail_capacity);
+    @memcpy(divergent_details[divergent_detail_count][0..copied], text[0..copied]);
+    divergent_detail_lens[divergent_detail_count] = copied;
+    divergent_detail_count += 1;
+}
 
 /// Room to hold the dump-file path named by `ROC_REUNIFY_CHECK_CENSUS`.
 const path_capacity = 4096;
@@ -92,7 +125,9 @@ pub fn enable(path: []const u8) void {
 /// Whether census measurement should run. Folds to a comptime `false` outside
 /// Debug so gated call sites cost nothing in release.
 pub fn active() bool {
-    return builtin.mode == .Debug and active_flag.load(.monotonic);
+    if (builtin.mode != .Debug) return false;
+    checkEnvOnce();
+    return active_flag.load(.monotonic);
 }
 
 fn makeIdentification(module_name: []const u8, node_idx: u32, has_node: bool) Identification {
@@ -177,6 +212,9 @@ pub fn dumpAppend(io: std.Io) void {
     }
     for (err_ids[0..err_id_count], 0..) |id, i| {
         sink.print("err_reachable_{d}={s}\n", .{ i, id.moduleText() });
+    }
+    for (0..divergent_detail_count) |i| {
+        sink.print("divergent_detail_{d}={s}\n", .{ i, divergent_details[i][0..divergent_detail_lens[i]] });
     }
 
     const dir = std.Io.Dir.cwd();
