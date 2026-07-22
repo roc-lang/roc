@@ -621,6 +621,7 @@ fn lowerEvalAndFinishRoots(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         host.ops(),
+        .normalize,
     );
     defer interpreter.deinit();
     interpreter.setStaticData(interpreter_static_data, static_erased_callables);
@@ -1042,6 +1043,7 @@ fn lowerDevEvalAndFinishRoots(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
+        .normalize,
     );
     defer codegen.deinit();
     codegen.setNativeStaticData(native_static_data);

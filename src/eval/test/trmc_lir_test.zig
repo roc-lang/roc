@@ -80,7 +80,7 @@ fn freshJoinPointId(next: *u32) LIR.JoinPointId {
 }
 
 fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
     return result.value.read(u64);
@@ -557,7 +557,7 @@ fn runProcU64Args(
     runtime_env: *RuntimeHostEnv,
     args: []const u64,
 ) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const arg_layouts = [_]layout.Idx{.u64} ** 4;
     var packed_args: [4]u64 = undefined;
@@ -591,7 +591,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 
     try lir.Arc.insert(&store, &layouts, .{});
 
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     for ([_]u64{ 0, 1, 3 }) |n| {
         var arg = n;
@@ -623,7 +623,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         try std.testing.expectError(error.Crash, interp.eval(.{
@@ -649,7 +649,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         try lir.Trmc.run(&store, &layouts);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         const result = try interp.eval(.{
@@ -993,7 +993,7 @@ test "mixed construct and plain-tail branches both become jumps" {
 
     // Depth 2000 makes 2000 recursive calls (1000 S nodes): both rewritten
     // branches must loop for this to survive the 1024-frame cap.
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     var arg: u64 = 2000;
     const result = try interp.eval(.{

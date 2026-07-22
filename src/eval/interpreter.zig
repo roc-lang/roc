@@ -298,6 +298,7 @@ pub const Interpreter = struct {
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
+    float_nan_mode: builtins.float_bits.NanMode,
     /// Arena for interpreter-allocated memory (temporaries, copies).
     arena: base.SingleThreadArena,
     /// RocOps environment for builtin dispatch.
@@ -509,6 +510,7 @@ pub const Interpreter = struct {
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
         caller_roc_ops: *RocOps,
+        float_nan_mode: builtins.float_bits.NanMode,
     ) Allocator.Error!LirInterpreter {
         const frame_plans = try buildFramePlans(allocator, store);
         errdefer deinitFramePlans(allocator, frame_plans);
@@ -540,6 +542,7 @@ pub const Interpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
+            .float_nan_mode = float_nan_mode,
             .arena = base.SingleThreadArena.init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
@@ -1041,15 +1044,41 @@ pub const Interpreter = struct {
         stmt_id: ?CFStmtId,
         local_id: LocalId,
         value: Value,
-    ) void {
+    ) Error!void {
+        const layout_idx = self.store.getLocal(local_id).layout_idx;
+        const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
+
         if (builtin.mode == .Debug) {
-            const layout_idx = self.store.getLocal(local_id).layout_idx;
             var visited = std.ArrayList(DebugVisitedValue).empty;
             defer visited.deinit(self.evalAllocator());
-            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, value, layout_idx, &visited);
+            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, normalized_value, layout_idx, &visited);
         }
 
-        frame.setLocal(local_id, value);
+        frame.setLocal(local_id, normalized_value);
+    }
+
+    fn normalizeFloatNanValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!Value {
+        if (self.float_nan_mode == .preserve) return value;
+
+        if (layout_idx == .f32) {
+            const bits = value.read(u32);
+            const normalized = builtins.float_bits.normalizeF32NanBits(bits);
+            if (bits == normalized) return value;
+            const result = try self.alloc(layout_idx);
+            result.write(u32, normalized);
+            return result;
+        }
+
+        if (layout_idx == .f64) {
+            const bits = value.read(u64);
+            const normalized = builtins.float_bits.normalizeF64NanBits(bits);
+            if (bits == normalized) return value;
+            const result = try self.alloc(layout_idx);
+            result.write(u64, normalized);
+            return result;
+        }
+
+        return value;
     }
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
@@ -1768,7 +1797,7 @@ pub const Interpreter = struct {
                 arg_layout,
                 param_layout,
             );
-            self.setLocalChecked(
+            try self.setLocalChecked(
                 &frame,
                 null,
                 param,
@@ -1856,11 +1885,11 @@ pub const Interpreter = struct {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
-                    self.setLocalChecked(frame, current, assign.target, value);
+                    try self.setLocalChecked(frame, current, assign.target, value);
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .init_uninitialized => |uninit| {
@@ -1880,7 +1909,7 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
                         return err;
                     };
-                    self.setLocalChecked(
+                    try self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
@@ -1907,7 +1936,7 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, err);
                         return err;
                     };
-                    self.setLocalChecked(
+                    try self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
@@ -1920,7 +1949,7 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
-                    self.setLocalChecked(
+                    try self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
@@ -1932,7 +1961,7 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
@@ -1944,15 +1973,15 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_list => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
-                    self.setLocalChecked(frame, current, assign.target, try self.evalTagLiteral(
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalTagLiteral(
                         frame,
                         assign.variant_index,
                         assign.discriminant,
@@ -1986,7 +2015,7 @@ pub const Interpreter = struct {
                         self.store.getLocal(assign.value).layout_idx,
                         target_layout,
                     );
-                    self.setLocalChecked(
+                    try self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
@@ -3823,7 +3852,7 @@ pub const Interpreter = struct {
             switch (step.capture) {
                 .discard => {},
                 .view => |local| {
-                    self.setLocalChecked(
+                    try self.setLocalChecked(
                         frame,
                         stmt_id,
                         local,
@@ -4788,16 +4817,16 @@ pub const Interpreter = struct {
             },
             .str_drop_prefix => self.callBuiltinStr2(builtins.str.strDropPrefix, valueToRocStr(args[0]), valueToRocStr(args[1]), ll.ret_layout),
             .str_drop_suffix => self.callBuiltinStr2(builtins.str.strDropSuffix, valueToRocStr(args[0]), valueToRocStr(args[1]), ll.ret_layout),
-            .str_find_first => blk: {
+            .str_split_first => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return error.Crash;
-                const result = builtins.str.findFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
+                const result = builtins.str.splitFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (layout_val.tag != .struct_) {
-                    return self.runtimeError("str_find_first expected a record return layout");
+                    return self.runtimeError("str_split_first expected a record return layout");
                 }
                 const record_idx = layout_val.getStruct().idx;
                 const fields = self.layout_store.struct_fields.sliceRange(self.layout_store.getStructData(record_idx).getFields());
@@ -4806,7 +4835,7 @@ pub const Interpreter = struct {
                     self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
                     self.layout_store.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
                 {
-                    return self.runtimeError("str_find_first expected fields after Str, before Str, found Bool");
+                    return self.runtimeError("str_split_first expected fields after Str, before Str, found Bool");
                 }
 
                 const val = try self.alloc(ll.ret_layout);
@@ -5037,7 +5066,7 @@ pub const Interpreter = struct {
             },
             .f32_to_bits => blk: {
                 const val = try self.alloc(ll.ret_layout);
-                val.write(u32, @bitCast(args[0].read(f32)));
+                val.write(u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].read(f32))));
                 break :blk val;
             },
             .f32_from_bits => blk: {
@@ -5047,7 +5076,7 @@ pub const Interpreter = struct {
             },
             .f64_to_bits => blk: {
                 const val = try self.alloc(ll.ret_layout);
-                val.write(u64, @bitCast(args[0].read(f64)));
+                val.write(u64, builtins.float_bits.normalizeF64NanBits(@bitCast(args[0].read(f64))));
                 break :blk val;
             },
             .f64_from_bits => blk: {
@@ -5580,6 +5609,11 @@ pub const Interpreter = struct {
             .num_bitwise_xor => self.numBitwiseOp(args[0], args[1], ll.ret_layout, arg_layout, .xor),
             .num_bitwise_not => self.numBitwiseOp(args[0], args[0], ll.ret_layout, arg_layout, .not),
 
+            // ── Bit counting (result is always U8) ──
+            .num_count_one_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_ones),
+            .num_count_leading_zero_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_leading_zeros),
+            .num_count_trailing_zero_bits => self.numBitCountOp(args[0], ll.ret_layout, arg_layout, .count_trailing_zeros),
+
             // ── Comparison ──
             .num_is_eq => self.numCmpOp(args[0], args[1], arg_layout, .eq),
             .num_is_lt => self.numCmpOp(args[0], args[1], arg_layout, .lt),
@@ -5630,16 +5664,14 @@ pub const Interpreter = struct {
             },
             .hasher_write_f32 => blk: {
                 const seed = args[0].read(u64);
-                const value = args[1].read(f32);
-                const bits: u64 = if (value == 0.0) 0 else @as(u64, @as(u32, @bitCast(value)));
-                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(lir.hasherDomain(ll.op)), bits, lir.hasherU64Width(ll.op));
+                const bits: u32 = @bitCast(args[1].read(f32));
+                const next = builtins.hash.hasher_write_f32_bits(seed, bits);
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
             .hasher_write_f64 => blk: {
                 const seed = args[0].read(u64);
-                const value = args[1].read(f64);
-                const bits: u64 = if (value == 0.0) 0 else @bitCast(value);
-                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(lir.hasherDomain(ll.op)), bits, lir.hasherU64Width(ll.op));
+                const bits: u64 = @bitCast(args[1].read(f64));
+                const next = builtins.hash.hasher_write_f64_bits(seed, bits);
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
             .hasher_write_u128,
@@ -5990,9 +6022,7 @@ pub const Interpreter = struct {
             .f64_to_u128_try_unsafe => self.floatToIntTry(f64, u128, args[0], ll.ret_layout),
             .f64_to_f32_try_unsafe => blk: {
                 const sv = args[0].read(f64);
-                if (!std.math.isNan(sv) and !std.math.isInf(sv) and
-                    sv <= std.math.floatMax(f32) and sv >= -std.math.floatMax(f32))
-                {
+                if (builtins.numeric_conversions.f64FitsF32(sv)) {
                     break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, @floatCast(sv));
                 } else {
                     break :blk try self.writeLowLevelTryRecord(f32, ll.ret_layout, null);
@@ -6023,7 +6053,7 @@ pub const Interpreter = struct {
             .dec_to_f32_wrap => blk: {
                 const dec = RocDec{ .num = args[0].read(i128) };
                 const val = try self.alloc(ll.ret_layout);
-                val.write(f32, @floatCast(dec.toF64()));
+                val.write(f32, builtins.dec.toF32(dec));
                 break :blk val;
             },
             .dec_to_f32_try_unsafe => blk: {
@@ -6154,6 +6184,7 @@ pub const Interpreter = struct {
     const CmpOp = enum { eq, lt, lte, gt, gte };
     const ShiftOp = enum { shl, shr, shr_zf };
     const BitwiseOp = enum { @"and", @"or", xor, not };
+    const BitCountOp = enum { count_ones, count_leading_zeros, count_trailing_zeros };
     const NumericOperandKind = union(enum) {
         unsigned_int: u16,
         signed_int: u16,
@@ -6497,6 +6528,33 @@ pub const Interpreter = struct {
         return val;
     }
 
+    /// Count one/leading-zero/trailing-zero bits of an integer operand. The
+    /// result is always a U8, independent of the operand width. Zig's
+    /// `@clz`/`@ctz` return the bit width for a zero input, matching the spec
+    /// (leading/trailing-zero of 0 == the operand's bit width).
+    fn numBitCountOp(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: BitCountOp) Error!Value {
+        const val = try self.alloc(ret_layout);
+        const count: u8 = switch (try self.numericOperandKind(arg_layout)) {
+            // Bit counting reads the two's-complement bit pattern, so the
+            // operand's signedness does not affect the result; read each width
+            // as its unsigned counterpart.
+            .unsigned_int, .signed_int => |bits| switch (bits) {
+                8 => bitCount(u8, a.read(u8), op),
+                16 => bitCount(u16, a.read(u16), op),
+                32 => bitCount(u32, a.read(u32), op),
+                64 => bitCount(u64, a.read(u64), op),
+                128 => bitCount(u128, a.read(u128), op),
+                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported integer bit-count width {d}", .{bits}),
+            },
+            .float, .dec => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: bit count used non-integer layout {d}",
+                .{@intFromEnum(arg_layout)},
+            ),
+        };
+        val.write(u8, count);
+        return val;
+    }
+
     fn evalNumPow(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
@@ -6508,7 +6566,7 @@ pub const Interpreter = struct {
                 val.write(i128, builtins.dec.powC(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
-                32 => val.write(f32, std.math.pow(f32, a.read(f32), b.read(f32))),
+                32 => val.write(f32, builtins.float_math_f32.pow(a.read(f32), b.read(f32))),
                 64 => val.write(f64, std.math.pow(f64, a.read(f64), b.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float pow width {d}", .{bits}),
             },
@@ -6554,7 +6612,7 @@ pub const Interpreter = struct {
                 val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
             },
             .float => |bits| switch (bits) {
-                32 => val.write(f32, @log(a.read(f32))),
+                32 => val.write(f32, builtins.float_math_f32.log(a.read(f32))),
                 64 => val.write(f64, @log(a.read(f64))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float log width {d}", .{bits}),
             },
@@ -6576,6 +6634,16 @@ pub const Interpreter = struct {
     };
 
     fn floatUnaryMath(comptime F: type, value: F, comptime op: FloatUnaryMathOp) F {
+        if (F == f32) {
+            return switch (op) {
+                .sin => builtins.float_math_f32.sin(value),
+                .cos => builtins.float_math_f32.cos(value),
+                .tan => builtins.float_math_f32.tan(value),
+                .asin => builtins.float_math_f32.asin(value),
+                .acos => builtins.float_math_f32.acos(value),
+                .atan => builtins.float_math_f32.atan(value),
+            };
+        }
         return switch (op) {
             .sin => std.math.sin(value),
             .cos => std.math.cos(value),
@@ -7298,13 +7366,8 @@ pub const Interpreter = struct {
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {
         const Bits = std.math.Log2Int(T);
         const max_bits = @typeInfo(T).int.bits;
-        if (amount >= max_bits) {
-            return switch (op) {
-                .shr => if (@typeInfo(T).int.signedness == .signed and av < 0) @as(T, -1) else 0,
-                .shl, .shr_zf => 0,
-            };
-        }
-        const shift: Bits = @intCast(amount);
+        // The shift count is taken modulo the bit width, matching every backend.
+        const shift: Bits = @intCast(amount % max_bits);
         return switch (op) {
             .shl => av << shift,
             .shr => av >> shift,
@@ -7321,6 +7384,14 @@ pub const Interpreter = struct {
             .@"or" => av | bv,
             .xor => av ^ bv,
             .not => ~av,
+        };
+    }
+
+    fn bitCount(comptime T: type, av: T, op: BitCountOp) u8 {
+        return switch (op) {
+            .count_ones => @popCount(av),
+            .count_leading_zeros => @clz(av),
+            .count_trailing_zeros => @ctz(av),
         };
     }
 
@@ -7782,6 +7853,66 @@ pub const Interpreter = struct {
     // ═══════════════════════════════════════════════════════════════════
 };
 
+test "interpreter float NaN mode preserves runtime payloads and normalizes compile-time results" {
+    const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
+    const allocator = std.testing.allocator;
+
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    const f32_local = try store.addLocal(.{ .layout_idx = .f32 });
+    const f32_ret = try store.addCFStmt(.{ .ret = .{ .value = f32_local } });
+    const f32_body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = f32_local,
+        .value = .{ .f32_literal = @bitCast(@as(u32, 0xffc1_2345)) },
+        .next = f32_ret,
+    } });
+    const f32_proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = f32_body,
+        .ret_layout = .f32,
+        .frame_locals = try store.addLocalSpan(&.{f32_local}),
+    });
+
+    const f64_local = try store.addLocal(.{ .layout_idx = .f64 });
+    const f64_ret = try store.addCFStmt(.{ .ret = .{ .value = f64_local } });
+    const f64_body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = f64_local,
+        .value = .{ .f64_literal = @bitCast(@as(u64, 0xfff9_2345_6789_abcd)) },
+        .next = f64_ret,
+    } });
+    const f64_proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = f64_body,
+        .ret_layout = .f64,
+        .frame_locals = try store.addLocalSpan(&.{f64_local}),
+    });
+
+    const cases = [_]struct {
+        mode: builtins.float_bits.NanMode,
+        expected_f32: u32,
+        expected_f64: u64,
+    }{
+        .{ .mode = .preserve, .expected_f32 = 0xffc1_2345, .expected_f64 = 0xfff9_2345_6789_abcd },
+        .{ .mode = .normalize, .expected_f32 = builtins.float_bits.normalized_f32_nan_bits, .expected_f64 = builtins.float_bits.normalized_f64_nan_bits },
+    };
+    for (cases) |case| {
+        var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), case.mode);
+        defer interpreter.deinit();
+
+        const f32_result = try interpreter.eval(.{ .proc_id = f32_proc, .ret_layout = .f32 });
+        try std.testing.expectEqual(case.expected_f32, f32_result.value.read(u32));
+        const f64_result = try interpreter.eval(.{ .proc_id = f64_proc, .ret_layout = .f64 });
+        try std.testing.expectEqual(case.expected_f64, f64_result.value.read(u64));
+    }
+}
+
 test "interpreter evaluates explicit static data by compact id" {
     const RuntimeHostEnv = @import("test/RuntimeHostEnv.zig");
     const allocator = std.testing.allocator;
@@ -7815,7 +7946,7 @@ test "interpreter evaluates explicit static data by compact id" {
         .frame_locals = frame_locals,
     });
 
-    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interpreter = try Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interpreter.deinit();
     interpreter.setStaticData(static_addresses.items, &.{});
 

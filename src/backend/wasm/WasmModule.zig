@@ -211,6 +211,11 @@ pub const Op = struct {
     pub const i32_rotl: u8 = 0x77;
     pub const i32_rotr: u8 = 0x78;
 
+    // i64 unary
+    pub const i64_clz: u8 = 0x79;
+    pub const i64_ctz: u8 = 0x7A;
+    pub const i64_popcnt: u8 = 0x7B;
+
     // i64 arithmetic
     pub const i64_add: u8 = 0x7C;
     pub const i64_sub: u8 = 0x7D;

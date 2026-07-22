@@ -74,6 +74,7 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             _: *const @import("lir").LirStore,
             _: *const @import("layout").Store,
             _: *const @import("builtins").host_abi.RocOps,
+            _: @import("builtins").float_bits.NanMode,
         ) error{BackendUnavailable}!@This() {
             return error.BackendUnavailable;
         }

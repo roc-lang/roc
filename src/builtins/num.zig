@@ -8,6 +8,7 @@
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
+const float_bits = @import("float_bits.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -261,11 +262,9 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
     const f = struct {
         fn func(x: T) callconv(.c) F {
             if (T == i128) {
-                const result = i128h.i128_to_f64(x);
-                return if (F == f32) @floatCast(result) else result;
+                return if (F == f32) i128h.i128_to_f32(x) else i128h.i128_to_f64(x);
             } else if (T == u128) {
-                const result = i128h.u128_to_f64(x);
-                return if (F == f32) @floatCast(result) else result;
+                return if (F == f32) i128h.u128_to_f32(x) else i128h.u128_to_f64(x);
             } else {
                 return @floatFromInt(x);
             }
@@ -1132,12 +1131,12 @@ pub fn f64FromParts(parts: F64Parts) callconv(.c) f64 {
 
 /// Returns the bit pattern of an f32 as u32.
 pub fn f32ToBits(self: f32) callconv(.c) u32 {
-    return @as(u32, @bitCast(self));
+    return float_bits.normalizeF32NanBits(@bitCast(self));
 }
 
 /// Returns the bit pattern of an f64 as u64.
 pub fn f64ToBits(self: f64) callconv(.c) u64 {
-    return @as(u64, @bitCast(self));
+    return float_bits.normalizeF64NanBits(@bitCast(self));
 }
 
 /// Returns the bit pattern of an i128 as u128.
@@ -1611,6 +1610,23 @@ test "f64ToBits and f64FromBits roundtrip" {
         const bits = f64ToBits(val);
         const reconstructed = f64FromBits(bits);
         try std.testing.expectEqual(val, reconstructed);
+    }
+}
+
+test "float to bits normalizes every NaN representation" {
+    const f32_nan_bits = [_]u32{ 0x7f80_0001, 0x7fc1_2345, 0xff80_0001, 0xffc1_2345 };
+    for (f32_nan_bits) |bits| {
+        try std.testing.expectEqual(float_bits.normalized_f32_nan_bits, f32ToBits(f32FromBits(bits)));
+    }
+
+    const f64_nan_bits = [_]u64{
+        0x7ff0_0000_0000_0001,
+        0x7ff9_2345_6789_abcd,
+        0xfff0_0000_0000_0001,
+        0xfff9_2345_6789_abcd,
+    };
+    for (f64_nan_bits) |bits| {
+        try std.testing.expectEqual(float_bits.normalized_f64_nan_bits, f64ToBits(f64FromBits(bits)));
     }
 }
 

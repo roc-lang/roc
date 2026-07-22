@@ -374,10 +374,10 @@ Builtin :: [].{
 
 			split_json_number_exponent : Str -> Try({ mantissa : Str, exponent : Str }, [NotFound])
 			split_json_number_exponent = |value|
-				match Str.find_first(value, "e") {
+				match Str.split_first(value, "e") {
 					Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 					Err(NotFound) =>
-						match Str.find_first(value, "E") {
+						match Str.split_first(value, "E") {
 							Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 							Err(NotFound) => Err(NotFound)
 						}
@@ -403,7 +403,7 @@ Builtin :: [].{
 					mantissa
 				}
 
-				parts = match Str.find_first(unsigned_mantissa, ".") {
+				parts = match Str.split_first(unsigned_mantissa, ".") {
 					Ok(split) => { int_part: split.before, frac_part: split.after }
 					Err(NotFound) => { int_part: unsigned_mantissa, frac_part: "" }
 				}
@@ -775,7 +775,7 @@ Builtin :: [].{
 
 			snake_to_camel : Str -> Str
 			snake_to_camel = |text|
-				match Str.find_first(text, "_") {
+				match Str.split_first(text, "_") {
 					Ok({ before, after }) =>
 						before.concat(Json.upper_first_ascii(Json.snake_to_camel(after)))
 
@@ -1897,7 +1897,7 @@ Builtin :: [].{
 				if Str.is_empty(headers) {
 					Ok(Done({ rest: HttpHeaderState.{ raw: "" } }))
 				} else {
-					line_parts = match Str.find_first(headers, "\r\n") {
+					line_parts = match Str.split_first(headers, "\r\n") {
 						Ok(parts) => parts
 						Err(NotFound) => { before: headers, after: "" }
 					}
@@ -1905,7 +1905,7 @@ Builtin :: [].{
 					if Str.is_empty(line_parts.before) {
 						Ok(Done({ rest: HttpHeaderState.{ raw: line_parts.after } }))
 					} else {
-						match Str.find_first(headers, ":") {
+						match Str.split_first(headers, ":") {
 							Ok({ before: name, after: value_start }) => {
 								name_len = Str.count_utf8_bytes(name)
 								line_len = Str.count_utf8_bytes(line_parts.before)
@@ -1937,14 +1937,14 @@ Builtin :: [].{
 
 			take_header_value : Str -> Try({ value : Str, after : Str }, [BadHeader, ..])
 			take_header_value = |raw|
-				match Str.find_first(raw, "\r\n") {
+				match Str.split_first(raw, "\r\n") {
 					Ok({ before, after }) => Ok({ value: Str.trim(before), after })
 					Err(NotFound) => Ok({ value: Str.trim(raw), after: "" })
 				}
 
 			underscores_to_dashes : Str -> Str
 			underscores_to_dashes = |text|
-				match Str.find_first(text, "_") {
+				match Str.split_first(text, "_") {
 					Ok({ before, after }) =>
 						Str.concat(Str.concat(before, "-"), HttpHeader.underscores_to_dashes(after))
 
@@ -2162,17 +2162,18 @@ Builtin :: [].{
 		## ```
 		drop_suffix : Str, Str -> Str
 
-		## Finds the first occurrence of a delimiter in a string.
+		## Splits the string on the first occurrence of a delimiter, returning the
+		## parts before and after it.
 		##
 		## The returned strings are slices of the original string.
 		##
 		## ```roc
-		## expect "foo: bar".find_first(":") == Ok({ before: "foo", after: " bar" })
-		## expect "foo".find_first(":") == Err(NotFound)
+		## expect "foo: bar".split_first(":") == Ok({ before: "foo", after: " bar" })
+		## expect "foo".split_first(":") == Err(NotFound)
 		## ```
-		find_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
-		find_first = |source, delimiter| {
-			split = str_find_first_raw(source, delimiter)
+		split_first : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_first = |source, delimiter| {
+			split = str_split_first_raw(source, delimiter)
 
 			if split.found {
 				Ok({ before: split.before, after: split.after })
@@ -2496,10 +2497,12 @@ Builtin :: [].{
 		## Feed an [I128] into the hasher.
 		write_i128 : Hasher, I128 -> Hasher
 
-		## Feed an [F32] into the hasher.
+		## Feed an [F32] into the hasher. Positive and negative zero hash
+		## identically, and every `NaN` representation hashes identically.
 		write_f32 : Hasher, F32 -> Hasher
 
-		## Feed an [F64] into the hasher.
+		## Feed an [F64] into the hasher. Positive and negative zero hash
+		## identically, and every `NaN` representation hashes identically.
 		write_f64 : Hasher, F64 -> Hasher
 
 		## Feed a [Dec] into the hasher.
@@ -3849,6 +3852,97 @@ Builtin :: [].{
 						acc
 					},
 			)
+
+		## Like [List.map], but the transform can fail. Runs a `Try`-returning
+		## function on each element and collects the `Ok` values. Stops at the first
+		## `Err` and returns it, so the result is either all the transformed values
+		## or the first failure.
+		## ```roc
+		## expect [1.I64, 2, 3].map_try(|n| if n < 3 { Ok(n) } else { Err(TooBig) }) == Err(TooBig)
+		## ```
+		map_try : List(a), (a -> Try(b, err)) -> Try(List(b), err)
+		map_try = |list, transform| {
+			var $out = List.with_capacity(list.len())
+			for elem in list {
+				$out = list_append_unsafe($out, transform(elem)?)
+			}
+			Ok($out)
+		}
+
+		## Like [List.map_try], but the transform is effectful. It runs on each
+		## element until one returns `Err`, then stops.
+		## ```roc
+		## rows.map_try!(|row| SQL.insert!("INSERT INTO t VALUES (?)", [row]))
+		## ```
+		map_try! : List(a), (a => Try(b, err)) => Try(List(b), err)
+		map_try! = |list, transform!| {
+			var $out = List.with_capacity(list.len())
+			for elem in list {
+				$out = list_append_unsafe($out, transform!(elem)?)
+			}
+			Ok($out)
+		}
+
+		## Like [List.keep_if], but the predicate can fail. Runs a `Try`-returning
+		## predicate on each element, keeping the ones it maps to `Ok(Bool.True)`.
+		## Stops at the first `Err` and returns it.
+		## ```roc
+		## expect [1.I64, 2, 3].keep_if_try(|n| Ok(n > 1)) == Ok([2, 3])
+		## ```
+		keep_if_try : List(a), (a -> Try(Bool, err)) -> Try(List(a), err)
+		keep_if_try = |list, predicate| {
+			var $out = []
+			for elem in list {
+				if predicate(elem)? {
+					$out = List.concat($out, [elem])
+				}
+			}
+			Ok($out)
+		}
+
+		## Like [List.keep_if_try], but the predicate is effectful. It runs on each
+		## element until one returns `Err`, then stops.
+		## ```roc
+		## users.keep_if_try!(|user| SQL.query_bool!("SELECT is_active FROM users WHERE id = ?", [user.id]))
+		## ```
+		keep_if_try! : List(a), (a => Try(Bool, err)) => Try(List(a), err)
+		keep_if_try! = |list, predicate!| {
+			var $out = []
+			for elem in list {
+				if predicate!(elem)? {
+					$out = List.concat($out, [elem])
+				}
+			}
+			Ok($out)
+		}
+
+		## Like [List.fold], but the step function can fail. Threads `state` through
+		## the list, and if a step returns `Err`, stops and returns it.
+		## ```roc
+		## expect [1.I64, 2, 3].fold_try(0, |sum, n| if n < 3 { Ok(sum + n) } else { Err(Stop) }) == Err(Stop)
+		## ```
+		fold_try : List(item), state, (state, item -> Try(state, err)) -> Try(state, err)
+		fold_try = |list, initial, step| {
+			var $state = initial
+			for elem in list {
+				$state = step($state, elem)?
+			}
+			Ok($state)
+		}
+
+		## Like [List.fold_try], but the step function is effectful. It runs on each
+		## element until one returns `Err`, then stops.
+		## ```roc
+		## events.fold_try!(State.init, |state, event| Store.apply!(state, event))
+		## ```
+		fold_try! : List(item), state, (state, item => Try(state, err)) => Try(state, err)
+		fold_try! = |list, initial, step!| {
+			var $state = initial
+			for elem in list {
+				$state = step!($state, elem)?
+			}
+			Ok($state)
+		}
 
 		## Build a value using each element in the list.
 		##
@@ -5985,34 +6079,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 256).
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shift_left_by(1, 3) == 8
+			## expect U8.shl_wrap(1, 3) == 8
 			##
-			## expect U8.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U8.shl_wrap(1, 8) == 1
 			## ```
-			shift_left_by : U8, U8 -> U8
+			shl_wrap : U8, U8 -> U8
 
 			## Shift the bits of a [U8] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U8.shift_right_zf_by].
+			## [U8.shr_zf_wrap].
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shift_right_by(32, 2) == 8
+			## expect U8.shr_wrap(32, 2) == 8
 			##
-			## expect U8.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U8.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U8.shr_wrap(32, 8) == 32
 			## ```
-			shift_right_by : U8, U8 -> U8
+			shr_wrap : U8, U8 -> U8
 
 			## Shift the bits of a [U8] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U8.shift_right_by].
+			## integers this behaves the same as [U8.shr_wrap].
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shift_right_zf_by(32, 2) == 8
+			## expect U8.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U8.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U8.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U8.shr_zf_wrap(32, 8) == 32
 			## ```
-			shift_right_zf_by : U8, U8 -> U8
+			shr_zf_wrap : U8, U8 -> U8
 
 			## Returns the bitwise AND of two [U8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -6049,7 +6152,6 @@ Builtin :: [].{
 			## expect U8.count_leading_zero_bits(0) == 8
 			## ```
 			count_leading_zero_bits : U8 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(8, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -6058,7 +6160,6 @@ Builtin :: [].{
 			## expect U8.count_trailing_zero_bits(0) == 8
 			## ```
 			count_trailing_zero_bits : U8 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -6067,7 +6168,6 @@ Builtin :: [].{
 			## expect U8.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U8 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Build a [U8] from a list of base-10 digits, most significant first.
 			## Each element of the list must be a digit in the range `0` to `9`.
@@ -6696,33 +6796,42 @@ Builtin :: [].{
 			## Shift the bits of an [I8] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shift_left_by(1, 3) == 8
+			## expect I8.shl_wrap(1, 3) == 8
 			##
-			## expect I8.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I8.shl_wrap(1, 8) == 1
 			## ```
-			shift_left_by : I8, U8 -> I8
+			shl_wrap : I8, U8 -> I8
 
 			## Shift the bits of an [I8] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shift_right_by(32, 2) == 8
+			## expect I8.shr_wrap(32, 2) == 8
 			##
-			## expect I8.shift_right_by(-32, 2) == -8
+			## expect I8.shr_wrap(-32, 2) == -8
+			##
+			## expect I8.shr_wrap(32, 8) == 32
 			## ```
-			shift_right_by : I8, U8 -> I8
+			shr_wrap : I8, U8 -> I8
 
 			## Shift the bits of an [I8] to the right by the given number of
 			## positions.
+			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shift_right_zf_by(32, 2) == 8
+			## expect I8.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I8.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I8.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I8.shr_zf_wrap(32, 8) == 32
 			## ```
-			shift_right_zf_by : I8, U8 -> I8
+			shr_zf_wrap : I8, U8 -> I8
 
 			## Returns the bitwise AND of two [I8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -6760,7 +6869,6 @@ Builtin :: [].{
 			## expect I8.count_leading_zero_bits(0) == 8
 			## ```
 			count_leading_zero_bits : I8 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(8, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -6769,7 +6877,6 @@ Builtin :: [].{
 			## expect I8.count_trailing_zero_bits(0) == 8
 			## ```
 			count_trailing_zero_bits : I8 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(8, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -6778,7 +6885,6 @@ Builtin :: [].{
 			## expect I8.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I8 -> U8
-			count_one_bits = |value| signed_count_one_bits(8, 0, 2, value)
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
 			## (Use [I8.until] instead to end with the other `I8` minus one.)
@@ -7389,34 +7495,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 65536).
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shift_left_by(1, 3) == 8
+			## expect U16.shl_wrap(1, 3) == 8
 			##
-			## expect U16.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U16.shl_wrap(1, 16) == 1
 			## ```
-			shift_left_by : U16, U8 -> U16
+			shl_wrap : U16, U8 -> U16
 
 			## Shift the bits of a [U16] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U16.shift_right_zf_by].
+			## [U16.shr_zf_wrap].
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shift_right_by(32, 2) == 8
+			## expect U16.shr_wrap(32, 2) == 8
 			##
-			## expect U16.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U16.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U16.shr_wrap(32, 16) == 32
 			## ```
-			shift_right_by : U16, U8 -> U16
+			shr_wrap : U16, U8 -> U16
 
 			## Shift the bits of a [U16] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U16.shift_right_by].
+			## integers this behaves the same as [U16.shr_wrap].
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shift_right_zf_by(32, 2) == 8
+			## expect U16.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U16.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U16.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U16.shr_zf_wrap(32, 16) == 32
 			## ```
-			shift_right_zf_by : U16, U8 -> U16
+			shr_zf_wrap : U16, U8 -> U16
 
 			## Returns the bitwise AND of two [U16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -7453,7 +7568,6 @@ Builtin :: [].{
 			## expect U16.count_leading_zero_bits(0) == 16
 			## ```
 			count_leading_zero_bits : U16 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(16, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -7462,7 +7576,6 @@ Builtin :: [].{
 			## expect U16.count_trailing_zero_bits(0) == 16
 			## ```
 			count_trailing_zero_bits : U16 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -7471,7 +7584,6 @@ Builtin :: [].{
 			## expect U16.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U16 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U16` and ending with the other `U16`.
 			## (Use [U16.until] instead to end with the other `U16` minus one.)
@@ -8133,33 +8245,42 @@ Builtin :: [].{
 			## Shift the bits of an [I16] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shift_left_by(1, 3) == 8
+			## expect I16.shl_wrap(1, 3) == 8
 			##
-			## expect I16.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I16.shl_wrap(1, 16) == 1
 			## ```
-			shift_left_by : I16, U8 -> I16
+			shl_wrap : I16, U8 -> I16
 
 			## Shift the bits of an [I16] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shift_right_by(32, 2) == 8
+			## expect I16.shr_wrap(32, 2) == 8
 			##
-			## expect I16.shift_right_by(-32, 2) == -8
+			## expect I16.shr_wrap(-32, 2) == -8
+			##
+			## expect I16.shr_wrap(32, 16) == 32
 			## ```
-			shift_right_by : I16, U8 -> I16
+			shr_wrap : I16, U8 -> I16
 
 			## Shift the bits of an [I16] to the right by the given number of
 			## positions.
+			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shift_right_zf_by(32, 2) == 8
+			## expect I16.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I16.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I16.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I16.shr_zf_wrap(32, 16) == 32
 			## ```
-			shift_right_zf_by : I16, U8 -> I16
+			shr_zf_wrap : I16, U8 -> I16
 
 			## Returns the bitwise AND of two [I16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -8197,7 +8318,6 @@ Builtin :: [].{
 			## expect I16.count_leading_zero_bits(0) == 16
 			## ```
 			count_leading_zero_bits : I16 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(16, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -8206,7 +8326,6 @@ Builtin :: [].{
 			## expect I16.count_trailing_zero_bits(0) == 16
 			## ```
 			count_trailing_zero_bits : I16 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(16, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -8215,7 +8334,6 @@ Builtin :: [].{
 			## expect I16.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I16 -> U8
-			count_one_bits = |value| signed_count_one_bits(16, 0, 2, value)
 
 			## Iterator of integers beginning with this `I16` and ending with the other `I16`.
 			## (Use [I16.until] instead to end with the other `I16` minus one.)
@@ -8841,34 +8959,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 4294967296).
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shift_left_by(1, 3) == 8
+			## expect U32.shl_wrap(1, 3) == 8
 			##
-			## expect U32.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U32.shl_wrap(1, 32) == 1
 			## ```
-			shift_left_by : U32, U8 -> U32
+			shl_wrap : U32, U8 -> U32
 
 			## Shift the bits of a [U32] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U32.shift_right_zf_by].
+			## [U32.shr_zf_wrap].
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shift_right_by(32, 2) == 8
+			## expect U32.shr_wrap(32, 2) == 8
 			##
-			## expect U32.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U32.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U32.shr_wrap(32, 32) == 32
 			## ```
-			shift_right_by : U32, U8 -> U32
+			shr_wrap : U32, U8 -> U32
 
 			## Shift the bits of a [U32] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U32.shift_right_by].
+			## integers this behaves the same as [U32.shr_wrap].
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shift_right_zf_by(32, 2) == 8
+			## expect U32.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U32.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U32.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U32.shr_zf_wrap(32, 32) == 32
 			## ```
-			shift_right_zf_by : U32, U8 -> U32
+			shr_zf_wrap : U32, U8 -> U32
 
 			## Returns the bitwise AND of two [U32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -8905,7 +9032,6 @@ Builtin :: [].{
 			## expect U32.count_leading_zero_bits(0) == 32
 			## ```
 			count_leading_zero_bits : U32 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(32, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -8914,7 +9040,6 @@ Builtin :: [].{
 			## expect U32.count_trailing_zero_bits(0) == 32
 			## ```
 			count_trailing_zero_bits : U32 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -8923,7 +9048,6 @@ Builtin :: [].{
 			## expect U32.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U32 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U32` and ending with the other `U32`.
 			## (Use [U32.until] instead to end with the other `U32` minus one.)
@@ -9617,33 +9741,42 @@ Builtin :: [].{
 			## Shift the bits of an [I32] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shift_left_by(1, 3) == 8
+			## expect I32.shl_wrap(1, 3) == 8
 			##
-			## expect I32.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I32.shl_wrap(1, 32) == 1
 			## ```
-			shift_left_by : I32, U8 -> I32
+			shl_wrap : I32, U8 -> I32
 
 			## Shift the bits of an [I32] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shift_right_by(32, 2) == 8
+			## expect I32.shr_wrap(32, 2) == 8
 			##
-			## expect I32.shift_right_by(-32, 2) == -8
+			## expect I32.shr_wrap(-32, 2) == -8
+			##
+			## expect I32.shr_wrap(32, 32) == 32
 			## ```
-			shift_right_by : I32, U8 -> I32
+			shr_wrap : I32, U8 -> I32
 
 			## Shift the bits of an [I32] to the right by the given number of
 			## positions.
+			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shift_right_zf_by(32, 2) == 8
+			## expect I32.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I32.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I32.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I32.shr_zf_wrap(32, 32) == 32
 			## ```
-			shift_right_zf_by : I32, U8 -> I32
+			shr_zf_wrap : I32, U8 -> I32
 
 			## Returns the bitwise AND of two [I32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -9681,7 +9814,6 @@ Builtin :: [].{
 			## expect I32.count_leading_zero_bits(0) == 32
 			## ```
 			count_leading_zero_bits : I32 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(32, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -9690,7 +9822,6 @@ Builtin :: [].{
 			## expect I32.count_trailing_zero_bits(0) == 32
 			## ```
 			count_trailing_zero_bits : I32 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(32, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -9699,7 +9830,6 @@ Builtin :: [].{
 			## expect I32.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I32 -> U8
-			count_one_bits = |value| signed_count_one_bits(32, 0, 2, value)
 
 			## Iterator of integers beginning with this `I32` and ending with the other `I32`.
 			## (Use [I32.until] instead to end with the other `I32` minus one.)
@@ -10345,34 +10475,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 2^64).
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shift_left_by(1, 3) == 8
+			## expect U64.shl_wrap(1, 3) == 8
 			##
-			## expect U64.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U64.shl_wrap(1, 64) == 1
 			## ```
-			shift_left_by : U64, U8 -> U64
+			shl_wrap : U64, U8 -> U64
 
 			## Shift the bits of a [U64] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U64.shift_right_zf_by].
+			## [U64.shr_zf_wrap].
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shift_right_by(32, 2) == 8
+			## expect U64.shr_wrap(32, 2) == 8
 			##
-			## expect U64.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U64.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U64.shr_wrap(32, 64) == 32
 			## ```
-			shift_right_by : U64, U8 -> U64
+			shr_wrap : U64, U8 -> U64
 
 			## Shift the bits of a [U64] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U64.shift_right_by].
+			## integers this behaves the same as [U64.shr_wrap].
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shift_right_zf_by(32, 2) == 8
+			## expect U64.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U64.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U64.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U64.shr_zf_wrap(32, 64) == 32
 			## ```
-			shift_right_zf_by : U64, U8 -> U64
+			shr_zf_wrap : U64, U8 -> U64
 
 			## Returns the bitwise AND of two [U64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -10409,7 +10548,6 @@ Builtin :: [].{
 			## expect U64.count_leading_zero_bits(0) == 64
 			## ```
 			count_leading_zero_bits : U64 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(64, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -10418,7 +10556,6 @@ Builtin :: [].{
 			## expect U64.count_trailing_zero_bits(0) == 64
 			## ```
 			count_trailing_zero_bits : U64 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -10427,7 +10564,6 @@ Builtin :: [].{
 			## expect U64.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U64 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U64` and ending with the other `U64`.
 			## (Use [U64.until] instead to end with the other `U64` minus one.)
@@ -11163,33 +11299,42 @@ Builtin :: [].{
 			## Shift the bits of an [I64] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shift_left_by(1, 3) == 8
+			## expect I64.shl_wrap(1, 3) == 8
 			##
-			## expect I64.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I64.shl_wrap(1, 64) == 1
 			## ```
-			shift_left_by : I64, U8 -> I64
+			shl_wrap : I64, U8 -> I64
 
 			## Shift the bits of an [I64] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shift_right_by(32, 2) == 8
+			## expect I64.shr_wrap(32, 2) == 8
 			##
-			## expect I64.shift_right_by(-32, 2) == -8
+			## expect I64.shr_wrap(-32, 2) == -8
+			##
+			## expect I64.shr_wrap(32, 64) == 32
 			## ```
-			shift_right_by : I64, U8 -> I64
+			shr_wrap : I64, U8 -> I64
 
 			## Shift the bits of an [I64] to the right by the given number of
 			## positions.
+			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shift_right_zf_by(32, 2) == 8
+			## expect I64.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I64.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I64.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I64.shr_zf_wrap(32, 64) == 32
 			## ```
-			shift_right_zf_by : I64, U8 -> I64
+			shr_zf_wrap : I64, U8 -> I64
 
 			## Returns the bitwise AND of two [I64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -11227,7 +11372,6 @@ Builtin :: [].{
 			## expect I64.count_leading_zero_bits(0) == 64
 			## ```
 			count_leading_zero_bits : I64 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(64, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -11236,7 +11380,6 @@ Builtin :: [].{
 			## expect I64.count_trailing_zero_bits(0) == 64
 			## ```
 			count_trailing_zero_bits : I64 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(64, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -11245,7 +11388,6 @@ Builtin :: [].{
 			## expect I64.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I64 -> U8
-			count_one_bits = |value| signed_count_one_bits(64, 0, 2, value)
 
 			## Iterator of integers beginning with this `I64` and ending with the other `I64`.
 			## (Use [I64.until] instead to end with the other `I64` minus one.)
@@ -11919,34 +12061,43 @@ Builtin :: [].{
 			## Bits shifted past the most significant bit are discarded, and zeros
 			## are shifted in on the right. Each left shift by one is equivalent to
 			## multiplying by 2 (modulo 2^128).
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shift_left_by(1, 3) == 8
+			## expect U128.shl_wrap(1, 3) == 8
 			##
-			## expect U128.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect U128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect U128.shl_wrap(1, 128) == 1
 			## ```
-			shift_left_by : U128, U8 -> U128
+			shl_wrap : U128, U8 -> U128
 
 			## Shift the bits of a [U128] to the right by the given number of positions.
 			## Bits shifted past the least significant bit are discarded, and zeros
 			## are shifted in on the left. Each right shift by one is equivalent to
 			## integer division by 2. For unsigned integers this behaves the same as
-			## [U128.shift_right_zf_by].
+			## [U128.shr_zf_wrap].
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shift_right_by(32, 2) == 8
+			## expect U128.shr_wrap(32, 2) == 8
 			##
-			## expect U128.shift_right_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U128.shr_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U128.shr_wrap(32, 128) == 32
 			## ```
-			shift_right_by : U128, U8 -> U128
+			shr_wrap : U128, U8 -> U128
 
 			## Shift the bits of a [U128] to the right by the given number of positions,
 			## filling the vacated high bits with zeros ("zero-fill"). For unsigned
-			## integers this behaves the same as [U128.shift_right_by].
+			## integers this behaves the same as [U128.shr_wrap].
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shift_right_zf_by(32, 2) == 8
+			## expect U128.shr_zf_wrap(32, 2) == 8
 			##
-			## expect U128.shift_right_zf_by(0b1010_0000, 3) == 0b0001_0100
+			## expect U128.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
+			##
+			## expect U128.shr_zf_wrap(32, 128) == 32
 			## ```
-			shift_right_zf_by : U128, U8 -> U128
+			shr_zf_wrap : U128, U8 -> U128
 
 			## Returns the bitwise AND of two [U128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -11983,7 +12134,6 @@ Builtin :: [].{
 			## expect U128.count_leading_zero_bits(0) == 128
 			## ```
 			count_leading_zero_bits : U128 -> U8
-			count_leading_zero_bits = |value| unsigned_count_leading_zero_bits(128, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -11992,7 +12142,6 @@ Builtin :: [].{
 			## expect U128.count_trailing_zero_bits(0) == 128
 			## ```
 			count_trailing_zero_bits : U128 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -12001,7 +12150,6 @@ Builtin :: [].{
 			## expect U128.count_one_bits(0) == 0
 			## ```
 			count_one_bits : U128 -> U8
-			count_one_bits = |value| unsigned_count_one_bits(0, 2, value)
 
 			## Iterator of integers beginning with this `U128` and ending with the other `U128`.
 			## (Use [U128.until] instead to end with the other `U128` minus one.)
@@ -12782,33 +12930,42 @@ Builtin :: [].{
 			## Shift the bits of an [I128] to the left by the given number of
 			## positions. Bits shifted past the most significant bit are discarded,
 			## and zeros are shifted in on the right.
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shift_left_by(1, 3) == 8
+			## expect I128.shl_wrap(1, 3) == 8
 			##
-			## expect I128.shift_left_by(0b0000_0101, 2) == 0b0001_0100
+			## expect I128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
+			##
+			## expect I128.shl_wrap(1, 128) == 1
 			## ```
-			shift_left_by : I128, U8 -> I128
+			shl_wrap : I128, U8 -> I128
 
 			## Shift the bits of an [I128] to the right by the given number of
 			## positions, preserving the sign ("arithmetic shift"). The sign bit
 			## is shifted in on the left, so negative values remain negative. Each
 			## right shift by one is equivalent to integer division by 2 (rounding
 			## toward negative infinity).
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shift_right_by(32, 2) == 8
+			## expect I128.shr_wrap(32, 2) == 8
 			##
-			## expect I128.shift_right_by(-32, 2) == -8
+			## expect I128.shr_wrap(-32, 2) == -8
+			##
+			## expect I128.shr_wrap(32, 128) == 32
 			## ```
-			shift_right_by : I128, U8 -> I128
+			shr_wrap : I128, U8 -> I128
 
 			## Shift the bits of an [I128] to the right by the given number of
 			## positions.
+			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shift_right_zf_by(32, 2) == 8
+			## expect I128.shr_zf_wrap(32, 2) == 8
 			##
-			## expect I128.shift_right_zf_by(0b0101_0000, 3) == 0b0000_1010
+			## expect I128.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
+			##
+			## expect I128.shr_zf_wrap(32, 128) == 32
 			## ```
-			shift_right_zf_by : I128, U8 -> I128
+			shr_zf_wrap : I128, U8 -> I128
 
 			## Returns the bitwise AND of two [I128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
@@ -12846,7 +13003,6 @@ Builtin :: [].{
 			## expect I128.count_leading_zero_bits(0) == 128
 			## ```
 			count_leading_zero_bits : I128 -> U8
-			count_leading_zero_bits = |value| signed_count_leading_zero_bits(128, 0, 2, value)
 
 			## Count the zero bits after the last one bit, starting at the least significant bit.
 			## ```roc
@@ -12855,7 +13011,6 @@ Builtin :: [].{
 			## expect I128.count_trailing_zero_bits(0) == 128
 			## ```
 			count_trailing_zero_bits : I128 -> U8
-			count_trailing_zero_bits = |value| integer_count_trailing_zero_bits(128, 0, 2, value)
 
 			## Count the one bits in the value.
 			## ```roc
@@ -12864,7 +13019,6 @@ Builtin :: [].{
 			## expect I128.count_one_bits(0) == 0
 			## ```
 			count_one_bits : I128 -> U8
-			count_one_bits = |value| signed_count_one_bits(128, 0, 2, value)
 
 			## Iterator of integers beginning with this `I128` and ending with the other `I128`.
 			## (Use [I128.until] instead to end with the other `I128` minus one.)
@@ -14235,7 +14389,8 @@ Builtin :: [].{
 			tau : F32
 			tau = F32.from_bits(1086918619)
 
-			## Convert an [F32] to its decimal string representation.
+			## Convert an [F32] to its decimal string representation. Every NaN
+			## representation, including negative NaNs, becomes `"nan"`.
 			## ```roc
 			## expect F32.to_str(42.5) == "42.5"
 			##
@@ -14243,7 +14398,9 @@ Builtin :: [].{
 			## ```
 			to_str : F32 -> Str
 
-			## Return the raw IEEE 754 bit pattern of an [F32].
+			## Return the IEEE 754 bit pattern of an [F32]. All `NaN` values return
+			## the canonical quiet-NaN bits `2143289344`; every non-NaN value
+			## returns its exact bits.
 			## ```roc
 			## expect F32.to_bits(F32.from_bits(1069547520)) == 1069547520
 			##
@@ -14251,7 +14408,9 @@ Builtin :: [].{
 			## ```
 			to_bits : F32 -> U32
 
-			## Build an [F32] from a raw IEEE 754 bit pattern.
+			## Build an [F32] from a raw IEEE 754 bit pattern. Any NaN payload or
+			## sign can be supplied, but [F32.to_bits] and hashing intentionally
+			## collapse all NaN representations.
 			## ```roc
 			## expect F32.from_bits(F32.to_bits(-0.0)).to_bits() == F32.to_bits(-0.0)
 			##
@@ -14888,8 +15047,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-128` to `127` are preserved; other values wrap by
 			## truncating to the low 8 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i8_wrap(42.7) == 42
 			## ```
@@ -14912,8 +15070,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-32768` to `32767` are preserved; other values wrap
 			## by truncating to the low 16 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i16_wrap(42.5) == 42
 			## ```
@@ -14933,8 +15090,8 @@ Builtin :: [].{
 			to_i16_try = |num| out_of_range_try(f32_to_i16_try_unsafe(num))
 
 			## Convert an [F32] to an [I32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i32_wrap(42.5) == 42
 			## ```
@@ -14950,8 +15107,8 @@ Builtin :: [].{
 			to_i32_try = |num| out_of_range_try(f32_to_i32_try_unsafe(num))
 
 			## Convert an [F32] to an [I64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i64_wrap(42.5) == 42
 			## ```
@@ -14967,8 +15124,8 @@ Builtin :: [].{
 			to_i64_try = |num| out_of_range_try(f32_to_i64_try_unsafe(num))
 
 			## Convert an [F32] to an [I128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128 and is interpreted
+			## using two's complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_i128_wrap(42.5) == 42
 			## ```
@@ -14986,9 +15143,8 @@ Builtin :: [].{
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 
 			## Convert an [F32] to a [U8]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^8. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u8_wrap(42.7) == 42
 			## ```
@@ -15007,9 +15163,8 @@ Builtin :: [].{
 			to_u8_try = |num| out_of_range_try(f32_to_u8_try_unsafe(num))
 
 			## Convert an [F32] to a [U16]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^16. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u16_wrap(42.5) == 42
 			## ```
@@ -15026,9 +15181,8 @@ Builtin :: [].{
 			to_u16_try = |num| out_of_range_try(f32_to_u16_try_unsafe(num))
 
 			## Convert an [F32] to a [U32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^32. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u32_wrap(42.5) == 42
 			## ```
@@ -15045,9 +15199,8 @@ Builtin :: [].{
 			to_u32_try = |num| out_of_range_try(f32_to_u32_try_unsafe(num))
 
 			## Convert an [F32] to a [U64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^64. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u64_wrap(42.5) == 42
 			## ```
@@ -15064,9 +15217,8 @@ Builtin :: [].{
 			to_u64_try = |num| out_of_range_try(f32_to_u64_try_unsafe(num))
 
 			## Convert an [F32] to a [U128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F32.to_u128_wrap(42.5) == 42
 			## ```
@@ -15184,7 +15336,8 @@ Builtin :: [].{
 			tau : F64
 			tau = F64.from_bits(4618760256179416344)
 
-			## Convert an [F64] to its decimal string representation.
+			## Convert an [F64] to its decimal string representation. Every NaN
+			## representation, including negative NaNs, becomes `"nan"`.
 			## ```roc
 			## expect F64.to_str(42.5) == "42.5"
 			##
@@ -15192,7 +15345,9 @@ Builtin :: [].{
 			## ```
 			to_str : F64 -> Str
 
-			## Return the raw IEEE 754 bit pattern of an [F64].
+			## Return the IEEE 754 bit pattern of an [F64]. All `NaN` values return
+			## the canonical quiet-NaN bits `9221120237041090560`; every non-NaN
+			## value returns its exact bits.
 			## ```roc
 			## expect F64.to_bits(F64.from_bits(4609434218613702656)) == 4609434218613702656
 			##
@@ -15200,7 +15355,9 @@ Builtin :: [].{
 			## ```
 			to_bits : F64 -> U64
 
-			## Build an [F64] from a raw IEEE 754 bit pattern.
+			## Build an [F64] from a raw IEEE 754 bit pattern. Any NaN payload or
+			## sign can be supplied, but [F64.to_bits] and hashing intentionally
+			## collapse all NaN representations.
 			## ```roc
 			## expect F64.from_bits(F64.to_bits(-0.0)).to_bits() == F64.to_bits(-0.0)
 			##
@@ -15837,8 +15994,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-128` to `127` are preserved; other values wrap by
 			## truncating to the low 8 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i8_wrap(42.7) == 42
 			## ```
@@ -15861,8 +16017,7 @@ Builtin :: [].{
 			## toward zero; the integer part wraps on overflow. Integer-part
 			## values from `-32768` to `32767` are preserved; other values wrap
 			## by truncating to the low 16 bits and reinterpreting them in two's
-			## complement. The result for `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i16_wrap(42.5) == 42
 			## ```
@@ -15882,8 +16037,8 @@ Builtin :: [].{
 			to_i16_try = |num| out_of_range_try(f64_to_i16_try_unsafe(num))
 
 			## Convert an [F64] to an [I32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i32_wrap(42.5) == 42
 			## ```
@@ -15899,8 +16054,8 @@ Builtin :: [].{
 			to_i32_try = |num| out_of_range_try(f64_to_i32_try_unsafe(num))
 
 			## Convert an [F64] to an [I64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps on overflow. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i64_wrap(42.5) == 42
 			## ```
@@ -15916,8 +16071,8 @@ Builtin :: [].{
 			to_i64_try = |num| out_of_range_try(f64_to_i64_try_unsafe(num))
 
 			## Convert an [F64] to an [I128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## `NaN`, `inf`, or `-inf` is implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128 and is interpreted
+			## using two's complement. `NaN`, `inf`, and `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_i128_wrap(42.5) == 42
 			## ```
@@ -15935,9 +16090,8 @@ Builtin :: [].{
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 
 			## Convert an [F64] to a [U8]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^8. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u8_wrap(42.7) == 42
 			## ```
@@ -15956,9 +16110,8 @@ Builtin :: [].{
 			to_u8_try = |num| out_of_range_try(f64_to_u8_try_unsafe(num))
 
 			## Convert an [F64] to a [U16]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^16. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u16_wrap(42.5) == 42
 			## ```
@@ -15975,9 +16128,8 @@ Builtin :: [].{
 			to_u16_try = |num| out_of_range_try(f64_to_u16_try_unsafe(num))
 
 			## Convert an [F64] to a [U32]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^32. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u32_wrap(42.5) == 42
 			## ```
@@ -15994,9 +16146,8 @@ Builtin :: [].{
 			to_u32_try = |num| out_of_range_try(f64_to_u32_try_unsafe(num))
 
 			## Convert an [F64] to a [U64]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^64. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u64_wrap(42.5) == 42
 			## ```
@@ -16013,9 +16164,8 @@ Builtin :: [].{
 			to_u64_try = |num| out_of_range_try(f64_to_u64_try_unsafe(num))
 
 			## Convert an [F64] to a [U128]. The fractional part is truncated
-			## toward zero; the integer part wraps on overflow. The result for
-			## negative values, `NaN`, `inf`, or `-inf` is
-			## implementation-defined.
+			## toward zero; the integer part wraps modulo 2^128. `NaN`, `inf`, and
+			## `-inf` all return `0`.
 			## ```roc
 			## expect F64.to_u128_wrap(42.5) == 42
 			## ```
@@ -16115,7 +16265,7 @@ dict_empty_bucket : Dict.DictBucket
 dict_empty_bucket = { dist_and_fingerprint: 0, entry_index: 0 }
 
 dict_dist_inc : U32
-dict_dist_inc = U32.shift_left_by(1, 8)
+dict_dist_inc = U32.shl_wrap(1, 8)
 
 dict_fingerprint_mask : U32
 dict_fingerprint_mask = dict_dist_inc - 1
@@ -16144,20 +16294,20 @@ dict_actual_shifts = |shifts| U8.bitwise_and(shifts, dict_shifts_mask)
 dict_shifts_for_current_seed : U8 -> U8
 dict_shifts_for_current_seed = |shifts| {
 	actual = dict_actual_shifts(shifts)
-	seed_high_byte = U64.to_u8_wrap(U64.shift_right_zf_by(dict_seed(), 56))
+	seed_high_byte = U64.to_u8_wrap(U64.shr_zf_wrap(dict_seed(), 56))
 	runtime_bit = U8.bitwise_and(seed_high_byte, dict_runtime_seed_bit)
 	U8.bitwise_or(actual, runtime_bit)
 }
 
 dict_seed_for_shifts : U8 -> U64
 dict_seed_for_shifts = |shifts| {
-	seed_mask_i8 = I8.shift_right_by(U8.to_i8_wrap(shifts), 7)
+	seed_mask_i8 = I8.shr_wrap(U8.to_i8_wrap(shifts), 7)
 	seed_mask = I8.to_u64_wrap(seed_mask_i8)
 	U64.bitwise_and(dict_seed(), seed_mask)
 }
 
 dict_bucket_count_for_shifts : U8 -> U64
-dict_bucket_count_for_shifts = |shifts| U64.shift_left_by(1, 64 - dict_actual_shifts(shifts))
+dict_bucket_count_for_shifts = |shifts| U64.shl_wrap(1, 64 - dict_actual_shifts(shifts))
 
 dict_max_entries_for_bucket_count : U64 -> U64
 dict_max_entries_for_bucket_count = |bucket_count|
@@ -16219,7 +16369,7 @@ dict_entry_index_from_u64 = |index|
 	}
 
 dict_bucket_index_from_hash : U64, U8 -> U64
-dict_bucket_index_from_hash = |hash, shifts| U64.shift_right_zf_by(hash, dict_actual_shifts(shifts))
+dict_bucket_index_from_hash = |hash, shifts| U64.shr_zf_wrap(hash, dict_actual_shifts(shifts))
 
 dict_dist_and_fingerprint_from_hash : U64 -> U32
 dict_dist_and_fingerprint_from_hash = |hash| {
@@ -16810,7 +16960,7 @@ crypto_digest_to_hex_bytes = |bytes| {
 
 	while $index < crypto_digest_byte_len {
 		byte = u8_list_get_unsafe(bytes, $index)
-		$out = u8_append($out, crypto_hex_digit(U8.shift_right_zf_by(byte, 4)))
+		$out = u8_append($out, crypto_hex_digit(U8.shr_zf_wrap(byte, 4)))
 		$out = u8_append($out, crypto_hex_digit(U8.bitwise_and(byte, 15)))
 		$index = $index + 1
 	}
@@ -16858,7 +17008,7 @@ crypto_digest_from_hex = |hex| {
 	while $index < crypto_digest_hex_len {
 		high = crypto_hex_nibble(u8_list_get_unsafe(bytes, $index), $index)?
 		low = crypto_hex_nibble(u8_list_get_unsafe(bytes, $index + 1), $index + 1)?
-		$out = u8_append($out, U8.bitwise_or(U8.shift_left_by(high, 4), low))
+		$out = u8_append($out, U8.bitwise_or(U8.shl_wrap(high, 4), low))
 		$index = $index + 2
 	}
 
@@ -17401,79 +17551,6 @@ signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
 			}
 		}
 
-unsigned_count_leading_zero_bits : U8, item, item, item -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-unsigned_count_leading_zero_bits = |width, zero, two, value| width - unsigned_bit_length(zero, two, value, 0)
-
-unsigned_bit_length : item, item, item, U8 -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item]
-unsigned_bit_length = |zero, two, value, count|
-	if value == zero {
-		count
-	} else {
-		unsigned_bit_length(zero, two, value / two, count + 1)
-	}
-
-signed_count_leading_zero_bits : U8, item, item, item -> U8
-	where [
-		item.is_eq : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.div_by : item, item -> item,
-	]
-signed_count_leading_zero_bits = |width, zero, two, value|
-	if value < zero {
-		0
-	} else {
-		unsigned_count_leading_zero_bits(width, zero, two, value)
-	}
-
-integer_count_trailing_zero_bits : U8, item, item, item -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
-integer_count_trailing_zero_bits = |width, zero, two, value|
-	if value == zero {
-		width
-	} else {
-		integer_count_trailing_zero_bits_step(zero, two, value, 0)
-	}
-
-integer_count_trailing_zero_bits_step : item, item, item, U8 -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
-integer_count_trailing_zero_bits_step = |zero, two, value, count|
-	if value.rem_by(two) != zero {
-		count
-	} else {
-		integer_count_trailing_zero_bits_step(zero, two, value / two, count + 1)
-	}
-
-unsigned_count_one_bits : item, item, item -> U8
-	where [item.is_eq : item, item -> Bool, item.div_by : item, item -> item, item.rem_by : item, item -> item]
-unsigned_count_one_bits = |zero, two, value|
-	if value == zero {
-		0
-	} else {
-		bit = if value.rem_by(two) == zero {
-			0
-		} else {
-			1
-		}
-		bit + unsigned_count_one_bits(zero, two, value / two)
-	}
-
-signed_count_one_bits : U8, item, item, item -> U8
-	where [
-		item.is_eq : item, item -> Bool,
-		item.is_lt : item, item -> Bool,
-		item.div_by : item, item -> item,
-		item.rem_by : item, item -> item,
-		item.bitwise_not : item -> item,
-	]
-signed_count_one_bits = |width, zero, two, value|
-	if value < zero {
-		width - unsigned_count_one_bits(zero, two, value.bitwise_not())
-	} else {
-		unsigned_count_one_bits(zero, two, value)
-	}
-
 integer_is_even : item, item, item -> Bool
 	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
 integer_is_even = |zero, two, value| value.rem_by(two) == zero
@@ -17758,18 +17835,18 @@ append_utf8_code_point = |out, code_point|
 	if code_point < 128 {
 		u8_append(out, code_point.to_u8_wrap())
 	} else if code_point < 2048 {
-		b0 = 192 + code_point.shift_right_by(6)
+		b0 = 192 + code_point.shr_wrap(6)
 		b1 = 128 + code_point.bitwise_and(63)
 		u8_append(u8_append(out, b0.to_u8_wrap()), b1.to_u8_wrap())
 	} else if code_point < 65536 {
-		b0 = 224 + code_point.shift_right_by(12)
-		b1 = 128 + code_point.shift_right_by(6).bitwise_and(63)
+		b0 = 224 + code_point.shr_wrap(12)
+		b1 = 128 + code_point.shr_wrap(6).bitwise_and(63)
 		b2 = 128 + code_point.bitwise_and(63)
 		u8_append(u8_append(u8_append(out, b0.to_u8_wrap()), b1.to_u8_wrap()), b2.to_u8_wrap())
 	} else {
-		b0 = 240 + code_point.shift_right_by(18)
-		b1 = 128 + code_point.shift_right_by(12).bitwise_and(63)
-		b2 = 128 + code_point.shift_right_by(6).bitwise_and(63)
+		b0 = 240 + code_point.shr_wrap(18)
+		b1 = 128 + code_point.shr_wrap(12).bitwise_and(63)
+		b2 = 128 + code_point.shr_wrap(6).bitwise_and(63)
 		b3 = 128 + code_point.bitwise_and(63)
 		u8_append(u8_append(u8_append(u8_append(out, b0.to_u8_wrap()), b1.to_u8_wrap()), b2.to_u8_wrap()), b3.to_u8_wrap())
 	}
@@ -17791,7 +17868,7 @@ list_replace_unsafe : List(item), U64, item -> { list : List(item), prev : item 
 list_swap_unsafe : List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler. Returns string slices into the source string.
-str_find_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+str_split_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
 
 # Implemented by the compiler. Returns a string slice after the prefix when the
 # source starts with the prefix using ASCII-caseless comparison.

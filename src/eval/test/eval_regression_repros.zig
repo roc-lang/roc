@@ -370,7 +370,7 @@ pub const tests = [_]TestCase{
     },
     .{
         .name = "regression B077: signed right shift by type width preserves sign",
-        .source = "I8.shift_right_by(-1, 8)",
+        .source = "I8.shr_wrap(-1, 8)",
         .expected = .{ .inspect_str = "-1" },
     },
     .{

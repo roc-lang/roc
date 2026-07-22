@@ -13108,6 +13108,11 @@ const CollectedSchemeUseSite = struct {
     checked_expr: CheckedExprId,
 };
 
+const CollectedScopeConstructionSite = struct {
+    scope: DispatchScopeId,
+    checked_expr: CheckedExprId,
+};
+
 /// Build-time-only per-template data collected by
 /// `sealCheckedProcedureTemplateRefs` for the total-resolution pass; never
 /// serialized (mono looks iterator plans up by node and receives evidence
@@ -13132,6 +13137,9 @@ const TemplateIteratorRefs = struct {
     /// Scope of each collected scheme-use site (parallel to
     /// `scheme_use_sites`).
     scheme_use_scopes: []DispatchScopeRef = &.{},
+    /// Generalized nested-procedure construction sites, grouped per template.
+    scope_site_spans: []artifact_serialize.Span = &.{},
+    scope_sites: []CollectedScopeConstructionSite = &.{},
 
     fn deinit(self: *TemplateIteratorRefs, allocator: Allocator) void {
         allocator.free(self.spans);
@@ -13143,6 +13151,8 @@ const TemplateIteratorRefs = struct {
         allocator.free(self.scheme_use_spans);
         allocator.free(self.scheme_use_sites);
         allocator.free(self.scheme_use_scopes);
+        allocator.free(self.scope_site_spans);
+        allocator.free(self.scope_sites);
         self.* = .{};
     }
 };
@@ -13220,10 +13230,14 @@ fn sealCheckedProcedureTemplateRefs(
     errdefer scheme_use_pool.deinit(allocator);
     var scheme_use_scope_pool = std.ArrayList(DispatchScopeRef).empty;
     errdefer scheme_use_scope_pool.deinit(allocator);
+    var scope_site_pool = std.ArrayList(CollectedScopeConstructionSite).empty;
+    errdefer scope_site_pool.deinit(allocator);
     const iterator_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.len);
     errdefer allocator.free(iterator_spans);
     const scheme_use_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.len);
     errdefer allocator.free(scheme_use_spans);
+    const scope_site_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.len);
+    errdefer allocator.free(scope_site_spans);
 
     for (templates.templates, 0..) |*template, template_index| {
         collector.clear();
@@ -13253,6 +13267,7 @@ fn sealCheckedProcedureTemplateRefs(
         }
         iterator_spans[template_index] = try artifact_serialize.appendSpan(artifact_serialize.Span, static_dispatch.IteratorForPlanId, &iterator_ref_pool, allocator, collector.iterator_refs.items);
         scheme_use_spans[template_index] = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedSchemeUseSite, &scheme_use_pool, allocator, collector.scheme_use_sites.items);
+        scope_site_spans[template_index] = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedScopeConstructionSite, &scope_site_pool, allocator, collector.scope_sites.items);
         try value_ref_scope_pool.appendSlice(allocator, collector.value_ref_scopes.items);
         try dispatch_ref_scope_pool.appendSlice(allocator, collector.dispatch_ref_scopes.items);
         try iterator_scope_pool.appendSlice(allocator, collector.iterator_ref_scopes.items);
@@ -13276,6 +13291,8 @@ fn sealCheckedProcedureTemplateRefs(
         .scheme_use_spans = scheme_use_spans,
         .scheme_use_sites = try scheme_use_pool.toOwnedSlice(allocator),
         .scheme_use_scopes = try scheme_use_scope_pool.toOwnedSlice(allocator),
+        .scope_site_spans = scope_site_spans,
+        .scope_sites = try scope_site_pool.toOwnedSlice(allocator),
     };
 }
 
@@ -13553,6 +13570,12 @@ const EvidencePass = struct {
             for (scheme_use_sites, 0..) |site, i| {
                 const chain = try self.chainFor(self.template_iterator_refs.scheme_use_scopes[scheme_use_span.start + i], params.items);
                 try self.emitSchemeUseSiteEvidence(site.record_idx, @intFromEnum(site.checked_expr), chain);
+            }
+
+            const scope_site_span = self.template_iterator_refs.scope_site_spans[template_index];
+            const scope_sites = self.template_iterator_refs.scope_sites[scope_site_span.start .. scope_site_span.start + scope_site_span.len];
+            for (scope_sites) |site| {
+                try self.emitScopeConstructionEvidence(site, params.items);
             }
         }
 
@@ -14070,7 +14093,8 @@ const EvidencePass = struct {
         // — the same rule that stamps `numeric_default_phase` on published
         // type variables (Dec for numerals and defaultable arithmetic
         // operators, Str for quotes and interpolations). Every obligation on
-        // the var resolves against that default owner now.
+        // the var resolves against that default owner now, while retaining the
+        // checker's exact callable relation for nested evidence.
         if (numericDefaultPhaseForConstraints(self.module, constraints)) |phase| {
             const owner: static_dispatch.MethodOwner = switch (phase) {
                 .mono_specialization => .{ .builtin = .dec },
@@ -14080,7 +14104,7 @@ const EvidencePass = struct {
                 .checking_finalized => return .checked_error,
             };
             if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
-                return try self.resolutionForMethodTarget(target, structural_kind, null);
+                return try self.resolutionForMethodTarget(target, structural_kind, constraint_fn_var);
             }
         }
 
@@ -14444,6 +14468,47 @@ const EvidencePass = struct {
 
         if (self.value_use_by_node.get(source_node)) |record_idx| {
             try self.emitSchemeUseSiteEvidence(record_idx, site_key, chain);
+            return;
+        }
+
+        // A monomorphic local procedure use does not instantiate a scheme, so
+        // checking has no SchemeUseRecord for it. Its declaration scope still
+        // owns an explicit evidence schema; publish that schema's finished
+        // vector from the settled source variables now.
+        if (rec.ref == .local_proc) {
+            const local = rec.ref.local_proc;
+            const scope_id = local.dispatch_scope orelse return;
+            const raw_scope = @intFromEnum(scope_id);
+            if (raw_scope >= self.templates.dispatch_scopes.len) {
+                checkedArtifactInvariant("local procedure use named an evidence scope outside the checked template table", .{});
+            }
+            const scope = self.templates.dispatch_scopes[raw_scope];
+            if (scope.checked_expr != local.expr) {
+                checkedArtifactInvariant("local procedure use evidence scope belonged to a different checked expression", .{});
+            }
+            const params = try self.paramsForScope(scope_id, scope.scheme_var);
+            if (params.len == 0) return;
+
+            self.current_chain = chain;
+            defer self.current_chain = &.{};
+            var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+            defer entries.deinit(self.allocator);
+            try entries.ensureTotalCapacity(self.allocator, params.len);
+            for (params) |param| {
+                const evidence = (try self.evidenceForVar(
+                    param,
+                    param.dispatcher_var,
+                    param.constraint.fn_var,
+                    true,
+                )) orelse checkedArtifactInvariant(
+                    "monomorphic local procedure evidence remained unresolved after checking",
+                    .{},
+                );
+                entries.appendAssumeCapacity(evidence);
+            }
+            const span = try self.appendEvidenceRefs(entries.items);
+            try self.site_seen.put(site_key, {});
+            try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
         }
 
         // References that do not become specialization edges intentionally
@@ -14469,7 +14534,61 @@ const EvidencePass = struct {
             try self.deferred_use_sites.append(self.allocator, .{ .record_idx = record_idx, .site_key = site_key });
             return;
         };
-        if (span.len == 0) return;
+        try self.site_seen.put(site_key, {});
+        try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
+    }
+
+    /// Publish the complete construction recipe for a generalized nested
+    /// procedure that checking did not instantiate through a SchemeUseRecord.
+    /// Path-bearing parameters explicitly project from the eventual callable;
+    /// pathless parameters are resolved now against the enclosing checked
+    /// evidence chain.
+    fn emitScopeConstructionEvidence(
+        self: *EvidencePass,
+        site: CollectedScopeConstructionSite,
+        template_params: []const EvidenceParam,
+    ) Allocator.Error!void {
+        const site_key = @intFromEnum(site.checked_expr);
+        if (self.site_seen.contains(site_key)) return;
+
+        const raw_scope = @intFromEnum(site.scope);
+        if (raw_scope >= self.template_iterator_refs.scopes.len) {
+            checkedArtifactInvariant("nested procedure construction named an unknown checked scope", .{});
+        }
+        const scope = self.template_iterator_refs.scopes[raw_scope];
+        if (scope.checked_expr != site.checked_expr) {
+            checkedArtifactInvariant("nested procedure construction scope belonged to a different checked expression", .{});
+        }
+
+        const parent_scope: DispatchScopeRef = if (scope.parent) |parent|
+            .{ .generalized = parent }
+        else
+            .root;
+        self.current_chain = try self.chainFor(parent_scope, template_params);
+        defer self.current_chain = &.{};
+
+        const scope_params = try self.paramsForScope(site.scope, scope.scheme_var);
+        var entries = std.ArrayListUnmanaged(static_dispatch.CheckedEvidence).empty;
+        defer entries.deinit(self.allocator);
+        try entries.ensureTotalCapacity(self.allocator, scope_params.len);
+        for (scope_params) |param| {
+            if (param.path.len > 0) {
+                entries.appendAssumeCapacity(.from_callable);
+                continue;
+            }
+            const evidence = (try self.evidenceForVar(
+                param,
+                param.dispatcher_var,
+                param.constraint.fn_var,
+                true,
+            )) orelse checkedArtifactInvariant(
+                "pathless nested procedure evidence remained unresolved after checking",
+                .{},
+            );
+            entries.appendAssumeCapacity(evidence);
+        }
+
+        const span = try self.appendEvidenceRefs(entries.items);
         try self.site_seen.put(site_key, {});
         try self.site_evidence.append(self.allocator, .{ .key = site_key, .start = span.start, .len = span.len });
     }
@@ -14635,6 +14754,7 @@ const CheckedTemplateRefCollector = struct {
     iterator_ref_scopes: std.ArrayList(DispatchScopeRef),
     scheme_use_sites: std.ArrayList(CollectedSchemeUseSite),
     scheme_use_scopes: std.ArrayList(DispatchScopeRef),
+    scope_sites: std.ArrayList(CollectedScopeConstructionSite),
     /// Pooled across templates (ids are global); the stack resets per template.
     scopes: std.ArrayList(DispatchRefScope),
     scope_by_checked_expr: std.AutoHashMap(CheckedExprId, DispatchScopeId),
@@ -14664,6 +14784,7 @@ const CheckedTemplateRefCollector = struct {
             .iterator_ref_scopes = .empty,
             .scheme_use_sites = .empty,
             .scheme_use_scopes = .empty,
+            .scope_sites = .empty,
             .scopes = .empty,
             .scope_by_checked_expr = std.AutoHashMap(CheckedExprId, DispatchScopeId).init(allocator),
             .scope_stack = .empty,
@@ -14685,6 +14806,7 @@ const CheckedTemplateRefCollector = struct {
         self.iterator_ref_scopes.deinit(self.allocator);
         self.scheme_use_sites.deinit(self.allocator);
         self.scheme_use_scopes.deinit(self.allocator);
+        self.scope_sites.deinit(self.allocator);
         self.scopes.deinit(self.allocator);
         self.scope_by_checked_expr.deinit();
         self.scope_stack.deinit(self.allocator);
@@ -14699,6 +14821,7 @@ const CheckedTemplateRefCollector = struct {
         self.iterator_ref_scopes.clearRetainingCapacity();
         self.scheme_use_sites.clearRetainingCapacity();
         self.scheme_use_scopes.clearRetainingCapacity();
+        self.scope_sites.clearRetainingCapacity();
         // `scopes` pools across templates; only the stack resets.
         self.scope_stack.clearRetainingCapacity();
         self.visited_exprs.clearRetainingCapacity();
@@ -14760,6 +14883,10 @@ const CheckedTemplateRefCollector = struct {
                 });
                 break :blk id;
             };
+            try self.scope_sites.append(self.allocator, .{
+                .scope = scope_id,
+                .checked_expr = expr_id,
+            });
             try self.scope_stack.append(self.allocator, scope_id);
         }
         defer {
@@ -15074,6 +15201,15 @@ pub const NestedProcKind = enum {
     desugared_closure,
 };
 
+/// Producer-authored source of a nested procedure's evidence vector.
+pub const NestedProcEvidenceSource = enum {
+    /// The site does not introduce a dispatch scope and inherits its lexical
+    /// evidence unchanged.
+    inherited,
+    /// Checking recorded an exact scheme-instantiation edge for the site.
+    checked_site,
+};
+
 /// Public `NestedProcPathComponent` declaration.
 pub const NestedProcPathComponent = union(enum) {
     expr: CheckedExprId,
@@ -15090,6 +15226,10 @@ pub const NestedProcSite = struct {
     /// Exact generalized-local scope lexically owning this site, or the
     /// template root when the site is outside every generalized local.
     lexical_scope: DispatchScopeRef,
+    evidence_source: NestedProcEvidenceSource,
+    /// Exact range in `StaticDispatchPlanTable.evidence_refs` when
+    /// `evidence_source == .checked_site`; empty otherwise.
+    evidence: artifact_serialize.Span,
     /// Range into the owning `NestedProcSiteTable.path_components` pool. Stored as
     /// a POD `(start,len)` (transform B) instead of an embedded slice so the
     /// element relocates with a single fixup.
@@ -15665,10 +15805,29 @@ const NestedProcSiteBuilder = struct {
         const path_start: u32 = @intCast(self.path_pool.items.len);
         try self.path_pool.appendSlice(self.allocator, self.path.items);
 
+        const evidence_source, const evidence = switch (self.current_scope) {
+            .root => .{ NestedProcEvidenceSource.inherited, artifact_serialize.Span{} },
+            .generalized => |scope_id| blk: {
+                const raw_scope = @intFromEnum(scope_id);
+                if (raw_scope >= self.dispatch_scopes.len) {
+                    checkedArtifactInvariant("nested procedure site owned an unknown checked dispatch scope", .{});
+                }
+                const scope = self.dispatch_scopes[raw_scope];
+                if (checked_expr == null or scope.checked_expr != checked_expr.?) {
+                    break :blk .{ NestedProcEvidenceSource.inherited, artifact_serialize.Span{} };
+                }
+                const span = self.static_dispatch_plans.siteEvidenceSpan(checked_expr.?) orelse
+                    checkedArtifactInvariant("nested procedure scope had no producer-authored construction evidence", .{});
+                break :blk .{ NestedProcEvidenceSource.checked_site, span };
+            },
+        };
+
         try self.sites.append(self.allocator, .{
             .site = site,
             .owner_template = owner,
             .lexical_scope = self.current_scope,
+            .evidence_source = evidence_source,
+            .evidence = evidence,
             .path_start = path_start,
             .path_len = @intCast(self.path.items.len),
             .kind = kind,
@@ -24822,7 +24981,7 @@ pub const CheckedModuleArtifact = struct {
                 .direct => |node| if (@intFromEnum(node) >= table.evidence_nodes.len) {
                     return .{ .kind = .evidence_ref_node_out_of_bounds, .index = @intCast(i) };
                 },
-                .constraint, .structural, .checked_error, .unreachable_value => {},
+                .constraint, .structural, .from_callable, .checked_error, .unreachable_value => {},
             }
         }
 
@@ -25067,6 +25226,13 @@ pub const CheckedModuleArtifact = struct {
             switch (site.lexical_scope) {
                 .root => {},
                 .generalized => |scope| std.debug.assert(@intFromEnum(scope) < self.checked_procedure_templates.dispatch_scopes.len),
+            }
+            switch (site.evidence_source) {
+                .inherited => std.debug.assert(site.evidence.len == 0),
+                .checked_site => std.debug.assert(
+                    site.evidence.start <= self.static_dispatch_plans.evidence_refs.len and
+                        site.evidence.len <= self.static_dispatch_plans.evidence_refs.len - site.evidence.start,
+                ),
             }
             if (site.checked_expr) |expr| std.debug.assert(@intFromEnum(expr) < self.checked_bodies.exprCount());
             if (site.checked_pattern) |pattern| std.debug.assert(@intFromEnum(pattern) < self.checked_bodies.patternCount());
@@ -29367,8 +29533,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xAC, 0xE8, 0x35, 0x7C, 0xF6, 0xBC, 0x0B, 0x76, 0x74, 0x56, 0x7A, 0xD3, 0x11, 0x7E, 0x43, 0xF0,
-        0x85, 0xF0, 0xB9, 0x67, 0x8B, 0x1F, 0x41, 0xE1, 0x8A, 0x6C, 0x1B, 0xC0, 0xCA, 0xE1, 0x55, 0xA0,
+        0x77, 0x7D, 0xF8, 0xB8, 0x4D, 0xBE, 0xFF, 0xF1, 0x32, 0x53, 0xF7, 0xCE, 0xE0, 0xDB, 0xD4, 0xAB,
+        0xF6, 0x8B, 0x9E, 0x4B, 0x5E, 0xA5, 0xF5, 0x8E, 0xEF, 0x26, 0x5E, 0x7D, 0x6D, 0x62, 0x6E, 0xDE,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

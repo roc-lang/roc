@@ -634,6 +634,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.andRegImm8(dst, 1);
         }
 
+        /// Emit float32 compare and set: dst = (a cond b) ? 1 : 0
+        pub fn emitCmpF32(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) Allocator.Error!void {
+            try self.emit.ucomissRegReg(a, b);
+            try self.emit.setcc(cond, dst);
+            try self.emit.andRegImm8(dst, 1);
+        }
+
         // Floating-point operations
 
         /// Emit float64 addition: dst = a + b
@@ -681,6 +688,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
             // Build the abs mask in XMM space; no frame scratch slot.
             try self.emit.pcmpeqdRegReg(dst, dst);
             try self.emit.psrlqRegImm8(dst, 1);
+            try self.emit.andpdRegReg(dst, src);
+        }
+
+        pub fn emitAbsF32(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            // Build 0x0000_0000_7fff_ffff in each qword and mask the low lane.
+            try self.emit.pcmpeqdRegReg(dst, dst);
+            try self.emit.psrlqRegImm8(dst, 33);
             try self.emit.andpdRegReg(dst, src);
         }
 
@@ -745,6 +759,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Store float64 to stack slot
         pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) Allocator.Error!void {
             try self.emit.movsdMemReg(.RBP, offset, src);
+        }
+
+        /// Load float32 from stack slot.
+        pub fn emitLoadStackF32(self: *Self, dst: FloatReg, offset: i32) Allocator.Error!void {
+            try self.emit.movssRegMem(dst, .RBP, offset);
         }
 
         /// Store float32 to stack slot.
@@ -876,6 +895,10 @@ test "float operations" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
+    try cg.emitAddF32(.XMM0, .XMM1, .XMM2);
+    try cg.emitSubF32(.XMM3, .XMM4, .XMM5);
+    try cg.emitMulF32(.XMM6, .XMM7, .XMM8);
+    try cg.emitDivF32(.XMM9, .XMM10, .XMM11);
     try cg.emitAddF64(.XMM0, .XMM1, .XMM2);
     try cg.emitSubF64(.XMM3, .XMM4, .XMM5);
     try cg.emitMulF64(.XMM6, .XMM7, .XMM8);

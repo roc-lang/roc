@@ -476,6 +476,41 @@ walk `ConstStore` in reverse using a type-derived storage plan, because a
 target-independent `ConstStore` node does not preserve the contextual callable
 encoding of every nested allocation.
 
+F32 and F64 are distinct representations throughout the post-check pipeline.
+An F32 local, immediate, register value, stack slot, call argument, return, and
+builtin-wrapper parameter/result must remain IEEE binary32. A backend must not
+implement an F32 LIR operation by widening its operands to F64, performing the
+F64 operation, and narrowing the result. F64 may enter an F32 value's dataflow
+only at an explicit language conversion between F32 and F64. Integer and Dec
+conversions to F32 must round directly to binary32 rather than converting to
+F64 first, so they cannot double-round.
+
+Floating-point evaluation has an explicit NaN mode. Ordinary runtime execution
+uses `preserve`, which permits the target's native f32 and f64 NaN sign, payload,
+and signaling-bit result. Any interpreter or backend used to execute a static
+initializer must instead use `normalize`. In that mode, every f32 or f64 value
+produced by an LIR assignment is canonicalized before it is bound to its local:
+all f32 NaNs become bits `0x7fc00000`, and all f64 NaNs become bits
+`0x7ff8000000000000`. This producer-side invariant includes results nested into
+later aggregates because aggregate construction consumes already-normalized
+locals. The `ConstStore` writer and target static-data materializer must freeze
+the value they receive and must not inspect, repair, or guess floating-point
+behavior. Consequently, the same checked initializer has byte-identical NaNs
+whether compile-time evaluation runs through the interpreter or native code,
+and regardless of the host used for cross-compilation.
+
+Runtime NaNs need not have identical in-memory bits, but Roc code must not be
+able to distinguish their sign or payload. The float `to_bits` operations and
+hashing canonicalize every NaN at their public observation boundaries, and
+`to_str` renders every NaN as `"nan"` without a sign. Fallible float-to-integer
+conversions and fallible f64-to-f32 narrowing reject non-finite inputs before
+conversion; wrapping float-to-integer conversions have explicit
+target-independent modulo behavior and map every non-finite input to zero.
+Encoders may distinguish NaN, positive infinity, and negative infinity, but not
+individual NaN representations. A new float operation or observation boundary
+must preserve these rules explicitly; a backend must never infer from its use
+whether normalization is required.
+
 Static initializer execution uses target-width symbolic memory rather than host
 pointers. Every allocation records its committed target layout, alignment,
 reference-count metadata, and relocations. Materialization freezes the graph

@@ -902,6 +902,8 @@ test "floatToStrBytes emits stable shortest representations" {
     try expectFloatToStr(f32, std.math.inf(f32), "inf");
     try expectFloatToStr(f32, -std.math.inf(f32), "-inf");
     try expectFloatToStr(f32, std.math.nan(f32), "nan");
+    try expectFloatToStr(f32, @bitCast(@as(u32, 0xff80_0001)), "nan");
+    try expectFloatToStr(f32, @bitCast(@as(u32, 0xffc1_2345)), "nan");
 
     try expectFloatToStr(f64, @as(f64, 0.0), "0");
     try expectFloatToStr(f64, @as(f64, -0.0), "-0");
@@ -912,6 +914,8 @@ test "floatToStrBytes emits stable shortest representations" {
     try expectFloatToStr(f64, std.math.inf(f64), "inf");
     try expectFloatToStr(f64, -std.math.inf(f64), "-inf");
     try expectFloatToStr(f64, std.math.nan(f64), "nan");
+    try expectFloatToStr(f64, @bitCast(@as(u64, 0xfff0_0000_0000_0001)), "nan");
+    try expectFloatToStr(f64, @bitCast(@as(u64, 0xfff9_2345_6789_abcd)), "nan");
 }
 
 /// Format a Roc float into a RocStr using the same implementation used by
@@ -1028,8 +1032,8 @@ pub fn substringUnsafeC(
     return substringUnsafe(string, start, length, roc_ops);
 }
 
-/// Result layout for `Str.find_first`.
-pub const FindFirstResult = struct {
+/// Result layout for `Str.split_first`.
+pub const SplitFirstResult = struct {
     before: RocStr,
     found: bool,
     after: RocStr,
@@ -1058,7 +1062,7 @@ fn smallStringFromPtr(bytes: [*]const u8, length: usize) RocStr {
 }
 
 /// Find the first delimiter occurrence and return seamless slices around it.
-pub fn findFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) FindFirstResult {
+pub fn splitFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitFirstResult {
     const source_bytes = source.asSlice();
     const delimiter_bytes = delimiter.asSlice();
 

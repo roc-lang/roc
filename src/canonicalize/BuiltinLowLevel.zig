@@ -218,8 +218,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
-    if (env.common.findIdent("str_find_first_raw")) |str_find_first_ident| {
-        try low_level_map.put(str_find_first_ident, .str_find_first);
+    if (env.common.findIdent("str_split_first_raw")) |str_split_first_ident| {
+        try low_level_map.put(str_split_first_ident, .str_split_first);
     }
     if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
         try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
@@ -503,9 +503,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
     // Bitwise shift operations (integer types only);
     for (integer_types) |num_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_left_by", .{num_type}, .num_shift_left_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_by", .{num_type}, .num_shift_right_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_zf_by", .{num_type}, .num_shift_right_zf_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shl_wrap", .{num_type}, .num_shift_left_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shr_wrap", .{num_type}, .num_shift_right_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shr_zf_wrap", .{num_type}, .num_shift_right_zf_by);
+    }
+
+    // Bit-counting operations (integer types only). The operand's layout carries
+    // the width, so a single low-level op serves every integer type. Each returns
+    // a U8 regardless of operand width.
+    for (integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_one_bits", .{num_type}, .num_count_one_bits);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_leading_zero_bits", .{num_type}, .num_count_leading_zero_bits);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_trailing_zero_bits", .{num_type}, .num_count_trailing_zero_bits);
     }
 
     // Bitwise logical operations (integer types only)

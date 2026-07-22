@@ -952,6 +952,9 @@ pub const CheckedEvidence = union(enum) {
     direct: EvidenceNodeId,
     constraint: EvidenceChainIndex,
     structural: StructuralDerivation,
+    /// The checker proved this nested-procedure obligation is the matching
+    /// evidence parameter projected from the concrete callable request.
+    from_callable,
     checked_error,
     /// The edge left this obligation's dispatcher unsolved: no value of that
     /// type can ever reach the dispatch (e.g. the `Ok` payload of a `Try` that
@@ -1637,11 +1640,17 @@ pub const StaticDispatchPlanTable = struct {
 
     /// Evidence for the scheme instantiated at `expr` (a constrained
     /// definition reference or an expression-position function construction
-    /// edge), in the scheme's canonical evidence-param order; null when the
-    /// use needed no evidence.
+    /// edge), in the scheme's canonical evidence-param order; null when no
+    /// checked instantiation edge was recorded for the expression.
     pub fn siteEvidence(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?[]const CheckedEvidence {
-        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        const found = self.siteEvidenceSpan(expr) orelse return null;
         return self.evidence_refs[found.start .. found.start + found.len];
+    }
+
+    /// Exact durable range for a checker-recorded instantiation edge.
+    pub fn siteEvidenceSpan(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?artifact_serialize.Span {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        return .{ .start = found.start, .len = found.len };
     }
 
     /// Build-time-only teardown: frees the heap-owned slices. A frozen

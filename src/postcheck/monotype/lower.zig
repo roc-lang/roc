@@ -24854,6 +24854,7 @@ const BodyContext = struct {
             ),
             else => Common.invariant("checked closure did not point at a lambda expression"),
         };
+        const nested_evidence = try self.evidenceForNestedSiteAtNode(nested, expr_id, request_fn_node);
         return try self.builder.lowerDraftNestedFromContext(
             self,
             expr_id,
@@ -24862,8 +24863,8 @@ const BodyContext = struct {
             self.view.types.rootKey(source_fn_ty),
             request_fn_node,
             capture_entry_guards,
-            self.evidence,
-            null,
+            nested_evidence.chain,
+            nested_evidence.owned_scope,
         );
     }
 
@@ -24998,9 +24999,8 @@ const BodyContext = struct {
     };
 
     /// Enter exactly the lexical dispatch scope recorded by checking for a
-    /// nested procedure. A generalized lambda literal has no separate use
-    /// edge to carry its evidence, so its producer-authored dispatcher paths
-    /// are instantiated over the concrete function request here.
+    /// nested procedure, consuming the producer-authored evidence source for
+    /// that construction edge.
     fn evidenceForNestedSiteAtNode(
         self: *BodyContext,
         nested: Ast.NestedFn,
@@ -25049,7 +25049,23 @@ const BodyContext = struct {
         const raw_scope = @intFromEnum(scope_id);
         const scope = self.view.templates.dispatch_scopes[raw_scope];
         const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
-        const vector = try self.synthesizeEvidenceParamsAtNode(self.view, params, request_fn_node);
+        const vector = switch (site.evidence_source) {
+            .inherited => Common.invariant("nested procedure that owned a dispatch scope declared inherited evidence"),
+            .checked_site => blk: {
+                const start: usize = site.evidence.start;
+                const len: usize = site.evidence.len;
+                if (start > self.view.static_dispatch_plans.evidence_refs.len or
+                    len > self.view.static_dispatch_plans.evidence_refs.len - start)
+                {
+                    Common.invariant("nested procedure checked evidence was outside the producer table");
+                }
+                break :blk try self.materializeNestedSiteEvidence(
+                    self.view.static_dispatch_plans.evidence_refs[start .. start + len],
+                    params,
+                    request_fn_node,
+                );
+            },
+        };
         return .{
             .chain = try enterEvidenceScope(self.builder, self.evidence, scope_id, expr_id, vector),
             .owned_scope = scope_id,
@@ -25976,6 +25992,45 @@ const BodyContext = struct {
         return out;
     }
 
+    /// Materialize the checker-authored recipe for one nested-procedure
+    /// construction. Callable-derived entries name the corresponding checked
+    /// evidence-param path explicitly; every other entry is already a final
+    /// checked resolution.
+    fn materializeNestedSiteEvidence(
+        self: *BodyContext,
+        refs: []const static_dispatch.CheckedEvidence,
+        params: []const static_dispatch.EvidenceParamRecord,
+        callable_node: NodeId,
+    ) Allocator.Error![]const SpecEvidence {
+        if (refs.len != params.len) {
+            Common.invariant("nested procedure evidence recipe length differed from its checked scope");
+        }
+        if (refs.len == 0) return &.{};
+
+        const arena = self.builder.evidence_arena.allocator();
+        const out = try arena.alloc(SpecEvidence, refs.len);
+        for (refs, params, 0..) |ref, param, i| {
+            out[i] = switch (ref) {
+                .from_callable => blk: {
+                    const path = self.view.templates.evidenceParamPath(param);
+                    if (path.len == 0) {
+                        Common.invariant("nested procedure callable evidence named a pathless checked parameter");
+                    }
+                    const component_node = try self.walkEvidencePathNode(self.view, callable_node, path) orelse
+                        Common.invariant("nested procedure callable evidence path did not match its checked request");
+                    break :blk try self.synthesizeComponentEvidenceAtNode(
+                        self.view,
+                        param.method,
+                        param.structural,
+                        component_node,
+                    );
+                },
+                else => try self.materializeEvidenceRef(ref),
+            };
+        }
+        return out;
+    }
+
     fn materializeEvidenceRef(self: *BodyContext, ref: static_dispatch.CheckedEvidence) Allocator.Error!SpecEvidence {
         switch (ref) {
             .direct => |node_id| {
@@ -25988,6 +26043,7 @@ const BodyContext = struct {
                 return entry;
             },
             .structural => |kind| return .{ .structural = kind },
+            .from_callable => Common.invariant("callable-derived checked evidence escaped a nested procedure construction recipe"),
             .checked_error => return .checked_error,
             .unreachable_value => return .unreachable_value,
         }

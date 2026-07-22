@@ -19,7 +19,7 @@ string_report = |seed| {
     utf8 = if seed == 0 { [82.U8, 111.U8, 99.U8] } else { [82.U8, 79.U8, 99.U8] }
     decoded = Str.from_utf8(utf8)
 
-    found = match Str.find_first("${roc}:lang", ":") {
+    found = match Str.split_first("${roc}:lang", ":") {
         Ok({ before, after }) => { before, after }
         Err(_) => { before: "<missing>", after: "<missing>" }
     }

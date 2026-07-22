@@ -360,7 +360,14 @@ pub fn main(init: std.process.Init) RunnerError!void {
             // Frontend-problem cases have nothing to execute differentially.
             switch (tc.expected) {
                 .problem, .problem_and_crash => continue,
-                .inspect_str, .allocations_at_most, .crash => {},
+                .inspect_str,
+                .allocations_at_most,
+                .comptime_f32_bits,
+                .comptime_f64_bits,
+                .comptime_f32_list_bits,
+                .comptime_f64_list_bits,
+                .crash,
+                => {},
             }
             try cases.append(gpa, .{
                 .name = tc.name,

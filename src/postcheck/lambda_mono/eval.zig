@@ -310,6 +310,7 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
+            .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
                 const prim = self.primitiveOf(expr.ty) orelse return self.unsupported_("int literal without primitive type");
                 const raw: i128 = switch (int_value.kind) {
@@ -442,14 +443,18 @@ pub const Evaluator = struct {
         const type_fields = self.program.types.fieldSpan(field_types);
         const out = self.alloc().alloc(Value, type_fields.len) catch return error.OutOfMemory;
         const field_exprs = self.program.fieldExprSpan(span);
-        // Evaluate in expression span order (observable through dbg), then place
-        // each value into the record type's field-span storage slot.
-        for (0..field_exprs.len) |i| {
-            const field_expr = GuardedList.at(field_exprs, i);
-            const value = try self.evalExpr(frame, field_expr.value);
-            const index = self.recordFieldIndex(type_fields, field_expr.name) orelse
-                return self.unsupported_("record field not found in record type");
-            out[index] = value;
+        // Records evaluate in their canonical type-field order, matching
+        // solved-to-LIR lowering; source field order is not semantically
+        // observable.
+        for (0..type_fields.len) |i| {
+            const type_field = GuardedList.at(type_fields, i);
+            const value_expr = for (0..field_exprs.len) |expr_index| {
+                const field_expr = GuardedList.at(field_exprs, expr_index);
+                if (self.program.names.recordFieldLabelTextEql(type_field.name, field_expr.name)) {
+                    break field_expr.value;
+                }
+            } else return self.unsupported_("record field not found in record expression");
+            out[i] = try self.evalExpr(frame, value_expr);
         }
         return .{ .record = out };
     }
@@ -1174,12 +1179,15 @@ pub const Evaluator = struct {
             .num_shift_left_by => self.numShift(args, arg_types, .shl),
             .num_shift_right_by => self.numShift(args, arg_types, .shr),
             .num_shift_right_zf_by => self.numShift(args, arg_types, .shr_zf),
+            .num_count_one_bits => self.numBitCount(args, arg_types, .count_ones),
+            .num_count_leading_zero_bits => self.numBitCount(args, arg_types, .count_leading_zeros),
+            .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
 
             .bool_not => .{ .bool_ = !truthy(args[0]) },
 
-            .f32_to_bits => self.canonicalInt(.u32, @as(u32, @bitCast(args[0].float32))),
+            .f32_to_bits => self.canonicalInt(.u32, builtins.float_bits.normalizeF32NanBits(@bitCast(args[0].float32))),
             .f32_from_bits => .{ .float32 = @bitCast(readInt(u32, args[0])) },
-            .f64_to_bits => self.canonicalInt(.u64, @as(i128, @as(u64, @bitCast(args[0].float64)))),
+            .f64_to_bits => self.canonicalInt(.u64, @as(i128, builtins.float_bits.normalizeF64NanBits(@bitCast(args[0].float64)))),
             .f64_from_bits => .{ .float64 = @bitCast(readInt(u64, args[0])) },
 
             .u8_to_str,
@@ -1216,7 +1224,7 @@ pub const Evaluator = struct {
             .str_drop_prefix,
             .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
-            .str_find_first,
+            .str_split_first,
             .str_count_utf8_bytes,
             .str_with_capacity,
             .str_reserve,
@@ -1508,6 +1516,18 @@ pub const Evaluator = struct {
     }
 
     fn floatMath1(comptime F: type, x: F, op: FloatMath1) F {
+        if (F == f32) {
+            return switch (op) {
+                .sqrt => @sqrt(x),
+                .sin => builtins.float_math_f32.sin(x),
+                .cos => builtins.float_math_f32.cos(x),
+                .tan => builtins.float_math_f32.tan(x),
+                .asin => builtins.float_math_f32.asin(x),
+                .acos => builtins.float_math_f32.acos(x),
+                .atan => builtins.float_math_f32.atan(x),
+                .log => builtins.float_math_f32.log(x),
+            };
+        }
         return switch (op) {
             .sqrt => @sqrt(x),
             .sin => std.math.sin(x),
@@ -1523,7 +1543,7 @@ pub const Evaluator = struct {
     fn numFloatMath2(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, _: enum { pow }) EvalError!Value {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("pow operand without primitive type");
         switch (prim) {
-            .f32 => return .{ .float32 = std.math.pow(f32, args[0].float32, args[1].float32) },
+            .f32 => return .{ .float32 = builtins.float_math_f32.pow(args[0].float32, args[1].float32) },
             .f64 => return .{ .float64 = std.math.pow(f64, args[0].float64, args[1].float64) },
             .dec => return self.unsupported_("dec transcendental op"),
             else => return self.unsupported_("integer pow op"),
@@ -1592,13 +1612,8 @@ pub const Evaluator = struct {
     fn shiftOp(comptime T: type, av: T, amount: u8, op: ShiftOp) T {
         const Bits = std.math.Log2Int(T);
         const max_bits = @typeInfo(T).int.bits;
-        if (amount >= max_bits) {
-            return switch (op) {
-                .shr => if (@typeInfo(T).int.signedness == .signed and av < 0) @as(T, -1) else 0,
-                .shl, .shr_zf => 0,
-            };
-        }
-        const shift: Bits = @intCast(amount);
+        // The shift count is taken modulo the bit width, matching every backend.
+        const shift: Bits = @intCast(amount % max_bits);
         return switch (op) {
             .shl => av << shift,
             .shr => av >> shift,
@@ -1606,6 +1621,28 @@ pub const Evaluator = struct {
                 const U = std.meta.Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
+        };
+    }
+
+    const BitCountOp = enum { count_ones, count_leading_zeros, count_trailing_zeros };
+
+    /// Count one/leading-zero/trailing-zero bits. The result is always a U8,
+    /// independent of the operand width. `@clz`/`@ctz` of 0 return the operand's
+    /// bit width, matching the spec.
+    fn numBitCount(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, op: BitCountOp) EvalError!Value {
+        const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("bit-count operand without primitive type");
+        return switch (prim) {
+            inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                const a = readAs(T, args[0]);
+                const count: u8 = switch (op) {
+                    .count_ones => @popCount(a),
+                    .count_leading_zeros => @clz(a),
+                    .count_trailing_zeros => @ctz(a),
+                };
+                break :blk makeInt(u8, count);
+            },
+            else => self.unsupported_("bit-count on non-integer type"),
         };
     }
 
@@ -1731,7 +1768,7 @@ pub const Evaluator = struct {
             .str_join_with => return try self.strJoinWith(args[0], args[1].str),
             .str_inspect => return .{ .str = try self.strInspect(args[0].str) },
             .str_drop_prefix_caseless_ascii => return try self.strDropPrefixCaseless(result_ty, args[0].str, args[1].str),
-            .str_find_first => return try self.strFindFirst(result_ty, args[0].str, args[1].str),
+            .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
@@ -1821,7 +1858,7 @@ pub const Evaluator = struct {
         });
     }
 
-    fn strFindFirst(self: *Evaluator, result_ty: Type.TypeId, source: []const u8, delimiter: []const u8) EvalError!Value {
+    fn strSplitFirst(self: *Evaluator, result_ty: Type.TypeId, source: []const u8, delimiter: []const u8) EvalError!Value {
         var before: []const u8 = "";
         var after: []const u8 = "";
         var found = false;
@@ -2163,7 +2200,7 @@ pub const Evaluator = struct {
                     .plain, .wrap => self.canonicalInt(dst, value.int),
                     .try_ => blk: {
                         const fits = intFitsPrim(dst, value.int);
-                        break :blk self.buildTryRecord(result_ty, dst, fits, if (fits) self.canonicalInt(dst, value.int) else self.zeroValue(dst));
+                        break :blk self.buildTryRecord(result_ty, fits, if (fits) self.canonicalInt(dst, value.int) else self.zeroValue(dst));
                     },
                     else => self.unsupported_("unexpected int-to-int conversion kind"),
                 },
@@ -2172,7 +2209,7 @@ pub const Evaluator = struct {
                     .plain => .{ .dec = @as(i128, @intCast(intWhole(src, value))) *% RocDec.one_point_zero_i128 },
                     .try_unsafe => blk: {
                         const maybe = intToDecTry(src, value);
-                        break :blk self.buildTryRecord(result_ty, .dec, maybe != null, .{ .dec = maybe orelse 0 });
+                        break :blk self.buildTryRecord(result_ty, maybe != null, .{ .dec = maybe orelse 0 });
                     },
                     else => self.unsupported_("unexpected int-to-dec conversion kind"),
                 },
@@ -2185,7 +2222,7 @@ pub const Evaluator = struct {
                         .trunc => self.canonicalInt(dst, floatToIntWrapPrim(F, dst, fv)),
                         .try_unsafe => inner: {
                             const maybe = floatToIntTryPrim(F, dst, fv);
-                            break :inner self.buildTryRecord(result_ty, dst, maybe != null, if (maybe) |m| self.canonicalInt(dst, m) else self.zeroValue(dst));
+                            break :inner self.buildTryRecord(result_ty, maybe != null, if (maybe) |m| self.canonicalInt(dst, m) else self.zeroValue(dst));
                         },
                         else => self.unsupported_("unexpected float-to-int conversion kind"),
                     };
@@ -2195,9 +2232,9 @@ pub const Evaluator = struct {
                     break :blk switch (kind) {
                         .plain, .wrap => floatValueOf(dst, sv),
                         .try_unsafe => inner: {
-                            const in_range = std.math.isFinite(sv) and sv <= std.math.floatMax(f32) and sv >= -std.math.floatMax(f32);
+                            const in_range = builtins.numeric_conversions.f64FitsF32(sv);
                             const casted: f64 = if (in_range) @floatCast(sv) else 0;
-                            break :inner self.buildTryRecord(result_ty, dst, in_range, floatValueOf(dst, casted));
+                            break :inner self.buildTryRecord(result_ty, in_range, floatValueOf(dst, casted));
                         },
                         else => self.unsupported_("unexpected float-to-float conversion kind"),
                     };
@@ -2209,15 +2246,18 @@ pub const Evaluator = struct {
                     .trunc => self.decToIntWrap(dst, value.dec),
                     .try_unsafe => blk: {
                         const maybe = decToIntTry(dst, value.dec);
-                        break :blk self.buildTryRecord(result_ty, dst, maybe != null, if (maybe) |m| self.canonicalInt(dst, m) else self.zeroValue(dst));
+                        break :blk self.buildTryRecord(result_ty, maybe != null, if (maybe) |m| self.canonicalInt(dst, m) else self.zeroValue(dst));
                     },
                     else => self.unsupported_("unexpected dec-to-int conversion kind"),
                 },
                 .float => switch (kind) {
-                    .plain, .wrap => floatValueOf(dst, RocDec.toF64(.{ .num = value.dec })),
+                    .plain, .wrap => if (dst == .f32)
+                        .{ .float32 = builtins.dec.toF32(.{ .num = value.dec }) }
+                    else
+                        .{ .float64 = RocDec.toF64(.{ .num = value.dec }) },
                     .try_unsafe => blk: {
                         const maybe = builtins.dec.toF32Try(.{ .num = value.dec });
-                        break :blk self.buildTryRecord(result_ty, dst, maybe != null, .{ .float32 = maybe orelse 0 });
+                        break :blk self.buildTryRecord(result_ty, maybe != null, .{ .float32 = maybe orelse 0 });
                     },
                     else => self.unsupported_("unexpected dec-to-float conversion kind"),
                 },
@@ -2235,9 +2275,9 @@ pub const Evaluator = struct {
         return self.canonicalInt(prim, 0);
     }
 
-    /// Build a two-field try record `{ value, is_ok }` for a conversion result,
-    /// placing the bool-typed field with `ok` and the other field with `value`.
-    fn buildTryRecord(self: *Evaluator, result_ty: Type.TypeId, comptime _: Primitive, ok: bool, value: Value) EvalError!Value {
+    /// Build the explicitly named unsafe-conversion record, or the public
+    /// `Try` tag union used by an integer conversion.
+    fn buildTryRecord(self: *Evaluator, result_ty: Type.TypeId, ok: bool, value: Value) EvalError!Value {
         // A checked conversion result is bit-identical whether the front end
         // typed it as a `{ value, is_ok }` record or a `Result` tag union: the
         // `is_ok` flag is the Ok/Err discriminant. Build whichever the type says.
@@ -2247,15 +2287,13 @@ pub const Evaluator = struct {
             else => return self.unsupported_("expected try-record result type"),
         };
         if (type_fields.len != 2) return self.unsupported_("expected two-field try record");
+        const success_index = self.recordFieldIndexByText(type_fields, "success") orelse
+            return self.unsupported_("unsafe conversion record omitted success field");
+        const value_index = self.recordFieldIndexByText(type_fields, "val_or_memory_garbage") orelse
+            return self.unsupported_("unsafe conversion record omitted value field");
         const out = self.alloc().alloc(Value, 2) catch return error.OutOfMemory;
-        for (0..2) |i| {
-            const field_ty = GuardedList.at(type_fields, i).ty;
-            const is_bool = switch (self.structural(field_ty)) {
-                .primitive => |p| p == .bool,
-                else => false,
-            };
-            out[i] = if (is_bool) .{ .bool_ = ok } else value;
-        }
+        out[success_index] = self.canonicalInt(.u8, @intFromBool(ok));
+        out[value_index] = value;
         return .{ .record = out };
     }
 
@@ -2463,30 +2501,18 @@ fn floatToIntTryPrim(comptime F: type, comptime dst: Primitive, value: F) ?i128 
     };
 }
 
-/// Mirror the interpreter's `floatToIntWrap`: NaN/Inf yield 0; targets of 64
-/// bits or fewer modulus-wrap; 128-bit targets range-check then convert or 0.
+/// Mirror the interpreter's target-independent wrapping float conversion.
 fn floatToIntWrapPrim(comptime F: type, comptime dst: Primitive, value: F) i128 {
     const T = intType(dst);
-    if (std.math.isNan(value) or std.math.isInf(value)) return 0;
-    const truncated = @trunc(value);
     const info = @typeInfo(T).int;
-    if (info.bits <= 64) {
-        const U = std.meta.Int(.unsigned, info.bits);
-        const modulus: F = @floatFromInt(@as(u128, 1) << info.bits);
-        var remainder = @mod(truncated, modulus);
-        if (remainder < 0) remainder += modulus;
-        if (remainder >= modulus) remainder = 0;
-        const unsigned: U = @intFromFloat(remainder);
-        const typed: T = @bitCast(unsigned);
-        return signedI128(T, typed);
-    }
-    const min_val: F = if (info.signedness == .signed) @floatFromInt(std.math.minInt(T)) else 0;
-    const max_val: F = @floatFromInt(std.math.maxInt(T));
-    if (truncated >= min_val and truncated <= max_val) {
-        const typed: T = @intFromFloat(truncated);
-        return signedI128(T, typed);
-    }
-    return 0;
+    const U = std.meta.Int(.unsigned, info.bits);
+    const raw_bits = builtins.numeric_conversions.floatToIntWrapBits(
+        F,
+        value,
+        info.bits,
+    );
+    const typed: T = @bitCast(@as(U, @truncate(raw_bits)));
+    return signedI128(T, typed);
 }
 
 fn signedI128(comptime T: type, x: T) i128 {

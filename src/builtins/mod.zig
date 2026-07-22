@@ -10,6 +10,8 @@ pub const dec = @import("dec.zig");
 pub const crypto = @import("crypto.zig");
 pub const dev_wrappers = @import("dev_wrappers.zig");
 pub const erased_callable = @import("erased_callable.zig");
+pub const float_bits = @import("float_bits.zig");
+pub const float_math_f32 = @import("float_math/f32.zig");
 pub const hash = @import("hash.zig");
 pub const list = @import("list.zig");
 pub const num = @import("num.zig");
@@ -25,6 +27,8 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("dec.zig"));
     std.testing.refAllDecls(@import("dev_wrappers.zig"));
     std.testing.refAllDecls(@import("erased_callable.zig"));
+    std.testing.refAllDecls(@import("float_bits.zig"));
+    std.testing.refAllDecls(@import("float_math/f32.zig"));
     std.testing.refAllDecls(@import("float_math/tan.zig"));
     std.testing.refAllDecls(@import("hash.zig"));
     std.testing.refAllDecls(@import("host_abi.zig"));

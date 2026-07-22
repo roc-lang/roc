@@ -77,7 +77,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{});
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
@@ -129,7 +129,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     });
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{});
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 

@@ -7234,7 +7234,7 @@ test "check type - def order independence - passive literal def after its constr
 // DIFFERENT integer-only methods share a component (`a`'s `bitwise_and` mentions
 // `b`). The group policy must (1) pick one candidate for the whole group — Dec
 // is refuted by the method-lookup miss, so the first surviving integer, I64,
-// wins — and (2) exempt passives from the forced assignment: `shift_left_by : T,
+// wins — and (2) exempt passives from the forced assignment: `shl_wrap : T,
 // U8 -> T` pins the shift-amount literal `3` to U8 via the method signature;
 // force-assigning it the group candidate (I64) would fail every candidate and
 // head-default the drivers to Dec, erroring. Both def orders must accept with
@@ -7242,7 +7242,7 @@ test "check type - def order independence - passive literal def after its constr
 test "check type - def order independence - heterogeneous multi-driver group (linking def first)" {
     const source =
         \\a = (1).bitwise_and(b)
-        \\b = (2).shift_left_by(3)
+        \\b = (2).shl_wrap(3)
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "a", .expected = "I64" },
@@ -7252,7 +7252,7 @@ test "check type - def order independence - heterogeneous multi-driver group (li
 
 test "check type - def order independence - heterogeneous multi-driver group (linking def last)" {
     const source =
-        \\b = (2).shift_left_by(3)
+        \\b = (2).shl_wrap(3)
         \\a = (1).bitwise_and(b)
     ;
     try checkTypesModuleDefs(source, &.{
@@ -7293,19 +7293,19 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 
 // BOUNDARY GROUP DEFAULTING: the same interference-component machinery must run
 // at a def's generalization boundary, not just at module finalize.
-// `(5).plus((2).shift_left_by(3))` puts two DRIVER literals in one component
+// `(5).plus((2).shl_wrap(3))` puts two DRIVER literals in one component
 // (`5`'s `plus` signature reaches the inner dispatch's return — `2`'s constraint
 // signature's return). At top level this resolves via `finalizeLiteralDefaults`'
-// group policy (Dec refuted by the `shift_left_by` lookup miss; first surviving
+// group policy (Dec refuted by the `shl_wrap` lookup miss; first surviving
 // integer, I64, wins). Wrapped in a function, the literals are NOT
 // signature-reachable, so the BOUNDARY must default them — using the same group
 // policy. Before the boundary shared this machinery, it committed literals
 // one-by-one in var-pool order: `5`'s Dec probe speculatively pinned the inner
 // dispatch's return before `2`'s integer-only constraint was consulted, so the
-// def erred (MISSING METHOD `shift_left_by` on Dec) while the identical
+// def erred (MISSING METHOD `shl_wrap` on Dec) while the identical
 // top-level expression type-checked. Exactly one LITERAL DEFAULTED warning:
 // `5`'s `plus` signature reaches the def's return type (the leak), while `2`'s
-// `shift_left_by` signature touches nothing signature-reachable (def-local
+// `shl_wrap` signature touches nothing signature-reachable (def-local
 // default, silent) and `3` is a passive pinned to U8 by the fired signature
 // (never warned).
 //
@@ -7315,7 +7315,7 @@ test "check type - def order independence - mixed quote+numeral multi-driver gro
 // literal group never spans local statements.)
 test "check type - boundary defaulting - heterogeneous multi-driver group inside a function" {
     const source =
-        \\g = |_x| (5).plus((2).shift_left_by(3))
+        \\g = |_x| (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass_with_warnings = .{
         .def = .last_def,
@@ -7328,7 +7328,7 @@ test "check type - boundary defaulting - heterogeneous multi-driver group inside
 // outcome (modulo the boundary's leak warning).
 test "check type - finalize defaulting - heterogeneous multi-driver group at top level" {
     const source =
-        \\top = (5).plus((2).shift_left_by(3))
+        \\top = (5).plus((2).shl_wrap(3))
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }

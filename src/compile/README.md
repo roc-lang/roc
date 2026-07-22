@@ -99,7 +99,13 @@ const view = try lir.LirImage.viewMappedImage(
 );
 
 // 7. Execute via the interpreter.
-var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &my_roc_ops);
+var interp = try eval.LirInterpreter.init(
+    gpa,
+    &view.store,
+    &view.layouts,
+    &my_roc_ops,
+    .preserve,
+);
 defer interp.deinit();
 _ = try interp.runEntrypoint(&view, 0, &args, &result_buf);
 ```

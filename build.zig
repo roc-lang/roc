@@ -340,6 +340,43 @@ const TestSuiteSpec = struct {
     default_step: bool = false,
 };
 
+/// Configures Roc's registered Zig unit tests to use Zig's stock runner with
+/// stack-trace capture controlled by `-Ddebug-gpa-traces`.
+const UnitTestRunner = struct {
+    path: std.Build.LazyPath,
+    build_options: *std.Build.Module,
+    zig_default_test_runner: *std.Build.Module,
+
+    fn configure(self: UnitTestRunner, compile: *Step.Compile) void {
+        compile.root_module.addImport("build_options", self.build_options);
+        compile.root_module.addImport("zig_default_test_runner", self.zig_default_test_runner);
+        compile.test_runner = .{
+            .path = self.path,
+            .mode = runnerMode(compile),
+        };
+    }
+
+    /// Keep in sync with `std.Build.addRunArtifact` and Zig's stock test
+    /// runner. These backends use the simple exit-code protocol; all others
+    /// use `std.zig.Server`.
+    fn runnerMode(compile: *Step.Compile) @FieldType(Step.Compile.TestRunner, "mode") {
+        if (compile.use_llvm == false) {
+            return switch (compile.rootModuleTarget().cpu.arch) {
+                .aarch64,
+                .aarch64_be,
+                .powerpc,
+                .powerpcle,
+                .powerpc64,
+                .powerpc64le,
+                .riscv64,
+                => .simple,
+                else => .server,
+            };
+        }
+        return .server;
+    }
+};
+
 /// Owns every cross-cutting edge a Zig test suite needs, so that a suite is
 /// wired up in exactly one call.
 ///
@@ -361,6 +398,7 @@ const TestSuiteRegistry = struct {
     b: *std.Build,
     summary: *TestsSummaryStep,
     build_test_zig_step: *Step,
+    unit_test_runner: UnitTestRunner,
     /// Non-null only while the test-wiring check is enumerating test binaries.
     wiring_run: ?*Step.Run,
     /// Args forwarded from `zig build -- <args>`, e.g. `--test-filter`.
@@ -368,6 +406,8 @@ const TestSuiteRegistry = struct {
 
     fn register(self: TestSuiteRegistry, spec: TestSuiteSpec) void {
         const b = self.b;
+
+        self.unit_test_runner.configure(spec.compile);
 
         // Build-side wiring, uniform for every suite.
         self.build_test_zig_step.dependOn(&spec.compile.step);
@@ -2603,7 +2643,7 @@ pub fn build(b: *std.Build) void {
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
     const debug_gpa = b.option(bool, "debug-gpa", "Use the leak-checking DebugAllocator for the roc binary even when libc is linked (default: off, so libc's malloc and its ASan/Valgrind/LD_PRELOAD tooling are used)") orelse false;
     const linker_warnings = b.option(bool, "linker-warnings", "Surface all embedded LLD linker warnings (default: off; suppressed with -w)") orelse false;
-    const debug_gpa_traces = b.option(bool, "debug-gpa-traces", "Capture an allocation-site stack trace on every DebugAllocator allocation so leak reports show where the leaked memory was allocated (default: off, because capturing traces dominates Debug-build runtime; leaks are detected either way)") orelse false;
+    const debug_gpa_traces = b.option(bool, "debug-gpa-traces", "Capture DebugAllocator allocation sites and enable Zig unit-test stack traces (default: off, because capturing traces dominates Debug-build runtime; leaks are detected either way)") orelse false;
     const shared_memory_size = b.option(u64, "shared-memory-size", "Explicitly set shared-memory arena sizes in bytes");
     const print_trmc = b.option(bool, "print-trmc", "Print one line for each transformed TRMC/TCE proc") orelse false;
     const print_ir_after_trmc = b.option(bool, "print-ir-after-trmc", "Print full LIR for each proc transformed by TRMC/TCE") orelse false;
@@ -2774,6 +2814,14 @@ pub fn build(b: *std.Build) void {
     });
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
+    const zig_unit_test_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
+    const unit_test_runner = UnitTestRunner{
+        .path = b.path("src/build/unit_test_runner.zig"),
+        .build_options = roc_modules.build_options,
+        .zig_default_test_runner = b.createModule(.{
+            .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_unit_test_lib_path, "compiler/test_runner.zig" }) },
+        }),
+    };
 
     // Build-time compiler for builtin .roc modules
     //
@@ -4559,6 +4607,7 @@ pub fn build(b: *std.Build) void {
         .b = b,
         .summary = tests_summary,
         .build_test_zig_step = build_test_zig_step,
+        .unit_test_runner = unit_test_runner,
         .wiring_run = if (enumerate_tests_for_wiring_check) run_test_wiring else null,
         .run_args = run_args,
     };

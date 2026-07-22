@@ -307,6 +307,7 @@ fn runEchoView(
         &view.store,
         &view.layouts,
         &roc_ops,
+        .preserve,
     ) catch |err| {
         diag.step("LirInterpreter.init", err);
         return err;

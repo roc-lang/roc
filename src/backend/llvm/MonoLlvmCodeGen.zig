@@ -295,7 +295,7 @@ pub const MonoLlvmCodeGen = struct {
         inner_bad_utf8_tag: u32,
     };
 
-    const StrFindFirstLayoutInfo = struct {
+    const StrSplitFirstLayoutInfo = struct {
         after_offset: u32,
         before_offset: u32,
         found_offset: u32,
@@ -2895,6 +2895,10 @@ pub const MonoLlvmCodeGen = struct {
             .num_bitwise_xor,
             => try self.emitNumericBinary(target, op, arg_locals),
             .num_bitwise_not => try self.emitNumericBitwiseNot(target, GuardedList.at(arg_locals, 0)),
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            => try self.emitNumericBitCount(target, op, GuardedList.at(arg_locals, 0)),
             .num_negate, .num_negate_checked => try self.emitNumericNegate(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs, .num_abs_checked => try self.emitNumericAbs(target, op, GuardedList.at(arg_locals, 0)),
             .num_abs_diff => try self.emitNumericAbsDiff(target, arg_locals),
@@ -2903,12 +2907,12 @@ pub const MonoLlvmCodeGen = struct {
             else
                 try self.emitNumericFloatBinaryIntrinsic(target, arg_locals, .pow),
             .num_sqrt => try self.emitNumericSqrt(target, GuardedList.at(arg_locals, 0)),
-            .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_sin)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_sin))),
-            .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_cos)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_cos))),
-            .num_tan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_tan)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_tan))),
-            .num_asin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_asin)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_asin))),
-            .num_acos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_acos)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_acos))),
-            .num_atan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), builtinSymbol(LowLevelBuiltins.unaryMathFloat(.num_atan)), builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_atan))),
+            .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_sin),
+            .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_cos),
+            .num_tan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_tan),
+            .num_asin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_asin),
+            .num_acos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_acos),
+            .num_atan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_atan),
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, GuardedList.at(arg_locals, 0), .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, GuardedList.at(arg_locals, 0), .ceil),
             .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
@@ -2940,7 +2944,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, GuardedList.at(arg_locals, 0)),
             .str_get_utf8_byte_unsafe => try self.emitStrGetUtf8ByteUnsafe(target, arg_locals),
             .str_substring_unsafe => try self.emitStrSubstringUnsafe(target, arg_locals),
-            .str_find_first => try self.emitStrFindFirst(target, arg_locals),
+            .str_split_first => try self.emitStrSplitFirst(target, arg_locals),
             .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
             .str_concat => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_concat)), arg_locals, unique_args),
             .str_trim => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim)), GuardedList.at(arg_locals, 0), unique_args),
@@ -3263,11 +3267,24 @@ pub const MonoLlvmCodeGen = struct {
         rhs = try self.coerceScalar(rhs, result_ty, self.localLayout(GuardedList.at(args, 1)).isSigned());
         const result = if (isFloatLayout(target_layout)) blk: {
             if (checked_op != null) return error.UnsupportedLowLevel;
+
+            if (plain_op == .num_div_trunc_by) {
+                const quotient = wip.bin(.fdiv, lhs, rhs, "") catch return error.OutOfMemory;
+                break :blk wip.callIntrinsic(
+                    .normal,
+                    .none,
+                    .trunc,
+                    &.{result_ty},
+                    &.{quotient},
+                    "",
+                ) catch return error.OutOfMemory;
+            }
+
             const tag: LlvmBuilder.Function.Instruction.Tag = switch (plain_op) {
                 .num_plus => .fadd,
                 .num_minus => .fsub,
                 .num_times => .fmul,
-                .num_div_by, .num_div_trunc_by => .fdiv,
+                .num_div_by => .fdiv,
                 .num_rem_by, .num_mod_by => .frem,
                 else => return error.UnsupportedLowLevel,
             };
@@ -3415,27 +3432,22 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const result_ty = self.scalarType(target_layout);
-        const shift_bits = builder.intValue(.i8, self.intBits(target_layout)) catch return error.OutOfMemory;
+        const width = self.intBits(target_layout);
         const rhs_u8 = try self.coerceScalar(rhs, .i8, false);
-        const too_large = wip.icmp(.uge, rhs_u8, shift_bits, "") catch return error.OutOfMemory;
         const amount = try self.coerceScalar(rhs_u8, result_ty, false);
-        if (op == .num_shift_right_by and target_layout.isSigned()) {
-            // Arithmetic right shift keeps filling with sign bits, so any
-            // amount >= the bit width behaves like shifting by bits - 1.
-            const max_amount = builder.intValue(result_ty, self.intBits(target_layout) - 1) catch return error.OutOfMemory;
-            const safe_amount = wip.select(.normal, too_large, max_amount, amount, "") catch return error.OutOfMemory;
-            return wip.bin(.ashr, lhs, safe_amount, "") catch return error.OutOfMemory;
-        }
-        const zero_amount = builder.zeroInitValue(result_ty) catch return error.OutOfMemory;
-        const safe_amount = wip.select(.normal, too_large, zero_amount, amount, "") catch return error.OutOfMemory;
+        // The shift count is taken modulo the bit width. The widths are all
+        // powers of two, so that is a bitwise AND with (width - 1). Masking also
+        // keeps LLVM's shl/lshr/ashr out of poison territory (their result is
+        // poison when the count is >= the bit width).
+        const mask = builder.intValue(result_ty, width - 1) catch return error.OutOfMemory;
+        const masked_amount = wip.bin(.@"and", amount, mask, "") catch return error.OutOfMemory;
         const tag: LlvmBuilder.Function.Instruction.Tag = switch (op) {
             .num_shift_left_by => .shl,
-            .num_shift_right_by, .num_shift_right_zf_by => .lshr,
+            .num_shift_right_by => if (target_layout.isSigned()) .ashr else .lshr,
+            .num_shift_right_zf_by => .lshr,
             else => unreachable,
         };
-        const shifted = wip.bin(tag, lhs, safe_amount, "") catch return error.OutOfMemory;
-        const zero_result = builder.zeroInitValue(result_ty) catch return error.OutOfMemory;
-        return wip.select(.normal, too_large, zero_result, shifted, "") catch return error.OutOfMemory;
+        return wip.bin(tag, lhs, masked_amount, "") catch return error.OutOfMemory;
     }
 
     fn emitDecBinary(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
@@ -3564,6 +3576,49 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
+    /// Lower a bit-counting op (`count_one_bits`/`count_leading_zero_bits`/
+    /// `count_trailing_zero_bits`) to the corresponding LLVM intrinsic on the
+    /// operand's integer type (i8..i128; LLVM legalizes i128 itself). The
+    /// ctlz/cttz `is_zero_poison` flag is FALSE so a zero operand yields the
+    /// bit width, matching the spec. The intrinsic result has the operand's
+    /// width; `storeScalar` truncates it to the declared U8 return.
+    fn emitNumericBitCount(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const target_layout = self.localLayout(target);
+        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value_ty = value.typeOfWip(wip);
+        const zero_is_not_poison = builder.intValue(.i1, 0) catch return error.OutOfMemory;
+        const result = switch (op) {
+            .num_count_one_bits => wip.callIntrinsic(
+                .normal,
+                .none,
+                .ctpop,
+                &.{value_ty},
+                &.{value},
+                "",
+            ) catch return error.OutOfMemory,
+            .num_count_leading_zero_bits => wip.callIntrinsic(
+                .normal,
+                .none,
+                .ctlz,
+                &.{value_ty},
+                &.{ value, zero_is_not_poison },
+                "",
+            ) catch return error.OutOfMemory,
+            .num_count_trailing_zero_bits => wip.callIntrinsic(
+                .normal,
+                .none,
+                .cttz,
+                &.{value_ty},
+                &.{ value, zero_is_not_poison },
+                "",
+            ) catch return error.OutOfMemory,
+            else => unreachable,
+        };
+        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+    }
+
     fn emitNumericAbs(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -3646,6 +3701,18 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitFloatToIntTryUnsafeConversion(target, GuardedList.at(args, 0));
                 return;
             },
+            .f64_to_f32_try_unsafe => {
+                try self.emitF64ToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
+                return;
+            },
+            .dec_to_f32_try_unsafe => {
+                try self.emitDecToF32TryUnsafeConversion(target, GuardedList.at(args, 0));
+                return;
+            },
+            .dec_to_f32_wrap, .dec_to_f64 => {
+                try self.emitDecToFloatConversion(target, GuardedList.at(args, 0), op == .dec_to_f32_wrap);
+                return;
+            },
             .dec_to_i8_try_unsafe,
             .dec_to_i16_try_unsafe,
             .dec_to_i32_try_unsafe,
@@ -3690,6 +3757,19 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.emitCrashBytes(name);
+    }
+
+    fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
+        const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(dec_value);
+        const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
+        const result = try self.callBuiltin(
+            LowLevelBuiltins.decToFloat(is_f32).symbolName(),
+            float_ty,
+            &.{ .i64, .i64 },
+            &.{ parts.low, parts.high },
+        );
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
     const FloatDecIntTryUnsafeInfo = struct {
@@ -3742,40 +3822,28 @@ pub const MonoLlvmCodeGen = struct {
     const FloatToIntTruncInfo = struct {
         src_is_f32: bool,
         target_bits: u8,
-        target_signed: bool,
     };
 
     fn floatToIntTruncInfo(op: lir.LowLevel) ?FloatToIntTruncInfo {
         return switch (op) {
-            .f32_to_i8_trunc => .{ .src_is_f32 = true, .target_bits = 8, .target_signed = true },
-            .f32_to_i16_trunc => .{ .src_is_f32 = true, .target_bits = 16, .target_signed = true },
-            .f32_to_i32_trunc => .{ .src_is_f32 = true, .target_bits = 32, .target_signed = true },
-            .f32_to_i64_trunc => .{ .src_is_f32 = true, .target_bits = 64, .target_signed = true },
-            .f32_to_i128_trunc => .{ .src_is_f32 = true, .target_bits = 128, .target_signed = true },
-            .f32_to_u8_trunc => .{ .src_is_f32 = true, .target_bits = 8, .target_signed = false },
-            .f32_to_u16_trunc => .{ .src_is_f32 = true, .target_bits = 16, .target_signed = false },
-            .f32_to_u32_trunc => .{ .src_is_f32 = true, .target_bits = 32, .target_signed = false },
-            .f32_to_u64_trunc => .{ .src_is_f32 = true, .target_bits = 64, .target_signed = false },
-            .f32_to_u128_trunc => .{ .src_is_f32 = true, .target_bits = 128, .target_signed = false },
-            .f64_to_i8_trunc => .{ .src_is_f32 = false, .target_bits = 8, .target_signed = true },
-            .f64_to_i16_trunc => .{ .src_is_f32 = false, .target_bits = 16, .target_signed = true },
-            .f64_to_i32_trunc => .{ .src_is_f32 = false, .target_bits = 32, .target_signed = true },
-            .f64_to_i64_trunc => .{ .src_is_f32 = false, .target_bits = 64, .target_signed = true },
-            .f64_to_i128_trunc => .{ .src_is_f32 = false, .target_bits = 128, .target_signed = true },
-            .f64_to_u8_trunc => .{ .src_is_f32 = false, .target_bits = 8, .target_signed = false },
-            .f64_to_u16_trunc => .{ .src_is_f32 = false, .target_bits = 16, .target_signed = false },
-            .f64_to_u32_trunc => .{ .src_is_f32 = false, .target_bits = 32, .target_signed = false },
-            .f64_to_u64_trunc => .{ .src_is_f32 = false, .target_bits = 64, .target_signed = false },
-            .f64_to_u128_trunc => .{ .src_is_f32 = false, .target_bits = 128, .target_signed = false },
+            .f32_to_i8_trunc, .f32_to_u8_trunc => .{ .src_is_f32 = true, .target_bits = 8 },
+            .f32_to_i16_trunc, .f32_to_u16_trunc => .{ .src_is_f32 = true, .target_bits = 16 },
+            .f32_to_i32_trunc, .f32_to_u32_trunc => .{ .src_is_f32 = true, .target_bits = 32 },
+            .f32_to_i64_trunc, .f32_to_u64_trunc => .{ .src_is_f32 = true, .target_bits = 64 },
+            .f32_to_i128_trunc, .f32_to_u128_trunc => .{ .src_is_f32 = true, .target_bits = 128 },
+            .f64_to_i8_trunc, .f64_to_u8_trunc => .{ .src_is_f32 = false, .target_bits = 8 },
+            .f64_to_i16_trunc, .f64_to_u16_trunc => .{ .src_is_f32 = false, .target_bits = 16 },
+            .f64_to_i32_trunc, .f64_to_u32_trunc => .{ .src_is_f32 = false, .target_bits = 32 },
+            .f64_to_i64_trunc, .f64_to_u64_trunc => .{ .src_is_f32 = false, .target_bits = 64 },
+            .f64_to_i128_trunc, .f64_to_u128_trunc => .{ .src_is_f32 = false, .target_bits = 128 },
             else => null,
         };
     }
 
     /// Wrapping float→int conversion: the builtin wrapper implements Roc's
-    /// wrap semantics (NaN and the infinities produce 0, widths of at most
-    /// 64 bits wrap modulo 2^bits, and 128-bit targets produce 0 when the
-    /// truncated value is out of range), writing the result bytes directly
-    /// into the target slot.
+    /// wrap semantics (NaN and the infinities produce 0; finite values
+    /// truncate toward zero and wrap modulo 2^bits), writing the result bytes
+    /// directly into the target slot.
     fn emitFloatToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, info: FloatToIntTruncInfo) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
@@ -3783,12 +3851,11 @@ pub const MonoLlvmCodeGen = struct {
         const float_ty: LlvmBuilder.Type = if (info.src_is_f32) .float else .double;
         try self.callBuiltinVoid(
             name,
-            &.{ try self.ptrType(), float_ty, .i32, .i32, .i32 },
+            &.{ try self.ptrType(), float_ty, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
                 value,
                 builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
-                builder.intValue(.i32, @intFromBool(info.target_signed)) catch return error.OutOfMemory,
                 builder.intValue(.i32, @as(u32, info.target_bits) / 8) catch return error.OutOfMemory,
             },
         );
@@ -3812,11 +3879,12 @@ pub const MonoLlvmCodeGen = struct {
 
         switch (info.src_kind) {
             .f32, .f64 => {
-                var value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-                value = try self.coerceScalar(value, .double, false);
+                const is_f32 = info.src_kind == .f32;
+                const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
+                const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
                 try self.callBuiltinVoid(
-                    builtinSymbol(.f64_to_int_try_unsafe),
-                    &.{ try self.ptrType(), .double, .i32, .i32, .i32, .i32, .i32 },
+                    if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
+                    &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
                     &.{
                         allocated.ptr,
                         value,
@@ -3976,12 +4044,13 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
         const arg_layout = self.localLayout(arg);
-        const raw_value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
-        const value = try self.coerceScalar(raw_value, .double, false);
+        const value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
+        const is_f32 = arg_layout == .f32;
+        const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
 
         try self.callBuiltinVoid(
-            builtinSymbol(.f64_to_int_try_unsafe),
-            &.{ try self.ptrType(), .double, .i32, .i32, .i32, .i32, .i32 },
+            if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
+            &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
                 value,
@@ -3990,6 +4059,52 @@ pub const MonoLlvmCodeGen = struct {
                 builder.intValue(.i32, info.value_size) catch return error.OutOfMemory,
                 builder.intValue(.i32, info.success_offset) catch return error.OutOfMemory,
                 builder.intValue(.i32, info.value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitF64ToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocAggregateTarget(target);
+        const ret_layout_val = self.layoutValue(allocated.layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        const success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+        const value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const value = try self.loadScalar(self.slot(arg).ptr, .f64);
+
+        try self.callBuiltinVoid(
+            builtinSymbol(.f64_to_f32_try_unsafe),
+            &.{ try self.ptrType(), .double, .i32, .i32 },
+            &.{
+                allocated.ptr,
+                value,
+                builder.intValue(.i32, success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, value_offset) catch return error.OutOfMemory,
+            },
+        );
+    }
+
+    fn emitDecToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const allocated = try self.allocAggregateTarget(target);
+        const ret_layout_val = self.layoutValue(allocated.layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+        const struct_idx = ret_layout_val.getStruct().idx;
+        const success_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+        const value_offset = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+        const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const parts = try self.splitI128Value(value);
+
+        try self.callBuiltinVoid(
+            builtinSymbol(.dec_to_f32_try_unsafe),
+            &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
+            &.{
+                allocated.ptr,
+                parts.low,
+                parts.high,
+                builder.intValue(.i32, success_offset) catch return error.OutOfMemory,
+                builder.intValue(.i32, value_offset) catch return error.OutOfMemory,
             },
         );
     }
@@ -6047,16 +6162,16 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitStrFindFirst(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    fn emitStrSplitFirst(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const target_slot = self.slot(target);
-        const info = try self.resolveStrFindFirstLayout(target_slot.layout_idx);
+        const info = try self.resolveStrSplitFirstLayout(target_slot.layout_idx);
         if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
 
         const layout_ptr = try self.allocEntryBlockSlot(
             .i8,
-            @sizeOf(builtins.dev_wrappers.StrFindFirstLayout),
-            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrFindFirstLayout)),
-            "str_find_first_layout",
+            @sizeOf(builtins.dev_wrappers.StrSplitFirstLayout),
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrSplitFirstLayout)),
+            "str_split_first_layout",
         );
 
         try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
@@ -6068,7 +6183,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
         try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_find_first)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_first)), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrDropPrefixCaselessAscii(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -6253,6 +6368,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitFloatBitCast(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
         const target_ty: LlvmBuilder.Type = switch (op) {
@@ -6262,8 +6378,54 @@ pub const MonoLlvmCodeGen = struct {
             .f64_from_bits => .double,
             else => unreachable,
         };
-        const casted = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), casted);
+        const raw_bits = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
+        const normalized = switch (op) {
+            .f32_to_bits => blk: {
+                const magnitude = wip.bin(
+                    .@"and",
+                    raw_bits,
+                    builder.intValue(.i32, 0x7fff_ffff) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                const is_nan = wip.icmp(
+                    .ugt,
+                    magnitude,
+                    builder.intValue(.i32, 0x7f80_0000) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                break :blk wip.select(
+                    .normal,
+                    is_nan,
+                    builder.intValue(.i32, builtins.float_bits.normalized_f32_nan_bits) catch return error.OutOfMemory,
+                    raw_bits,
+                    "",
+                ) catch return error.OutOfMemory;
+            },
+            .f64_to_bits => blk: {
+                const magnitude = wip.bin(
+                    .@"and",
+                    raw_bits,
+                    builder.intValue(.i64, 0x7fff_ffff_ffff_ffff) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                const is_nan = wip.icmp(
+                    .ugt,
+                    magnitude,
+                    builder.intValue(.i64, 0x7ff0_0000_0000_0000) catch return error.OutOfMemory,
+                    "",
+                ) catch return error.OutOfMemory;
+                break :blk wip.select(
+                    .normal,
+                    is_nan,
+                    builder.intValue(.i64, builtins.float_bits.normalized_f64_nan_bits) catch return error.OutOfMemory,
+                    raw_bits,
+                    "",
+                ) catch return error.OutOfMemory;
+            },
+            .f32_from_bits, .f64_from_bits => raw_bits,
+            else => unreachable,
+        };
+        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), normalized);
     }
 
     fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -6276,15 +6438,20 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitNumericFloatUnaryIntrinsic(target, arg, .sqrt);
     }
 
-    fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, float_name: []const u8, dec_name: []const u8) Error!void {
+    fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, op: lir.LowLevel) Error!void {
         if (self.localLayout(target) == .dec) {
             const value = try self.loadScalar(self.slot(arg).ptr, .dec);
-            const result = try self.callDecUnaryBuiltin(dec_name, value);
+            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(op).symbolName(), value);
             try self.storeScalar(self.slot(target).ptr, .dec, result);
             return;
         }
 
-        try self.emitNumericFloatUnaryBuiltin(target, arg, float_name);
+        const target_layout = self.localLayout(target);
+        try self.emitNumericFloatUnaryBuiltin(
+            target,
+            arg,
+            LowLevelBuiltins.unaryMathFloat(op, target_layout == .f32).symbolName(),
+        );
     }
 
     fn emitNumericFloatUnaryIntrinsic(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, intrinsic: LlvmBuilder.Intrinsic) Error!void {
@@ -6304,22 +6471,18 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, name: []const u8) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
-        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), .double, false);
-        const width: u8 = switch (target_layout) {
-            .f32 => 4,
-            .f64 => 8,
+        const target_ty: LlvmBuilder.Type = switch (target_layout) {
+            .f32 => .float,
+            .f64 => .double,
             else => return error.UnsupportedLowLevel,
         };
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), target_ty, false);
         const result = try self.callBuiltin(
             name,
-            .double,
-            &.{ .double, .i8 },
-            &.{
-                value,
-                builder.intValue(.i8, width) catch return error.OutOfMemory,
-            },
+            target_ty,
+            &.{target_ty},
+            &.{value},
         );
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
@@ -8142,7 +8305,7 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    fn resolveStrFindFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFindFirstLayoutInfo {
+    fn resolveStrSplitFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitFirstLayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
 

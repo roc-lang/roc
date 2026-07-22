@@ -220,6 +220,30 @@ pub fn runWasmStrWithStats(
             .{ BuiltinSignatures.BuiltinKind.num_mod_i128, hostI128Mod },
             .{ BuiltinSignatures.BuiltinKind.num_mul_with_overflow_i128, hostI128MulWithOverflow },
             .{ BuiltinSignatures.BuiltinKind.num_mul_with_overflow_u128, hostU128MulWithOverflow },
+            .{ BuiltinSignatures.BuiltinKind.f32_to_int_try_unsafe, hostF32ToIntTryUnsafe },
+            .{ BuiltinSignatures.BuiltinKind.f64_to_int_try_unsafe, hostF64ToIntTryUnsafe },
+            .{ BuiltinSignatures.BuiltinKind.dec_to_f32, hostDecToF32Exact },
+            .{ BuiltinSignatures.BuiltinKind.dec_to_f64, hostDecToF64Exact },
+            .{ BuiltinSignatures.BuiltinKind.i128_to_f32, hostI128ToF32 },
+            .{ BuiltinSignatures.BuiltinKind.i128_to_f64, hostI128ToF64 },
+            .{ BuiltinSignatures.BuiltinKind.u128_to_f32, hostU128ToF32 },
+            .{ BuiltinSignatures.BuiltinKind.u128_to_f64, hostU128ToF64 },
+            .{ BuiltinSignatures.BuiltinKind.float_pow_f32, hostFloatPowF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_pow, hostFloatPow },
+            .{ BuiltinSignatures.BuiltinKind.float_rem_f32, hostFloatRemF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_rem, hostFloatRem },
+            .{ BuiltinSignatures.BuiltinKind.float_sin_f32, hostFloatSinF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_sin, hostFloatSin },
+            .{ BuiltinSignatures.BuiltinKind.float_cos_f32, hostFloatCosF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_cos, hostFloatCos },
+            .{ BuiltinSignatures.BuiltinKind.float_tan_f32, hostFloatTanF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_tan, hostFloatTan },
+            .{ BuiltinSignatures.BuiltinKind.float_asin_f32, hostFloatAsinF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_asin, hostFloatAsin },
+            .{ BuiltinSignatures.BuiltinKind.float_acos_f32, hostFloatAcosF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_acos, hostFloatAcos },
+            .{ BuiltinSignatures.BuiltinKind.float_atan_f32, hostFloatAtanF32 },
+            .{ BuiltinSignatures.BuiltinKind.float_atan, hostFloatAtan },
         }) |entry| {
             const sig = comptime BuiltinSignatures.sigOf(entry[0]);
             env_imports.addHostFunction(
@@ -251,13 +275,6 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_i128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_str", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_float_to_str", &[_]bytebox.ValType{ .I64, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostFloatToStr, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_pow", &[_]bytebox.ValType{ .F64, .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatPow, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_sin", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatSin, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_cos", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatCos, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_tan", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatTan, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_asin", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatAsin, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_acos", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatAcos, null) catch return error.WasmExecFailed;
-        env_imports.addHostFunction("roc_float_atan", &[_]bytebox.ValType{ .F64, .I32 }, &[_]bytebox.ValType{.F64}, hostFloatAtan, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_int_to_str", &[_]bytebox.ValType{ .I64, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostIntToStr, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_u128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostU128ToDec, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_i128_to_dec", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostI128ToDec, null) catch return error.WasmExecFailed;
@@ -299,7 +316,7 @@ pub fn runWasmStrWithStats(
         }) |entry| {
             env_imports.addHostFunction(entry[0], &[_]bytebox.ValType{ .I32, .I32, .I32 }, &[_]bytebox.ValType{}, entry[1], null) catch return error.WasmExecFailed;
         }
-        env_imports.addHostFunction("roc_str_find_first", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostStrFindFirst, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_str_split_first", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostStrSplitFirst, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_str_drop_prefix_caseless_ascii", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostStrDropPrefixCaselessAscii, null) catch return error.WasmExecFailed;
 
         env_imports.addHostFunction("roc_str_caseless_ascii_equals", &[_]bytebox.ValType{ .I32, .I32 }, &[_]bytebox.ValType{.I32}, hostStrCaselessAsciiEquals, null) catch return error.WasmExecFailed;
@@ -682,6 +699,30 @@ fn readU128FromMem(buffer: []u8, ptr: usize) u128 {
     return @as(u128, high) << 64 | low;
 }
 
+fn hostDecToF32Exact(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_dec_to_f32(@bitCast(params[0].I64), @bitCast(params[1].I64)) };
+}
+
+fn hostDecToF64Exact(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_dec_to_f64(@bitCast(params[0].I64), @bitCast(params[1].I64)) };
+}
+
+fn hostI128ToF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_i128_to_f32(@bitCast(params[0].I64), @bitCast(params[1].I64)) };
+}
+
+fn hostI128ToF64(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_i128_to_f64(@bitCast(params[0].I64), @bitCast(params[1].I64)) };
+}
+
+fn hostU128ToF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_u128_to_f32(@bitCast(params[0].I64), @bitCast(params[1].I64)) };
+}
+
+fn hostU128ToF64(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_u128_to_f64(@bitCast(params[0].I64), @bitCast(params[1].I64)) };
+}
+
 fn writeI128ToMem(buffer: []u8, ptr: usize, val: i128) void {
     const as_u128: u128 = @bitCast(val);
     writeIntLittle(u64, buffer, ptr, @truncate(as_u128));
@@ -983,72 +1024,95 @@ fn hostFloatToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     results[0] = .{ .I32 = @intCast(formatted.len) };
 }
 
+fn floatToIntTryOutputInBounds(buffer: []u8, params: [*]const bytebox.Val) ?[*]u8 {
+    const out: usize = @intCast(params[0].I32);
+    const val_size: usize = @intCast(params[4].I32);
+    const success_offset: usize = @intCast(params[5].I32);
+    const value_offset: usize = @intCast(params[6].I32);
+    const required = @max(success_offset + 1, value_offset + val_size);
+    if (out > buffer.len or required > buffer.len - out) return null;
+    return buffer.ptr + out;
+}
+
+fn hostF32ToIntTryUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const out = floatToIntTryOutputInBounds(buffer, params) orelse return;
+    builtins.dev_wrappers.roc_builtins_f32_to_int_try_unsafe(
+        out,
+        params[1].F32,
+        @intCast(params[2].I32),
+        @intCast(params[3].I32),
+        @intCast(params[4].I32),
+        @intCast(params[5].I32),
+        @intCast(params[6].I32),
+    );
+}
+
+fn hostF64ToIntTryUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    const buffer = module.store.getMemory(0).buffer();
+    const out = floatToIntTryOutputInBounds(buffer, params) orelse return;
+    builtins.dev_wrappers.roc_builtins_f64_to_int_try_unsafe(
+        out,
+        params[1].F64,
+        @intCast(params[2].I32),
+        @intCast(params[3].I32),
+        @intCast(params[4].I32),
+        @intCast(params[5].I32),
+        @intCast(params[6].I32),
+    );
+}
+
+fn hostFloatPowF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_pow_f32(params[0].F32, params[1].F32) };
+}
+
 fn hostFloatPow(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const base = params[0].F64;
-    const exponent = params[1].F64;
-    const float_width: u8 = @intCast(params[2].I32);
-    results[0] = .{ .F64 = switch (float_width) {
-        4 => @as(f64, @floatCast(std.math.pow(f32, @as(f32, @floatCast(base)), @as(f32, @floatCast(exponent))))),
-        8 => std.math.pow(f64, base, exponent),
-        else => unreachable,
-    } };
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_pow(params[0].F64, params[1].F64) };
 }
 
-const HostFloatUnaryMathOp = enum {
-    sin,
-    cos,
-    tan,
-    asin,
-    acos,
-    atan,
-};
-
-fn hostFloatUnaryMath(params: [*]const bytebox.Val, results: [*]bytebox.Val, comptime op: HostFloatUnaryMathOp) void {
-    const val = params[0].F64;
-    const float_width: u8 = @intCast(params[1].I32);
-    results[0] = .{ .F64 = switch (float_width) {
-        4 => @as(f64, @floatCast(switch (op) {
-            .sin => std.math.sin(@as(f32, @floatCast(val))),
-            .cos => std.math.cos(@as(f32, @floatCast(val))),
-            .tan => std.math.tan(@as(f32, @floatCast(val))),
-            .asin => std.math.asin(@as(f32, @floatCast(val))),
-            .acos => std.math.acos(@as(f32, @floatCast(val))),
-            .atan => std.math.atan(@as(f32, @floatCast(val))),
-        })),
-        8 => switch (op) {
-            .sin => std.math.sin(val),
-            .cos => std.math.cos(val),
-            .tan => std.math.tan(val),
-            .asin => std.math.asin(val),
-            .acos => std.math.acos(val),
-            .atan => std.math.atan(val),
-        },
-        else => unreachable,
-    } };
+fn hostFloatRemF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_rem_f32(params[0].F32, params[1].F32) };
 }
 
+fn hostFloatRem(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_rem(params[0].F64, params[1].F64) };
+}
+
+fn hostFloatSinF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_sin_f32(params[0].F32) };
+}
 fn hostFloatSin(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    hostFloatUnaryMath(params, results, .sin);
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_sin(params[0].F64) };
 }
-
+fn hostFloatCosF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_cos_f32(params[0].F32) };
+}
 fn hostFloatCos(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    hostFloatUnaryMath(params, results, .cos);
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_cos(params[0].F64) };
 }
-
+fn hostFloatTanF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_tan_f32(params[0].F32) };
+}
 fn hostFloatTan(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    hostFloatUnaryMath(params, results, .tan);
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_tan(params[0].F64) };
 }
-
+fn hostFloatAsinF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_asin_f32(params[0].F32) };
+}
 fn hostFloatAsin(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    hostFloatUnaryMath(params, results, .asin);
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_asin(params[0].F64) };
 }
-
+fn hostFloatAcosF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_acos_f32(params[0].F32) };
+}
 fn hostFloatAcos(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    hostFloatUnaryMath(params, results, .acos);
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_acos(params[0].F64) };
 }
-
+fn hostFloatAtanF32(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
+    results[0] = .{ .F32 = builtins.dev_wrappers.roc_builtins_float_atan_f32(params[0].F32) };
+}
 fn hostFloatAtan(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    hostFloatUnaryMath(params, results, .atan);
+    results[0] = .{ .F64 = builtins.dev_wrappers.roc_builtins_float_atan(params[0].F64) };
 }
 
 fn hostIntToStr(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -1133,8 +1197,8 @@ fn hostDecToU128(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]con
 
 fn hostDecToF32(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
-    const f64_val: f64 = @as(f64, @floatFromInt(readI128FromMem(buffer, @intCast(params[0].I32)))) / @as(f64, @floatFromInt(dec_one_i128));
-    results[0] = .{ .F32 = @floatCast(f64_val) };
+    const value = builtins.dec.RocDec{ .num = readI128FromMem(buffer, @intCast(params[0].I32)) };
+    results[0] = .{ .F32 = builtins.dec.toF32(value) };
 }
 
 fn hostListStrEq(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
@@ -1599,7 +1663,7 @@ fn hostStrDropSuffix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     }
 }
 
-fn hostStrFindFirst(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+fn hostStrSplitFirst(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const delimiter = readWasmStr(buffer, @intCast(params[1].I32));

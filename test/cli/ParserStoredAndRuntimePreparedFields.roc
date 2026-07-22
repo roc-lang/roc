@@ -184,7 +184,7 @@ expect {
 
 underscores_to_dashes : Str -> Str
 underscores_to_dashes = |text|
-	match text.find_first("_") {
+	match text.split_first("_") {
 		Ok({ before, after }) =>
 			before.concat("-").concat(underscores_to_dashes(after))
 

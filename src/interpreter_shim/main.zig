@@ -174,6 +174,7 @@ fn evaluateEntrypointInView(
         &view.store,
         &view.layouts,
         ops,
+        .preserve,
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");
         return error.OutOfMemory;

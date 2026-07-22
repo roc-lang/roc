@@ -547,6 +547,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.cset(.w64, dst, cond);
         }
 
+        /// Emit float32 compare and set: dst = (a cond b) ? 1 : 0
+        pub fn emitCmpF32(self: *Self, dst: GeneralReg, a: FloatReg, b: FloatReg, cond: Emit.Condition) Allocator.Error!void {
+            try self.emit.fcmpRegReg(.single, a, b);
+            try self.emit.cset(.w64, dst, cond);
+        }
+
         // Floating-point operations
 
         /// Emit float64 addition: dst = a + b
@@ -576,6 +582,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         pub fn emitAbsF64(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             try self.emit.fabsRegReg(.double, dst, src);
+        }
+
+        pub fn emitAbsF32(self: *Self, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            try self.emit.fabsRegReg(.single, dst, src);
         }
 
         /// Emit float32 addition: dst = a + b
@@ -869,6 +879,10 @@ test "float operations" {
     var cg = LinuxCodeGen.init(std.testing.allocator);
     defer cg.deinit();
 
+    try cg.emitAddF32(.V0, .V1, .V2);
+    try cg.emitSubF32(.V3, .V4, .V5);
+    try cg.emitMulF32(.V6, .V7, .V8);
+    try cg.emitDivF32(.V9, .V10, .V11);
     try cg.emitAddF64(.V0, .V1, .V2);
     try cg.emitSubF64(.V3, .V4, .V5);
     try cg.emitMulF64(.V6, .V7, .V8);

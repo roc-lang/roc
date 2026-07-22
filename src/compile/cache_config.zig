@@ -58,7 +58,9 @@ pub const Constants = struct {
     /// 32: Combined the empty-row and interpolation checked-artifact layouts.
     /// 33: Platform requirement roots carry producer-authored dispatch evidence.
     /// 34: Checked iterator procedure identity includes Str.iter_utf8.
-    pub const CACHE_VERSION = 34;
+    /// 35: Builtin indices include width-specific f32 conversion and math wrappers.
+    /// 36: Nested procedure sites declare their producer-authored evidence source.
+    pub const CACHE_VERSION = 36;
 };
 
 /// Configuration for the Roc cache system.

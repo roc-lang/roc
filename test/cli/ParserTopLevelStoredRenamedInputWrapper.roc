@@ -64,7 +64,7 @@ find_field = |fields, name| {
 
 snake_to_camel : Str -> Str
 snake_to_camel = |text|
-	match Str.find_first(text, "_") {
+	match Str.split_first(text, "_") {
 		Ok({ before, after }) =>
 			before.concat(upper_first_ascii(snake_to_camel(after)))
 

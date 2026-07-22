@@ -165,7 +165,7 @@ test "embedding API: full canonical sequence on simple_success app" {
     _ = &hosted_fns;
 
     // 10. Initialize the interpreter and run the entrypoint.
-    var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &roc_ops);
+    var interp = try eval.LirInterpreter.init(gpa, &view.store, &view.layouts, &roc_ops, .preserve);
     defer interp.deinit();
 
     // simple_success has main! : () => {} — no args, returns unit.

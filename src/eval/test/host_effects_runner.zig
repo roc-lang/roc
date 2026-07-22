@@ -327,6 +327,7 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
         &lowered.view.store,
         &lowered.view.layouts,
         runtime_env.get_ops(),
+        .preserve,
     );
     defer interp.deinit();
 
@@ -363,6 +364,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             &lowered.view.store,
             &lowered.view.layouts,
             static_strings.entries,
+            .preserve,
         );
         defer codegen.deinit();
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());

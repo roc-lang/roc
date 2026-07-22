@@ -6,11 +6,8 @@
 // https://git.musl-libc.org/cgit/musl/tree/COPYRIGHT
 //
 // https://git.musl-libc.org/cgit/musl/tree/src/math/__cos.c
-// https://git.musl-libc.org/cgit/musl/tree/src/math/__cosdf.c
 // https://git.musl-libc.org/cgit/musl/tree/src/math/__sin.c
-// https://git.musl-libc.org/cgit/musl/tree/src/math/__sindf.c
 // https://git.musl-libc.org/cgit/musl/tree/src/math/__tand.c
-// https://git.musl-libc.org/cgit/musl/tree/src/math/__tandf.c
 // https://git.musl-libc.org/cgit/musl/tree/src/math/__sinl.c
 // https://git.musl-libc.org/cgit/musl/tree/src/math/__cosl.c
 // https://git.musl-libc.org/cgit/musl/tree/src/math/__tanl.c
@@ -68,21 +65,6 @@ pub fn cos(x: f64, y: f64) f64 {
     const hz = 0.5 * z;
     const w = 1.0 - hz;
     return w + (((1.0 - w) - hz) + (z * r - x * y));
-}
-
-/// Kernel cosine approximation for an F32 result on a reduced F64 argument.
-pub fn cosdf(x: f64) f32 {
-    // |cos(x) - c(x)| < 2**-34.1 (~[-5.37e-11, 5.295e-11]).
-    const C0 = -0x1ffffffd0c5e81.0p-54; // -0.499999997251031003120
-    const C1 = 0x155553e1053a42.0p-57; //  0.0416666233237390631894
-    const C2 = -0x16c087e80f1e27.0p-62; // -0.00138867637746099294692
-    const C3 = 0x199342e0ee5069.0p-68; //  0.0000243904487962774090654
-
-    // Try to optimize for parallel evaluation as in __tandf.c.
-    const z = x * x;
-    const w = z * z;
-    const r = C2 + z * C3;
-    return @floatCast(((1.0 + z * C0) + w * C1) + (w * z) * r);
 }
 
 /// Kernel cosine approximation for an extended-precision reduced argument.
@@ -172,22 +154,6 @@ pub fn sin(x: f64, y: f64, y_is_zero_flag: i32) f64 {
     } else {
         return x - ((z * (0.5 * y - v * r) - y) - v * S1);
     }
-}
-
-/// Kernel sine approximation for an F32 result on a reduced F64 argument.
-pub fn sindf(x: f64) f32 {
-    // |sin(x)/x - s(x)| < 2**-37.5 (~[-4.89e-12, 4.824e-12]).
-    const S1 = -0x15555554cbac77.0p-55; // -0.166666666416265235595
-    const S2 = 0x111110896efbb2.0p-59; //  0.0083333293858894631756
-    const S3 = -0x1a00f9e2cae774.0p-65; // -0.000198393348360966317347
-    const S4 = 0x16cd878c3b46a7.0p-71; //  0.0000027183114939898219064
-
-    // Try to optimize for parallel evaluation as in __tandf.c.
-    const z = x * x;
-    const w = z * z;
-    const r = S3 + z * S4;
-    const s = z * x;
-    return @floatCast((x + s * (S1 + z * S2)) + s * w * r);
 }
 
 /// Kernel sine approximation for an extended-precision reduced argument.
@@ -341,40 +307,6 @@ pub fn tan(x_: f64, y_: f64, odd: bool) f64 {
     a0 = a;
     a0 = @bitCast(@as(u64, @bitCast(a0)) & 0xffffffff00000000);
     return a0 + a * (1.0 + a0 * w0 + a0 * v);
-}
-
-/// Kernel tangent approximation for an F32 result on a reduced F64 argument.
-pub fn tandf(x: f64, odd: bool) f32 {
-    // |tan(x)/x - t(x)| < 2**-25.5 (~[-2e-08, 2e-08]).
-    const T = [_]f64{
-        0x15554d3418c99f.0p-54, // 0.333331395030791399758
-        0x1112fd38999f72.0p-55, // 0.133392002712976742718
-        0x1b54c91d865afe.0p-57, // 0.0533812378445670393523
-        0x191df3908c33ce.0p-58, // 0.0245283181166547278873
-        0x185dadfcecf44e.0p-61, // 0.00297435743359967304927
-        0x1362b9bf971bcd.0p-59, // 0.00946564784943673166728
-    };
-
-    const z = x * x;
-    // Split up the polynomial into small independent terms to give
-    // opportunities for parallel evaluation.  The chosen splitting is
-    // micro-optimized for Athlons (XP, X64).  It costs 2 multiplications
-    // relative to Horner's method on sequential machines.
-    //
-    // We add the small terms from lowest degree up for efficiency on
-    // non-sequential machines (the lowest degree terms tend to be ready
-    // earlier).  Apart from this, we don't care about order of
-    // operations, and don't need to to care since we have precision to
-    // spare.  However, the chosen splitting is good for accuracy too,
-    // and would give results as accurate as Horner's method if the
-    // small terms were added from highest degree down.
-    const r = T[4] + z * T[5];
-    const t = T[2] + z * T[3];
-    const w = z * z;
-    const s = z * x;
-    const u = T[0] + z * T[1];
-    const r0 = (x + s * u) + (s * w) * (t + w * r);
-    return @floatCast(if (odd) -1.0 / r0 else r0);
 }
 
 /// Kernel tangent approximation for an extended-precision reduced argument.

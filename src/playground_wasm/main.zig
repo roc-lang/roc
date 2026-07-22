@@ -1879,6 +1879,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         runtime_env.get_ops(),
+        .preserve,
     );
     defer interpreter.deinit();
 
