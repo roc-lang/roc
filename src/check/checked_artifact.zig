@@ -13197,7 +13197,7 @@ const EvidencePass = struct {
         for (0..shared) |i| {
             const kept_key = canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(kept_pairs[i].fresh_var)) catch return;
             const dup_key = canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(dup_pairs[i].fresh_var)) catch return;
-            if (!std.mem.eql(u8, &kept_key.bytes, &dup_key.bytes)) {
+            if (std.mem.order(u8, &kept_key.bytes, &dup_key.bytes) != .eq) {
                 const kept_text = type_writer.writeGet(@enumFromInt(kept_pairs[i].fresh_var), .one_line) catch break;
                 const kept_shown = kept_text[0..@min(kept_text.len, 60)];
                 const item = std.fmt.bufPrint(buffer[pos..], " pair{d}:kept_var={d}<{s}>", .{ i, kept_pairs[i].fresh_var, kept_shown }) catch break;
@@ -13214,7 +13214,7 @@ const EvidencePass = struct {
     fn schemeUseRecordsEquivalent(self: *EvidencePass, a_idx: u32, b_idx: u32) Allocator.Error!bool {
         const a_digest = try self.schemeUseRecordDigest(a_idx);
         const b_digest = try self.schemeUseRecordDigest(b_idx);
-        return std.mem.eql(u8, &a_digest, &b_digest);
+        return std.mem.order(u8, &a_digest, &b_digest) == .eq;
     }
 
     /// A structural digest of one scheme-use record: the resolved scheme root

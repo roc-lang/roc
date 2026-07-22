@@ -65,7 +65,9 @@ fn checkEnvOnce() void {
     if (comptime !enabled) return;
     if (env_checked.load(.acquire)) return;
     if (std.c.getenv("ROC_REUNIFY_CHECK_CENSUS")) |raw| {
-        const path = raw[0..std.mem.len(raw)];
+        var raw_len: usize = 0;
+        while (raw[raw_len] != 0) raw_len += 1;
+        const path = raw[0..raw_len];
         if (path.len > 0) enable(path);
     }
     env_checked.store(true, .release);
