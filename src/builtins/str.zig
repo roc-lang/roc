@@ -1089,6 +1089,41 @@ pub fn splitFirst(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitFirs
     };
 }
 
+/// Result layout for `Str.split_last`.
+pub const SplitLastResult = struct {
+    before: RocStr,
+    found: bool,
+    after: RocStr,
+};
+
+/// Find the last delimiter occurrence and return seamless slices around it.
+pub fn splitLast(source: RocStr, delimiter: RocStr, roc_ops: *RocOps) SplitLastResult {
+    const source_bytes = source.asSlice();
+    const delimiter_bytes = delimiter.asSlice();
+
+    if (delimiter_bytes.len == 0) {
+        return .{
+            .before = retainedSlice(source, 0, source_bytes.len, roc_ops),
+            .found = true,
+            .after = RocStr.empty(),
+        };
+    }
+
+    const index = std.mem.findLast(u8, source_bytes, delimiter_bytes) orelse {
+        return .{
+            .before = RocStr.empty(),
+            .found = false,
+            .after = RocStr.empty(),
+        };
+    };
+
+    return .{
+        .before = retainedSlice(source, 0, index, roc_ops),
+        .found = true,
+        .after = retainedSlice(source, index + delimiter_bytes.len, source_bytes.len - index - delimiter_bytes.len, roc_ops),
+    };
+}
+
 /// See substringUnsafeC for ownership documentation.
 pub fn substringUnsafe(
     string: RocStr,

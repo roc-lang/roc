@@ -2182,6 +2182,26 @@ Builtin :: [].{
 			}
 		}
 
+		## Splits the string on the last occurrence of a delimiter, returning the
+		## parts before and after it.
+		##
+		## The returned strings are slices of the original string.
+		##
+		## ```roc
+		## expect "a.b.c".split_last(".") == Ok({ before: "a.b", after: "c" })
+		## expect "foo".split_last(":") == Err(NotFound)
+		## ```
+		split_last : Str, Str -> Try({ before : Str, after : Str }, [NotFound])
+		split_last = |source, delimiter| {
+			split = str_split_last_raw(source, delimiter)
+
+			if split.found {
+				Ok({ before: split.before, after: split.after })
+			} else {
+				Err(NotFound)
+			}
+		}
+
 		## Gives the number of bytes in a [Str] value.
 		## ```roc
 		## expect "Hello World".count_utf8_bytes() == 11
@@ -17869,6 +17889,8 @@ list_swap_unsafe : List(item), U64, U64 -> List(item)
 
 # Implemented by the compiler. Returns string slices into the source string.
 str_split_first_raw : Str, Str -> { before : Str, found : Bool, after : Str }
+
+str_split_last_raw : Str, Str -> { before : Str, found : Bool, after : Str }
 
 # Implemented by the compiler. Returns a string slice after the prefix when the
 # source starts with the prefix using ASCII-caseless comparison.

@@ -26,6 +26,13 @@ gpa: Allocator,
 /// Use for small and miscellaneous allocations that are never freed individually.
 arena: Allocator,
 
+/// A non-allocating question about one environment variable. Implementations
+/// answer while the environment value is valid; no borrowed pointer escapes.
+pub const EnvVarQuery = union(enum) {
+    non_empty,
+    equals: []const u8,
+};
+
 /// Function pointer table for I/O operations.
 /// Implementations provide concrete functions; `ctx` is passed through as
 /// the first argument, allowing implementations to carry state.
@@ -75,6 +82,10 @@ pub const VTable = struct {
 
     /// Look up environment variable `key`. Caller owns the returned slice.
     getEnvVar: *const fn (?*anyopaque, std.Io, []const u8, Allocator) GetEnvVarError![]u8,
+
+    /// Evaluate a non-allocating query against a statically named environment
+    /// variable without exposing the environment's borrowed storage.
+    queryEnvVar: *const fn (?*anyopaque, std.Io, [:0]const u8, EnvVarQuery) bool = &missingEnvVarQuery,
 
     /// Download `url` and extract its contents into `dest_path`, enforcing an
     /// optional limit on the decompressed size in bytes. Returns the total
@@ -193,6 +204,18 @@ pub fn rename(self: Self, old_path: []const u8, new_path: []const u8) RenameErro
 /// Look up environment variable `key`. Caller owns the returned slice.
 pub fn getEnvVar(self: Self, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
     return self.vtable.getEnvVar(self.ctx, self.std_io, key, allocator);
+}
+
+/// Return whether a statically named environment variable has a non-empty
+/// value, without allocating or exposing borrowed environment storage.
+pub fn envVarIsNonEmpty(self: Self, key: [:0]const u8) bool {
+    return self.vtable.queryEnvVar(self.ctx, self.std_io, key, .non_empty);
+}
+
+/// Compare a statically named environment variable with `expected`, without
+/// allocating or exposing borrowed environment storage.
+pub fn envVarEquals(self: Self, key: [:0]const u8, expected: []const u8) bool {
+    return self.vtable.queryEnvVar(self.ctx, self.std_io, key, .{ .equals = expected });
 }
 
 /// Download `url` and extract into `dest_path` directory, enforcing an
@@ -336,7 +359,7 @@ pub const CanonicalizeError = error{
     IoError,
 };
 
-/// Errors that can occur when looking up an environment variable.
+/// Errors that can occur when looking up an owned environment variable.
 pub const GetEnvVarError = error{
     EnvironmentVariableMissing,
     OutOfMemory,
@@ -446,6 +469,7 @@ const os_vtable = VTable{
     .makePath = &osMakePath,
     .rename = &osRename,
     .getEnvVar = &osGetEnvVar,
+    .queryEnvVar = &osQueryEnvVar,
     .fetchUrl = &osFetchUrl,
     .deleteFile = &osDeleteFile,
     .deleteDir = &osDeleteDir,
@@ -700,12 +724,23 @@ fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []co
 }
 
 fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
-    // In Zig 0.16, environment access is via std.c.getenv (no allocator needed for lookup)
     const key_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableMissing;
-    const len = std.mem.len(value);
-    return allocator.dupe(u8, value[0..len]) catch return error.OutOfMemory;
+    return allocator.dupe(u8, std.mem.span(value)) catch return error.OutOfMemory;
+}
+
+fn osQueryEnvVar(_: ?*anyopaque, _: std.Io, key: [:0]const u8, query: EnvVarQuery) bool {
+    const value = std.c.getenv(key) orelse return false;
+    const bytes = std.mem.span(value);
+    return switch (query) {
+        .non_empty => bytes.len > 0,
+        .equals => |expected| std.mem.eql(u8, bytes, expected),
+    };
+}
+
+fn missingEnvVarQuery(_: ?*anyopaque, _: std.Io, _: [:0]const u8, _: EnvVarQuery) bool {
+    return false;
 }
 
 /// fetchUrl is intentionally a stub in the default OS vtable.

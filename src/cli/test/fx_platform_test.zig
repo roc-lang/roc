@@ -764,7 +764,7 @@ test "fx platform string interpolation type mismatch (interpreter)" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "Found 1 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "1 error") != null);
 }
 
 test "fx platform string interpolation type mismatch (dev backend)" {
@@ -801,7 +801,7 @@ test "fx platform string interpolation type mismatch (dev backend)" {
     try testing.expect(std.mem.find(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "Str") != null);
-    try testing.expect(std.mem.find(u8, run_result.stderr, "Found 1 error") != null);
+    try testing.expect(std.mem.find(u8, run_result.stderr, "1 error") != null);
 }
 
 test "fx platform run from different cwd" {
@@ -1705,7 +1705,7 @@ test "fx platform issue8943 error message memory corruption" {
     }
 
     // We expect at least 2 occurrences from source regions plus one more at
-    // the end in "Found X error(s)..."
+    // the summary at the end.
     if (filename_count < 3) {
         std.debug.print("Error output appears corrupted - filename 'issue8943.roc' found only {d} times (expected at least 3):\n", .{filename_count});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});

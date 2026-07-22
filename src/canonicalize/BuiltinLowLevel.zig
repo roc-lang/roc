@@ -221,6 +221,9 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("str_split_first_raw")) |str_split_first_ident| {
         try low_level_map.put(str_split_first_ident, .str_split_first);
     }
+    if (env.common.findIdent("str_split_last_raw")) |str_split_last_ident| {
+        try low_level_map.put(str_split_last_ident, .str_split_last);
+    }
     if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
         try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
     }

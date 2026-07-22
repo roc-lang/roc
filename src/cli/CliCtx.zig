@@ -35,6 +35,7 @@
 //!   return ctx.exitCode();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const reporting = @import("reporting");
 const problem_mod = @import("CliProblem.zig");
@@ -101,6 +102,58 @@ pub const Io = struct {
     }
 };
 
+/// Standard output streams whose ANSI capabilities can differ when one is
+/// redirected and the other remains attached to a terminal.
+pub const OutputStream = enum {
+    stdout,
+    stderr,
+};
+
+/// If output should use colors
+pub const ColorMode = enum {
+    auto,
+    always,
+    never,
+};
+
+/// Process-wide color preferences. Stream capability is applied separately so
+/// `.auto` can make the correct decision for stdout and stderr independently.
+pub const ColorPolicy = struct {
+    mode: ColorMode,
+    high_contrast: bool,
+
+    fn resolve(env: ColorEnvironment) ColorPolicy {
+        if (env.no_color) {
+            return .{ .mode = .never, .high_contrast = false };
+        }
+
+        if (env.force_color) {
+            return .{ .mode = .always, .high_contrast = env.high_contrast };
+        }
+
+        if (env.dumb_terminal) {
+            return .{ .mode = .never, .high_contrast = false };
+        }
+
+        return .{ .mode = .auto, .high_contrast = env.high_contrast };
+    }
+
+    fn usesColor(self: ColorPolicy, supports_ansi: bool) bool {
+        return switch (self.mode) {
+            .auto => supports_ansi,
+            .always => true,
+            .never => false,
+        };
+    }
+};
+
+const ColorEnvironment = struct {
+    no_color: bool,
+    force_color: bool,
+    dumb_terminal: bool,
+    high_contrast: bool,
+};
+
 /// The single error type for CLI operations.
 /// When a function returns this error, it means a problem has been recorded
 /// in the CliCtx and will be rendered at the top level.
@@ -156,6 +209,8 @@ pub const CliCtx = struct {
     command: Command,
     /// Exit code based on problem severity
     exit_code: u8,
+    /// Lazily loaded once because color environment variables are process-wide.
+    color_policy: ?ColorPolicy,
 
     const Self = @This();
 
@@ -169,6 +224,7 @@ pub const CliCtx = struct {
             .problems = std.ArrayList(CliProblem).empty,
             .command = command,
             .exit_code = 0,
+            .color_policy = null,
         };
     }
 
@@ -183,14 +239,70 @@ pub const CliCtx = struct {
         return CoreCtx.default(self.gpa, self.arena, self.io.std_io);
     }
 
-    /// Build a colored-terminal reporting config sized to the real terminal
-    /// width (falling back to the default for narrow/unknown terminals).
-    pub fn terminalReportConfig(self: *const Self) ReportingConfig {
+    /// Build the terminal-layout defaults before applying color policy.
+    fn baseReportConfig(self: *const Self) ReportingConfig {
         var config = ReportingConfig.initColorTerminal();
         if (self.coreCtx().terminalWidth()) |cols| {
             if (cols >= 40) config.max_line_width = cols;
         }
         return config;
+    }
+
+    /// Resolve process-wide color settings once through CoreCtx so native,
+    /// testing, and freestanding environments use the same explicit I/O
+    /// abstraction.
+    pub fn colorPolicy(self: *Self) ColorPolicy {
+        if (self.color_policy) |policy| return policy;
+
+        if (comptime builtin.target.cpu.arch == .wasm32 or builtin.target.os.tag == .freestanding) {
+            const policy = ColorPolicy{ .mode = .never, .high_contrast = false };
+            self.color_policy = policy;
+            return policy;
+        }
+
+        const core_ctx = self.coreCtx();
+        const policy = ColorPolicy.resolve(.{
+            .no_color = core_ctx.envVarIsNonEmpty("NO_COLOR"),
+            .force_color = core_ctx.envVarIsNonEmpty("FORCE_COLOR"),
+            .dumb_terminal = core_ctx.envVarEquals("TERM", "dumb"),
+            .high_contrast = core_ctx.envVarEquals("ROC_HIGH_CONTRAST", "1"),
+        });
+        self.color_policy = policy;
+        return policy;
+    }
+
+    /// Whether a particular standard stream should receive ANSI color.
+    pub fn usesColor(self: *Self, stream: OutputStream) bool {
+        const policy = self.colorPolicy();
+        return policy.usesColor(self.streamSupportsAnsi(stream));
+    }
+
+    /// Build the box-style terminal reporting configuration while applying the
+    /// shared color policy for the selected output stream.
+    pub fn reportConfig(self: *Self, stream: OutputStream) ReportingConfig {
+        const policy = self.colorPolicy();
+        const supports_ansi = self.streamSupportsAnsi(stream);
+        const use_color = policy.usesColor(supports_ansi);
+
+        var config = self.baseReportConfig();
+        config.is_tty = supports_ansi;
+        config.color_preference = if (!use_color)
+            .never
+        else if (policy.high_contrast)
+            .high_contrast
+        else
+            .always;
+        return config;
+    }
+
+    fn streamSupportsAnsi(self: *const Self, stream: OutputStream) bool {
+        if (comptime builtin.target.cpu.arch == .wasm32 or builtin.target.os.tag == .freestanding) return false;
+
+        const file = switch (stream) {
+            .stdout => std.Io.File.stdout(),
+            .stderr => std.Io.File.stderr(),
+        };
+        return file.supportsAnsiEscapeCodes(self.io.std_io) catch false;
     }
 
     /// Clean up resources and flush I/O
@@ -278,7 +390,7 @@ pub const CliCtx = struct {
 
     /// Render all problems to a writer
     pub fn renderProblemsTo(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
-        const config = self.terminalReportConfig();
+        const config = self.reportConfig(.stderr);
 
         for (self.problems.items) |problem| {
             var report = try problem.toReport(self.gpa);
@@ -324,18 +436,14 @@ pub fn reportSingleProblem(
     return ctx.exitCode();
 }
 
-/// Render a single problem without creating a full context.
-/// Useful for one-off errors that don't need accumulation.
-pub fn renderProblem(
-    allocator: Allocator,
-    writer: anytype,
-    problem: CliProblem,
-) Allocator.Error!void {
-    var report = try problem.toReport(allocator);
+/// Render a single problem without adding it to the context's accumulated
+/// problem list.
+pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
+    var report = try problem.toReport(ctx.gpa);
     defer report.deinit();
 
-    const config = ReportingConfig.initColorTerminal();
-    reporting.renderReportToTerminal(&report, writer, ColorPalette.ANSI, config) catch {};
+    const config = ctx.reportConfig(.stderr);
+    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, config) catch {};
 }
 
 // Tests
@@ -396,4 +504,43 @@ test "Command names are correct" {
     try std.testing.expectEqualStrings("build", Command.build.name());
     try std.testing.expectEqualStrings("run", Command.run.name());
     try std.testing.expectEqualStrings("test", Command.test_cmd.name());
+}
+
+test "color policy resolves environment precedence" {
+    const automatic = ColorPolicy.resolve(.{
+        .no_color = false,
+        .force_color = false,
+        .dumb_terminal = false,
+        .high_contrast = false,
+    });
+    try std.testing.expectEqual(ColorMode.auto, automatic.mode);
+    try std.testing.expect(automatic.usesColor(true));
+    try std.testing.expect(!automatic.usesColor(false));
+
+    const no_color_wins = ColorPolicy.resolve(.{
+        .no_color = true,
+        .force_color = true,
+        .dumb_terminal = false,
+        .high_contrast = true,
+    });
+    try std.testing.expectEqual(ColorMode.never, no_color_wins.mode);
+    try std.testing.expect(!no_color_wins.high_contrast);
+
+    const force_color_wins_over_dumb_terminal = ColorPolicy.resolve(.{
+        .no_color = false,
+        .force_color = true,
+        .dumb_terminal = true,
+        .high_contrast = true,
+    });
+    try std.testing.expectEqual(ColorMode.always, force_color_wins_over_dumb_terminal.mode);
+    try std.testing.expect(force_color_wins_over_dumb_terminal.high_contrast);
+    try std.testing.expect(force_color_wins_over_dumb_terminal.usesColor(false));
+
+    const dumb_terminal = ColorPolicy.resolve(.{
+        .no_color = false,
+        .force_color = false,
+        .dumb_terminal = true,
+        .high_contrast = true,
+    });
+    try std.testing.expectEqual(ColorMode.never, dumb_terminal.mode);
 }

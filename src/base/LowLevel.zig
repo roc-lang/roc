@@ -26,6 +26,7 @@ pub const LowLevel = enum(u16) {
     str_drop_prefix_caseless_ascii,
     str_drop_suffix,
     str_split_first,
+    str_split_last,
     str_count_utf8_bytes,
     str_get_utf8_byte_unsafe,
     str_substring_unsafe,
@@ -687,6 +688,7 @@ pub const LowLevel = enum(u16) {
 
             .str_drop_prefix_caseless_ascii,
             .str_split_first,
+            .str_split_last,
             => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),

@@ -3868,7 +3868,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildAnnotationOnlyValueReport(self: *Self, data: AnnotationOnlyValue) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .runtime_error);
+        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning);
         errdefer report.deinit();
 
         try self.addSourceHighlightRegion(&report, data.region);

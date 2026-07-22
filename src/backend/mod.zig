@@ -54,6 +54,165 @@ test "backend tests" {
     std.testing.refAllDecls(wasm);
 }
 
+test "issue 10295: dev backend preserves deep structural equality under register pressure" {
+    // https://github.com/roc-lang/roc/issues/10295
+    const std = @import("std");
+    const layout = @import("layout");
+    const lir = @import("lir");
+
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layout_store = try layout.Store.init(allocator, .u64);
+    defer layout_store.deinit();
+
+    const depth = 32;
+    var nested_layouts: [depth + 1]layout.Idx = undefined;
+    nested_layouts[0] = .i64;
+    for (1..nested_layouts.len) |i| {
+        nested_layouts[i] = try layout_store.putStructFields(&.{.{ .index = 0, .layout = nested_layouts[i - 1] }});
+    }
+
+    var lhs: [depth + 1]lir.LIR.LocalId = undefined;
+    var rhs: [depth + 1]lir.LIR.LocalId = undefined;
+    for (0..nested_layouts.len) |i| {
+        lhs[i] = try store.addLocal(.{ .layout_idx = nested_layouts[i] });
+        rhs[i] = try store.addLocal(.{ .layout_idx = nested_layouts[i] });
+    }
+    const answer = try store.addLocal(.{ .layout_idx = .bool });
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } });
+    const eq_args = try store.addLocalSpan(&.{ lhs[depth], rhs[depth] });
+    var body = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = answer,
+        .op = .num_is_eq,
+        .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
+        .args = eq_args,
+        .next = ret,
+    } });
+
+    var level: usize = depth;
+    while (level > 0) : (level -= 1) {
+        const rhs_fields = try store.addLocalSpan(&.{rhs[level - 1]});
+        body = try store.addCFStmt(.{ .assign_struct = .{
+            .target = rhs[level],
+            .fields = rhs_fields,
+            .next = body,
+        } });
+        const lhs_fields = try store.addLocalSpan(&.{lhs[level - 1]});
+        body = try store.addCFStmt(.{ .assign_struct = .{
+            .target = lhs[level],
+            .fields = lhs_fields,
+            .next = body,
+        } });
+    }
+    body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs[0],
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
+        .next = body,
+    } });
+    body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs[0],
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
+        .next = body,
+    } });
+
+    const root = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = lir.LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .bool,
+    });
+
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    const generated = try codegen.generateCode(root, .bool, 1);
+    defer allocator.free(generated.code);
+
+    var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        generated.code,
+        generated.entry_offset,
+        codegen.getUnwindFunctions(),
+    );
+    defer executable.deinit();
+
+    var actual: u8 = 0;
+    var dummy_roc_ops: u8 = 0;
+    const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
+    try std.testing.expectEqual(@as(u8, 1), actual);
+}
+
+test "issue 10295: nested list equality has bounded register pressure" {
+    const std = @import("std");
+    const layout = @import("layout");
+    const lir = @import("lir");
+
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layout_store = try layout.Store.init(allocator, .u64);
+    defer layout_store.deinit();
+
+    const depth = 32;
+    var nested_layouts: [depth + 1]layout.Idx = undefined;
+    nested_layouts[0] = .i64;
+    for (1..nested_layouts.len) |i| {
+        nested_layouts[i] = try layout_store.insertLayout(layout.Layout.list(nested_layouts[i - 1]));
+    }
+
+    const lhs = try store.addLocal(.{ .layout_idx = nested_layouts[depth] });
+    const rhs = try store.addLocal(.{ .layout_idx = nested_layouts[depth] });
+    const answer = try store.addLocal(.{ .layout_idx = .bool });
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } });
+    const eq_args = try store.addLocalSpan(&.{ lhs, rhs });
+    const eq = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = answer,
+        .op = .num_is_eq,
+        .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
+        .args = eq_args,
+        .next = ret,
+    } });
+    const empty_elems = try store.addLocalSpan(&.{});
+    const assign_rhs = try store.addCFStmt(.{ .assign_list = .{
+        .target = rhs,
+        .elems = empty_elems,
+        .next = eq,
+    } });
+    const body = try store.addCFStmt(.{ .assign_list = .{
+        .target = lhs,
+        .elems = empty_elems,
+        .next = assign_rhs,
+    } });
+    const root = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .args = lir.LIR.LocalSpan.empty(),
+        .body = body,
+        .ret_layout = .bool,
+    });
+
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, &.{}, .preserve);
+    defer codegen.deinit();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    const generated = try codegen.generateCode(root, .bool, 1);
+    defer allocator.free(generated.code);
+
+    var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
+        generated.code,
+        generated.entry_offset,
+        codegen.getUnwindFunctions(),
+    );
+    defer executable.deinit();
+
+    var actual: u8 = 0;
+    var dummy_roc_ops: u8 = 0;
+    const entry: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
+    entry(@ptrCast(&actual), @ptrCast(&dummy_roc_ops));
+    try std.testing.expectEqual(@as(u8, 1), actual);
+}
+
 test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const std = @import("std");
     const layout = @import("layout");

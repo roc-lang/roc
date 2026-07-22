@@ -12,7 +12,6 @@ const EmitMod = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const Call = @import("Call.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
-const ValueStorageMod = @import("../ValueStorage.zig");
 const FrameBuilderMod = @import("../FrameBuilder.zig");
 
 const GeneralReg = Registers.GeneralReg;
@@ -69,7 +68,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
         allocator: Allocator,
         stack_offset: i32,
         relocations: std.ArrayList(Relocation),
-        locals: std.AutoHashMap(u32, ValueStorageMod.ValueLoc),
         free_general: u32,
         free_float: u32,
         callee_saved_used: u32, // Bitmask of callee-saved regs we used
@@ -77,43 +75,32 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Remaining callee-saved registers available (used after caller-saved exhausted)
         callee_saved_available: u32,
 
-        /// Reverse mapping: register index -> local that owns it (null if free)
-        general_owners: [NUM_GENERAL_REGS]?u32,
-        float_owners: [NUM_FLOAT_REGS]?u32,
-
         pub fn init(allocator: Allocator) Self {
             return Self{
                 .emit = Emit.init(allocator),
                 .allocator = allocator,
                 .stack_offset = 0,
                 .relocations = .empty,
-                .locals = std.AutoHashMap(u32, ValueStorageMod.ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
                 .callee_saved_used = 0,
                 .callee_saved_available = CALLEE_SAVED_GENERAL_MASK,
-                .general_owners = [_]?u32{null} ** NUM_GENERAL_REGS,
-                .float_owners = [_]?u32{null} ** NUM_FLOAT_REGS,
             };
         }
 
         pub fn deinit(self: *Self) void {
             self.emit.deinit();
             self.relocations.deinit(self.allocator);
-            self.locals.deinit();
         }
 
         pub fn reset(self: *Self) void {
             self.emit.buf.clearRetainingCapacity();
             self.relocations.clearRetainingCapacity();
-            self.locals.clearRetainingCapacity();
             self.stack_offset = 0;
             self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
             self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
             self.callee_saved_used = 0;
             self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
-            self.general_owners = [_]?u32{null} ** NUM_GENERAL_REGS;
-            self.float_owners = [_]?u32{null} ** NUM_FLOAT_REGS;
         }
 
         /// Get the generated code
@@ -126,51 +113,10 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return self.emit.buf.items.len;
         }
 
-        // Register allocation with spilling support
+        // Register allocation. LirCodeGen keeps every semantic local in its
+        // authoritative stable-location table; these masks manage only bounded,
+        // short-lived instruction-selection temporaries.
 
-        /// Allocate a general-purpose register for a local variable.
-        /// This will try caller-saved registers first, then callee-saved,
-        /// and finally spill an existing register if all are in use.
-        ///
-        /// INVARIANT: Each local ID must map to at most ONE register. Using the same
-        /// local ID for multiple registers corrupts spill tracking. Use unique temp IDs
-        /// (starting at 0x8000_0000) for temporaries that don't correspond to real locals.
-        pub fn allocGeneralFor(self: *Self, local: u32) Allocator.Error!GeneralReg {
-            // 1. Try caller-saved registers first (preferred - no save/restore needed)
-            if (self.allocFromGeneralMask(&self.free_general)) |reg| {
-                // DEBUG: Verify no OTHER register already owns this local
-                if (std.debug.runtime_safety) {
-                    for (self.general_owners, 0..) |owner, i| {
-                        if (owner) |owned_local| {
-                            std.debug.assert(owned_local != local or i == @intFromEnum(reg));
-                        }
-                    }
-                }
-                self.general_owners[@intFromEnum(reg)] = local;
-                return reg;
-            }
-
-            // 2. Try callee-saved registers (will need save/restore in prologue/epilogue)
-            if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
-                self.callee_saved_used |= @as(u32, 1) << @intFromEnum(reg);
-                // DEBUG: Verify no OTHER register already owns this local
-                if (std.debug.runtime_safety) {
-                    for (self.general_owners, 0..) |owner, i| {
-                        if (owner) |owned_local| {
-                            std.debug.assert(owned_local != local or i == @intFromEnum(reg));
-                        }
-                    }
-                }
-                self.general_owners[@intFromEnum(reg)] = local;
-                return reg;
-            }
-
-            // 3. All registers in use — panic (spills are not supported)
-            return self.spillAndAllocGeneral();
-        }
-
-        /// Allocate a general-purpose register without associating it with a local.
-        /// Returns null if no registers available. Use allocGeneralFor for spill support.
         pub fn allocGeneral(self: *Self) ?GeneralReg {
             // Try caller-saved first
             if (self.allocFromGeneralMask(&self.free_general)) |reg| {
@@ -194,8 +140,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Free a general-purpose register, making it available for allocation.
         pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
             const idx = @intFromEnum(reg);
-            // Clear ownership
-            self.general_owners[idx] = null;
             // Return to appropriate pool
             if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
                 self.callee_saved_available |= @as(u32, 1) << idx;
@@ -204,79 +148,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
         }
 
-        /// Mark a register as in use so it won't be allocated.
-        /// Used for return values from function calls that need to persist.
-        /// NOTE: Uses sentinel value 0 for ownership. Callers of allocGeneralFor must NOT use
-        /// local ID 0 - use unique temp IDs (starting at 0x8000_0000) for temporaries.
+        /// Mark a fixed ABI register as in use so it won't be allocated.
         pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
             const idx = @intFromEnum(reg);
             // Remove from free pool (it's now in use)
             self.free_general &= ~(@as(u32, 1) << idx);
             self.callee_saved_available &= ~(@as(u32, 1) << idx);
-            // DEBUG: Verify no OTHER register already owns local 0 before assignment
-            if (std.debug.runtime_safety) {
-                for (self.general_owners, 0..) |owner, i| {
-                    if (owner) |owned_local| {
-                        std.debug.assert(owned_local != 0 or i == idx);
-                    }
-                }
-            }
-            // Set ownership to a sentinel value (0 = temporary)
-            self.general_owners[idx] = 0;
-        }
-
-        /// Spill a register to make room and allocate it for the given local.
-        /// WARNING: This function is fundamentally unsafe for LirCodeGen's usage pattern.
-        /// See the x86_64 version for the full explanation.
-        fn spillAndAllocGeneral(self: *Self) Allocator.Error!GeneralReg {
-            if (builtin.mode == .Debug) {
-                var owned_count: u32 = 0;
-                for (0..NUM_GENERAL_REGS) |i| {
-                    if (self.general_owners[i] != null) owned_count += 1;
-                }
-                std.debug.panic(
-                    "Register spill triggered: all {d} general registers are in use " ++
-                        "(free_general=0x{x}, callee_saved_available=0x{x}). " ++
-                        "LirCodeGen does not support spills — raw register references would become stale. " ++
-                        "Fix the caller to free registers before allocating new ones.",
-                    .{ owned_count, self.free_general, self.callee_saved_available },
-                );
-            }
-            unreachable;
-        }
-
-        /// Reload a spilled value back into a register.
-        /// Returns the register it was loaded into.
-        pub fn reloadLocal(self: *Self, local: u32) Allocator.Error!GeneralReg {
-            // Check if it's already in a register
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .general_reg => |r| return @enumFromInt(r),
-                    .stack => |slot| {
-                        // Allocate a register (might cause another spill)
-                        const reg = try self.allocGeneralFor(local);
-                        // Load from stack
-                        try self.emitLoadStack(.w64, reg, slot);
-                        // Update location
-                        try self.locals.put(local, .{ .general_reg = @intFromEnum(reg) });
-                        return reg;
-                    },
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
-        }
-
-        /// Allocate a floating-point register for a local variable.
-        pub fn allocFloatFor(self: *Self, local: u32) Allocator.Error!FloatReg {
-            // Float registers: try caller-saved first
-            if (self.allocFromFloatMask(&self.free_float)) |reg| {
-                self.float_owners[@intFromEnum(reg)] = local;
-                return reg;
-            }
-
-            // All registers in use - must spill one
-            return self.spillAndAllocFloat(local);
         }
 
         pub fn allocFloat(self: *Self) ?FloatReg {
@@ -286,86 +163,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return @enumFromInt(bit);
         }
 
-        fn allocFromFloatMask(_: *Self, mask: *u32) ?FloatReg {
-            if (mask.* == 0) return null;
-            const bit: u5 = @intCast(@ctz(mask.*));
-            mask.* &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
-        }
-
         pub fn freeFloat(self: *Self, reg: FloatReg) void {
             const idx = @intFromEnum(reg);
-            self.float_owners[idx] = null;
             self.free_float |= @as(u32, 1) << idx;
-        }
-
-        fn spillAndAllocFloat(self: *Self, local: u32) Allocator.Error!FloatReg {
-            // Find a float register to spill
-            var victim: ?FloatReg = null;
-            for (0..NUM_FLOAT_REGS) |i| {
-                if (self.float_owners[i] != null) {
-                    victim = @enumFromInt(i);
-                    break;
-                }
-            }
-
-            const reg = victim orelse unreachable;
-            const owner = self.float_owners[@intFromEnum(reg)].?;
-
-            // Allocate stack slot (8 bytes for f64)
-            const slot = self.allocStack(8);
-
-            // Emit store instruction
-            try self.emitStoreStackF64(slot, reg);
-
-            // Update the owner's location to stack
-            try self.locals.put(owner, .{ .stack = slot });
-
-            // Update ownership
-            self.float_owners[@intFromEnum(reg)] = local;
-
-            return reg;
-        }
-
-        /// Reload a spilled float value back into a register.
-        pub fn reloadFloatLocal(self: *Self, local: u32) Allocator.Error!FloatReg {
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .float_reg => |r| return @enumFromInt(r),
-                    .stack => |slot| {
-                        const reg = try self.allocFloatFor(local);
-                        try self.emitLoadStackF64(reg, slot);
-                        try self.locals.put(local, .{ .float_reg = @intFromEnum(reg) });
-                        return reg;
-                    },
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
-        }
-
-        /// Get the register holding a local, reloading if necessary.
-        pub fn getLocalReg(self: *Self, local: u32) Allocator.Error!GeneralReg {
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .general_reg => |r| return @enumFromInt(r),
-                    .stack => return self.reloadLocal(local),
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
-        }
-
-        /// Get the float register holding a local, reloading if necessary.
-        pub fn getLocalFloatReg(self: *Self, local: u32) Allocator.Error!FloatReg {
-            if (self.locals.get(local)) |loc| {
-                switch (loc) {
-                    .float_reg => |r| return @enumFromInt(r),
-                    .stack => return self.reloadFloatLocal(local),
-                    else => return error.InvalidLocalLocation,
-                }
-            }
-            return error.LocalNotFound;
         }
 
         // Stack management
@@ -889,6 +689,40 @@ test "float operations" {
     try cg.emitDivF64(.V9, .V10, .V11);
 
     try std.testing.expect(cg.getCode().len > 0);
+}
+
+test "float allocation never relocates an allocated register" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_FLOAT);
+    var regs: [LinuxCodeGen.NUM_FLOAT_REGS]FloatReg = undefined;
+    for (0..count) |i| {
+        regs[i] = cg.allocFloat().?;
+    }
+
+    const stack_offset = cg.stack_offset;
+    const code_len = cg.getCode().len;
+    try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
+    try std.testing.expectEqual(stack_offset, cg.stack_offset);
+    try std.testing.expectEqual(code_len, cg.getCode().len);
+
+    for (regs[0..count]) |reg| cg.freeFloat(reg);
+}
+
+test "general allocation reports exhaustion after all allocatable registers" {
+    var cg = LinuxCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    const count: usize = @popCount(LinuxCodeGen.INITIAL_FREE_GENERAL) +
+        @popCount(LinuxCodeGen.CALLEE_SAVED_GENERAL_MASK);
+    var regs: [LinuxCodeGen.NUM_GENERAL_REGS]GeneralReg = undefined;
+    for (0..count) |i| {
+        regs[i] = cg.allocGeneral().?;
+    }
+
+    try std.testing.expectEqual(@as(?GeneralReg, null), cg.allocGeneral());
+    for (regs[0..count]) |reg| cg.freeGeneral(reg);
 }
 
 test "CodeGen works for all aarch64 targets" {

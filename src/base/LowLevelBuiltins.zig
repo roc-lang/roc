@@ -177,6 +177,7 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .str_drop_prefix_caseless_ascii => .str_drop_prefix_caseless_ascii,
         .str_drop_suffix => .str_drop_suffix,
         .str_split_first => .str_split_first,
+        .str_split_last => .str_split_last,
         .str_count_utf8_bytes => .str_count_utf8_bytes,
         .str_get_utf8_byte_unsafe => .str_get_utf8_byte_unsafe,
         .str_substring_unsafe => .str_substring_unsafe,

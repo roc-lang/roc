@@ -1224,6 +1224,7 @@ pub const Evaluator = struct {
             .str_drop_prefix_caseless_ascii,
             .str_drop_suffix,
             .str_split_first,
+            .str_split_last,
             .str_count_utf8_bytes,
             .str_with_capacity,
             .str_reserve,
@@ -1768,6 +1769,7 @@ pub const Evaluator = struct {
             .str_inspect => return .{ .str = try self.strInspect(args[0].str) },
             .str_drop_prefix_caseless_ascii => return try self.strDropPrefixCaseless(result_ty, args[0].str, args[1].str),
             .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
+            .str_split_last => return try self.strSplitLast(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
@@ -1865,6 +1867,25 @@ pub const Evaluator = struct {
             found = true;
             after = source;
         } else if (std.mem.find(u8, source, delimiter)) |index| {
+            found = true;
+            before = source[0..index];
+            after = source[index + delimiter.len ..];
+        }
+        return self.buildNamedRecord(result_ty, &.{
+            .{ .name = "after", .value = .{ .str = after } },
+            .{ .name = "before", .value = .{ .str = before } },
+            .{ .name = "found", .value = .{ .bool_ = found } },
+        });
+    }
+
+    fn strSplitLast(self: *Evaluator, result_ty: Type.TypeId, source: []const u8, delimiter: []const u8) EvalError!Value {
+        var before: []const u8 = "";
+        var after: []const u8 = "";
+        var found = false;
+        if (delimiter.len == 0) {
+            found = true;
+            before = source;
+        } else if (std.mem.findLast(u8, source, delimiter)) |index| {
             found = true;
             before = source[0..index];
             after = source[index + delimiter.len ..];

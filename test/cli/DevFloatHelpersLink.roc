@@ -24,13 +24,13 @@ main! = || {
 	if F64.ceiling_to_i32($f64) != -7 {
 		crash "wrong F64 ceiling result"
 	}
-	if $u128.shift_left_by(3) != 128 {
+	if $u128.shl_wrap(3) != 128 {
 		crash "wrong U128 shift-left result"
 	}
-	if $u128.shift_right_by(2) != 4 {
+	if $u128.shr_wrap(2) != 4 {
 		crash "wrong U128 shift-right result"
 	}
-	if $i128.shift_right_by(4) != -16 {
+	if $i128.shr_wrap(4) != -16 {
 		crash "wrong I128 shift-right result"
 	}
 }

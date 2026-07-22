@@ -301,6 +301,12 @@ pub const MonoLlvmCodeGen = struct {
         found_offset: u32,
     };
 
+    const StrSplitLastLayoutInfo = struct {
+        after_offset: u32,
+        before_offset: u32,
+        found_offset: u32,
+    };
+
     const StrDropPrefixCaselessAsciiLayoutInfo = struct {
         after_offset: u32,
         found_offset: u32,
@@ -2945,6 +2951,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_get_utf8_byte_unsafe => try self.emitStrGetUtf8ByteUnsafe(target, arg_locals),
             .str_substring_unsafe => try self.emitStrSubstringUnsafe(target, arg_locals),
             .str_split_first => try self.emitStrSplitFirst(target, arg_locals),
+            .str_split_last => try self.emitStrSplitLast(target, arg_locals),
             .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
             .str_concat => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_concat)), arg_locals, unique_args),
             .str_trim => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim)), GuardedList.at(arg_locals, 0), unique_args),
@@ -6186,6 +6193,30 @@ pub const MonoLlvmCodeGen = struct {
         try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_first)), call_args.types.items, call_args.values.items);
     }
 
+    fn emitStrSplitLast(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const target_slot = self.slot(target);
+        const info = try self.resolveStrSplitLastLayout(target_slot.layout_idx);
+        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
+
+        const layout_ptr = try self.allocEntryBlockSlot(
+            .i8,
+            @sizeOf(builtins.dev_wrappers.StrSplitLastLayout),
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrSplitLastLayout)),
+            "str_split_last_layout",
+        );
+
+        try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
+        try self.storeRawInt(layout_ptr, 4, .i32, info.before_offset, 4);
+        try self.storeRawInt(layout_ptr, 8, .i32, info.found_offset, 4);
+
+        var call_args = try self.rocStrArgs2(GuardedList.at(args, 0), GuardedList.at(args, 1), false);
+        defer call_args.deinit(self.allocator);
+        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
+        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
+        try call_args.append(self.allocator, try self.ptrType(), self.rocOps());
+        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_last)), call_args.types.items, call_args.values.items);
+    }
+
     fn emitStrDropPrefixCaselessAscii(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const target_slot = self.slot(target);
         const info = try self.resolveStrDropPrefixCaselessAsciiLayout(target_slot.layout_idx);
@@ -8306,6 +8337,26 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn resolveStrSplitFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitFirstLayoutInfo {
+        const ret_layout_val = self.layoutValue(layout_idx);
+        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
+
+        const record_idx = ret_layout_val.getStruct().idx;
+        const record_data = self.layouts().getStructData(record_idx);
+        const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
+        if (fields.len != 3) return error.CompilationFailed;
+
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str) return error.CompilationFailed;
+        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool) return error.CompilationFailed;
+
+        return .{
+            .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
+            .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
+            .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
+        };
+    }
+
+    fn resolveStrSplitLastLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitLastLayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
 

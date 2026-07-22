@@ -586,7 +586,6 @@ const CheckTypeCheckerPatternsStep = struct {
             if (std.mem.endsWith(u8, entry.path, "_test.zig")) continue;
             if (std.mem.find(u8, entry.path, "test/") != null) continue;
             if (std.mem.startsWith(u8, entry.path, "test")) continue;
-            if (std.mem.endsWith(u8, entry.path, "test_runner.zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
 
@@ -1756,7 +1755,6 @@ const test_asset_coverage_dirs = [_]TestAssetCoverageDir{
     } },
     .{ .dir = "test/str", .spec_files = &.{
         "src/cli/test/platform_config.zig",
-        "src/cli/test/test_runner.zig",
         "src/cli/test/parallel_cli_runner.zig",
         "src/compile/coordinator.zig",
     } },
@@ -3171,23 +3169,6 @@ pub fn build(b: *std.Build) void {
             build_release_step.dependOn(&install.step);
         }
     }
-
-    // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
-    const test_runner_exe = b.addExecutable(.{
-        .name = "test_runner",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cli/test/test_runner.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "build_options", .module = roc_modules.build_options },
-            },
-            // runner_core.zig uses std.c.{timespec,clock_gettime,environ}; Zig 0.16 requires
-            // explicit libc linkage for any module that touches std.c.
-            .link_libc = true,
-        }),
-    });
-    b.installArtifact(test_runner_exe);
 
     // Store CLI runner step reference so we can add glue host dependency later.
     var run_cli_test_step: ?*std.Build.Step = null;

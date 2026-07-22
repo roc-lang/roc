@@ -448,6 +448,7 @@ str_trim_end_import: ?u32 = null,
 str_split_import: ?u32 = null,
 str_join_with_import: ?u32 = null,
 str_split_first_import: ?u32 = null,
+str_split_last_import: ?u32 = null,
 str_drop_prefix_caseless_ascii_import: ?u32 = null,
 str_reserve_import: ?u32 = null,
 str_release_excess_capacity_import: ?u32 = null,
@@ -731,6 +732,7 @@ fn hostBuiltinImports(self: *const Self) HostBuiltinImports {
             .float_from_str => self.float_from_str_import,
             .str_equal => self.str_eq_import,
             .str_split_first => self.str_split_first_import,
+            .str_split_last => self.str_split_last_import,
             .str_concat => self.str_concat_import,
             .str_repeat => self.str_repeat_import,
             .str_trim => self.str_trim_import,
@@ -1919,6 +1921,10 @@ fn registerHostImports(self: *Self) Allocator.Error!void {
     // roc_str_split_first: (source, delimiter, result, after_off, before_off, found_off) -> void
     const str_split_first_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     self.str_split_first_import = try self.module.addImport("env", "roc_str_split_first", str_split_first_type);
+
+    // roc_str_split_last: (source, delimiter, result, after_off, before_off, found_off) -> void
+    const str_split_last_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    self.str_split_last_import = try self.module.addImport("env", "roc_str_split_last", str_split_last_type);
 
     // roc_str_drop_prefix_caseless_ascii: (source, prefix, result, after_off, found_off) -> void
     const str_drop_prefix_caseless_ascii_type = try self.module.addFuncType(&.{ .i32, .i32, .i32, .i32, .i32 }, &.{});
@@ -12153,6 +12159,64 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitI32Const(@intCast(found_offset));
             }
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_split_first)), self.str_split_first_import);
+            try self.emitFpOffset(result_offset);
+        },
+
+        .str_split_last => {
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            const source = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(source);
+            try self.emitProcLocal(GuardedList.at(args, 1));
+            const delimiter = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+            try self.emitLocalSet(delimiter);
+
+            const ls = self.getLayoutStore();
+            const ret_layout_val = ls.getLayout(ll.ret_layout);
+            if (ret_layout_val.tag != .struct_) unreachable;
+            const record_idx = ret_layout_val.getStruct().idx;
+            const record_data = ls.getStructData(record_idx);
+            const fields = ls.struct_fields.sliceRange(record_data.getFields());
+            if (fields.len != 3 or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str or
+                ls.getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool)
+            {
+                unreachable;
+            }
+
+            const result_size = try self.layoutStorageByteSize(ll.ret_layout);
+            const result_align = try self.layoutStorageByteAlign(ll.ret_layout);
+            const result_offset = try self.allocStackMemory(result_size, result_align);
+            const after_offset: u32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
+            const before_offset: u32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1));
+            const found_offset: u32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2));
+            if (self.externalCallsUseRelocs()) {
+                const layout_offset = try self.allocStackMemory(12, 4);
+                try self.emitFpOffset(layout_offset);
+                try self.emitI32Const(@intCast(after_offset));
+                try self.emitStoreOp(.i32, 0);
+                try self.emitFpOffset(layout_offset);
+                try self.emitI32Const(@intCast(before_offset));
+                try self.emitStoreOp(.i32, 4);
+                try self.emitFpOffset(layout_offset);
+                try self.emitI32Const(@intCast(found_offset));
+                try self.emitStoreOp(.i32, 8);
+                const source_fields = try self.loadRocStrFields(source);
+                const delimiter_fields = try self.loadRocStrFields(delimiter);
+                try self.emitFpOffset(result_offset);
+                try self.emitRocStrFields(source_fields);
+                try self.emitRocStrFields(delimiter_fields);
+                try self.emitFpOffset(layout_offset);
+                try self.emitLocalGet(self.roc_ops_local);
+            } else {
+                try self.emitLocalGet(source);
+                try self.emitLocalGet(delimiter);
+                try self.emitFpOffset(result_offset);
+                try self.emitI32Const(@intCast(after_offset));
+                try self.emitI32Const(@intCast(before_offset));
+                try self.emitI32Const(@intCast(found_offset));
+            }
+            try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_split_last)), self.str_split_last_import);
             try self.emitFpOffset(result_offset);
         },
 

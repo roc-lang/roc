@@ -2232,6 +2232,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "504" },
     },
     .{
+        .name = "low_level - Str.split_last returns seamless before and after slices",
+        .source =
+        \\{
+        \\x = match Str.split_last("alpha:beta:gamma", ":") {
+        \\    Ok(parts) => Str.count_utf8_bytes(parts.before) * 100 + Str.count_utf8_bytes(parts.after)
+        \\    Err(_) => 0
+        \\}
+        \\x
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1005" },
+    },
+    .{
         .name = "low_level - U8.to_i16 safe widening",
         .source =
         \\{

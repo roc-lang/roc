@@ -4992,6 +4992,25 @@ parallel insertion paths at any point:
    specialization demand vector, check-free helper plans, and the certifier
    rule.
 
+## Dev Backend Register Lifetimes
+
+`LirCodeGen` is the sole authority for LIR local locations. Every assigned
+LIR local is materialized into a stable location—a stack slot for represented
+runtime data—before statement generation continues. Architecture-specific code
+generators own only architecture register masks for short-lived
+instruction-selection temporaries; they do not
+own a second local-location map, move live values between registers and stack,
+or reload LIR local values independently.
+
+The number of simultaneously live instruction-selection temporaries must be
+bounded by the emitted operation, never by source or layout nesting depth.
+Explicit emission worklists carry stack offsets and reuse their
+caller-provided result register across child continuations. They must not retain
+one newly allocated architecture register per recursive layout, control-flow node,
+list element layer, or tag payload layer. Register-pool exhaustion is therefore
+an internal lifetime-invariant failure, not a source-program condition and not
+an invitation for an architecture-specific best-effort spill.
+
 ## Compile-Time Constants
 
 Compile-time constants use the same post-check pipeline as runtime code while a

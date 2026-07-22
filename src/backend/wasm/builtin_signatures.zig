@@ -67,6 +67,7 @@ pub const BuiltinKind = enum {
     float_from_str,
     str_equal,
     str_split_first,
+    str_split_last,
     str_concat,
     str_repeat,
     str_trim,
