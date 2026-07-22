@@ -701,7 +701,7 @@ pub fn main(init: std.process.Init) SnapshotError!void {
 
     // Final reunify Slice 0 checking-census snapshot for this process (a no-op
     // unless ROC_REUNIFY_CHECK_CENSUS names a dump path in a Debug build).
-    check.ReunifyCensus.dumpAppend(app_io);
+    check.ReunifyCensus.dumpAppend();
 
     if (result.failed > 0) {
         std.log.err("Failed to process {d} snapshots.", .{result.failed});

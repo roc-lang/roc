@@ -199,8 +199,11 @@ const Sink = struct {
 /// Called at an end-of-checking point by the compile driver. Fresh reads of the
 /// atomic counters make each block a complete snapshot, so the last block
 /// appended holds the run's final totals. A no-op when the census is disabled.
-/// Every failure is silent: the census must never perturb a compile.
-pub fn dumpAppend(io: std.Io) void {
+/// Every failure is silent: the census must never perturb a compile. The write
+/// goes directly through libc with `O_APPEND` — Debug-only measurement
+/// plumbing, deliberately outside the compiler's file-system abstraction, and
+/// atomic enough that concurrent corpus processes interleave whole blocks.
+pub fn dumpAppend() void {
     if (comptime !enabled) return;
     if (!active()) return;
 
@@ -208,7 +211,9 @@ pub fn dumpAppend(io: std.Io) void {
     defer unlockBuffer();
 
     if (stored_path_len == 0) return;
-    const path = stored_path[0..stored_path_len];
+    if (stored_path_len >= stored_path.len) return;
+    stored_path[stored_path_len] = 0;
+    const path_z: [*:0]const u8 = @ptrCast(stored_path[0..stored_path_len :0]);
 
     var buffer: [8192]u8 = undefined;
     var sink = Sink{ .data = &buffer };
@@ -227,11 +232,15 @@ pub fn dumpAppend(io: std.Io) void {
         sink.print("divergent_detail_{d}={s}\n", .{ i, divergent_details[i][0..divergent_detail_lens[i]] });
     }
 
-    const dir = std.Io.Dir.cwd();
-    var file = dir.createFile(io, path, .{ .truncate = false }) catch return;
-    defer file.close(io);
-    const offset = (file.stat(io) catch return).size;
-    file.writePositionalAll(io, sink.slice(), offset) catch return;
+    const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, @as(std.c.mode_t, 0o644));
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    var remaining = sink.slice();
+    while (remaining.len > 0) {
+        const written = std.c.write(fd, remaining.ptr, remaining.len);
+        if (written <= 0) return;
+        remaining = remaining[@intCast(written)..];
+    }
 }
 
 test "recording is a no-op outside Debug and bounded inside it" {

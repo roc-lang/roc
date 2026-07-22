@@ -2232,7 +2232,7 @@ pub const PackageEnv = struct {
 
         // reunify Slice 0 (reunify.md 13): after this module finalizes, append a
         // census snapshot so the dump file reflects the run's accumulated totals.
-        reunify_census.dumpAppend(self.roc_ctx.std_io);
+        reunify_census.dumpAppend();
 
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);

@@ -4659,7 +4659,7 @@ pub const Coordinator = struct {
         // reunify Slice 0 (reunify.md 13): append a census snapshot after this
         // module's checking (Item 1 duplicate measurement and Item 2 err walk ran
         // inside `typeCheckModule`), so the dump reflects the accumulated totals.
-        check.ReunifyCensus.dumpAppend(self.roc_ctx.std_io);
+        check.ReunifyCensus.dumpAppend();
 
         const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
 

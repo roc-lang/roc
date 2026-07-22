@@ -78,3 +78,34 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     }
     return out.toOwnedSlice(allocator);
 }
+
+/// When `ROC_REUNIFY_CENSUS` names a file, append the counter dump to it.
+/// The census owns this write directly through libc — it is Debug-only
+/// measurement plumbing, deliberately outside the compiler's file-system
+/// abstraction, and every failure is silent so lowering is never affected.
+pub fn appendDumpToEnvPath(allocator: std.mem.Allocator) void {
+    if (comptime !enabled) return;
+    const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+    const path = raw_path[0..std.mem.len(raw_path)];
+    if (path.len == 0) return;
+    const text = dumpText(allocator) catch return;
+    defer allocator.free(text);
+    if (text.len == 0) return;
+    appendToFile(raw_path, text);
+}
+
+/// Append bytes to the named file through libc with `O_APPEND`, so multiple
+/// processes measuring one corpus interleave whole writes rather than
+/// clobbering each other's offsets.
+pub fn appendToFile(path: [*:0]const u8, bytes: []const u8) void {
+    if (comptime !enabled) return;
+    const fd = std.c.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, @as(std.c.mode_t, 0o644));
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    var remaining = bytes;
+    while (remaining.len > 0) {
+        const written = std.c.write(fd, remaining.ptr, remaining.len);
+        if (written <= 0) return;
+        remaining = remaining[@intCast(written)..];
+    }
+}
