@@ -619,7 +619,7 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     const proof_data = sourceSliceBetween(
         lower_source,
         "const RuntimeImpossibilityProofId",
-        "const DraftStructuralEqOwnedCall",
+        "const DraftStructuralEqMethodCall",
     );
     try expectContains(proof_data, "any: DraftSpan(RuntimeImpossibilityProofId)");
     try expectContains(proof_data, "all: DraftSpan(RuntimeImpossibilityProofId)");

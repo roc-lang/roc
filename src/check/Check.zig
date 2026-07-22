@@ -181,10 +181,6 @@ u64_var: Var,
 builtin_types_copied: bool,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
-/// Hidden field-access expressions preallocated for method-call nodes. If a
-/// method call resolves to a record field function, the checker rewrites the
-/// method call to an ordinary call using this field access as the callee.
-method_field_access_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Expr.Idx),
 /// Interpolation constraint function vars whose custom part checks have already run.
 checked_interpolation_part_constraints: std.AutoHashMap(Var, void),
 /// Dispatcher/method pairs already reported by `reportConstraintError`, so a
@@ -1483,7 +1479,6 @@ fn initAssumePrepared(
         .u64_var = undefined,
         .builtin_types_copied = false,
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .method_field_access_exprs = .{},
         .checked_interpolation_part_constraints = std.AutoHashMap(Var, void).init(gpa),
         .reported_constraint_errors = std.AutoHashMap(ReportedConstraintError, void).init(gpa),
         .reported_effectful_expect = std.AutoHashMap(Var, void).init(gpa),
@@ -1622,7 +1617,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_deferred_static_dispatch_constraints.deinit();
     self.import_cache.deinit(self.gpa);
     self.ident_to_var_map.deinit();
-    self.method_field_access_exprs.deinit(self.gpa);
     self.checked_interpolation_part_constraints.deinit();
     self.reported_constraint_errors.deinit();
     self.reported_effectful_expect.deinit();
@@ -3240,32 +3234,6 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     }
 }
 
-fn prepareMethodFieldAccessExprs(self: *Self) Allocator.Error!void {
-    const initial_node_count = self.cir.store.nodes.len();
-    var raw_node_idx: u32 = 0;
-    while (raw_node_idx < initial_node_count) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
-        if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
-
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
-        if (self.method_field_access_exprs.contains(expr_idx)) continue;
-
-        switch (self.cir.store.getExpr(expr_idx)) {
-            .e_method_call => |method_call| {
-                const expr_region = self.cir.store.getExprRegion(expr_idx);
-                const field_expr_idx = try self.cir.addExpr(.{ .e_field_access = .{
-                    .receiver = method_call.receiver,
-                    .field_name = method_call.method_name,
-                    .field_name_region = method_call.method_name_region,
-                } }, expr_region);
-                _ = try self.regions.append(self.gpa, expr_region);
-                try self.method_field_access_exprs.put(self.gpa, expr_idx, field_expr_idx);
-            },
-            else => {},
-        }
-    }
-}
-
 // import caches //
 
 /// Key for the import cache: module index + expression index in that module
@@ -3656,113 +3624,6 @@ fn resolvePendingTupleAccesses(
     self.pending_tuple_accesses.shrinkRetainingCapacity(write_i);
 }
 
-fn recordFieldVarByName(
-    self: *Self,
-    fields: types_mod.RecordField.SafeMultiList.Range,
-    field_name: Ident.Idx,
-) ?Var {
-    const field_slice = self.types.getRecordFieldsSlice(fields);
-    for (field_slice.items(.name), field_slice.items(.var_)) |name, field_var| {
-        if (name.eql(field_name)) return field_var;
-    }
-    return null;
-}
-
-fn recordTypeFieldVarByName(self: *Self, record_var: Var, field_name: Ident.Idx) ?Var {
-    var current = record_var;
-    var guard = types_mod.debug.IterationGuard.init("recordTypeFieldVarByName");
-    while (true) {
-        guard.tick();
-        const resolved = self.types.resolveVar(current);
-        switch (resolved.desc.content) {
-            .structure => |structure| switch (structure) {
-                .record => |record| {
-                    if (self.recordFieldVarByName(record.fields, field_name)) |field_var| return field_var;
-                    current = record.ext;
-                },
-                .record_unbound => |fields| return self.recordFieldVarByName(fields, field_name),
-                else => return null,
-            },
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            else => return null,
-        }
-    }
-}
-
-fn tryResolveStructuralRecordFieldDispatch(
-    self: *Self,
-    dispatcher_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-) Allocator.Error!bool {
-    switch (constraint.origin) {
-        .method_call => {},
-        else => return false,
-    }
-
-    const field_var = self.recordTypeFieldVarByName(dispatcher_var, constraint.fn_name) orelse return false;
-    const expr_idx = constraintIntroExpr(constraint) orelse return false;
-    const expr_region = self.cir.store.getExprRegion(expr_idx);
-
-    const dispatch_call = switch (self.cir.store.getExpr(expr_idx)) {
-        .e_dispatch_call => |dispatch_call| dispatch_call,
-        else => return false,
-    };
-
-    if (!dispatch_call.method_name.eql(constraint.fn_name)) return false;
-
-    const dispatch_constraint_root = self.types.resolveVar(dispatch_call.constraint_fn_var).var_;
-    const constraint_root = self.types.resolveVar(constraint.fn_var).var_;
-    if (dispatch_constraint_root != constraint_root) return false;
-
-    const constraint_fn = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
-    const arg_expr_idxs = self.cir.store.sliceExpr(dispatch_call.args);
-    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const arg_vars_alloc = arg_vars_sfa.get();
-    const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
-    defer arg_vars_alloc.free(arg_vars);
-    for (arg_expr_idxs, 0..) |arg_expr_idx, arg_i| {
-        arg_vars[arg_i] = ModuleEnv.varFrom(arg_expr_idx);
-    }
-
-    const field_expr_idx = self.method_field_access_exprs.get(expr_idx) orelse return false;
-
-    const callable_field_var = blk: {
-        const resolved = self.types.resolveVar(field_var);
-        if (resolved.desc.rank == Rank.generalized) {
-            break :blk try self.instantiateVar(field_var, env, .use_last_var);
-        }
-        break :blk field_var;
-    };
-
-    const field_expr_var = ModuleEnv.varFrom(field_expr_idx);
-    _ = try self.unify(field_expr_var, callable_field_var, env);
-
-    const call_func_content = try self.types.mkFuncUnbound(arg_vars, constraint_fn.ret);
-    const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
-    const result = try self.unify(callable_field_var, call_func_var, env);
-    if (!result.isProblem()) {
-        try self.reportEffectfulDispatchInExpect(constraint);
-    }
-
-    const published_constraint_args = try self.types.appendVars(arg_vars);
-    const published_constraint_func = Func{
-        .args = published_constraint_args,
-        .ret = constraint_fn.ret,
-    };
-    const published_constraint_fn_var = try self.freshFromContent(.{ .structure = .{
-        .fn_unbound = published_constraint_func,
-    } }, env, expr_region);
-
-    try self.cir.store.replaceExprWithCallConstraint(
-        expr_idx,
-        field_expr_idx,
-        dispatch_call.args,
-        .apply,
-        published_constraint_fn_var,
-    );
-    return true;
-}
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -5328,8 +5189,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    try self.prepareMethodFieldAccessExprs();
 
     // Fill in types store up to the size of CIR nodes
     try ensureTypeStoreIsFilled(self);
@@ -8768,8 +8627,6 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    try self.prepareMethodFieldAccessExprs();
-
     try ensureTypeStoreIsFilled(self);
 
     // Copy builtin types into this module's type store
@@ -8813,8 +8670,6 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
-
-    try self.prepareMethodFieldAccessExprs();
 
     try ensureTypeStoreIsFilled(self);
 
@@ -19905,14 +19760,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             },
                         }
                     } else {
-                        if (try self.tryResolveStructuralRecordFieldDispatch(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                        )) {
-                            continue;
-                        }
-
                         // Structural types (other than is_eq, to_hash, parser_for, and
                         // encoder_for) cannot have methods called on them. The user must
                         // explicitly wrap the value in a nominal type.

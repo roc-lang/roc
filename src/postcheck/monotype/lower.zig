@@ -3967,11 +3967,11 @@ const Builder = struct {
                 try self.finalizeDraftConstUse(body_draft, graph, boundary_index);
             }
 
-            var added_owned_call = false;
+            var added_method_call = false;
             var equality_index: usize = 0;
             while (equality_index < body_draft.deferred_structural_eqs.items.len) : (equality_index += 1) {
                 if (try self.prepareDraftStructuralEq(body_draft, graph, equality_index)) {
-                    added_owned_call = true;
+                    added_method_call = true;
                 }
             }
 
@@ -3995,7 +3995,7 @@ const Builder = struct {
             }
 
             if (const_index < body_draft.deferred_const_uses.items.len) continue;
-            if (!added_owned_call and !added_inspect_method and !added_codec_call) break;
+            if (!added_method_call and !added_inspect_method and !added_codec_call) break;
         }
         resolveDraftConstUseReservations(body_draft);
         try graph.drainDirty();
@@ -4142,16 +4142,16 @@ const Builder = struct {
 
         var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
         defer seen.deinit();
-        var added_owned_call = false;
+        var added_method_call = false;
         try ctx.prepareStructuralEqNode(
             boundary_index,
             boundary.operand_node,
             boundary.ret_ty,
             &seen,
-            &added_owned_call,
+            &added_method_call,
         );
         body_draft.deferred_structural_eqs.items[boundary_index].emission_plan_ready = true;
-        return added_owned_call;
+        return added_method_call;
     }
 
     fn prepareDraftInspectMethods(
@@ -4425,21 +4425,21 @@ const Builder = struct {
         ctx.current_fn_key = boundary.current_fn_key;
         try ctx.restoreCodecLexicalContext(boundary.lexical);
 
-        var owned_calls = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
-        defer owned_calls.deinit();
-        for (body_draft.structural_eq_owned_calls.items) |planned| {
+        var method_calls = std.AutoHashMap(Type.TypeId, DraftFnSlot).init(self.allocator);
+        defer method_calls.deinit();
+        for (body_draft.structural_eq_method_calls.items) |planned| {
             if (planned.boundary != boundary_index) continue;
-            const owned_ty = try sealer.sealNode(planned.node);
-            const entry = try owned_calls.getOrPut(owned_ty);
+            const component_ty = try sealer.sealNode(planned.node);
+            const entry = try method_calls.getOrPut(component_ty);
             if (entry.found_existing) {
                 if (!std.meta.eql(entry.value_ptr.*, planned.callee)) {
-                    Common.invariant("deferred structural equality plan assigned two callees to one owned type");
+                    Common.invariant("deferred structural equality plan assigned two callees to one component type");
                 }
             } else {
                 entry.value_ptr.* = planned.callee;
             }
         }
-        ctx.frozen_equality_owned_calls = &owned_calls;
+        ctx.frozen_equality_method_calls = &method_calls;
 
         const operand_ty = try sealer.sealNode(boundary.operand_node);
         const lowered = try ctx.lowerStructuralEqFromOperands(
@@ -7979,7 +7979,7 @@ const FrozenRuntimeImpossibilityProofEvaluator = struct {
     }
 };
 
-const DraftStructuralEqOwnedCall = struct {
+const DraftStructuralEqMethodCall = struct {
     boundary: u32,
     node: NodeId,
     callee: DraftFnSlot,
@@ -8103,7 +8103,7 @@ const BodyDraftStore = struct {
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
     prepared_inspect_methods: std.ArrayList(DraftPreparedInspectMethod),
-    structural_eq_owned_calls: std.ArrayList(DraftStructuralEqOwnedCall),
+    structural_eq_method_calls: std.ArrayList(DraftStructuralEqMethodCall),
     runtime_value_demands: std.ArrayList(DraftRuntimeValueDemand),
     impossibility_proofs: std.ArrayList(RuntimeImpossibilityProof),
     impossibility_proof_ids: std.ArrayList(RuntimeImpossibilityProofId),
@@ -8164,7 +8164,7 @@ const BodyDraftStore = struct {
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
             .prepared_inspect_methods = .empty,
-            .structural_eq_owned_calls = .empty,
+            .structural_eq_method_calls = .empty,
             .runtime_value_demands = .empty,
             .impossibility_proofs = .empty,
             .impossibility_proof_ids = .empty,
@@ -8262,7 +8262,7 @@ const BodyDraftStore = struct {
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit(self.allocator);
         self.runtime_value_demands.deinit(self.allocator);
-        self.structural_eq_owned_calls.deinit(self.allocator);
+        self.structural_eq_method_calls.deinit(self.allocator);
         self.prepared_inspect_methods.deinit(self.allocator);
         self.deferred_inspects.deinit(self.allocator);
         self.deferred_structural_serializations.deinit(self.allocator);
@@ -9529,9 +9529,10 @@ const BodyContext = struct {
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     encoder_defs: std.AutoHashMap(GeneratedEncoderDefAddress, DraftGeneratedHelperDefEntry),
     parser_defs: std.AutoHashMap(GeneratedParserDefAddress, DraftGeneratedHelperDefEntry),
-    /// Frozen Phase-B lookup from each sealed owned equality component to the
-    /// procedure slot reserved while relations were still being produced.
-    frozen_equality_owned_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
+    /// Frozen Phase-B lookup from each sealed equality component with an exact
+    /// method to the procedure slot reserved while relations were still being
+    /// produced.
+    frozen_equality_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
     /// Frozen Phase-B lookup from a sealed inspected nominal type to the
     /// attached `to_inspect` slot reserved while relations were still open.
     frozen_inspect_method_calls: ?*const std.AutoHashMap(Type.TypeId, DraftFnSlot) = null,
@@ -9998,7 +9999,7 @@ const BodyContext = struct {
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .encoder_defs = std.AutoHashMap(GeneratedEncoderDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
             .parser_defs = std.AutoHashMap(GeneratedParserDefAddress, DraftGeneratedHelperDefEntry).init(allocator),
-            .frozen_equality_owned_calls = null,
+            .frozen_equality_method_calls = null,
             .frozen_codec_calls = null,
         };
     }
@@ -30843,37 +30844,27 @@ const BodyContext = struct {
         raw_node: NodeId,
         bool_ty: Type.TypeId,
         seen: *std.AutoHashMap(NodeId, void),
-        added_owned_call: *bool,
+        added_method_call: *bool,
     ) Allocator.Error!void {
         const entry = try seen.getOrPut(raw_node);
         if (entry.found_existing) return;
 
         switch (self.graph.content(raw_node)) {
             .list => {
-                for (self.draft.structural_eq_owned_calls.items) |planned| {
-                    if (planned.boundary != boundary_index) continue;
-                    if (self.graph.sameClass(planned.node, raw_node)) return;
-                }
                 const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(
                     .{ .builtin = .list },
                     "is_eq",
-                ) orelse Common.invariant("checked method registry is missing owned equality target"));
-                const ret_node = try self.graph.importMono(bool_ty);
-                const callable_node = try self.graphFunctionNode(
-                    &.{ raw_node, raw_node },
-                    ret_node,
-                );
-                const callee = try self.methodTargetCalleeAtNode(
+                ) orelse Common.invariant("checked method registry is missing List equality target"));
+                if (lookup.target.kind == .structural) {
+                    Common.invariant("owned List equality resolved to a structural registry implementation");
+                }
+                try self.prepareStructuralEqMethodCall(
+                    boundary_index,
+                    raw_node,
+                    bool_ty,
                     lookup,
-                    callable_node,
-                    .synthesize,
+                    added_method_call,
                 );
-                try self.draft.structural_eq_owned_calls.append(self.allocator, .{
-                    .boundary = @intCast(boundary_index),
-                    .node = raw_node,
-                    .callee = callee,
-                });
-                added_owned_call.* = true;
             },
             .tuple => {
                 for (try self.graph.tupleItemNodes(raw_node)) |item| {
@@ -30882,7 +30873,7 @@ const BodyContext = struct {
                         item,
                         bool_ty,
                         seen,
-                        added_owned_call,
+                        added_method_call,
                     );
                 }
             },
@@ -30893,7 +30884,7 @@ const BodyContext = struct {
                         field.ty,
                         bool_ty,
                         seen,
-                        added_owned_call,
+                        added_method_call,
                     );
                 }
             },
@@ -30905,20 +30896,40 @@ const BodyContext = struct {
                             payload,
                             bool_ty,
                             seen,
-                            added_owned_call,
+                            added_method_call,
                         );
                     }
                 }
             },
             .named => {
                 const named = self.graph.namedNodes(raw_node);
+                if (self.methodOwnerFromNode(raw_node)) |owner| {
+                    if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
+                        const lookup = try self.withLocalProcContext(raw_lookup);
+                        switch (lookup.target.kind) {
+                            .structural => |kind| if (kind != .equality) {
+                                Common.invariant("named equality resolved to a different structural registry implementation");
+                            },
+                            .procedure, .local_proc => {
+                                try self.prepareStructuralEqMethodCall(
+                                    boundary_index,
+                                    raw_node,
+                                    bool_ty,
+                                    lookup,
+                                    added_method_call,
+                                );
+                                return;
+                            },
+                        }
+                    }
+                }
                 if (named.backing) |backing| {
                     try self.prepareStructuralEqNode(
                         boundary_index,
                         backing.node,
                         bool_ty,
                         seen,
-                        added_owned_call,
+                        added_method_call,
                     );
                 }
             },
@@ -30933,6 +30944,29 @@ const BodyContext = struct {
             .zst,
             => {},
         }
+    }
+
+    fn prepareStructuralEqMethodCall(
+        self: *BodyContext,
+        boundary_index: usize,
+        node: NodeId,
+        bool_ty: Type.TypeId,
+        lookup: MethodLookup,
+        added_method_call: *bool,
+    ) Allocator.Error!void {
+        for (self.draft.structural_eq_method_calls.items) |planned| {
+            if (planned.boundary != boundary_index) continue;
+            if (self.graph.sameClass(planned.node, node)) return;
+        }
+        const ret_node = try self.graph.importMono(bool_ty);
+        const callable_node = try self.graphFunctionNode(&.{ node, node }, ret_node);
+        const callee = try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
+        try self.draft.structural_eq_method_calls.append(self.allocator, .{
+            .boundary = @intCast(boundary_index),
+            .node = node,
+            .callee = callee,
+        });
+        added_method_call.* = true;
     }
 
     /// Whether `shape` is a type the structural-derivation ladders (is_eq /
@@ -30981,10 +31015,11 @@ const BodyContext = struct {
     //
     // is_eq and to_hash share one recursive ladder: walk a type one layer at a
     // time, decomposing aggregates (records/tuples/tag unions) and transparent
-    // nominals, dispatching owned types (List) to their real method, and
-    // emitting a leaf node (`structural_eq` / `structural_hash`) for scalars,
-    // opaque nominals, and other inline-handled leaves. Recursion is broken by
-    // an expansion stack plus a memoized generated helper def.
+    // nominals that have no exact component method. A List or named component
+    // with an exact method dispatches to that method before its representation
+    // can be inspected. Scalars, opaque nominals, and other inline-handled
+    // leaves emit a leaf node (`structural_eq` / `structural_hash`). Recursion is
+    // broken by an expansion stack plus a memoized generated helper def.
     //
     // The per-derivation specifics are supplied by a comptime `Deriver` type
     // (`EqDeriver` / `HashDeriver`). A Deriver provides:
@@ -30999,8 +31034,9 @@ const BodyContext = struct {
     //   - `combineSeed` / `combine` plus `forward`: fold the per-component
     //     results (equality conjoins component bools with AND; hashing threads
     //     the accumulator left to right).
-    //   - `ownedCall` / `named` / `tagUnion`: the shapes whose decomposition
-    //     differs structurally between the two derivations.
+    //   - `methodArgTypes` / `named` / `tagUnion`: method call types and the
+    //     shapes whose decomposition differs structurally between the two
+    //     derivations.
     //
     // A `DerivationCtx` carries the runtime parameters shared by every step:
     // the derivation's result type (Bool / Hasher) and the method name.
@@ -31011,6 +31047,54 @@ const BodyContext = struct {
     };
 
     fn lowerDerivation(
+        self: *BodyContext,
+        comptime D: type,
+        ty: Type.TypeId,
+        operand: D.Operand,
+        ctx: DerivationCtx,
+    ) Allocator.Error!DraftExprId {
+        const shape = self.builder.program.types.get(ty);
+
+        switch (shape) {
+            .list => {
+                const lookup = try self.derivationMethodLookup(ty, ctx.method_name) orelse
+                    Common.invariant(D.missing_component_method_msg);
+                if (lookup.target.kind == .structural) {
+                    Common.invariant("owned List derivation resolved to a structural registry implementation");
+                }
+                return try self.derivationMethodCall(D, lookup, ty, operand, ctx);
+            },
+            .named => {
+                if (try self.derivationMethodLookup(ty, ctx.method_name)) |lookup| {
+                    switch (lookup.target.kind) {
+                        .structural => |kind| if (kind != D.structural_kind) {
+                            Common.invariant("structural registry implementation did not match the active derivation");
+                        },
+                        .procedure, .local_proc => return try self.derivationMethodCall(D, lookup, ty, operand, ctx),
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return try self.lowerDerivationExpansion(D, ty, operand, ctx);
+    }
+
+    fn derivationMethodLookup(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        method_name: []const u8,
+    ) Allocator.Error!?MethodLookup {
+        const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse return null;
+        const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse return null;
+        return try self.withLocalProcContext(lookup);
+    }
+
+    /// Expand `ty` structurally without consulting its exact method target.
+    /// Components still derive through `lowerDerivation`, so only the top
+    /// layer skips method dispatch. Generated recursive helper bodies use this
+    /// entry point to avoid resolving their own method back into a self-call.
+    fn lowerDerivationExpansion(
         self: *BodyContext,
         comptime D: type,
         ty: Type.TypeId,
@@ -31033,7 +31117,7 @@ const BodyContext = struct {
         }
 
         return switch (shape) {
-            .list => try D.ownedCall(self, ty, operand, ctx),
+            .list => Common.invariant("structural derivation expansion reached a List; List derivations dispatch to a method target"),
             .record => |fields| try self.derivationRecord(D, self.builder.program.types.fieldSpan(fields), operand, ctx),
             .tuple => |items| try self.derivationTuple(D, self.builder.program.types.span(items), operand, ctx),
             .tag_union => |tags| try D.tagUnion(self, ty, tags, operand, ctx),
@@ -31074,32 +31158,27 @@ const BodyContext = struct {
         });
     }
 
-    /// Dispatch an owned (non-structural) type to its real derived method,
-    /// shared by every derivation. The argument types and the per-derivation
-    /// invariant wording come from the comptime `Deriver`; the operand-to-args
-    /// mapping reuses `D.callArgs`.
-    fn derivationOwnedCall(
+    /// Dispatch a component to its exact checked method target, shared by every
+    /// derivation. The argument types come from the comptime `Deriver`; the
+    /// operand-to-args mapping reuses `D.callArgs`.
+    fn derivationMethodCall(
         self: *BodyContext,
         comptime D: type,
+        lookup: MethodLookup,
         ty: Type.TypeId,
         operand: D.Operand,
         ctx: DerivationCtx,
     ) Allocator.Error!DraftExprId {
-        const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
-            Common.invariant(D.owned_missing_owner_msg);
-        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, ctx.method_name) orelse
-            Common.invariant(D.owned_missing_target_msg));
-
         const callee = if (comptime D == EqDeriver) planned: {
-            if (self.frozen_equality_owned_calls) |planned_calls| {
+            if (self.frozen_equality_method_calls) |planned_calls| {
                 break :planned planned_calls.get(ty) orelse
-                    Common.invariant("frozen structural equality emission reached an unplanned owned type");
+                    Common.invariant("frozen structural equality emission reached an unplanned component method");
             }
-            const arg_tys = D.ownedArgTypes(ty, ctx.result_ty);
+            const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
             const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
             break :planned try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
         } else ordinary: {
-            const arg_tys = D.ownedArgTypes(ty, ctx.result_ty);
+            const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
             const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
             break :ordinary try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
         };
@@ -31143,7 +31222,7 @@ const BodyContext = struct {
         }
         defer stack.putAssumeCapacity(value_ty, {});
 
-        const body = try self.lowerDerivation(D, value_ty, operand, ctx);
+        const body = try self.lowerDerivationExpansion(D, value_ty, operand, ctx);
         const args = try self.addTypedLocalSpan(&.{
             .{ .local = self_local, .ty = value_ty },
             .{ .local = aux_local, .ty = second_ty },
@@ -36813,6 +36892,8 @@ test "specialization evidence equality includes exact target instantiation" {
 /// component access on each, and conjoins the per-component bools with AND so
 /// the first inequality short-circuits to `false`.
 const EqDeriver = struct {
+    const structural_kind: static_dispatch.StructuralKind = .equality;
+
     const Operand = struct {
         lhs: DraftExprId,
         rhs: DraftExprId,
@@ -36890,15 +36971,10 @@ const EqDeriver = struct {
         return .{ .lhs = lhs_item, .rhs = rhs_item };
     }
 
-    const owned_missing_owner_msg = "owned equality call requested for a type without a method owner";
-    const owned_missing_target_msg = "checked method registry is missing owned equality target";
+    const missing_component_method_msg = "checked method registry is missing List equality target";
 
-    fn ownedArgTypes(ty: Type.TypeId, _: Type.TypeId) [2]Type.TypeId {
+    fn methodArgTypes(ty: Type.TypeId, _: Type.TypeId) [2]Type.TypeId {
         return .{ ty, ty };
-    }
-
-    fn ownedCall(self: *BodyContext, ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
-        return try self.derivationOwnedCall(EqDeriver, ty, operand, ctx);
     }
 
     /// Decomposes structural equality on a nominal type. Record and tuple backings are
@@ -37045,6 +37121,8 @@ const EqDeriver = struct {
 /// threads a single value plus a running Hasher accumulator: each component
 /// feeds the hasher accumulated so far, left to right.
 const HashDeriver = struct {
+    const structural_kind: static_dispatch.StructuralKind = .hash;
+
     const Operand = struct {
         value: DraftExprId,
         hasher: DraftExprId,
@@ -37113,15 +37191,10 @@ const HashDeriver = struct {
         return .{ .value = item_value, .hasher = state };
     }
 
-    const owned_missing_owner_msg = "owned hash call requested for a type without a method owner";
-    const owned_missing_target_msg = "checked method registry is missing owned to_hash target";
+    const missing_component_method_msg = "checked method registry is missing List to_hash target";
 
-    fn ownedArgTypes(ty: Type.TypeId, result_ty: Type.TypeId) [2]Type.TypeId {
+    fn methodArgTypes(ty: Type.TypeId, result_ty: Type.TypeId) [2]Type.TypeId {
         return .{ ty, result_ty };
-    }
-
-    fn ownedCall(self: *BodyContext, ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
-        return try self.derivationOwnedCall(HashDeriver, ty, operand, ctx);
     }
 
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
