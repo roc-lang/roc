@@ -60,6 +60,20 @@ const Solver = struct {
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
+    /// Memoized `containsCallableOccurrence` results, keyed by monotype id.
+    /// The predicate is a pure function of the immutable lifted monotype
+    /// graph, so it is cached once on the solver and reused by every cloning
+    /// call rather than recomputed per position.
+    callable_occurrence_memo: std.AutoHashMap(MonoType.TypeId, bool),
+
+    /// Result of one `containsCallableOccurrence` sub-walk. `touched_active`
+    /// records whether the walk leaned on an id still open higher on the DFS
+    /// stack; such a result may be incomplete, so only fully-resolved results
+    /// (`touched_active == false`) are cached.
+    const CallablePresence = struct {
+        present: bool,
+        touched_active: bool,
+    };
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -114,10 +128,12 @@ const Solver = struct {
             .join_points = .empty,
             .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .callable_occurrence_memo = std.AutoHashMap(MonoType.TypeId, bool).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        self.callable_occurrence_memo.deinit();
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
@@ -1156,6 +1172,101 @@ const Solver = struct {
         }
     }
 
+    /// Whether the lifted monotype subgraph rooted at `ty` transitively holds
+    /// any function-typed occurrence: a `.func` node, which the cloner lowers
+    /// to a fresh callable slot, or an `.erased` node, whose lowered form
+    /// accumulates erased members. A subgraph with neither has no callable
+    /// flow, so its completed clone may be shared across occurrences without
+    /// coupling a lambda set or an erased-member accumulation. A subgraph with
+    /// either must clone fresh at each non-recursive occurrence.
+    fn containsCallableOccurrence(self: *Solver, ty: MonoType.TypeId) Allocator.Error!bool {
+        var visiting = std.AutoHashMap(MonoType.TypeId, void).init(self.allocator);
+        defer visiting.deinit();
+        return (try self.containsCallableOccurrenceInner(ty, &visiting)).present;
+    }
+
+    fn containsCallableOccurrenceInner(
+        self: *Solver,
+        ty: MonoType.TypeId,
+        visiting: *std.AutoHashMap(MonoType.TypeId, void),
+    ) Allocator.Error!CallablePresence {
+        if (self.callable_occurrence_memo.get(ty)) |known| {
+            return .{ .present = known, .touched_active = false };
+        }
+        if (visiting.contains(ty)) {
+            // A back-edge to an id whose walk is still open. The edge itself
+            // adds no callable node; whether the cycle reaches one is decided
+            // on the branch that first opened the id.
+            return .{ .present = false, .touched_active = true };
+        }
+        try visiting.put(ty, {});
+
+        var present = false;
+        var touched_active = false;
+        const fold = struct {
+            fn go(
+                inner: *Solver,
+                child: MonoType.TypeId,
+                open: *std.AutoHashMap(MonoType.TypeId, void),
+                acc_present: *bool,
+                acc_touched: *bool,
+            ) Allocator.Error!void {
+                const result = try inner.containsCallableOccurrenceInner(child, open);
+                acc_present.* = acc_present.* or result.present;
+                acc_touched.* = acc_touched.* or result.touched_active;
+            }
+        }.go;
+
+        switch (self.lifted.types.get(ty)) {
+            .primitive, .zst => {},
+            // A function type gets a fresh callable slot; an erased function
+            // accumulates members. Either couples callable flow when shared.
+            .func, .erased => present = true,
+            .list, .box => |elem| try fold(self, elem, visiting, &present, &touched_active),
+            .tuple => |items| {
+                for (self.lifted.types.span(items)) |item| {
+                    try fold(self, item, visiting, &present, &touched_active);
+                }
+            },
+            .record => |fields| {
+                for (self.lifted.types.fieldSpan(fields)) |field| {
+                    try fold(self, field.ty, visiting, &present, &touched_active);
+                }
+            },
+            .tag_union => |tags| {
+                for (self.lifted.types.tagSpan(tags)) |tag| {
+                    for (self.lifted.types.span(tag.payloads)) |payload| {
+                        try fold(self, payload, visiting, &present, &touched_active);
+                    }
+                }
+            },
+            .named => |named| {
+                for (self.lifted.types.span(named.args)) |arg| {
+                    try fold(self, arg, visiting, &present, &touched_active);
+                }
+                if (named.backing) |backing| {
+                    try fold(self, backing.ty, visiting, &present, &touched_active);
+                }
+                for (self.lifted.types.declaredFieldSpan(named.declared_order)) |entry| {
+                    switch (entry) {
+                        .named => {},
+                        .padding => |pad| try fold(self, pad, visiting, &present, &touched_active),
+                    }
+                }
+            },
+        }
+
+        _ = visiting.remove(ty);
+        // Cache only a result whose walk never leaned on an id still open
+        // higher on the stack. Such a result is the complete answer for this
+        // subgraph; a result reached through an open ancestor may be partial,
+        // so it is left uncached for the cycle head to settle.
+        if (!touched_active) {
+            try self.callable_occurrence_memo.put(ty, present);
+        }
+        return .{ .present = present, .touched_active = touched_active };
+    }
+
     fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         var cloner = TypeCloner.init(self);
         defer cloner.deinit();
@@ -1934,32 +2045,58 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 
 const TypeCloner = struct {
     solver: *Solver,
-    map: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
+    /// Monotype ids whose clone is in progress along the current path, mapped
+    /// to the var reserved on entry. A back-edge to an id still on this path
+    /// reuses its reservation, tying a recursive knot; the entry is removed
+    /// once the clone completes, so a later non-recursive occurrence of the
+    /// same id clones fresh with its own callable slot.
+    active_path: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
+    /// Completed clones of callable-free subgraphs, keyed by monotype id. Only
+    /// ids for which `containsCallableOccurrence` is false are recorded; their
+    /// clones hold no callable slot, so sharing them across occurrences
+    /// couples nothing and keeps large scalar-only types from re-cloning.
+    shared_callable_free: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
     forced_dynamic_backings: std.ArrayList(Type.TypeVarId),
 
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
-            .map = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
+            .active_path = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
+            .shared_callable_free = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
             .forced_dynamic_backings = .empty,
         };
     }
 
     fn deinit(self: *TypeCloner) void {
         self.forced_dynamic_backings.deinit(self.solver.allocator);
-        self.map.deinit();
+        self.shared_callable_free.deinit();
+        self.active_path.deinit();
     }
 
     fn lower(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
-        if (self.map.get(ty)) |cached| return cached;
+        // A back-edge to an id still being cloned on the current path reuses
+        // the var reserved on entry, tying the recursive knot.
+        if (self.active_path.get(ty)) |reserved| return reserved;
+
+        // A callable-free subgraph carries no callable slot, so its completed
+        // clone is safe to share across occurrences.
+        const callable_free = !(try self.solver.containsCallableOccurrence(ty));
+        if (callable_free) {
+            if (self.shared_callable_free.get(ty)) |cached| return cached;
+        }
+
         const reserved = try self.solver.program.types.add(.unbound);
-        try self.map.put(ty, reserved);
+        try self.active_path.put(ty, reserved);
         const content = try self.lowerContent(self.solver.lifted.types.get(ty));
         self.solver.program.types.set(reserved, content);
         if (content == .named and content.named.def.iterator_representation == .forced_dynamic) {
             const backing = content.named.backing orelse
                 Common.invariant("forced-dynamic iterator reached Lambda Solved without a backing type");
             try self.forced_dynamic_backings.append(self.solver.allocator, backing.ty);
+        }
+        _ = self.active_path.remove(ty);
+        if (callable_free) {
+            try self.shared_callable_free.put(ty, reserved);
         }
         return reserved;
     }
