@@ -423,6 +423,8 @@ fn writeIteratorTopology(
     writeBytes(hasher, "iterator-topology");
     writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
     writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
+    writeBytes(hasher, name_store.tagLabelText(value.known_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.unknown_tag));
     writeBytes(hasher, name_store.tagLabelText(value.done_tag));
     writeBytes(hasher, name_store.tagLabelText(value.one_tag));
     writeBytes(hasher, name_store.tagLabelText(value.skip_tag));

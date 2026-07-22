@@ -1370,6 +1370,54 @@ pub const InstGraph = struct {
         return false;
     }
 
+    /// Whether this exact graph type contains a node imported from a finished
+    /// Monotype at any structural depth. Finished snapshots may be related to
+    /// producer evidence, but no enclosing representation-selection operation
+    /// may mutate one of their descendant classes.
+    pub fn containsFinishedMono(self: *InstGraph, root: NodeId) Allocator.Error!bool {
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |raw_node| {
+            const node = self.find(raw_node);
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            var members = self.classMemberIterator(node);
+            while (members.next()) |member| {
+                if (self.imported_monos.contains(member)) return true;
+            }
+            switch (self.nodes.items[@intFromEnum(node)]) {
+                .redirect => unreachable,
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                    try pending.appendSlice(self.allocator, named.args);
+                    for (named.declared_order) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                },
+            }
+        }
+        return false;
+    }
+
     /// Relate a checked public interface to a generated private specialization
     /// without merging a generated-private opaque node or any composite that
     /// contains it with its public counterpart. Matching composite structure is
@@ -1404,21 +1452,10 @@ pub const InstGraph = struct {
         if (try self.containsGeneratedPrivate(public_node) or !try self.containsGeneratedPrivate(private_node)) {
             Common.invariant("generated-private representation selection received incorrect public/private direction");
         }
-        if (self.classContainsFinishedMono(public_node) or self.classContainsFinishedMono(private_node)) {
+        if (try self.containsFinishedMono(public_node) or try self.containsFinishedMono(private_node)) {
             Common.invariant("finished Monotype reached generated-private representation selection");
         }
         try self.unifyRootsTransitively(public_node, private_node, true);
-    }
-
-    /// Whether this class contains a node imported from a finished Monotype.
-    /// Consumers may relate that snapshot to producer evidence, but may never
-    /// select a different representation into the snapshot's class.
-    pub fn classContainsFinishedMono(self: *InstGraph, node: NodeId) bool {
-        var members = self.classMemberIterator(node);
-        while (members.next()) |member| {
-            if (self.imported_monos.contains(member)) return true;
-        }
-        return false;
     }
 
     fn relateOpaqueInterfacePair(
@@ -4689,6 +4726,29 @@ test "explicit empty tag union imports as closed uninhabited row" {
     const imported = try graph.importMono(explicit_empty);
 
     try std.testing.expectEqual(InstNode.empty_tag_union, graph.content(imported));
+}
+
+test "finished Monotype detection includes imported structural descendants" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const imported_item_ty = try type_store.add(.{ .primitive = .u64 });
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const imported_item = try graph.importMono(imported_item_ty);
+    const fresh_list = try graph.newNode(.{ .list = imported_item });
+    const fresh_tuple = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{fresh_list}) });
+    try std.testing.expect(try graph.containsFinishedMono(fresh_tuple));
+
+    const fresh_item = try graph.newNode(.{ .primitive = .u64 });
+    const entirely_fresh = try graph.newNode(.{ .list = fresh_item });
+    try std.testing.expect(!try graph.containsFinishedMono(entirely_fresh));
 }
 
 test "opaque interface relation preserves distinct public and generated-private backing authority" {

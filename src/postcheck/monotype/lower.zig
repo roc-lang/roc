@@ -379,7 +379,7 @@ fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produce
     if (declared_private != produced_private) {
         const public_node = if (declared_private) produced_node else declared_node;
         const private_node = if (declared_private) declared_node else produced_node;
-        if (graph.classContainsFinishedMono(public_node) or graph.classContainsFinishedMono(private_node)) {
+        if (try graph.containsFinishedMono(public_node) or try graph.containsFinishedMono(private_node)) {
             // The finished request remains an immutable interface snapshot;
             // the expression and its enclosing producer boundary carry the
             // distinct private result representation.
@@ -4128,19 +4128,20 @@ const Builder = struct {
         const restored = switch (boundary.provenance) {
             .declared => try ctx.restoreConstUseAtNode(
                 boundary.const_use,
-                boundary.request_node,
+                boundary.witness_node,
                 boundary.use_evidence,
             ),
             .hoisted => |entry| blk: {
                 const previous_restore_evidence = ctx.restore_evidence;
                 defer ctx.restore_evidence = previous_restore_evidence;
                 ctx.restore_evidence = rootEvidence(ctx.owner_template, boundary.use_evidence);
-                break :blk try ctx.restoredHoistedConstAtNode(entry, boundary.request_node);
+                break :blk try ctx.restoredHoistedConstAtNode(entry, boundary.witness_node);
             },
         };
         const restored_expr = body_draft.exprs.items[@intFromEnum(restored)];
         const restored_node = try restored_expr.ty.toGraphNode(graph);
-        try graph.unify(boundary.request_node, restored_node);
+        try relateRequestComponent(graph, boundary.witness_node, restored_node);
+        try relateRequestComponent(graph, boundary.request_node, boundary.witness_node);
         try graph.drainDirty();
         const restored_proof = body_draft.expr_impossibility_proofs.items[@intFromEnum(restored)];
         body_draft.impossibility_proofs.items[@intFromEnum(boundary.proof_reservation)] =
@@ -4177,7 +4178,6 @@ const Builder = struct {
                 Common.invariant("deferred const reservation lost its stable impossibility proof");
             }
             body_draft.exprs.items[reservation_index] = restored_expr;
-            body_draft.exprs.items[reservation_index].ty = DraftTypeCell.fromGraphNode(boundary.request_node);
             body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[@intFromEnum(restored)];
             body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[@intFromEnum(restored)];
         }
@@ -7831,7 +7831,10 @@ const DraftDeferredConstUse = struct {
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
+    /// Checked-public request interface owned by the use site.
     request_node: NodeId,
+    /// Exact producer-owned runtime representation stored with the const.
+    witness_node: NodeId,
     const_use: checked.ConstUseTemplate,
     /// Explicit checker-owned origin for selecting the restoration path.
     provenance: DraftConstUseProvenance,
@@ -14886,8 +14889,9 @@ const BodyContext = struct {
         defer self.allocator.free(fields);
         const backing_ty = self.builder.namedBackingType(ret_ty) orelse
             Common.invariant("FieldNames iterator result was not an Iter nominal type");
-        const len_field = self.recordFieldByText(backing_ty, "len_if_known");
-        const step_field = self.recordFieldByText(backing_ty, "step");
+        const topology = try self.iteratorRepresentationNames();
+        const len_field = self.recordFieldByName(backing_ty, topology.len_field);
+        const step_field = self.recordFieldByName(backing_ty, topology.step_field);
         const step_fn_ty = step_field.ty;
         const step_shape = self.builder.functionShape(step_fn_ty, "FieldNames iterator step field was not a function");
         if (self.builder.program.types.span(step_shape.args).len != 0) {
@@ -15289,6 +15293,8 @@ const BodyContext = struct {
         return .{
             .len_field = try self.builder.recordFieldName(self.view, topology.len_field),
             .step_field = try self.builder.recordFieldName(self.view, topology.step_field),
+            .known_tag = try self.builder.tagName(self.view, topology.known_tag),
+            .unknown_tag = try self.builder.tagName(self.view, topology.unknown_tag),
             .done_tag = try self.builder.tagName(self.view, topology.done_tag),
             .one_tag = try self.builder.tagName(self.view, topology.one_tag),
             .skip_tag = try self.builder.tagName(self.view, topology.skip_tag),
@@ -16030,10 +16036,11 @@ const BodyContext = struct {
         ty: Type.TypeId,
         mode: FieldNamesIterMode,
     ) Allocator.Error!DraftExprId {
+        const topology = try self.iteratorRepresentationNames();
         return switch (mode) {
             .all => try self.lowerInterpolationLenIfKnown(remaining, ty),
             .for_size => blk: {
-                const unknown_tag = self.monoTagByText(ty, "Unknown");
+                const unknown_tag = self.monoTagByName(ty, topology.unknown_tag);
                 break :blk try self.addExpr(.{ .ty = ty, .data = .{ .tag = .{
                     .name = unknown_tag.name,
                     .payloads = .empty(),
@@ -16053,7 +16060,8 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{});
         defer demand_scope.leave();
-        const done_tag = self.monoTagByText(step_ret_ty, "Done");
+        const topology = try self.iteratorRepresentationNames();
+        const done_tag = self.monoTagByName(step_ret_ty, topology.done_tag);
         const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = done_tag.name,
             .payloads = .empty(),
@@ -16075,7 +16083,8 @@ const BodyContext = struct {
         const rest_ty = try self.exprType(rest_expr);
         const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{ item_ty, rest_ty });
         defer demand_scope.leave();
-        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const topology = try self.iteratorRepresentationNames();
+        const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.builder.program.types.span(one_tag.payloads);
         if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
         const one_payload = try self.lowerInterpolationOnePayload(GuardedList.at(one_payloads, 0), item_expr, rest_expr);
@@ -16105,8 +16114,9 @@ const BodyContext = struct {
         defer demand_scope.leave();
         const item_local = try self.addLocal(self.builder.symbols.fresh(), field_handle_ty);
         const item_local_expr = try self.localExpr(item_local, field_handle_ty);
+        const topology = try self.iteratorRepresentationNames();
 
-        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const one_payloads = self.builder.program.types.span(one_tag.payloads);
         if (one_payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
         const one_payload = try self.lowerInterpolationOnePayload(GuardedList.at(one_payloads, 0), item_local_expr, rest_expr);
@@ -16115,7 +16125,7 @@ const BodyContext = struct {
             .payloads = try self.addExprSpan(&[_]DraftExprId{one_payload}),
         } } });
 
-        const skip_tag = self.monoTagByText(step_ret_ty, "Skip");
+        const skip_tag = self.monoTagByName(step_ret_ty, topology.skip_tag);
         const skip_payloads = self.builder.program.types.span(skip_tag.payloads);
         if (skip_payloads.len != 1) Common.invariant("Iter step Skip tag did not have one record payload");
         const skip_payload = try self.lowerInterpolationSkipPayload(GuardedList.at(skip_payloads, 0), rest_expr);
@@ -16147,13 +16157,13 @@ const BodyContext = struct {
         const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
+        const topology = try self.iteratorRepresentationNames();
 
         for (0..GuardedList.borrowLen(fields)) |i| {
             const field = GuardedList.at(fields, i);
-            const label = self.builder.program.names.recordFieldLabelText(field.name);
             lowered[i] = .{
                 .name = field.name,
-                .value = if (Ident.textEql(label, "rest"))
+                .value = if (field.name == topology.rest_field)
                     rest_expr
                 else
                     Common.invariant("Iter step Skip payload contained an unexpected field"),
@@ -20760,7 +20770,7 @@ const BodyContext = struct {
 
     /// Return exact producer evidence for a call operand without sealing and
     /// re-importing a live result node. Lookup-only evidence may already be a
-    /// durable value, so that path retains the existing TypeId bridge.
+    /// finished Monotype snapshot, so the lookup path retains its TypeId edge.
     fn callArgumentEvidenceNode(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
@@ -21564,10 +21574,10 @@ const BodyContext = struct {
             },
         }
         const requested_node = try self.constUseTypeNode(checked_ty, const_use);
-        try self.graph.unify(expected_node, requested_node);
+        try relateRequestComponent(self.graph, expected_node, requested_node);
         try self.graph.drainDirty();
         const expr = try self.addExprWithTypeCell(
-            DraftTypeCell.fromGraphNode(expected_node),
+            DraftTypeCell.fromGraphNode(requested_node),
             .pending_deferred,
         );
         const proof_reservation = try self.addImpossibilityProof(.pending);
@@ -21583,6 +21593,7 @@ const BodyContext = struct {
             .owner = self.draft.current_owner,
             .expr = expr,
             .request_node = expected_node,
+            .witness_node = requested_node,
             .const_use = const_use,
             .provenance = provenance,
             .context_evidence = self.evidence,
@@ -22624,6 +22635,8 @@ const BodyContext = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(store_view, topology.len_field),
                 .step_field = try self.constRecordFieldName(store_view, topology.step_field),
+                .known_tag = try self.constTagName(store_view, topology.known_tag),
+                .unknown_tag = try self.constTagName(store_view, topology.unknown_tag),
                 .done_tag = try self.constTagName(store_view, topology.done_tag),
                 .one_tag = try self.constTagName(store_view, topology.one_tag),
                 .skip_tag = try self.constTagName(store_view, topology.skip_tag),
@@ -24111,8 +24124,9 @@ const BodyContext = struct {
 
         const backing_ty = self.builder.namedBackingType(ty) orelse
             Common.invariant("generated interpolation iterator expected Iter nominal type");
-        const len_field = self.recordFieldByText(backing_ty, "len_if_known");
-        const step_field = self.recordFieldByText(backing_ty, "step");
+        const topology = try self.iteratorRepresentationNames();
+        const len_field = self.recordFieldByName(backing_ty, topology.len_field);
+        const step_field = self.recordFieldByName(backing_ty, topology.step_field);
         const step_fn_ty = step_field.ty;
         const step_shape = self.builder.functionShape(step_fn_ty, "generated interpolation iterator step field was not a function");
         if (self.builder.program.types.span(step_shape.args).len != 0) {
@@ -24191,15 +24205,15 @@ const BodyContext = struct {
         const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(backing_ty));
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
+        const topology = try self.iteratorRepresentationNames();
 
         for (0..GuardedList.borrowLen(fields)) |i| {
             const field = GuardedList.at(fields, i);
-            const label = self.builder.program.names.recordFieldLabelText(field.name);
             lowered[i] = .{
                 .name = field.name,
-                .value = if (Ident.textEql(label, "len_if_known"))
+                .value = if (field.name == topology.len_field)
                     len_expr
-                else if (Ident.textEql(label, "step"))
+                else if (field.name == topology.step_field)
                     step_expr
                 else
                     Common.invariant("Iter backing record contained an unexpected field"),
@@ -24221,7 +24235,8 @@ const BodyContext = struct {
         remaining: usize,
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const known_tag = self.monoTagByText(ty, "Known");
+        const topology = try self.iteratorRepresentationNames();
+        const known_tag = self.monoTagByName(ty, topology.known_tag);
         const payloads = self.builder.program.types.span(known_tag.payloads);
         if (payloads.len != 1) Common.invariant("Iter.len_if_known Known tag did not have one payload");
         const count = try self.intLiteralExpr(@intCast(remaining), GuardedList.at(payloads, 0));
@@ -24241,7 +24256,8 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{});
         defer demand_scope.leave();
-        const done_tag = self.monoTagByText(step_ret_ty, "Done");
+        const topology = try self.iteratorRepresentationNames();
+        const done_tag = self.monoTagByName(step_ret_ty, topology.done_tag);
         const body = try self.addExpr(.{ .ty = step_ret_ty, .data = .{ .tag = .{
             .name = done_tag.name,
             .payloads = .empty(),
@@ -24273,7 +24289,8 @@ const BodyContext = struct {
             .tuple = try self.addExprSpan(&[_]DraftExprId{ value_expr, segment_expr }),
         } });
 
-        const one_tag = self.monoTagByText(step_ret_ty, "One");
+        const topology = try self.iteratorRepresentationNames();
+        const one_tag = self.monoTagByName(step_ret_ty, topology.one_tag);
         const payloads = self.builder.program.types.span(one_tag.payloads);
         if (payloads.len != 1) Common.invariant("Iter step One tag did not have one record payload");
         const payload_ty = GuardedList.at(payloads, 0);
@@ -24295,15 +24312,15 @@ const BodyContext = struct {
         const fields = self.builder.program.types.fieldSpan(self.builder.recordFieldsSpan(ty));
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
+        const topology = try self.iteratorRepresentationNames();
 
         for (0..GuardedList.borrowLen(fields)) |i| {
             const field = GuardedList.at(fields, i);
-            const label = self.builder.program.names.recordFieldLabelText(field.name);
             lowered[i] = .{
                 .name = field.name,
-                .value = if (Ident.textEql(label, "item"))
+                .value = if (field.name == topology.item_field)
                     item_expr
-                else if (Ident.textEql(label, "rest"))
+                else if (field.name == topology.rest_field)
                     rest_expr
                 else
                     Common.invariant("Iter step One payload contained an unexpected field"),
@@ -24340,6 +24357,18 @@ const BodyContext = struct {
     fn recordFieldByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Field {
         return self.recordFieldByTextOptional(ty, text) orelse
             Common.invariant("expected record field was absent from monotype type");
+    }
+
+    fn recordFieldByName(self: *BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
+        const fields = switch (self.builder.shapeContent(ty)) {
+            .record => |span| self.builder.program.types.fieldSpan(span),
+            else => Common.invariant("expected record field belonged to a non-record monotype type"),
+        };
+        for (0..GuardedList.borrowLen(fields)) |index| {
+            const field = GuardedList.at(fields, index);
+            if (field.name == name) return field;
+        }
+        Common.invariant("expected record field id was absent from monotype type");
     }
 
     fn recordFieldByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Field {
@@ -24977,6 +25006,9 @@ const BodyContext = struct {
         const target_fields = (try self.graph.recordConstructionNodes(record_node)).fields;
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_fields.len);
         defer self.allocator.free(lowered);
+        const produced_fields = try self.allocator.alloc(InstField, target_fields.len);
+        defer self.allocator.free(produced_fields);
+        var requires_distinct_witness = false;
 
         const base_record = if (record.ext) |ext|
             self.preLoweredChildAt(pre_lowered, ext) orelse try self.lowerExpr(ext)
@@ -25002,23 +25034,37 @@ const BodyContext = struct {
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
                 if (!self.graph.sameClass(field.ty, child_node)) {
-                    Common.invariant("record graph constructor child was not related to its field cell");
+                    if (!try self.graph.containsGeneratedPrivate(child_node)) {
+                        Common.invariant("record graph constructor child differed without generated-private evidence");
+                    }
+                    requires_distinct_witness = true;
                 }
+                produced_fields[index] = .{ .name = field.name, .ty = child_node };
                 break :blk pre;
-            } else if (base_expr) |base_value|
-                try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(field.ty), .{ .field_access = .{
+            } else if (base_expr) |base_value| blk: {
+                produced_fields[index] = field;
+                break :blk try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(field.ty), .{ .field_access = .{
                     .receiver = base_value,
                     .field = field.name,
-                } })
-            else
-                Common.invariant("closed record graph constructor was missing a checked field value");
+                } });
+            } else Common.invariant("closed record graph constructor was missing a checked field value");
             lowered[index] = .{ .name = field.name, .value = value };
         }
 
-        const record_expr = try self.addConstructorExprAtNode(record_node, .{ .record = try self.addFieldExprSpan(lowered) });
+        const produced_node = if (requires_distinct_witness) blk: {
+            const fields = try self.graph.arena().dupe(InstField, produced_fields);
+            const node = try self.graph.newNode(.{ .record = .{
+                .fields = fields,
+                .ext = try self.graph.newNode(.empty_record),
+            } });
+            try self.graph.relateOpaqueInterface(record_node, node);
+            try self.graph.drainDirty();
+            break :blk node;
+        } else record_node;
+        const record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
         if (base_record) |base_value| {
             const local = base_local orelse Common.invariant("record graph update lowered base without a base local");
-            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(record_node), .{ .let_ = .{
+            return try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(produced_node), .{ .let_ = .{
                 .bind = try self.addPatWithTypeCell(base_cell, .{ .bind = local }),
                 .value = base_value,
                 .rest = record_expr,
@@ -25990,6 +26036,18 @@ const BodyContext = struct {
 
     fn monoTagByText(self: *BodyContext, ty: Type.TypeId, text: []const u8) Type.Tag {
         return self.monoTagByTextOptional(ty, text) orelse Common.invariant("expected tag was absent from monotype tag union");
+    }
+
+    fn monoTagByName(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) Type.Tag {
+        const tags = switch (self.builder.shapeContent(ty)) {
+            .tag_union => |span| self.builder.program.types.tagSpan(span),
+            else => Common.invariant("expected tag belonged to a non-union monotype type"),
+        };
+        for (0..GuardedList.borrowLen(tags)) |index| {
+            const tag = GuardedList.at(tags, index);
+            if (tag.name == name) return tag;
+        }
+        Common.invariant("expected tag id was absent from monotype tag union");
     }
 
     fn monoTagByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Tag {
@@ -36496,7 +36554,7 @@ const BodyContext = struct {
             }
         }
         if (rebind_existing) {
-            Common.invariant("match pattern binder was not pre-registered before exact graph projection");
+            Common.invariant("match pattern binder was not pre-registered before exact record-field/tag-payload binding");
         }
         const cell = DraftTypeCell.fromGraphNode(node);
         const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, binder);

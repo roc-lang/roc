@@ -337,11 +337,11 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const selection = sourceSliceBetween(
         solve_source,
         "pub fn selectGeneratedPrivateRepresentation(",
-        "pub fn classContainsFinishedMono(",
+        "fn relateOpaqueInterfacePair(",
     );
     try expectContains(selection, "incorrect public/private direction");
-    try expectContains(selection, "classContainsFinishedMono(public_node)");
-    try expectContains(selection, "classContainsFinishedMono(private_node)");
+    try expectContains(selection, "containsFinishedMono(public_node)");
+    try expectContains(selection, "containsFinishedMono(private_node)");
     try expectContains(selection, "finished Monotype reached generated-private representation selection");
     try expectContains(selection, "unifyRootsTransitively(public_node, private_node, true)");
 
@@ -359,8 +359,8 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
         "fn selectRequestRepresentation(",
         "const HostedTryAdapterCapability",
     );
-    try expectContains(request_selection, "classContainsFinishedMono(public_node)");
-    try expectContains(request_selection, "classContainsFinishedMono(private_node)");
+    try expectContains(request_selection, "containsFinishedMono(public_node)");
+    try expectContains(request_selection, "containsFinishedMono(private_node)");
     try expectContains(request_selection, "relateOpaqueInterface(public_node, private_node)");
     try expectContains(request_selection, "selectGeneratedPrivateRepresentation(public_node, private_node)");
 
@@ -760,7 +760,9 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
     try expectContains(lower_source, "hoisted const use reached a declared deferred boundary");
     try expectContains(lower_source, "declared const use reached a hoisted deferred boundary");
     try expectContains(lower_source, "deferred hoisted const provenance referenced a different const template");
-    try expectContains(lower_source, "ctx.restoredHoistedConstAtNode(entry, boundary.request_node)");
+    try expectContains(lower_source, "ctx.restoredHoistedConstAtNode(entry, boundary.witness_node)");
+    try expectContains(lower_source, "relateRequestComponent(graph, boundary.witness_node, restored_node)");
+    try expectNotContains(lower_source, "body_draft.exprs.items[reservation_index].ty = DraftTypeCell.fromGraphNode(boundary.request_node)");
     try expectNotContains(lower_source, "runtimeResultProducerForDraftCallee");
     try expectNotContains(lower_source, "runtimeDemandHasUninhabitedProducerGuard");
 }

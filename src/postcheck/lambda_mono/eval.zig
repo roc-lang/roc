@@ -443,9 +443,8 @@ pub const Evaluator = struct {
         const type_fields = self.program.types.fieldSpan(field_types);
         const out = self.alloc().alloc(Value, type_fields.len) catch return error.OutOfMemory;
         const field_exprs = self.program.fieldExprSpan(span);
-        // Records evaluate in their canonical type-field order, matching
-        // solved-to-LIR lowering; source field order is not semantically
-        // observable.
+        // Records evaluate in type-store field order, matching solved-to-LIR
+        // lowering; source field order does not affect Roc evaluation.
         for (0..type_fields.len) |i| {
             const type_field = GuardedList.at(type_fields, i);
             const value_expr = for (0..field_exprs.len) |expr_index| {

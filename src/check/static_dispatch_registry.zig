@@ -1117,6 +1117,8 @@ pub const IteratorStepTopology = struct {
 pub const IteratorRepresentationTopology = struct {
     len_field: canonical.RecordFieldLabelId,
     step_field: canonical.RecordFieldLabelId,
+    known_tag: canonical.TagLabelId,
+    unknown_tag: canonical.TagLabelId,
     done_tag: canonical.TagLabelId,
     one_tag: canonical.TagLabelId,
     skip_tag: canonical.TagLabelId,
@@ -1267,6 +1269,8 @@ pub const StaticDispatchPlanTable = struct {
         iterator_topologies[0] = .{
             .len_field = try names.internRecordFieldLabel("len_if_known"),
             .step_field = try names.internRecordFieldLabel("step"),
+            .known_tag = try names.internTagLabel("Known"),
+            .unknown_tag = try names.internTagLabel("Unknown"),
             .done_tag = try names.internTagLabel("Done"),
             .one_tag = try names.internTagLabel("One"),
             .skip_tag = try names.internTagLabel("Skip"),
@@ -2157,11 +2161,13 @@ test "StaticDispatchPlanTable: relocates with a constant number of fixups, opera
         var iterator_topologies = [_]IteratorRepresentationTopology{.{
             .len_field = @enumFromInt(20),
             .step_field = @enumFromInt(21),
-            .done_tag = @enumFromInt(22),
-            .one_tag = @enumFromInt(23),
-            .skip_tag = @enumFromInt(24),
-            .item_field = @enumFromInt(25),
-            .rest_field = @enumFromInt(26),
+            .known_tag = @enumFromInt(22),
+            .unknown_tag = @enumFromInt(23),
+            .done_tag = @enumFromInt(24),
+            .one_tag = @enumFromInt(25),
+            .skip_tag = @enumFromInt(26),
+            .item_field = @enumFromInt(27),
+            .rest_field = @enumFromInt(28),
         }};
 
         const table = StaticDispatchPlanTable{

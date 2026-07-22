@@ -14293,10 +14293,9 @@ fn closePayloadVarToEmpty(
     self: *Self,
     payload_var: Var,
 ) Allocator.Error!void {
-    const empty_content = Content{ .structure = .empty_tag_union };
     const resolved = self.types.resolveVar(payload_var);
     if (payloadVarCanResolveToEmpty(resolved.desc.content)) {
-        try self.types.setVarContent(resolved.var_, empty_content);
+        try self.types.setVarToEmptyTagUnionDefault(resolved.var_);
     }
 }
 

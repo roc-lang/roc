@@ -7117,6 +7117,45 @@ test "checked output keeps redirected proven empty tag union explicit" {
     }.inspect);
 }
 
+test "checker marks exhaustiveness-defaulted empty payload provenance" {
+    const TestEnv = @import("test/TestEnv.zig");
+    const source =
+        \\x : Try(I64, _err)
+        \\x = Ok(42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Ok(value) => value
+        \\}
+    ;
+    var test_env = try TestEnv.init("Main", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const idents = test_env.module_env.getIdentStoreConst();
+    const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
+    const x_var = for (defs) |def_idx| {
+        const def = test_env.module_env.store.getDef(def_idx);
+        const pattern = test_env.module_env.store.getPattern(def.pattern);
+        if (pattern == .assign and std.mem.eql(u8, idents.getText(pattern.assign.ident), "x")) {
+            break ModuleEnv.varFrom(def_idx);
+        }
+    } else return error.TestUnexpectedResult;
+
+    const nominal = switch (test_env.module_env.types.resolveVar(x_var).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |value| value,
+            else => return error.TestUnexpectedResult,
+        },
+        else => return error.TestUnexpectedResult,
+    };
+    const args = test_env.module_env.types.sliceVars(nominal.args);
+    try std.testing.expectEqual(@as(usize, 2), args.len);
+    const err_desc = test_env.module_env.types.resolveVar(args[1]).desc;
+    try std.testing.expectEqual(types.Content{ .structure = .empty_tag_union }, err_desc.content);
+    try std.testing.expect(err_desc.empty_tag_union_is_default);
+}
+
 test "checked output retains defaulted identity inside parent function digest" {
     const allocator = std.testing.allocator;
     try withEmptyTagCheckedOutputForTest(allocator, struct {
@@ -24494,7 +24533,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 42;
+    const serialized_layout_version: u32 = 43;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29533,8 +29572,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x77, 0x7D, 0xF8, 0xB8, 0x4D, 0xBE, 0xFF, 0xF1, 0x32, 0x53, 0xF7, 0xCE, 0xE0, 0xDB, 0xD4, 0xAB,
-        0xF6, 0x8B, 0x9E, 0x4B, 0x5E, 0xA5, 0xF5, 0x8E, 0xEF, 0x26, 0x5E, 0x7D, 0x6D, 0x62, 0x6E, 0xDE,
+        0xDA, 0x1A, 0xD1, 0x34, 0xE3, 0xB4, 0x49, 0xD9, 0x06, 0x43, 0x8B, 0x2F, 0x0C, 0x1C, 0x97, 0x3B,
+        0x32, 0x27, 0x06, 0x73, 0xC5, 0x32, 0x98, 0xDA, 0xA9, 0x30, 0x57, 0x23, 0xD6, 0xA7, 0x99, 0x93,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

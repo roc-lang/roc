@@ -2216,6 +2216,13 @@ compile-time wrapper carries the private result cell as its exact output
 witness. ConstStore preserves that witness beside the stored value, and restore
 relates the checked public interface to it without ordinary unification.
 
+Record constructors preserve that distinction structurally. If a field is a
+finished generated-private witness, the constructor emits a distinct record
+witness that references the field directly and relates that record to the
+checked-public container. It never merges the child into the public field cell
+or asks a later consumer to recover the child's runtime representation from the
+public container shape.
+
 Each generated-private request also retains its exact checked-source function
 node. That source node can itself contain upstream private arguments, so a
 callee relates its fresh checked root to the source through opaque interface
@@ -2226,9 +2233,9 @@ even when the source signature uses one public `Iter` type variable for both.
 
 Match lowering likewise relates each checked pattern interface to the exact
 scrutinee node without merging a generated-private root into that public
-interface. Once all pattern relations have settled, constructor projection
-walks the checked pattern and rebinds its pre-registered locals to the exact
-projected graph cells before the guard or branch body is lowered. Later pattern
+interface. Once all pattern relations have settled, record-field/tag-payload
+traversal walks the checked pattern and rebinds its pre-registered locals to the
+exact child graph cells before the guard or branch body is lowered. Later pattern
 materialization consumes those same cells. Branch code therefore specializes
 from producer-owned representation evidence rather than from the checked
 pattern's public approximation.
@@ -2349,6 +2356,13 @@ and restores the node at that exact type; the checked public type is used only
 to assert that the saved representation has the checked root type.
 Representation evidence therefore survives CTFE without a consumer
 reconstructing it from constant node shape.
+
+For a finite callable inside that exact witness, the Lambda Solved function
+type node is the sole authority for the durable `ConstStore` function type.
+Runtime callable variants may have different specialization-private Monotype
+signatures; the const writer never chooses one variant or requires those
+private signatures to be identical in order to reconstruct their shared source
+interface.
 
 #### Correctness Boundaries
 

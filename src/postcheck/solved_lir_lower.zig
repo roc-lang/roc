@@ -1582,6 +1582,8 @@ const Lowerer = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try self.constRecordFieldName(topology.len_field),
                 .step_field = try self.constRecordFieldName(topology.step_field),
+                .known_tag = try self.constTagName(topology.known_tag),
+                .unknown_tag = try self.constTagName(topology.unknown_tag),
                 .done_tag = try self.constTagName(topology.done_tag),
                 .one_tag = try self.constTagName(topology.one_tag),
                 .skip_tag = try self.constTagName(topology.skip_tag),
@@ -1677,18 +1679,21 @@ const Lowerer = struct {
     }
 
     fn constFuncTypeForCallable(self: *Lowerer, ty: Type.TypeId, variants_span: Type.Span) Common.LowerError!const_store.ConstType {
-        const variants = self.types.fnVariantSpan(variants_span);
-        if (variants.len == 0) return try self.constFuncTypeForEmptyCallable(ty);
-        const function = try self.constFuncTypeForVariants(variants);
-        return .{ .func = .{ .args = function.args, .ret = function.ret } };
+        _ = variants_span;
+        return try self.constFuncTypeForCallableSource(ty);
     }
 
-    fn constFuncTypeForEmptyCallable(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstType {
+    /// A callable type's solved function node is the explicit common source
+    /// signature for every runtime variant. Individual variants may have
+    /// distinct specialization-private Monotype signatures, so neither one
+    /// variant nor an equality check across those signatures can define the
+    /// durable ConstStore function type.
+    fn constFuncTypeForCallableSource(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstType {
         const solved_fn_ty = self.callable_source_fn_map.get(ty) orelse
-            Common.invariant("empty callable const type lacked source function type");
+            Common.invariant("callable const type lacked its solved source function type");
         const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
             .func => |func| func,
-            else => Common.invariant("empty callable source type was not a function"),
+            else => Common.invariant("callable source type was not a function"),
         };
 
         const source_args = self.solved.types.span(func.args);
@@ -1707,11 +1712,11 @@ const Lowerer = struct {
     fn constFuncTypeForErased(self: *Lowerer, variants_span: Type.Span) Common.LowerError!const_store.ConstType {
         const variants = self.types.fnVariantSpan(variants_span);
         if (variants.len == 0) Common.invariant("erased function capture type had no function variants");
-        const function = try self.constFuncTypeForVariants(variants);
+        const function = try self.constFuncTypeForErasedVariants(variants);
         return .{ .func = .{ .args = function.args, .ret = function.ret } };
     }
 
-    fn constFuncTypeForVariants(
+    fn constFuncTypeForErasedVariants(
         self: *Lowerer,
         variants: anytype,
     ) Common.LowerError!ConstFnTypeInfo {
@@ -1723,7 +1728,7 @@ const Lowerer = struct {
             const template = self.fnTemplateForFn(variant.target);
             const digest = self.solved.lifted.types.typeDigest(&self.solved.lifted.names, template.mono_fn_ty);
             if (!std.mem.eql(u8, first_digest.bytes[0..], digest.bytes[0..])) {
-                Common.invariant("callable capture variants had different source-level function types");
+                Common.invariant("erased callable variants had different monomorphic function types");
             }
         }
         const fn_ty = try self.constTypeOfMonoType(first_template.mono_fn_ty);
