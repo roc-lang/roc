@@ -29,6 +29,7 @@ const builtin = @import("builtin");
 const check = @import("check");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+const census = @import("census.zig");
 
 const names = check.CheckedNames;
 
@@ -424,12 +425,14 @@ pub const SpecBuilder = struct {
         {
             return;
         }
+        census.bump("request_refined");
         const digest_changed = !digestEql(record.request_fn_ty_digest, request_fn_ty_digest);
         record.request_fn_ty = request_fn_ty;
         record.request_fn_ty_digest = request_fn_ty_digest;
         record.solved_fn_ty = request_fn_ty;
         record.solved_fn_ty_digest = request_fn_ty_digest;
         if (digest_changed) {
+            census.bump("request_refined_digest_changed");
             if (identity_shadow_enabled) {
                 try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
             }
@@ -463,6 +466,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
         if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
+            census.bump("solved_digest_differs_from_request");
             try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, solved_fn_ty_digest, spec);
         }
     }

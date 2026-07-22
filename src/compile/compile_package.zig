@@ -34,6 +34,7 @@ const watch_inputs = @import("watch_inputs.zig");
 
 const Check = check.Check;
 const CheckedArtifact = check.CheckedArtifact;
+const reunify_census = check.ReunifyCensus;
 const CheckedModules = check.TypedCIR.Modules;
 const Can = can.Can;
 const Report = reporting.Report;
@@ -61,6 +62,17 @@ const CoreCtx = @import("ctx").CoreCtx;
 
 const parallel = base.parallel;
 const AtomicUsize = std.atomic.Value(usize);
+
+/// reunify Slice 0 (reunify.md 13): read the census dump-file path once at
+/// driver construction and, when `ROC_REUNIFY_CHECK_CENSUS` names one, enable
+/// the census before any module is checked. Debug + opt-in only; idempotent, so
+/// every driver construction path may call it.
+pub fn enableReunifyCensusFromEnv(gpa: Allocator, roc_ctx: CoreCtx) void {
+    if (builtin.mode != .Debug) return;
+    const value = roc_ctx.getEnvVar("ROC_REUNIFY_CHECK_CENSUS", gpa) catch return;
+    defer gpa.free(value);
+    reunify_census.enable(value);
+}
 
 /// Errors that can occur while publishing compile-time finalization results.
 pub const PublishError = CheckedArtifact.CompileTimeFinalizer.Error;
@@ -758,6 +770,7 @@ pub const PackageEnv = struct {
     };
 
     pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, roc_ctx: CoreCtx) PackageEnv {
+        enableReunifyCensusFromEnv(gpa, roc_ctx);
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
@@ -802,6 +815,7 @@ pub const PackageEnv = struct {
         builtin_modules: *const BuiltinModules,
         roc_ctx: CoreCtx,
     ) PackageEnv {
+        enableReunifyCensusFromEnv(gpa, roc_ctx);
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
@@ -2010,6 +2024,19 @@ pub const PackageEnv = struct {
         };
         errdefer checked_artifact.deinit(artifact_alloc);
 
+        // reunify Slice 0 boundary assertion (reunify.md 5.4, 7.5): a module the
+        // gates just cleared for lowering must publish no checked type payload
+        // that reaches `.err`. Slice 0 measures rather than panics; the census
+        // counts any lowerable module that violates it. Debug + opt-in, and it
+        // is a full-artifact walk, so it runs only when the census is enabled.
+        if (user_errors_allow_lowering and reunify_census.active()) {
+            const reaches_err = checked_artifact.checked_types.debugAnyPublishedRootReachesError(check_alloc) catch false;
+            if (reaches_err) {
+                const module_name = checked_artifact.canonical_names.moduleNameText(checked_artifact.module_identity.module_name);
+                reunify_census.recordErrReachableInLowerableModule(module_name);
+            }
+        }
+
         return .{
             .checker = checker,
             .checked_artifact = checked_artifact,
@@ -2202,6 +2229,10 @@ pub const PackageEnv = struct {
         // Done
         st.phase = .Done;
         self.remaining_modules -= 1;
+
+        // reunify Slice 0 (reunify.md 13): after this module finalizes, append a
+        // census snapshot so the dump file reflects the run's accumulated totals.
+        reunify_census.dumpAppend(self.roc_ctx.std_io);
 
         // Wake dependents to re-check unblock
         for (st.dependents.items) |dep| try self.enqueue(dep);

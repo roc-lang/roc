@@ -314,12 +314,39 @@ pub fn lowerCheckedModulesToLir(
     const lir_result = lowered.lir_result;
     lowered.lir_result = undefined;
 
+    if (builtin.mode == .Debug) {
+        appendReunifyCensus(allocator);
+    }
+
     return .{
         .lir_result = lir_result,
         .main_proc = main_proc,
         .target_usize = target.target_usize,
         .runtime_value_schemas = runtime_value_schemas,
     };
+}
+
+/// Debug-only Slice 0 measurement: when `ROC_REUNIFY_CENSUS` names a file,
+/// append the Monotype census counters to it. Any error is dropped, since
+/// this only feeds corpus measurement and must not affect lowering.
+fn appendReunifyCensus(allocator: Allocator) void {
+    const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+    const path = raw_path[0..std.mem.len(raw_path)];
+    if (path.len == 0) return;
+    const text = postcheck.Monotype.Census.dumpText(allocator) catch return;
+    defer allocator.free(text);
+    if (text.len == 0) return;
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().createFile(io, path, .{ .truncate = false, .read = true }) catch return;
+    defer file.close(io);
+    const info = file.stat(io) catch return;
+    var write_buffer: [4096]u8 = undefined;
+    var writer = file.writer(io, &write_buffer);
+    writer.seekTo(info.size) catch return;
+    const out = &writer.interface;
+    out.writeAll(text) catch return;
+    out.flush() catch return;
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {

@@ -9,6 +9,7 @@
 //! specialization's final type.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const check = @import("check");
 const base = @import("base");
 const collections = @import("collections");
@@ -16,6 +17,12 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+const census = @import("census.zig");
+
+/// Debug-only: the census records extension nodes minted by the import path
+/// so a later row merge that distributes a remainder into one can be counted.
+const track_import_ext = builtin.mode == .Debug;
+const ImportExtNodeSet = if (track_import_ext) std.AutoHashMap(NodeId, void) else void;
 
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
@@ -280,6 +287,8 @@ pub const InstGraph = struct {
     /// Reused chain-walk state for `findStructuralBackingNode`. Backing chains
     /// are short, so membership is a linear scan.
     backing_chain_scratch: std.ArrayList(NodeId) = .empty,
+    /// Debug-only census provenance: extension nodes the import path minted.
+    import_ext_nodes: ImportExtNodeSet = if (track_import_ext) undefined else {},
 
     pub fn create(
         allocator: Allocator,
@@ -307,12 +316,14 @@ pub const InstGraph = struct {
             .unify_related = std.AutoHashMap(NodePair, void).init(allocator),
             .dirty_mark_visited = std.AutoHashMap(NodeId, void).init(allocator),
             .row_seen_scratch = std.AutoHashMap(NodeId, void).init(allocator),
+            .import_ext_nodes = if (track_import_ext) std.AutoHashMap(NodeId, void).init(allocator) else {},
         };
         return graph;
     }
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
+        if (track_import_ext) self.import_ext_nodes.deinit();
         self.backing_chain_scratch.deinit(allocator);
         self.row_seen_scratch.deinit();
         self.flat_fields_scratch.deinit(allocator);
@@ -486,6 +497,23 @@ pub const InstGraph = struct {
 
     pub fn content(self: *InstGraph, id: NodeId) InstNode {
         return self.nodes.items[@intFromEnum(self.find(id))];
+    }
+
+    /// Debug-only census provenance: note that `node` is an extension the
+    /// import path minted.
+    fn markImportExt(self: *InstGraph, node: NodeId) void {
+        if (track_import_ext) {
+            self.import_ext_nodes.put(node, {}) catch {};
+        }
+    }
+
+    /// Debug-only census provenance: whether `node` is an extension the import
+    /// path minted.
+    fn isImportExt(self: *InstGraph, node: NodeId) bool {
+        if (track_import_ext) {
+            return self.import_ext_nodes.contains(node);
+        }
+        return false;
     }
 
     /// Return the graph node for one field of a record-shaped node. Field
@@ -791,6 +819,7 @@ pub const InstGraph = struct {
                     switch (Type.iteratorRelation(left_named, right_named)) {
                         .ordinary => {},
                         .public_minted => {
+                            census.bump("iter_public_minted");
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("minted/public iterator pair reached Monotype instantiation without a public item argument");
                             }
@@ -806,6 +835,7 @@ pub const InstGraph = struct {
                             return;
                         },
                         .forced_dynamic => {
+                            census.bump("iter_forced_dynamic");
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("forced-dynamic iterator reached Monotype instantiation without a public item argument");
                             }
@@ -821,6 +851,7 @@ pub const InstGraph = struct {
                             return;
                         },
                         .minted_join => {
+                            census.bump("iter_minted_join");
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("minted iterator join reached Monotype instantiation without a public item argument");
                             }
@@ -906,6 +937,7 @@ pub const InstGraph = struct {
         other: NodeId,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
+        census.bump("nominal_backing_root_join");
         const named = switch (named_content) {
             .named => |named| named,
             else => unreachable,
@@ -1050,6 +1082,7 @@ pub const InstGraph = struct {
     fn unifyRowWithEmpty(self: *InstGraph, row: NodeId, empty: NodeId, kind: RowKind) Allocator.Error!void {
         switch (kind) {
             .tag_union => {
+                census.bump("empty_tag_union_yield");
                 const flat = try self.flattenTagRow(row);
                 if (flat.tags.len != 0) Common.invariant("instantiation unified a non-empty tag union with an empty tag union");
                 try self.unify(flat.ext, empty);
@@ -1245,12 +1278,15 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
         } else if (only_left.items.len == 0) {
             // Left lacks tags: its extension absorbs the right-only tags.
+            census.bump("one_sided_tag_row_merge");
             try self.writeOrQueueTagRest(flat_left.ext, only_right.items, flat_right.ext, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
+            census.bump("one_sided_tag_row_merge");
             try self.writeOrQueueTagRest(flat_right.ext, only_left.items, flat_left.ext, pending);
             merged_ext = flat_left.ext;
         } else {
+            census.bump("two_sided_tag_row_merge");
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_tag_union) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstTag).empty;
@@ -1289,6 +1325,9 @@ pub const InstGraph = struct {
                     if (default != .empty_tag_union) {
                         Common.invariant("instantiation tried to write a tag row into a record row variable");
                     }
+                }
+                if (census.enabled and tags.len > 0 and self.isImportExt(ext_root)) {
+                    census.bump("import_ext_widened");
                 }
                 try self.setContent(ext_root, .{ .tag_union = .{
                     .tags = try self.arena().dupe(InstTag, tags),
@@ -1347,12 +1386,15 @@ pub const InstGraph = struct {
         if (only_left.items.len == 0 and only_right.items.len == 0) {
             try pending.append(self.allocator, .{ .left = flat_left.ext, .right = flat_right.ext });
         } else if (only_left.items.len == 0) {
+            census.bump("one_sided_record_row_merge");
             try self.writeOrQueueRecordRest(flat_left.ext, only_right.items, flat_right.ext, pending);
             merged_ext = flat_right.ext;
         } else if (only_right.items.len == 0) {
+            census.bump("one_sided_record_row_merge");
             try self.writeOrQueueRecordRest(flat_right.ext, only_left.items, flat_left.ext, pending);
             merged_ext = flat_left.ext;
         } else {
+            census.bump("two_sided_record_row_merge");
             const new_ext = try self.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
             if (self.find(flat_left.ext) == self.find(flat_right.ext)) {
                 var rest = std.ArrayList(InstField).empty;
@@ -1391,6 +1433,9 @@ pub const InstGraph = struct {
                     if (default != .empty_record) {
                         Common.invariant("instantiation tried to write a record row into a tag row variable");
                     }
+                }
+                if (census.enabled and fields.len > 0 and self.isImportExt(ext_root)) {
+                    census.bump("import_ext_widened");
                 }
                 try self.setContent(ext_root, .{ .record = .{
                     .fields = try self.arena().dupe(InstField, fields),
@@ -1489,6 +1534,25 @@ pub const InstGraph = struct {
             .zst => .zst,
         };
         _ = try self.replaceContentNoDirty(node, imported);
+        if (census.enabled) {
+            switch (imported) {
+                // An empty tag union imports as an open node kept for local
+                // evidence; the whole node is the extension.
+                .unresolved => {
+                    census.bump("import_tag_ext_kept_open");
+                    self.markImportExt(node);
+                },
+                .tag_union => |row| {
+                    census.bump("import_tag_ext_kept_open");
+                    self.markImportExt(row.ext);
+                },
+                .record => |row| {
+                    census.bump("import_record_ext_kept_open");
+                    self.markImportExt(row.ext);
+                },
+                else => {},
+            }
+        }
         return node;
     }
 
@@ -2192,6 +2256,7 @@ pub const GraphTypeFinals = struct {
 
 fn materializeUnresolved(variable: InstVariable) Type.Content {
     if (variable.numeric_default_phase) |phase| {
+        census.bump("numeric_default_applied");
         const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
             Common.invariant("checking-finalized numeric variable reached Monotype unresolved");
         return switch (target) {
@@ -2199,12 +2264,18 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
             .str => .{ .primitive = .str },
         };
     }
-    if (variable.row_default) |row_default| switch (row_default) {
-        .empty_record => return .{ .record = Type.Span.empty() },
-        .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
-    };
+    if (variable.row_default) |row_default| {
+        census.bump("row_default_applied");
+        switch (row_default) {
+            .empty_record => return .{ .record = Type.Span.empty() },
+            .empty_tag_union => return .{ .tag_union = Type.Span.empty() },
+        }
+    }
     return switch (variable.origin) {
-        .checked_variable => .{ .tag_union = Type.Span.empty() },
+        .checked_variable => blk: {
+            census.bump("plain_variable_to_empty_tag_union");
+            break :blk .{ .tag_union = Type.Span.empty() };
+        },
         .row_extension => Common.invariant("row extension reached Monotype materialization without row default"),
         .placeholder => Common.invariant("instantiation placeholder reached Monotype materialization"),
     };

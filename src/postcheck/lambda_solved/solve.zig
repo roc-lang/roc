@@ -6,6 +6,7 @@ const check = @import("check");
 
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
+const census = @import("../monotype/census.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
@@ -856,6 +857,7 @@ const Solver = struct {
         } else if (expected_score > generated_score) {
             self.program.types.set(generated, .{ .link = expected });
         } else {
+            census.bump("lambda_generated_backing_equal_score");
             try self.unify(generated, expected);
         }
     }
@@ -1573,7 +1575,11 @@ const Solver = struct {
                     if (isScoreSelectedEvidenceOwner(left_named.builtin_owner) or
                         isScoreSelectedEvidenceOwner(right_named.builtin_owner))
                     {
-                        if (self.generatedOpaqueEvidenceScore(right_named) > self.generatedOpaqueEvidenceScore(left_named)) {
+                        const evidence_scores = [2]u8{ self.generatedOpaqueEvidenceScore(right_named), self.generatedOpaqueEvidenceScore(left_named) };
+                        if (census.enabled and evidence_scores[0] == evidence_scores[1]) {
+                            census.bump("lambda_generated_backing_equal_score");
+                        }
+                        if (evidence_scores[0] > evidence_scores[1]) {
                             self.program.types.set(a, .{ .link = b });
                         } else {
                             self.program.types.set(b, .{ .link = a });
@@ -1710,10 +1716,12 @@ const Solver = struct {
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
         return switch (content) {
-            .named => |named| if (named.kind == .alias)
-                (named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty
-            else
-                null,
+            .named => |named| if (named.kind == .alias) blk: {
+                if (census.enabled and named.builtin_owner != null) {
+                    census.bump("lambda_alias_unwrap_builtin_owned");
+                }
+                break :blk (named.backing orelse Common.invariant("transparent alias reached Lambda Solved without a backing type")).ty;
+            } else null,
             else => null,
         };
     }

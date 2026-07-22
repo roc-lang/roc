@@ -13,6 +13,7 @@ const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
 const serialize = @import("serialize.zig");
+const census = @import("census.zig");
 
 const InstGraph = solve.InstGraph;
 const NodeId = solve.NodeId;
@@ -658,6 +659,10 @@ const Builder = struct {
     /// requests made anywhere inside that specialization defer to its end,
     /// when its types are final and specialization keys are stable.
     active_graph: ?*InstGraph = null,
+    /// Debug-only census context: the reserved procedure whose deferred
+    /// requests are being sealed, so a request that targets the same
+    /// procedure can be recorded as direct recursion.
+    census_sealing_fn: ?Ast.FnId = null,
     batched_requester_drain_graph: ?*InstGraph = null,
     batched_requester_drain_needed: bool = false,
     final_body_output_allowance: FinalBodyOutputCounts = .{},
@@ -1549,6 +1554,9 @@ const Builder = struct {
         const saved_graph = self.active_graph;
         self.active_graph = graph;
         defer self.active_graph = saved_graph;
+        const saved_census_fn = self.census_sealing_fn;
+        defer self.census_sealing_fn = saved_census_fn;
+        if (census.enabled) self.census_sealing_fn = reserved_fn_id;
         var body_draft = BodyDraftStore.init(self.allocator);
         defer body_draft.deinit();
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, method_scope, template_ref, graph, &body_draft);
@@ -3232,6 +3240,18 @@ const Builder = struct {
         for (graph.deferred_templates.items[start_len..]) |*request| {
             const sealed_fn_ty = try sealer.sealType(request.fn_ty);
             if (sealed_fn_ty == request.fn_ty) continue;
+            census.bump("deferred_request_sealed_shape_changed");
+            if (census.enabled) {
+                const is_recursive = if (self.census_sealing_fn) |requester_fn|
+                    requester_fn == request.fn_id
+                else
+                    false;
+                if (is_recursive) {
+                    census.bump("deferred_request_recursive");
+                } else {
+                    census.bump("deferred_request_nonrecursive");
+                }
+            }
             request.fn_ty = sealed_fn_ty;
             try self.updateReservedTemplateRequestType(request.fn_id, sealed_fn_ty);
         }
@@ -10909,6 +10929,7 @@ const BodyContext = struct {
     }
 
     fn functionHasGeneratedOpaqueEvidence(self: *BodyContext, fn_ty: Type.TypeId) Allocator.Error!bool {
+        census.bump("generated_opaque_evidence_gate");
         const function = self.builder.functionShape(fn_ty, "generated opaque evidence check requested for a non-function type");
         const args = self.builder.program.types.span(function.args);
         for (0..GuardedList.borrowLen(args)) |index| {
@@ -16697,6 +16718,14 @@ const BodyContext = struct {
             }
         }
         if (expected_ret_ty) |expected| {
+            if (census.enabled) {
+                // The expected-type constraint binds the callee return only
+                // when its node had gained no evidence from the arguments.
+                switch (self.graph.content(try self.instNode(function.ret))) {
+                    .unresolved => census.bump("expected_return_constraint_bound"),
+                    else => {},
+                }
+            }
             if (self.isGeneratedSpecializationEvidenceType(expected)) {
                 saw_generated_opaque_evidence = true;
                 generated_ret_override = try self.graph.sealType(expected);

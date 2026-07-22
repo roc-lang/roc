@@ -8,6 +8,7 @@ const check = @import("check");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
+const census = @import("census.zig");
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
@@ -363,6 +364,14 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
+        if (census.enabled) {
+            switch (content) {
+                .named => |named| if (named.kind == .alias and named.builtin_owner != null) {
+                    census.bump("builtin_owned_alias_created");
+                },
+                else => {},
+            }
+        }
         self.assertMutable();
         const index = self.types.len();
         try self.types.append(self.allocator, content);

@@ -12,6 +12,7 @@ pub const Monotype = struct {
     pub const Serialize = @import("monotype/serialize.zig");
     pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
+    pub const Census = @import("monotype/census.zig");
 };
 /// Monotype IR after nested function bodies are lifted.
 pub const MonotypeLifted = struct {
@@ -48,6 +49,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/serialize.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
+    std.testing.refAllDecls(@import("monotype/census.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));

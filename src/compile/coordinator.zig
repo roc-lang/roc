@@ -1032,6 +1032,12 @@ pub const Coordinator = struct {
         cache_manager: ?*CacheManager,
         roc_ctx: CoreCtx,
     ) Allocator.Error!Coordinator {
+        // reunify Slice 0 (reunify.md 13): enable the check-side census before any
+        // module is checked when its env var names a dump-file path. This is the
+        // driver that calls `typeCheckModule` directly (bypassing PackageEnv's own
+        // per-module path), so it enables and dumps the census itself.
+        compile_package.enableReunifyCensusFromEnv(gpa, roc_ctx);
+
         // Both channels use smp_allocator in multi-threaded mode because their
         // buffers may be grown (task_channel) or accessed from worker threads.
         // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
@@ -4649,6 +4655,11 @@ pub const Coordinator = struct {
             task.defer_publication,
         );
         defer typecheck_output.deinit();
+
+        // reunify Slice 0 (reunify.md 13): append a census snapshot after this
+        // module's checking (Item 1 duplicate measurement and Item 2 err walk ran
+        // inside `typeCheckModule`), so the dump reflects the accumulated totals.
+        check.ReunifyCensus.dumpAppend(self.roc_ctx.std_io);
 
         const type_check_ns = readStageTimer(self.roc_ctx.std_io, &check_timer);
 

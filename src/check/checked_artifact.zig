@@ -17,6 +17,7 @@ const dispatch_evidence = @import("dispatch_evidence.zig");
 const checked_traverse = @import("checked_traverse.zig");
 const canonical = @import("canonical_names.zig");
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const reunify_census = @import("reunify_census.zig");
 const hoist_roots = @import("hoist_roots.zig");
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
@@ -3439,6 +3440,19 @@ pub const CheckedTypeStore = struct {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
         return reconstructCheckedTypePayload(self, self.payloads.items[index]);
+    }
+
+    /// reunify Slice 0 census (reunify.md 5.4, 7.5): whether any published
+    /// checked type root of this store reaches an `.err` payload. `roots` is the
+    /// deduped set of every published expression/pattern type root, so walking
+    /// each covers every reachable payload; the per-root scan guards cycles with
+    /// an explicit active set. A module that will lower must never satisfy this;
+    /// the driver counts each one that does. Debug measurement only.
+    pub fn debugAnyPublishedRootReachesError(self: *const CheckedTypeStore, allocator: Allocator) Allocator.Error!bool {
+        for (self.roots.items) |root| {
+            if (try checkedTypeContainsError(allocator, self, root.id)) return true;
+        }
+        return false;
     }
 
     /// Append `ids` to `type_id_pool`, returning their range.
@@ -13067,13 +13081,23 @@ const EvidencePass = struct {
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
         const module_env = self.module.moduleEnvConst();
+        // reunify Slice 0 census (reunify.md 7.2): a re-checked CIR edge may
+        // record its instantiation more than once. Publication keeps the first
+        // record by iteration order; before the exactly-one-equivalent-record
+        // invariant becomes authoritative, the census reports whether each such
+        // duplicate resolves to structurally equal content. Debug + opt-in only.
+        const census_on = reunify_census.active();
         for (module_env.scheme_uses.items.items, 0..) |record, i| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
                 .value_use, .shared_value_use => {
                     // Re-checks can record the same instantiation twice; keep
                     // the first.
                     const entry = try self.value_use_by_node.getOrPut(record.node_idx);
-                    if (!entry.found_existing) entry.value_ptr.* = @intCast(i);
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = @intCast(i);
+                    } else if (census_on) {
+                        self.censusSchemeUseDuplicate(entry.value_ptr.*, @intCast(i));
+                    }
                 },
                 .dispatch_target => {
                     // Key by the settled union-find root so a query through
@@ -13081,7 +13105,11 @@ const EvidencePass = struct {
                     // finds the record.
                     const root = self.types.resolveVar(@enumFromInt(record.slot_data)).var_;
                     const entry = try self.target_by_fn_var.getOrPut(@intFromEnum(root));
-                    if (!entry.found_existing) entry.value_ptr.* = @intCast(i);
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = @intCast(i);
+                    } else if (census_on) {
+                        self.censusSchemeUseDuplicate(entry.value_ptr.*, @intCast(i));
+                    }
                 },
                 .nested_function_use => {},
             }
@@ -13127,6 +13155,41 @@ const EvidencePass = struct {
                 try self.mapValueSchemeParams(def.pattern, def.expr, &scheme_params);
             }
         }
+    }
+
+    /// reunify Slice 0 census (reunify.md 7.2): resolve two scheme-use records
+    /// for the same CIR edge and report whether they resolve to equal content.
+    /// Debug + opt-in only; measurement never alters which record publication
+    /// keeps. Out-of-memory while digesting simply skips the measurement.
+    fn censusSchemeUseDuplicate(self: *EvidencePass, kept_idx: u32, duplicate_idx: u32) void {
+        const equivalent = self.schemeUseRecordsEquivalent(kept_idx, duplicate_idx) catch return;
+        const module_env = self.module.moduleEnvConst();
+        const duplicate = module_env.scheme_uses.items.items[duplicate_idx];
+        reunify_census.recordSchemeUseDuplicate(equivalent, module_env.module_name, duplicate.node_idx);
+    }
+
+    fn schemeUseRecordsEquivalent(self: *EvidencePass, a_idx: u32, b_idx: u32) Allocator.Error!bool {
+        const a_digest = try self.schemeUseRecordDigest(a_idx);
+        const b_digest = try self.schemeUseRecordDigest(b_idx);
+        return std.mem.eql(u8, &a_digest, &b_digest);
+    }
+
+    /// A structural digest of one scheme-use record: the resolved scheme root
+    /// followed by the resolved fresh var of each recorded pair, each hashed
+    /// through the canonical-type-key digest (which resolves union-find vars).
+    /// Two records for one edge that resolve to equal content share a digest.
+    fn schemeUseRecordDigest(self: *EvidencePass, record_idx: u32) Allocator.Error![32]u8 {
+        const module_env = self.module.moduleEnvConst();
+        const record = module_env.scheme_uses.items.items[record_idx];
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        const root_key = try canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(record.scheme_root));
+        hasher.update(&root_key.bytes);
+        const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+        for (pairs) |pair| {
+            const fresh_key = try canonical_type_keys.fromVar(self.allocator, self.types, module_env, @enumFromInt(pair.fresh_var));
+            hasher.update(&fresh_key.bytes);
+        }
+        return hasher.finalResult();
     }
 
     fn enumerateParams(self: *EvidencePass, root: Var, out: *std.ArrayListUnmanaged(EvidenceParam)) Allocator.Error!void {
