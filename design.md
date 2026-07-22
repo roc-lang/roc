@@ -2161,17 +2161,26 @@ exhausted, so exhaustion selects the explicit dynamic tier rather than allowing
 the minted type universe to grow without bound.
 
 Recursive specialization contributes an explicit second proof of the dynamic
-tier. Each in-progress specialization records the permanent ordered argument
-nodes from its initial request. When a recursive edge reaches that
-specialization, a request argument whose permanent node differs from its
-initial slot is recorded as a representation-growing recursive slot before the
-two function interfaces are related. If that slot subsequently joins distinct
-minted iterator identities, the graph records that the resulting iterator
-class must use the forced-dynamic fixed point. Recursion over the same permanent
-argument node is not representation growth and remains eligible for the minted
-tier. This makes the distinction producer-authored: finalization consumes the
-recorded recursive edge and minted join instead of inferring recursion from a
-finished type shape or from call-stack depth.
+tier. Each in-progress specialization snapshots every permanent member of each
+ordered argument's union class. When a recursive edge reaches that
+specialization, a request argument introduced after the snapshot is recorded as
+a representation-growing recursive slot before the two function interfaces are
+related. If that slot subsequently joins distinct minted iterator identities,
+the graph records that the resulting iterator class must use the forced-dynamic
+fixed point. Recursion through any alias already present in the initial class is
+not representation growth and remains eligible for the minted tier. This makes
+the distinction producer-authored: finalization consumes the recorded recursive
+edge and minted join instead of inferring recursion from a finished type shape,
+union-find root selection, or call-stack depth.
+
+The recursive edge itself is also producer-authored. Every draft function
+records the draft owner that created it, forming an explicit active ownership
+tree. A partial open-interface match may reuse an in-progress specialization
+only when the current owner descends from that specialization in this tree.
+Shared graph cells alone cannot classify two sibling calls as recursion. Exact
+completed interfaces may still deduplicate normally, but only an explicit
+ancestor edge invokes recursive-interface unification and records recursive
+representation growth.
 
 Finalization rebuilds a selected forced-dynamic class with exactly one public
 item argument and an exact self-recursive backing before identity sealing.
@@ -2179,6 +2188,50 @@ It does not restamp a minted backing whose component arguments still encode the
 growing chain. Once representation finalization, identity sealing, and graph
 freezing finish, the durable Monotype is immutable and no consumer may reopen,
 widen, or reinterpret it.
+
+Iterator-for lowering obtains the step result shape from the exact generated
+iterator node when one is present. The checked step type supplies the public
+interface and topology only; it cannot replace or merge the producer-owned
+private `rest` representation. This keeps the loop's initial state and every
+back-edge state in the same explicit representation family.
+
+Nested call and dispatch operands carry producer evidence through the active
+instantiation graph until that graph's single final seal. Relation production
+passes the exact result node to the consuming call request; it does not seal an
+intermediate `TypeId`, re-import that snapshot, or fall back to the checked
+public cell after discarding private representation evidence.
+
+When a dispatch expression produces generated-private evidence for a live
+checked-public result cell, Monotype selects that representation through the
+dedicated `selectGeneratedPrivateRepresentation` capability before lowering
+the dispatch. The capability exists only during relation production, requires
+an explicitly directed public-to-private edge, and rejects every class that
+contains an imported finished Monotype. Ordinary graph unification rejects the
+same edge. This preserves producer selection for branch results without making
+public/private merging—or reopening a durable Monotype—available as a general
+unification behavior. If the requested public interface is already a finished
+Monotype, the producer relates its distinct private result to that immutable
+interface without merging either class, and the enclosing procedure or
+compile-time wrapper carries the private result cell as its exact output
+witness. ConstStore preserves that witness beside the stored value, and restore
+relates the checked public interface to it without ordinary unification.
+
+Each generated-private request also retains its exact checked-source function
+node. That source node can itself contain upstream private arguments, so a
+callee relates its fresh checked root to the source through opaque interface
+relations; it never fully unifies the two function graphs. Expected private
+results remain request-owned nodes while their checked result cells stay fresh
+public interfaces. This keeps an adapter's input and output identities distinct
+even when the source signature uses one public `Iter` type variable for both.
+
+Match lowering likewise relates each checked pattern interface to the exact
+scrutinee node without merging a generated-private root into that public
+interface. Once all pattern relations have settled, constructor projection
+walks the checked pattern and rebinds its pre-registered locals to the exact
+projected graph cells before the guard or branch body is lowered. Later pattern
+materialization consumes those same cells. Branch code therefore specializes
+from producer-owned representation evidence rather than from the checked
+pattern's public approximation.
 
 The cap is a type-universe bound, not a call-depth or specialization-request
 counter. Every generated iterator passes through the same graph-owned producer
@@ -2197,9 +2250,17 @@ tier explicitly:
   without discarding callable members;
 - equal tiers use ordinary named-type equality.
 
-At a forced-dynamic relation, Lambda Solved unifies the item type and both
-backings before linking the other type to the dynamic root. This is what carries
-every reachable finite step implementation into the dynamic callable set.
+At a forced-dynamic relation, Lambda Solved always unifies the public item type.
+A minted peer also joins its generated-private backing into the dynamic backing;
+an ordinary public peer has no private representation authority, so its backing
+is not merged or reinterpreted.
+
+Lambda Solved transfers callable evidence across a public-to-generated relation
+with a separate structure-preserving walk. That walk validates corresponding
+public and private structure while retaining both sealed Monotype roots, and it
+unifies only callable slots and still-open Lambda Solved slots. This makes a
+SpecConstr-authored callable worker visible in the exact private representation
+that contains it without using the public representation as a replacement.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark
@@ -3049,6 +3110,14 @@ checked binder id is the same. Draft sealing retains or suppresses whole owned
 specializations and rejects every retained record that references suppressed
 owned content, so cross-materialization local reuse cannot become durable
 Monotype IR.
+
+Open nested-specialization reuse is therefore owner-scoped. Before lifting, a
+nested body refers to `DraftLocalId`s from one explicit materialization owner;
+equal function interfaces, capture types, or checked binder provenance do not
+make those locals interchangeable with another owner's locals. Only requests
+from the same draft owner may reuse an in-progress nested body. Final
+specialization identity and capture ABI identity remain responsible for durable
+deduplication after owner-local bodies have been sealed.
 
 ### Monotype Specialization
 

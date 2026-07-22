@@ -471,19 +471,54 @@ pub const InstGraph = struct {
         self.relation_state = .frozen;
     }
 
+    pub const ArgumentClassSnapshot = struct {
+        members: []const NodeId,
+
+        fn contains(self: ArgumentClassSnapshot, node: NodeId) bool {
+            for (self.members) |member| {
+                if (member == node) return true;
+            }
+            return false;
+        }
+    };
+
+    /// Snapshot every permanent member of each ordered argument class before
+    /// a specialization body can add recursive relations. Root choice is not
+    /// stable under union, so recursive growth must compare permanent identity
+    /// against the whole initial class rather than one representative node.
+    pub fn snapshotFunctionArgumentClasses(
+        self: *InstGraph,
+        fn_node: NodeId,
+    ) Allocator.Error![]const ArgumentClassSnapshot {
+        const args = (try self.functionNodes(fn_node)).args;
+        const snapshots = try self.arena().alloc(ArgumentClassSnapshot, args.len);
+        for (args, snapshots) |arg, *snapshot| {
+            var count: usize = 0;
+            var counting = self.classMemberIterator(arg);
+            while (counting.next() != null) count += 1;
+
+            const members = try self.arena().alloc(NodeId, count);
+            var filling = self.classMemberIterator(arg);
+            var index: usize = 0;
+            while (filling.next()) |member| : (index += 1) members[index] = member;
+            snapshot.* = .{ .members = members };
+        }
+        return snapshots;
+    }
+
     pub fn unifyRecursiveFunctionInterface(
         self: *InstGraph,
         active_fn: NodeId,
-        initial_active_args: []const NodeId,
+        initial_active_arg_classes: []const ArgumentClassSnapshot,
         recursive_request: NodeId,
     ) Allocator.Error!void {
         self.requireRelationProduction();
         const request = try self.functionNodes(recursive_request);
-        if (initial_active_args.len != request.args.len) {
+        if (initial_active_arg_classes.len != request.args.len) {
             Common.invariant("recursive function interface changed argument arity");
         }
-        for (initial_active_args, request.args) |active_arg, request_arg| {
-            if (active_arg != request_arg) {
+        for (initial_active_arg_classes, request.args) |initial_class, request_arg| {
+            if (!initial_class.contains(request_arg)) {
                 try self.recursive_argument_slots.append(self.allocator, request_arg);
             }
         }
@@ -1355,6 +1390,37 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Select producer-authored generated-private evidence as the runtime
+    /// representation of a live checked-public draft. This capability exists
+    /// only while the instantiation graph is producing relations; imported
+    /// finished Monotypes can never participate. Ordinary `unify` rejects the
+    /// same public/private edge structurally.
+    pub fn selectGeneratedPrivateRepresentation(
+        self: *InstGraph,
+        public_node: NodeId,
+        private_node: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        if (try self.containsGeneratedPrivate(public_node) or !try self.containsGeneratedPrivate(private_node)) {
+            Common.invariant("generated-private representation selection received incorrect public/private direction");
+        }
+        if (self.classContainsFinishedMono(public_node) or self.classContainsFinishedMono(private_node)) {
+            Common.invariant("finished Monotype reached generated-private representation selection");
+        }
+        try self.unifyRootsTransitively(public_node, private_node, true);
+    }
+
+    /// Whether this class contains a node imported from a finished Monotype.
+    /// Consumers may relate that snapshot to producer evidence, but may never
+    /// select a different representation into the snapshot's class.
+    pub fn classContainsFinishedMono(self: *InstGraph, node: NodeId) bool {
+        var members = self.classMemberIterator(node);
+        while (members.next()) |member| {
+            if (self.imported_monos.contains(member)) return true;
+        }
+        return false;
+    }
+
     fn relateOpaqueInterfacePair(
         self: *InstGraph,
         raw_public: NodeId,
@@ -2027,6 +2093,15 @@ pub const InstGraph = struct {
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
+        try self.unifyRootsTransitively(a, b, false);
+    }
+
+    fn unifyRootsTransitively(
+        self: *InstGraph,
+        a: NodeId,
+        b: NodeId,
+        allow_private_selection: bool,
+    ) Allocator.Error!void {
         self.requireRelationProduction();
         var pending = std.ArrayList(NodePair).empty;
         defer pending.deinit(self.allocator);
@@ -2034,7 +2109,7 @@ pub const InstGraph = struct {
         defer related.deinit();
         try pending.append(self.allocator, .{ .left = a, .right = b });
         while (pending.pop()) |pair| {
-            try self.unifyRoots(pair.left, pair.right, &pending, &related);
+            try self.unifyRoots(pair.left, pair.right, &pending, &related, allow_private_selection);
         }
     }
 
@@ -2044,6 +2119,7 @@ pub const InstGraph = struct {
         raw_right: NodeId,
         pending: *std.ArrayList(NodePair),
         related: *std.AutoHashMap(NodePair, void),
+        allow_private_selection: bool,
     ) Allocator.Error!void {
         const left = self.find(raw_left);
         const right = self.find(raw_right);
@@ -2057,6 +2133,17 @@ pub const InstGraph = struct {
 
         const left_content = self.nodes.items[@intFromEnum(left)];
         const right_content = self.nodes.items[@intFromEnum(right)];
+        const left_generated_private = switch (left_content) {
+            .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
+            else => false,
+        };
+        const right_generated_private = switch (right_content) {
+            .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
+            else => false,
+        };
+        if (left_generated_private != right_generated_private and !allow_private_selection) {
+            Common.invariant("generated-private representation reached ordinary public/private graph unification");
+        }
 
         switch (left_content) {
             .redirect => unreachable,

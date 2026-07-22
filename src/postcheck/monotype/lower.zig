@@ -25,6 +25,7 @@ const InstVariable = solve.InstVariable;
 const GraphTypeFinals = solve.GraphTypeFinals;
 const EntryRoot = solve.EntryRoot;
 const FunctionNodes = solve.FunctionNodes;
+const ArgumentClassSnapshot = solve.InstGraph.ArgumentClassSnapshot;
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedModule;
@@ -349,27 +350,45 @@ fn enterEvidenceScope(
 
 fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_fn: NodeId) Allocator.Error!void {
     if (try graph.containsGeneratedPrivate(private_fn)) {
-        if (try graph.containsGeneratedPrivate(public_fn)) {
-            // Two exact generated requests join through normal graph
-            // unification, including the explicit minted-iterator relation.
-            try graph.unify(public_fn, private_fn);
-        } else {
-            try graph.relateOpaqueInterface(public_fn, private_fn);
-        }
+        try graph.relateOpaqueInterface(public_fn, private_fn);
     } else {
         try graph.unify(public_fn, private_fn);
     }
 }
 
-fn relateRequestComponent(graph: *InstGraph, public_node: NodeId, request_node: NodeId) Allocator.Error!void {
-    if (try graph.containsGeneratedPrivate(request_node)) {
-        if (try graph.containsGeneratedPrivate(public_node)) {
-            try graph.unify(public_node, request_node);
+fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
+    const left_private = try graph.containsGeneratedPrivate(left_node);
+    const right_private = try graph.containsGeneratedPrivate(right_node);
+    if (left_private and right_private) {
+        try graph.unify(left_node, right_node);
+    } else if (right_private) {
+        try graph.relateOpaqueInterface(left_node, right_node);
+    } else if (left_private) {
+        try graph.relateOpaqueInterface(right_node, left_node);
+    } else {
+        try graph.unify(left_node, right_node);
+    }
+}
+
+/// Choose producer-authored generated-private evidence for a live draft result
+/// while keeping ordinary graph unification unable to cross the public/private
+/// boundary. The directed selection capability rejects imported Monotypes.
+fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produced_node: NodeId) Allocator.Error!void {
+    const declared_private = try graph.containsGeneratedPrivate(declared_node);
+    const produced_private = try graph.containsGeneratedPrivate(produced_node);
+    if (declared_private != produced_private) {
+        const public_node = if (declared_private) produced_node else declared_node;
+        const private_node = if (declared_private) declared_node else produced_node;
+        if (graph.classContainsFinishedMono(public_node) or graph.classContainsFinishedMono(private_node)) {
+            // The finished request remains an immutable interface snapshot;
+            // the expression and its enclosing producer boundary carry the
+            // distinct private result representation.
+            try graph.relateOpaqueInterface(public_node, private_node);
         } else {
-            try graph.relateOpaqueInterface(public_node, request_node);
+            try graph.selectGeneratedPrivateRepresentation(public_node, private_node);
         }
     } else {
-        try graph.unify(public_node, request_node);
+        try graph.unify(declared_node, produced_node);
     }
 }
 
@@ -2206,9 +2225,14 @@ const Builder = struct {
                         if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
                         if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
                         const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
+                        const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
+                            source_ctx.draft.current_owner,
+                            spec.fn_id,
+                        );
                         if (!draftOpenCandidateQualifies(
                             spec.state,
                             exact_interface,
+                            active_recursive_edge,
                             spec.runtime_demand_guard_frames,
                             try source_ctx.runtimeDemandGuardFrameAddresses(),
                         )) continue;
@@ -2257,11 +2281,17 @@ const Builder = struct {
             // definition. Completed specializations only reach here through
             // exact interface identity and cannot merge on a partial overlap.
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
-            try source_ctx.graph.unifyRecursiveFunctionInterface(
-                spec.request_fn_node,
-                spec.initial_request_args,
-                request_fn_node,
-            );
+            const active_recursive_edge = spec.state == .lowering and
+                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
+            if (active_recursive_edge) {
+                try source_ctx.graph.unifyRecursiveFunctionInterface(
+                    spec.request_fn_node,
+                    spec.initial_request_arg_classes,
+                    request_fn_node,
+                );
+            } else {
+                try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
+            }
             try source_ctx.graph.drainDirty();
             if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
                 Common.invariant("recursive draft template request did not join its complete function interface");
@@ -2329,10 +2359,7 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
-            .initial_request_args = try source_ctx.graph.arena().dupe(
-                NodeId,
-                (try source_ctx.graph.functionNodes(request_fn_node)).args,
-            ),
+            .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
             .request_fn_ty = null,
             .evidence = evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
@@ -2382,7 +2409,7 @@ const Builder = struct {
             );
         } else if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
             if (source_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
-                try source_ctx.graph.unify(root_node, source_fn_node);
+                try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
                 try source_ctx.graph.drainDirty();
             }
             try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
@@ -2437,10 +2464,7 @@ const Builder = struct {
                 .source_fn_ty = declared_source_fn_ty,
                 .source_fn_key = declared_source_fn_key,
                 .request_fn_node = declared_node,
-                .initial_request_args = try source_ctx.graph.arena().dupe(
-                    NodeId,
-                    (try source_ctx.graph.functionNodes(declared_node)).args,
-                ),
+                .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(declared_node),
                 .request_fn_ty = declared_fn_ty,
                 .evidence = &.{},
                 .runtime_demand_guard_frames = &.{},
@@ -2473,11 +2497,24 @@ const Builder = struct {
             request_fn_node
         else
             root_node;
+        const body_fn = try source_ctx.graph.functionNodes(body_fn_node);
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
         try source_ctx.graph.drainDirty();
 
+        const lowered_ret_node = try lowered.ret.toGraphNode(source_ctx.graph);
+        const completed_fn_node = if (source_ctx.graph.sameClass(body_fn.ret, lowered_ret_node))
+            body_fn_node
+        else
+            try body_ctx.graphFunctionNode(body_fn.args, lowered_ret_node);
+        if (try source_ctx.graph.containsGeneratedPrivate(completed_fn_node) and
+            source_ctx.graph.requestSourceInterface(completed_fn_node) == null)
+        {
+            const source_interface = source_ctx.graph.requestSourceInterface(request_fn_node) orelse root_node;
+            try source_ctx.graph.registerRequestSourceInterface(completed_fn_node, source_interface);
+        }
+
         var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
-        completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(body_fn_node);
+        completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
         if (local_context_dependent) {
             _ = try source_ctx.draft.addNestedDef(.{
                 .symbol = symbol,
@@ -3731,10 +3768,16 @@ const Builder = struct {
                             }
                         }
                         if (!captures_match) continue;
+                        if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
+                        const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
+                            source_ctx.draft.current_owner,
+                            spec.fn_id,
+                        );
                         if (!draftOpenCandidateQualifies(
                             spec.state,
                             exact_interface,
+                            active_recursive_edge,
                             spec.runtime_demand_guard_frames,
                             try source_ctx.runtimeDemandGuardFrameAddresses(),
                         )) continue;
@@ -3751,11 +3794,17 @@ const Builder = struct {
             // nested request is an explicit recursive edge. Relate its fresh
             // checked cells before reusing the in-progress definition.
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
-            try source_ctx.graph.unifyRecursiveFunctionInterface(
-                spec.request_fn_node,
-                spec.initial_request_args,
-                request_fn_node,
-            );
+            const active_recursive_edge = spec.state == .lowering and
+                source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
+            if (active_recursive_edge) {
+                try source_ctx.graph.unifyRecursiveFunctionInterface(
+                    spec.request_fn_node,
+                    spec.initial_request_arg_classes,
+                    request_fn_node,
+                );
+            } else {
+                try source_ctx.graph.unify(spec.request_fn_node, request_fn_node);
+            }
             try source_ctx.graph.drainDirty();
             if (!source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node)) {
                 Common.invariant("recursive draft nested request did not join its complete function interface");
@@ -3788,10 +3837,7 @@ const Builder = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
-            .initial_request_args = try source_ctx.graph.arena().dupe(
-                NodeId,
-                (try source_ctx.graph.functionNodes(request_fn_node)).args,
-            ),
+            .initial_request_arg_classes = try source_ctx.graph.snapshotFunctionArgumentClasses(request_fn_node),
             .request_fn_ty = null,
             .evidence = requested_evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
@@ -7256,6 +7302,7 @@ const DraftFnTemplate = struct {
 const DraftFn = struct {
     source: DraftFnTemplate,
     signature_relation: Ast.SignatureRelation = .independent_roots,
+    parent_owner: DraftOwner = .root,
 };
 
 const DraftLocal = struct {
@@ -7640,11 +7687,12 @@ fn runtimeDemandGuardFrameSetsEql(
 fn draftOpenCandidateQualifies(
     state: DraftSpecState,
     exact_interface: bool,
+    active_recursive_edge: bool,
     candidate_frames: []const RuntimeDemandGuardFrameAddress,
     request_frames: []const RuntimeDemandGuardFrameAddress,
 ) bool {
     if (!runtimeDemandGuardFrameSetsEql(candidate_frames, request_frames)) return false;
-    return exact_interface or state == .lowering;
+    return exact_interface or (state == .lowering and active_recursive_edge);
 }
 
 /// An exact, fully resolved recursive request must return the definition that
@@ -7748,7 +7796,7 @@ const DraftTemplateSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
-    initial_request_args: []const NodeId,
+    initial_request_arg_classes: []const ArgumentClassSnapshot,
     request_fn_ty: ?Type.TypeId,
     evidence: []const SpecEvidence,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
@@ -8020,7 +8068,7 @@ const DraftNestedSpec = struct {
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
-    initial_request_args: []const NodeId,
+    initial_request_arg_classes: []const ArgumentClassSnapshot,
     request_fn_ty: ?Type.TypeId,
     evidence: EvidenceChain,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
@@ -8426,8 +8474,33 @@ const BodyDraftStore = struct {
 
     fn addFn(self: *BodyDraftStore, fn_: DraftFn) Allocator.Error!DraftFnId {
         const id: DraftFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
-        try self.fns.append(self.allocator, fn_);
+        var stored = fn_;
+        stored.parent_owner = self.current_owner;
+        try self.fns.append(self.allocator, stored);
         return id;
+    }
+
+    /// Return whether `owner` is currently lowering inside `ancestor`'s body.
+    /// Draft function parents are recorded at creation, so a partial interface
+    /// match can only be classified as recursion through an explicit active
+    /// ownership path rather than inferred from shared type-graph cells.
+    fn ownerDescendsFromDraftFn(self: *const BodyDraftStore, owner: DraftOwner, ancestor: DraftFnId) bool {
+        var cursor = owner;
+        var remaining = self.fns.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (cursor) {
+                .root, .reserved_fn => return false,
+                .draft_fn => |fn_id| {
+                    if (fn_id == ancestor) return true;
+                    const raw = @intFromEnum(fn_id);
+                    if (raw >= self.fns.items.len) {
+                        Common.invariant("draft owner ancestry referenced an unknown function");
+                    }
+                    cursor = self.fns.items[raw].parent_owner;
+                },
+            }
+        }
+        Common.invariant("draft function ownership ancestry contained a cycle");
     }
 
     fn reserveDef(self: *BodyDraftStore, owner: DraftOwner) Allocator.Error!DraftDefId {
@@ -12616,7 +12689,17 @@ const BodyContext = struct {
             .expect,
             => try self.lowerComptimeRootExprAtCell(wrapper.body_expr, ret_cell),
         };
-        return .{ .args = .empty(), .body = body, .ret = ret_cell };
+        const declared_ret_node = try ret_cell.toGraphNode(self.graph);
+        const body_ret_cell = self.exprTypeCell(body);
+        const body_ret_node = try body_ret_cell.toGraphNode(self.graph);
+        try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
+        try self.graph.drainDirty();
+        const produced_ret_cell = if (try self.graph.containsGeneratedPrivate(body_ret_node))
+            body_ret_cell
+        else
+            ret_cell;
+        self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
+        return .{ .args = .empty(), .body = body, .ret = produced_ret_cell };
     }
 
     fn instantiateTemplateDispatchRelations(
@@ -12872,17 +12955,20 @@ const BodyContext = struct {
             } });
         }
 
-        try self.graph.unify(
-            try ret_cell.toGraphNode(self.graph),
-            try self.exprTypeCell(body).toGraphNode(self.graph),
-        );
+        const declared_ret_node = try ret_cell.toGraphNode(self.graph);
+        const body_ret_node = try self.exprTypeCell(body).toGraphNode(self.graph);
+        try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
         try self.graph.drainDirty();
-        self.draft.exprs.items[@intFromEnum(body)].ty = ret_cell;
+        const produced_ret_cell = if (try self.graph.containsGeneratedPrivate(body_ret_node))
+            DraftTypeCell.fromGraphNode(body_ret_node)
+        else
+            ret_cell;
+        self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
 
         return .{
             .args = try self.draft.addTypedLocalSpan(args),
             .body = body,
-            .ret = ret_cell,
+            .ret = produced_ret_cell,
         };
     }
 
@@ -13299,7 +13385,7 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(self.view, stored, entry.checked_type);
                 const stored_node = try self.graph.importMono(stored_ty);
-                try self.graph.unify(request_node, stored_node);
+                try relateRequestComponent(self.graph, request_node, stored_node);
                 try self.graph.drainDirty();
                 const saved_loc = self.builder.program.current_loc;
                 defer self.builder.program.current_loc = saved_loc;
@@ -13392,7 +13478,12 @@ const BodyContext = struct {
             .eval_template => try self.lowerTypeView(entry.checked_type),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype type selection"),
         };
-        try self.constrainTypeToMono(checked_ty, hoisted_ty);
+        try relateCheckedNodeToMono(
+            self.graph,
+            try self.instNode(checked_ty),
+            try self.graph.importMono(hoisted_ty),
+        );
+        try self.graph.drainDirty();
         return hoisted_ty;
     }
 
@@ -14946,10 +15037,6 @@ const BodyContext = struct {
         return .{ .record_fields = record_fields };
     }
 
-    fn typeContainsGeneratedOpaqueEvidence(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
-        return self.graph.containsGeneratedPrivate(try self.graph.importMono(ty));
-    }
-
     fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) bool {
         return switch (self.graph.content(node)) {
             .named => |named| switch (named.def.iterator_representation) {
@@ -14959,6 +15046,16 @@ const BodyContext = struct {
                     false,
                 .none => false,
             },
+            else => false,
+        };
+    }
+
+    fn isIteratorInterfaceNode(self: *BodyContext, node: NodeId) bool {
+        return switch (self.graph.content(node)) {
+            .named => |named| if (named.builtin_owner) |owner|
+                static_dispatch.isIteratorOwner(owner)
+            else
+                false,
             else => false,
         };
     }
@@ -20027,6 +20124,7 @@ const BodyContext = struct {
             if (iterator_procedure) |procedure| {
                 const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
                 if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                    try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
                     try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                     try self.graph.drainDirty();
                     fn_node = private_fn_node;
@@ -20053,11 +20151,17 @@ const BodyContext = struct {
                 };
             }
             const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
+            const callee_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
+            const callee_fn_nodes = try self.graph.functionNodes(callee_fn_node);
+            if (callee_fn_nodes.args.len != fn_nodes.args.len) {
+                Common.invariant("completed direct-call specialization changed argument arity");
+            }
+            const lowered_args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
             return .{
-                .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
+                .ret_ty = DraftTypeCell.fromGraphNode(callee_fn_nodes.ret),
                 .data = .{ .call_proc = .{
                     .callee = .{ .func = callee },
-                    .args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args),
+                    .args = lowered_args,
                     .iterator_procedure = iterator_procedure,
                 } },
             };
@@ -20251,8 +20355,8 @@ const BodyContext = struct {
             if (!self.sameType(expected, fn_data.ret)) return null;
         }
         for (checked_args) |checked_arg| {
-            if (try self.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
-                if (try self.typeContainsGeneratedOpaqueEvidence(evidence_ty)) return null;
+            if (try self.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
+                if (try self.graph.containsGeneratedPrivate(evidence_node)) return null;
             }
         }
         return fn_ty;
@@ -20333,16 +20437,15 @@ const BodyContext = struct {
         const request_args = try self.graph.arena().alloc(NodeId, function.args.len);
         for (fn_graph.args, checked_args, 0..) |formal_node, checked_arg, index| {
             const arg_ty = caller.view.bodies.expr(checked_arg).ty;
-            if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
-                if (try self.typeContainsGeneratedOpaqueEvidence(evidence_ty)) {
+            if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
+                if (try self.graph.containsGeneratedPrivate(evidence_node)) {
                     const public_node = try caller.freshInstNode(arg_ty);
-                    const private_node = try self.graph.importMono(evidence_ty);
-                    try self.graph.relateOpaqueInterface(public_node, private_node);
+                    try self.graph.relateOpaqueInterface(public_node, evidence_node);
                     try self.graph.unify(formal_node, public_node);
-                    request_args[index] = private_node;
+                    request_args[index] = evidence_node;
                 } else {
                     try self.graph.unify(formal_node, try caller.instNode(arg_ty));
-                    try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
+                    try self.graph.unify(formal_node, evidence_node);
                     request_args[index] = formal_node;
                 }
             } else {
@@ -20372,11 +20475,10 @@ const BodyContext = struct {
         }
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
-            request_ret = try checkedMonoRequestNode(
-                self.graph,
-                fn_graph.ret,
-                expected,
-            );
+            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
+                expected
+            else
+                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
         }
         try self.graph.drainDirty();
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
@@ -20431,7 +20533,7 @@ const BodyContext = struct {
             .arg => |index| {
                 if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
                 const dispatcher_node = try caller.instNode(dispatcher_ty);
-                try self.graph.unify(fn_graph.args[index], dispatcher_node);
+                try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
             },
             .type_only => {},
         }
@@ -20466,11 +20568,10 @@ const BodyContext = struct {
         var request_ret = fn_graph.ret;
         if (expected_ret_node) |expected| {
             try self.graph.unify(fn_graph.ret, try caller.freshInstNode(checked_ret_ty));
-            request_ret = try checkedMonoRequestNode(
-                self.graph,
-                fn_graph.ret,
-                expected,
-            );
+            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
+                expected
+            else
+                try checkedMonoRequestNode(self.graph, fn_graph.ret, expected);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
@@ -20657,45 +20758,64 @@ const BodyContext = struct {
         return fn_node;
     }
 
-    fn callArgumentMonoType(
+    /// Return exact producer evidence for a call operand without sealing and
+    /// re-importing a live result node. Lookup-only evidence may already be a
+    /// durable value, so that path retains the existing TypeId bridge.
+    fn callArgumentEvidenceNode(
         self: *BodyContext,
         checked_arg: checked.CheckedExprId,
         expected_ty: ?Type.TypeId,
-    ) Allocator.Error!?Type.TypeId {
+    ) Allocator.Error!?NodeId {
         const expr = self.view.bodies.expr(checked_arg);
         switch (expr.data) {
             .call => |call| {
-                _ = try self.callResultTypeNode(expr.ty, call, expected_ty);
-                return expected_ty;
+                if (call.direct_target) |target| {
+                    const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+                    const fn_node = try self.directCallTypeNode(
+                        expr.ty,
+                        call,
+                        source_fn_ty,
+                        if (expected_ty) |expected| try self.activeNodeFromType(expected) else null,
+                    );
+                    const fn_nodes = try self.graph.functionNodes(fn_node);
+                    if (self.isGeneratedIteratorEvidenceNode(fn_nodes.ret)) return fn_nodes.ret;
+                    if (self.isIteratorInterfaceNode(fn_nodes.ret)) {
+                        try self.ensureNestedCallablesAtNodes(call.args, fn_nodes.args);
+                        const callee = try self.fnTemplateForDirectCallAtNode(
+                            target,
+                            source_fn_ty,
+                            self.view.types.rootKey(source_fn_ty),
+                            fn_node,
+                        );
+                        const completed_fn_node = try self.draftFnSlotTypeNode(callee, fn_node);
+                        return (try self.graph.functionNodes(completed_fn_node)).ret;
+                    }
+                    return fn_nodes.ret;
+                }
+                return try self.callResultTypeNode(expr.ty, call, expected_ty);
             },
-            .dispatch_call => |plan| {
-                _ = try self.dispatchResultTypeNode(expr.ty, plan, expected_ty);
-                return expected_ty;
-            },
-            .interpolation => |interpolation| {
-                _ = try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty);
-                return expected_ty;
-            },
-            .type_dispatch_call => |plan| {
-                _ = try self.dispatchResultTypeNode(expr.ty, plan, expected_ty);
-                return expected_ty;
-            },
-            .method_eq => |plan| {
-                _ = try self.dispatchResultTypeNode(expr.ty, plan, expected_ty);
-                return expected_ty;
-            },
-            .field_access => |field| {
-                _ = try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, expected_ty);
-                return expected_ty;
-            },
-            .lookup_local => |lookup| return try self.lookupCallArgumentMonoType(expr.ty, lookup.resolved, expected_ty),
-            .lookup_external => |resolved| return try self.lookupCallArgumentMonoType(expr.ty, resolved, expected_ty),
-            .lookup_required => |resolved| return try self.lookupCallArgumentMonoType(expr.ty, resolved, expected_ty),
+            .dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
+            .interpolation => |interpolation| return try self.dispatchResultTypeNode(expr.ty, interpolation.plan, expected_ty),
+            .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
+            .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
+            .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, expected_ty),
+            .lookup_local => |lookup| return if (try self.lookupCallArgumentMonoType(expr.ty, lookup.resolved, expected_ty)) |ty|
+                try self.activeNodeFromType(ty)
+            else
+                null,
+            .lookup_external => |resolved| return if (try self.lookupCallArgumentMonoType(expr.ty, resolved, expected_ty)) |ty|
+                try self.activeNodeFromType(ty)
+            else
+                null,
+            .lookup_required => |resolved| return if (try self.lookupCallArgumentMonoType(expr.ty, resolved, expected_ty)) |ty|
+                try self.activeNodeFromType(ty)
+            else
+                null,
             else => {},
         }
         if (expected_ty) |ty| {
             try self.constrainTypeToMono(expr.ty, ty);
-            return ty;
+            return try self.activeNodeFromType(ty);
         }
         return null;
     }
@@ -20952,6 +21072,7 @@ const BodyContext = struct {
         if (self.iteratorProcedureForResolvedTarget(call.direct_target.?)) |procedure| {
             const public_fn_node = self.graph.requestSourceInterface(fn_node) orelse fn_node;
             if (try self.generatedIteratorFunctionNode(procedure, public_fn_node, fn_node, call.args)) |private_fn_node| {
+                try self.graph.registerRequestSourceInterface(private_fn_node, public_fn_node);
                 try relateFunctionRequestInterface(self.graph, public_fn_node, private_fn_node);
                 try self.graph.drainDirty();
                 fn_node = private_fn_node;
@@ -21524,6 +21645,23 @@ const BodyContext = struct {
         };
     }
 
+    fn draftFnSlotTypeNode(
+        self: *BodyContext,
+        slot: DraftFnSlot,
+        imported_fallback: NodeId,
+    ) Allocator.Error!NodeId {
+        return switch (slot) {
+            .local => |local| switch (local) {
+                .draft => |draft_fn| try self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph),
+                .final => |final_fn| try self.activeNodeFromType(self.builder.program.fnSource(final_fn).mono_fn_ty),
+            },
+            // Imported slots were selected from this exact request. Their
+            // durable signature belongs to another shard, while the active
+            // graph request is already the local representation witness.
+            .imported => imported_fallback,
+        };
+    }
+
     const CallableEvalUse = struct {
         view: ModuleView,
         template: checked.CallableEvalTemplateId,
@@ -21588,7 +21726,7 @@ const BodyContext = struct {
             .eval_template => try self.instNode(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
-        try self.graph.unify(try self.instNode(checked_ty), requested_node);
+        _ = try checkedMonoRequestNode(self.graph, try self.instNode(checked_ty), requested_node);
         try self.graph.drainDirty();
         return requested_node;
     }
@@ -21652,7 +21790,7 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(store_view, stored, requested_ty);
                 const stored_node = try self.graph.importMono(stored_ty);
-                try self.graph.unify(request_node, stored_node);
+                try relateRequestComponent(self.graph, request_node, stored_node);
                 try self.graph.drainDirty();
                 break :blk try self.restoredStaticDataCandidateNodeAtNode(
                     store_view,
@@ -21690,7 +21828,12 @@ const BodyContext = struct {
         requested_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeId {
         const stored_ty = try self.lowerConstCaptureType(store_view, stored.root_type);
-        try self.constrainTypeToMono(requested_ty, stored_ty);
+        _ = try checkedMonoRequestNode(
+            self.graph,
+            try self.instNode(requested_ty),
+            try self.graph.importMono(stored_ty),
+        );
+        try self.graph.drainDirty();
         return stored_ty;
     }
 
@@ -22638,7 +22781,11 @@ const BodyContext = struct {
             .nested => |nested| nested.context_fn_key,
             else => Common.invariant("capturing stored function had no nested function identity"),
         };
-        try self.graph.unify(try fn_ctx.instNode(fn_value.source_fn_ty), request_fn_node);
+        _ = try checkedMonoRequestNode(
+            self.graph,
+            try fn_ctx.instNode(fn_value.source_fn_ty),
+            request_fn_node,
+        );
         try self.graph.drainDirty();
 
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
@@ -23607,8 +23754,24 @@ const BodyContext = struct {
             .lookup_external => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
             .lookup_required => |resolved| try self.relateLookupExprAtNode(checked_expr, resolved, expected_node),
             .call => |call| try self.relateCallExprAtNode(expr.ty, call, expected_node),
+            .dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
+            .interpolation => |interpolation| try self.relateDispatchExprAtNode(expr.ty, interpolation.plan, expected_node),
+            .type_dispatch_call => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
+            .method_eq => |plan| try self.relateDispatchExprAtNode(expr.ty, plan, expected_node),
             .field_access => |field| try self.relateFieldAccessExprAtNode(field, expected_node),
+            .tag => |tag| try self.relateTagExprAtNode(tag, expected_node),
+            .zero_argument_tag => _ = try self.graph.tagRowNodes(expected_node),
+            .nominal => |nominal| try self.relateNominalExprAtNode(nominal, expected_node),
+            .tuple => |items| try self.relateTupleExprAtNode(items, expected_node),
+            .list => |items| try self.relateListExprAtNode(items, expected_node),
+            .empty_list => _ = try self.graph.listElementNode(expected_node),
+            .empty_record => _ = try self.graph.recordConstructionNodes(expected_node),
             .record => |record| try self.relateRecordExprAtNode(record, expected_node),
+            // These forms propagate the exact result cell while their own
+            // lowering establishes branch-local binders and statement state.
+            // Relating their shared checked result node here would collapse
+            // distinct generated-private representations across branches.
+            .block, .match_, .if_, .runtime_error => {},
             .lambda, .closure => {
                 if (self.graph.content(expected_node) != .func) {
                     Common.invariant("checked callable relation received a non-function request node");
@@ -23616,6 +23779,54 @@ const BodyContext = struct {
             },
             else => try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr)),
         }
+    }
+
+    fn relateTagExprAtNode(
+        self: *BodyContext,
+        tag: anytype,
+        tag_node: NodeId,
+    ) Allocator.Error!void {
+        const name = try self.builder.tagName(self.view, tag.name);
+        for (tag.args, 0..) |arg, index| {
+            try self.relateExprAtNode(
+                arg,
+                try self.graph.tagConstructionPayloadNode(tag_node, name, index),
+            );
+        }
+        try self.graph.drainDirty();
+    }
+
+    fn relateNominalExprAtNode(
+        self: *BodyContext,
+        nominal: anytype,
+        nominal_node: NodeId,
+    ) Allocator.Error!void {
+        const named = self.graph.namedNodes(nominal_node);
+        const backing_node = (named.backing orelse
+            Common.invariant("nominal constructor graph node had no backing")).node;
+        try self.relateExprAtNode(nominal.backing_expr, backing_node);
+        try self.graph.drainDirty();
+    }
+
+    fn relateTupleExprAtNode(
+        self: *BodyContext,
+        items: []const checked.CheckedExprId,
+        tuple_node: NodeId,
+    ) Allocator.Error!void {
+        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+        if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
+        for (items, item_nodes) |item, item_node| try self.relateExprAtNode(item, item_node);
+        try self.graph.drainDirty();
+    }
+
+    fn relateListExprAtNode(
+        self: *BodyContext,
+        items: []const checked.CheckedExprId,
+        list_node: NodeId,
+    ) Allocator.Error!void {
+        const element_node = try self.graph.listElementNode(list_node);
+        for (items) |item| try self.relateExprAtNode(item, element_node);
+        try self.graph.drainDirty();
     }
 
     fn relateRecordExprAtNode(
@@ -23631,6 +23842,22 @@ const BodyContext = struct {
             );
             try self.relateExprAtNode(field.value, field_node);
         }
+        try self.graph.drainDirty();
+    }
+
+    fn relateDispatchExprAtNode(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        expected_ret_node: NodeId,
+    ) Allocator.Error!void {
+        const actual_ret_node = try self.dispatchResultTypeNodeInPhase(
+            checked_ret_ty,
+            maybe_plan,
+            expected_ret_node,
+            .expression_lowering,
+        );
+        try relateRequestComponent(self.graph, actual_ret_node, expected_ret_node);
         try self.graph.drainDirty();
     }
 
@@ -24201,6 +24428,9 @@ const BodyContext = struct {
                 }
             },
             .graph_node => blk: {
+                if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
+                    break :blk restored;
+                }
                 switch (self.view.bodies.expr(checked_expr).data) {
                     .lookup_local => |lookup| break :blk try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
                     .lookup_external => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
@@ -24208,21 +24438,46 @@ const BodyContext = struct {
                     .lambda => break :blk try self.lowerLambdaExprAtNode(checked_expr, expected_node),
                     .closure => |closure| break :blk try self.lowerClosureAtNode(checked_expr, closure, expected_node),
                     .field_access => |field| break :blk try self.lowerFieldAccessExprAtNode(checked_expr, field, expected_node),
+                    .tag => |tag| break :blk try self.lowerTagConstructorAtNode(tag, expected_node),
+                    .zero_argument_tag => |tag| break :blk try self.addConstructorExprAtNode(expected_node, .{ .tag = .{
+                        .name = try self.builder.tagName(self.view, tag.name),
+                        .payloads = .empty(),
+                    } }),
+                    .nominal => |nominal| break :blk try self.lowerNominalConstructorAtNode(nominal, expected_node),
+                    .tuple => |items| break :blk try self.lowerTupleConstructorAtNode(items, expected_node),
+                    .list => |items| break :blk try self.lowerListConstructorAtNode(items, expected_node),
+                    .empty_list => break :blk try self.addExprWithTypeCell(
+                        DraftTypeCell.fromGraphNode(expected_node),
+                        .{ .list = .empty() },
+                    ),
+                    .empty_record => break :blk try self.addConstructorExprAtNode(expected_node, .{ .record = .empty() }),
                     .record => |record| break :blk try self.lowerRecordConstructorAtNode(record, expected_node),
                     .call => break :blk try self.lowerCallExprAtNode(checked_expr, expected_node),
+                    .dispatch_call => |plan| {
+                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
+                    },
+                    .interpolation => |interpolation| {
+                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, interpolation.plan, cell);
+                    },
+                    .type_dispatch_call => |plan| {
+                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
+                    },
+                    .method_eq => |plan| {
+                        try self.selectExprRepresentationAtNode(checked_expr, expected_node);
+                        break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell);
+                    },
+                    .block => |block| break :blk try self.lowerBlockAtTypeCell(block, cell),
+                    .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
+                    .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
+                    .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
                     else => {},
                 }
                 try self.graph.unify(expected_node, try self.lowerExprTypeNode(checked_expr));
                 try self.graph.drainDirty();
                 switch (self.view.bodies.expr(checked_expr).data) {
-                    .block => |block| break :blk try self.lowerBlockAtTypeCell(block, cell),
-                    .match_ => |match| break :blk try self.lowerMatchExprAtTypeCell(checked_expr, match, cell),
-                    .if_ => |if_| break :blk try self.lowerIfExprAtTypeCell(checked_expr, if_, cell),
-                    .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
-                    .dispatch_call => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
-                    .interpolation => |interpolation| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, interpolation.plan, cell),
-                    .type_dispatch_call => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
-                    .method_eq => |plan| break :blk try self.lowerDispatchExprAtType(self.view.bodies.expr(checked_expr).ty, plan, cell),
                     .tuple_access => |access| {
                         const tuple_node = try self.lowerExprTypeNode(access.tuple);
                         const item_nodes = try self.graph.tupleItemNodes(tuple_node);
@@ -24254,6 +24509,19 @@ const BodyContext = struct {
                 break :blk lowered;
             },
         };
+    }
+
+    fn selectExprRepresentationAtNode(
+        self: *BodyContext,
+        checked_expr: checked.CheckedExprId,
+        expected_node: NodeId,
+    ) Allocator.Error!void {
+        try selectRequestRepresentation(
+            self.graph,
+            expected_node,
+            try self.lowerExprTypeNode(checked_expr),
+        );
+        try self.graph.drainDirty();
     }
 
     fn lowerCallExprAtNode(
@@ -24291,13 +24559,16 @@ const BodyContext = struct {
                 try self.lowerCall(expr.ty, call);
             break :lowered try self.addExprWithTypeCell(call_data.ret_ty, call_data.data);
         };
+        const lowered_node = try self.exprTypeCell(lowered).toGraphNode(self.graph);
         try relateRequestComponent(
             self.graph,
             expected_node,
-            try self.exprTypeCell(lowered).toGraphNode(self.graph),
+            lowered_node,
         );
         try self.graph.drainDirty();
-        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(expected_node);
+        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(
+            if (try self.graph.containsGeneratedPrivate(lowered_node)) lowered_node else expected_node,
+        );
         return lowered;
     }
 
@@ -24756,6 +25027,92 @@ const BodyContext = struct {
         return record_expr;
     }
 
+    fn lowerTagConstructorAtNode(
+        self: *BodyContext,
+        tag: anytype,
+        tag_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const name = try self.builder.tagName(self.view, tag.name);
+        const payload_nodes = try self.allocator.alloc(NodeId, tag.args.len);
+        defer self.allocator.free(payload_nodes);
+        for (tag.args, 0..) |_, index| {
+            payload_nodes[index] = try self.graph.tagConstructionPayloadNode(tag_node, name, index);
+        }
+        try self.prepareConstructorChildrenAtNodes(tag.args, payload_nodes);
+        const lowered = try self.allocator.alloc(DraftExprId, tag.args.len);
+        defer self.allocator.free(lowered);
+        for (tag.args, payload_nodes, 0..) |arg, payload_node, index| {
+            lowered[index] = try self.lowerConstructorChildAtCell(
+                arg,
+                DraftTypeCell.fromGraphNode(payload_node),
+            );
+        }
+        try self.graph.drainDirty();
+        return try self.addConstructorExprAtNode(tag_node, .{ .tag = .{
+            .name = name,
+            .payloads = try self.addExprSpan(lowered),
+        } });
+    }
+
+    fn lowerNominalConstructorAtNode(
+        self: *BodyContext,
+        nominal: anytype,
+        nominal_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const named = self.graph.namedNodes(nominal_node);
+        const backing_node = (named.backing orelse
+            Common.invariant("nominal constructor graph node had no backing")).node;
+        try self.prepareConstructorChildrenAtNodes(&.{nominal.backing_expr}, &.{backing_node});
+        const backing = try self.lowerConstructorChildAtCell(
+            nominal.backing_expr,
+            DraftTypeCell.fromGraphNode(backing_node),
+        );
+        try self.graph.drainDirty();
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(nominal_node),
+            .{ .nominal = backing },
+        );
+    }
+
+    fn lowerTupleConstructorAtNode(
+        self: *BodyContext,
+        items: []const checked.CheckedExprId,
+        tuple_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const item_nodes = try self.graph.tupleItemNodes(tuple_node);
+        if (items.len != item_nodes.len) Common.invariant("tuple constructor arity differed from its graph type");
+        try self.prepareConstructorChildrenAtNodes(items, item_nodes);
+        const lowered = try self.allocator.alloc(DraftExprId, items.len);
+        defer self.allocator.free(lowered);
+        for (items, item_nodes, 0..) |item, item_node, index| {
+            lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(item_node));
+        }
+        try self.graph.drainDirty();
+        return try self.addConstructorExprAtNode(tuple_node, .{ .tuple = try self.addExprSpan(lowered) });
+    }
+
+    fn lowerListConstructorAtNode(
+        self: *BodyContext,
+        items: []const checked.CheckedExprId,
+        list_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        const element_node = try self.graph.listElementNode(list_node);
+        const item_nodes = try self.allocator.alloc(NodeId, items.len);
+        defer self.allocator.free(item_nodes);
+        @memset(item_nodes, element_node);
+        try self.prepareConstructorChildrenAtNodes(items, item_nodes);
+        const lowered = try self.allocator.alloc(DraftExprId, items.len);
+        defer self.allocator.free(lowered);
+        for (items, 0..) |item, index| {
+            lowered[index] = try self.lowerConstructorChildAtCell(item, DraftTypeCell.fromGraphNode(element_node));
+        }
+        try self.graph.drainDirty();
+        return try self.addExprWithTypeCell(
+            DraftTypeCell.fromGraphNode(list_node),
+            .{ .list = try self.addExprSpan(lowered) },
+        );
+    }
+
     fn lowerRecordConstructorAtNode(
         self: *BodyContext,
         record: anytype,
@@ -25081,14 +25438,11 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-        const expected_ret_ty = if (expected_ret_cell) |cell| switch (cell) {
+        const expected_ret_ty: ?Type.TypeId = if (expected_ret_cell) |cell| switch (cell) {
             .sealed => |ty| ty,
-            .graph_node => |node| blk: {
-                try self.graph.unify(try self.instNode(checked_ret_ty), node);
-                try self.graph.drainDirty();
-                break :blk null;
-            },
+            .graph_node => null,
         } else null;
+        const expected_ret_node = if (expected_ret_cell) |cell| try cell.toGraphNode(self.graph) else null;
 
         var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
@@ -25098,7 +25452,16 @@ const BodyContext = struct {
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
 
-        var callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, self, checked_ret_ty, plan_args, expected_ret_ty);
+        var callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
+            plan.callable_ty,
+            plan.dispatcher,
+            plan.dispatcher_ty,
+            self,
+            checked_ret_ty,
+            plan_args,
+            expected_ret_node,
+            .expression_lowering,
+        );
         if (self.planUnexecutable(plan) == null) {
             const resolution = self.evidenceResolution(plan) orelse
                 Common.invariant("runtime method call had no StaticDispatchResolution evidence");
@@ -25210,7 +25573,11 @@ const BodyContext = struct {
                 },
             },
         };
-        _ = try checkedMonoRequestNode(self.graph, try self.lowerTypeNode(checked_ret_ty), plan_ret_node);
+        const checked_result_node = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
+            try self.freshInstNode(checked_ret_ty)
+        else
+            try self.lowerTypeNode(checked_ret_ty);
+        _ = try checkedMonoRequestNode(self.graph, checked_result_node, plan_ret_node);
         try self.graph.drainDirty();
         const call_data = try self.lowerResolvedDispatchAtNode(plan, resolved, callable_node, self, pre_lowered.items);
         const call_ret_cell = if (try self.graph.containsGeneratedPrivate(plan_ret_node))
@@ -25919,7 +26286,7 @@ const BodyContext = struct {
         return try self.dispatchResultTypeNodeInPhase(
             checked_ret_ty,
             maybe_plan,
-            expected_ret_ty,
+            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
             .expression_lowering,
         );
     }
@@ -25928,7 +26295,7 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        expected_ret_ty: ?Type.TypeId,
+        expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
@@ -25950,7 +26317,7 @@ const BodyContext = struct {
             self,
             checked_ret_ty,
             plan_args,
-            if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
+            expected_ret_node,
             phase,
         );
         if (self.planUnexecutable(plan) == null) {
@@ -26420,11 +26787,8 @@ const BodyContext = struct {
             request_node,
             checked_args,
         )) orelse return null;
+        try self.graph.registerRequestSourceInterface(private_node, public_target_node);
         try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
-        // Both sides are exact generated requests. Their iterator identities
-        // join through the graph's explicit minted-iterator relation; this is
-        // not a checked-public/private interface edge.
-        try self.graph.unify(request_node, private_node);
         try self.graph.drainDirty();
         return private_node;
     }
@@ -26656,19 +27020,6 @@ const BodyContext = struct {
             out[i] = try self.synthesizeComponentEvidence(view, param.method, param.structural, component_ty);
         }
         return out;
-    }
-
-    fn synthesizeEvidenceParamsAtNode(
-        self: *BodyContext,
-        view: ModuleView,
-        params: []const static_dispatch.EvidenceParamRecord,
-        callable_node: NodeId,
-    ) Allocator.Error![]const SpecEvidence {
-        if (params.len == 0) return &.{};
-
-        const component_nodes = try self.projectEvidenceComponentNodes(view, params, callable_node);
-        defer self.allocator.free(component_nodes);
-        return try self.synthesizeEvidenceAtComponentNodes(view, params, component_nodes);
     }
 
     /// Project checker-authored dispatcher paths over the exact checked root
@@ -31614,10 +31965,12 @@ const BodyContext = struct {
         output: MatchOutput,
         comptime_site: ?DraftComptimeSiteId,
     ) Allocator.Error!DraftExprId {
-        return try self.addExprWithTypeCell(
-            self.matchOutputCell(output),
-            try self.lowerMatch(match, output, comptime_site),
-        );
+        const data = try self.lowerMatch(match, output, comptime_site);
+        const output_cell = switch (output) {
+            .value => |declared| try self.joinMatchValueResultCell(declared, data.match_),
+            .state_result, .state_only => self.matchOutputCell(output),
+        };
+        return try self.addExprWithTypeCell(output_cell, data);
     }
 
     fn patternNeedsExplicitBinding(self: *BodyContext, pattern_id: checked.CheckedPatternId) bool {
@@ -32979,7 +33332,11 @@ const BodyContext = struct {
                 errdefer branch_ctx.deinit();
                 try branch_ctx.preRegisterPatternBindersFromCheckedTypes(pattern.pattern);
                 try branch_ctx.applyAlternativeBinderRemaps(pattern.binderRemapsSlice(self.view.bodies));
-                try self.graph.unify(scrutinee_node, try branch_ctx.instNode(branch_ctx.view.bodies.pattern(pattern.pattern).ty));
+                try relateRequestComponent(
+                    self.graph,
+                    scrutinee_node,
+                    try branch_ctx.instNode(branch_ctx.view.bodies.pattern(pattern.pattern).ty),
+                );
                 try pending.append(self.allocator, .{
                     .ctx = branch_ctx,
                     .pattern = pattern,
@@ -32998,6 +33355,7 @@ const BodyContext = struct {
                 entry.pattern.pattern,
                 scrutinee_node,
             );
+            try entry.ctx.rebindPreRegisteredPatternBindersAtNode(entry.pattern.pattern, scrutinee_node);
             entry.user_guard = if (entry.checked_guard) |guard_expr| try entry.ctx.lowerExpr(guard_expr) else null;
             entry.body = try entry.ctx.wrapComptimeBranch(
                 comptime_site,
@@ -33360,9 +33718,10 @@ const BodyContext = struct {
         defer self.allocator.free(merge_binders);
 
         if (merge_binders.len == 0) {
+            const data = try self.lowerIfAtTypeCells(if_, result_cell, result_cell, &.{}, comptime_site);
             return try self.addExprWithTypeCell(
-                result_cell,
-                try self.lowerIfAtTypeCells(if_, result_cell, result_cell, &.{}, comptime_site),
+                try self.joinIfValueResultCell(result_cell, data.if_),
+                data,
             );
         }
 
@@ -33477,6 +33836,71 @@ const BodyContext = struct {
                 try else_ctx.lowerIfBranchBodyAtTypeCells(if_.final_else, result_cell, branch_cell, merge_binders),
             ),
         } };
+    }
+
+    const ControlFlowResultJoin = struct {
+        private_node: ?NodeId = null,
+        saw_public_value: bool = false,
+    };
+
+    fn includeControlFlowResult(
+        self: *BodyContext,
+        join: *ControlFlowResultJoin,
+        body: DraftExprId,
+    ) Allocator.Error!void {
+        if (self.exprImpossibilityProof(body) != null) return;
+        const node = try self.exprTypeCell(body).toGraphNode(self.graph);
+        if (try self.graph.containsGeneratedPrivate(node)) {
+            if (join.saw_public_value) {
+                Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
+            }
+            if (join.private_node) |existing| {
+                try self.graph.unify(existing, node);
+            } else {
+                join.private_node = node;
+            }
+        } else {
+            if (join.private_node != null) {
+                Common.invariant("control-flow result mixed explicit generated-private and checked-public runtime representations");
+            }
+            join.saw_public_value = true;
+        }
+    }
+
+    fn finishControlFlowResultJoin(
+        self: *BodyContext,
+        declared: DraftTypeCell,
+        join: ControlFlowResultJoin,
+    ) Allocator.Error!DraftTypeCell {
+        const private_node = join.private_node orelse return declared;
+        try relateRequestComponent(self.graph, try declared.toGraphNode(self.graph), private_node);
+        try self.graph.drainDirty();
+        return DraftTypeCell.fromGraphNode(private_node);
+    }
+
+    fn joinIfValueResultCell(
+        self: *BodyContext,
+        declared: DraftTypeCell,
+        if_: DraftIfExpr,
+    ) Allocator.Error!DraftTypeCell {
+        var join = ControlFlowResultJoin{};
+        for (self.ifBranchSpan(if_.branches)) |branch| {
+            try self.includeControlFlowResult(&join, branch.body);
+        }
+        try self.includeControlFlowResult(&join, if_.final_else);
+        return try self.finishControlFlowResultJoin(declared, join);
+    }
+
+    fn joinMatchValueResultCell(
+        self: *BodyContext,
+        declared: DraftTypeCell,
+        match: DraftMatchExpr,
+    ) Allocator.Error!DraftTypeCell {
+        var join = ControlFlowResultJoin{};
+        for (self.branchSpan(match.branches)) |branch| {
+            try self.includeControlFlowResult(&join, branch.body);
+        }
+        return try self.finishControlFlowResultJoin(declared, join);
     }
 
     fn lowerIfBranchBodyAtTypeCells(
@@ -34587,7 +35011,7 @@ const BodyContext = struct {
         const initial_iterator = try self.lowerIteratorDispatch(plan.iter, null, null);
         const iterator_cell = self.exprTypeCell(initial_iterator);
         try self.constrainCheckedInterfaceToCell(plan.iterator_ty, iterator_cell);
-        const step = try self.iteratorStepShape(plan);
+        const step = try self.iteratorStepShape(plan, iterator_cell);
         try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(step.one_rest.node));
         try self.constrainCheckedInterfaceToCell(plan.iterator_ty, DraftTypeCell.fromGraphNode(step.skip_rest.node));
         try self.constrainCheckedInterfaceToCell(plan.item_ty, DraftTypeCell.fromGraphNode(step.one_item.node));
@@ -34863,11 +35287,11 @@ const BodyContext = struct {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
                     try self.graph.unify(formal_node, public_node);
-                    if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                    if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
                             public_node,
-                            try self.graph.importMono(evidence_ty),
+                            evidence_node,
                         );
                     } else {
                         request_arg.* = formal_node;
@@ -34886,11 +35310,11 @@ const BodyContext = struct {
         }
         var request_ret = function_nodes.ret;
         if (expected_ret_ty) |expected| {
-            request_ret = try checkedMonoRequestNode(
-                self.graph,
-                function_nodes.ret,
-                try expected.toGraphNode(self.graph),
-            );
+            const expected_node = try expected.toGraphNode(self.graph);
+            request_ret = if (try self.graph.containsGeneratedPrivate(expected_node))
+                expected_node
+            else
+                try checkedMonoRequestNode(self.graph, function_nodes.ret, expected_node);
             if (try self.graph.containsGeneratedPrivate(request_ret)) contains_generated_private = true;
         }
         try self.graph.drainDirty();
@@ -35460,9 +35884,17 @@ const BodyContext = struct {
         node: NodeId,
     };
 
-    fn iteratorStepShape(self: *BodyContext, plan: static_dispatch.IteratorForPlan) Allocator.Error!IterStepShape {
+    fn iteratorStepShape(
+        self: *BodyContext,
+        plan: static_dispatch.IteratorForPlan,
+        iterator_cell: DraftTypeCell,
+    ) Allocator.Error!IterStepShape {
         const topology = plan.step_topology;
-        const step_node = try self.lowerTypeNode(plan.step_ty);
+        const iterator_node = try iterator_cell.toGraphNode(self.graph);
+        const step_node = if (self.isGeneratedIteratorEvidenceNode(iterator_node))
+            try self.generatedIteratorStepReturnNode(iterator_node)
+        else
+            try self.lowerTypeNode(plan.step_ty);
         const done_tag_name = try self.builder.tagName(self.view, topology.done_tag);
         const one_tag_name = try self.builder.tagName(self.view, topology.one_tag);
         const skip_tag_name = try self.builder.tagName(self.view, topology.skip_tag);
@@ -35754,8 +36186,10 @@ const BodyContext = struct {
         cell: DraftTypeCell,
     ) Allocator.Error!DraftLocalId {
         if (self.reuse_pre_registered_pattern_binders) {
-            return self.currentOwnerPatternBinderLocal(binder) orelse
+            const local = self.currentOwnerPatternBinderLocal(binder) orelse
                 Common.invariant("pattern binder was not pre-registered before materialization");
+            self.draft.setLocalType(local, cell);
+            return local;
         }
         const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, binder);
         try self.bindLocalName(local, binder);
@@ -36018,7 +36452,15 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
     ) Allocator.Error!void {
-        try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders);
+        try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, false);
+    }
+
+    fn rebindPreRegisteredPatternBindersAtNode(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        node: NodeId,
+    ) Allocator.Error!void {
+        try self.registerPatternBindersAtNodeInMap(pattern_id, node, &self.binders, true);
     }
 
     fn registerPatternBindersAtNodeInMap(
@@ -36026,10 +36468,11 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         binders: *BinderMap,
+        rebind_existing: bool,
     ) Allocator.Error!void {
         var active = std.AutoHashMap(PatternNodeVisit, void).init(self.allocator);
         defer active.deinit();
-        try self.preRegisterPatternBindersAtNodeInner(pattern_id, node, binders, &active);
+        try self.preRegisterPatternBindersAtNodeInner(pattern_id, node, binders, rebind_existing, &active);
     }
 
     fn preRegisterPatternBinderAtNode(
@@ -36037,15 +36480,23 @@ const BodyContext = struct {
         binder: checked.PatternBinderId,
         node: NodeId,
         binders: *BinderMap,
+        rebind_existing: bool,
     ) Allocator.Error!void {
         if (binders.get(binder)) |existing| {
             if (self.draft.currentOwnerOwnsCore(.locals, @intFromEnum(existing))) {
+                if (rebind_existing) {
+                    self.draft.setLocalType(existing, DraftTypeCell.fromGraphNode(node));
+                    return;
+                }
                 const existing_node = try self.localTypeCell(existing).toGraphNode(self.graph);
                 if (!self.graph.sameClass(existing_node, node)) {
                     Common.invariant("materialized pattern binder was pre-registered at a different graph class");
                 }
                 return;
             }
+        }
+        if (rebind_existing) {
+            Common.invariant("match pattern binder was not pre-registered before exact graph projection");
         }
         const cell = DraftTypeCell.fromGraphNode(node);
         const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, binder);
@@ -36058,6 +36509,7 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         node: NodeId,
         binders: *BinderMap,
+        rebind_existing: bool,
         active: anytype,
     ) Allocator.Error!void {
         const key: PatternNodeVisit = .{ .pattern = pattern_id, .node = node };
@@ -36068,17 +36520,17 @@ const BodyContext = struct {
         defer _ = active.remove(key);
         const pattern = self.view.bodies.pattern(pattern_id);
         switch (pattern.data) {
-            .assign => |binder| try self.preRegisterPatternBinderAtNode(binder, node, binders),
+            .assign => |binder| try self.preRegisterPatternBinderAtNode(binder, node, binders, rebind_existing),
             .as => |as| {
-                try self.preRegisterPatternBinderAtNode(as.binder, node, binders);
-                try self.preRegisterPatternBindersAtNodeInner(as.pattern, node, binders, active);
+                try self.preRegisterPatternBinderAtNode(as.binder, node, binders, rebind_existing);
+                try self.preRegisterPatternBindersAtNodeInner(as.pattern, node, binders, rebind_existing, active);
             },
             .applied_tag => |tag| {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tag pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tag pattern backing did not advance");
-                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, active);
+                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, rebind_existing, active);
                 } else {
                     const name = try self.builder.tagName(self.view, tag.name);
                     for (tag.args, 0..) |arg, payload_index| {
@@ -36086,6 +36538,7 @@ const BodyContext = struct {
                             arg,
                             try self.graph.tagPayloadNode(node, name, payload_index),
                             binders,
+                            rebind_existing,
                             active,
                         );
                     }
@@ -36095,14 +36548,14 @@ const BodyContext = struct {
                 const backing = self.graph.namedNodes(node).backing orelse
                     Common.invariant("nominal pattern had no runtime backing");
                 if (backing.node == node) Common.invariant("nominal pattern backing did not advance");
-                try self.preRegisterPatternBindersAtNodeInner(nominal.backing_pattern, backing.node, binders, active);
+                try self.preRegisterPatternBindersAtNodeInner(nominal.backing_pattern, backing.node, binders, rebind_existing, active);
             },
             .record_destructure => |destructs| {
                 if (self.graph.content(node) == .named) {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal record pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal record pattern backing did not advance");
-                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, active);
+                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, rebind_existing, active);
                 } else {
                     for (destructs) |destruct| switch (destruct.kind) {
                         .required, .sub_pattern => |child| {
@@ -36111,23 +36564,24 @@ const BodyContext = struct {
                                 child,
                                 try self.graph.recordFieldNode(node, name),
                                 binders,
+                                rebind_existing,
                                 active,
                             );
                         },
                         .rest => |rest| {
                             if (self.patternIsIgnored(rest)) continue;
                             const rest_node = try self.recordRestNodeForPattern(node, destructs, rest);
-                            try self.preRegisterPatternBindersAtNodeInner(rest, rest_node, binders, active);
+                            try self.preRegisterPatternBindersAtNodeInner(rest, rest_node, binders, rebind_existing, active);
                         },
                     };
                 }
             },
             .list => |list| {
                 const elem_node = try self.graph.listElementNode(node);
-                for (list.patterns) |child| try self.preRegisterPatternBindersAtNodeInner(child, elem_node, binders, active);
+                for (list.patterns) |child| try self.preRegisterPatternBindersAtNodeInner(child, elem_node, binders, rebind_existing, active);
                 if (list.rest) |rest| {
                     if (rest.pattern) |rest_pattern| {
-                        try self.preRegisterPatternBindersAtNodeInner(rest_pattern, node, binders, active);
+                        try self.preRegisterPatternBindersAtNodeInner(rest_pattern, node, binders, rebind_existing, active);
                     }
                 }
             },
@@ -36136,18 +36590,18 @@ const BodyContext = struct {
                     const backing = self.graph.namedNodes(node).backing orelse
                         Common.invariant("nominal tuple pattern had no runtime backing");
                     if (backing.node == node) Common.invariant("nominal tuple pattern backing did not advance");
-                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, active);
+                    try self.preRegisterPatternBindersAtNodeInner(pattern_id, backing.node, binders, rebind_existing, active);
                 } else {
                     const item_nodes = try self.graph.tupleItemNodes(node);
                     if (items.len != item_nodes.len) Common.invariant("tuple pattern arity differed from graph tuple arity");
                     for (items, item_nodes) |item, item_node| {
-                        try self.preRegisterPatternBindersAtNodeInner(item, item_node, binders, active);
+                        try self.preRegisterPatternBindersAtNodeInner(item, item_node, binders, rebind_existing, active);
                     }
                 }
             },
             .str_interpolation => |str| {
                 for (str.steps) |step| {
-                    if (step.capture) |capture| try self.preRegisterPatternBindersAtNodeInner(capture, node, binders, active);
+                    if (step.capture) |capture| try self.preRegisterPatternBindersAtNodeInner(capture, node, binders, rebind_existing, active);
                 }
             },
             .pending,
@@ -36854,7 +37308,8 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expectEqual(@as(usize, 2), frames.len);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, &.{shared_frame}, &.{shared_frame}));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, &.{shared_frame}, &.{shared_frame}));
+    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, &.{shared_frame}, &.{shared_frame}));
     try graph.unify(active_fn, recursive_fn);
     try graph.drainDirty();
     try std.testing.expect(graph.sameFunctionInterface(active_fn, recursive_fn));
@@ -36866,13 +37321,13 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = shared_ret,
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, &.{shared_frame}, &.{shared_frame}));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, &.{shared_frame}, &.{shared_frame}));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 
     // Even an exact function/evidence request must not reuse a specialization
     // lowered under a different branch-reachability topology.
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, true, &.{shared_frame}, &.{}));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, &.{shared_frame}, &.{shared_frame}));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, true, false, &.{shared_frame}, &.{}));
+    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false, &.{shared_frame}, &.{shared_frame}));
     // A fully resolved recursive edge must reuse its in-progress definition;
     // otherwise ordinary recursion beneath a match branch specializes forever.
     try std.testing.expect(resolvedDraftCandidateQualifies(.lowering, &.{shared_frame}, &.{}));
