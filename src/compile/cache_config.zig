@@ -54,9 +54,10 @@ pub const Constants = struct {
     /// 28: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
     /// 29: String interpolation constraint metadata moved into the type store.
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
-    /// 31: Combined the empty-row and interpolation checked-artifact layouts.
-    /// 32: Platform requirement roots carry producer-authored dispatch evidence.
-    pub const CACHE_VERSION = 32;
+    /// 31: Canonical expression storage includes compiler-derived method nodes.
+    /// 32: Combined the empty-row and interpolation checked-artifact layouts.
+    /// 33: Platform requirement roots carry producer-authored dispatch evidence.
+    pub const CACHE_VERSION = 33;
 };
 
 /// Configuration for the Roc cache system.

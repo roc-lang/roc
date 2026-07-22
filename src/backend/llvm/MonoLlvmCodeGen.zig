@@ -149,11 +149,17 @@ fn unsupportedLlvmDataLayout(target: std.Target) noreturn {
 
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
+    pub const EntrypointAbi = enum {
+        test_runner,
+        plugin,
+    };
+
     pub const Entrypoint = struct {
         symbol_name: []const u8,
         proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
+        abi: EntrypointAbi = .test_runner,
     };
 
     allocator: Allocator,
@@ -171,6 +177,9 @@ pub const MonoLlvmCodeGen = struct {
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
     layout_store: ?*const layout.Store = null,
+    /// Optional compiler-plugin stamp bytes exported by generated shared libs.
+    plugin_stamp_bytes: ?[]const u8 = null,
+    plugin_stamp_alignment: u32 = 1,
 
     builder: ?*LlvmBuilder = null,
     wip: ?*LlvmBuilder.WipFunction = null,
@@ -652,8 +661,11 @@ pub const MonoLlvmCodeGen = struct {
                 entrypoint.proc,
                 entrypoint.arg_layouts,
                 entrypoint.ret_layout,
+                entrypoint.abi,
             );
         }
+
+        try self.emitPluginStampFunction();
 
         if (self.enable_default_platform_runtime) {
             try self.emitDefaultPlatformBacktraceTable();
@@ -1691,6 +1703,7 @@ pub const MonoLlvmCodeGen = struct {
         entry_proc: LirProcSpecId,
         arg_layouts: []const layout.Idx,
         ret_layout: layout.Idx,
+        abi: EntrypointAbi,
     ) Error!void {
         if (self.enable_default_platform_hosted_calls and
             self.host_call_mode == .extern_symbols and
@@ -1705,7 +1718,10 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const proc_fn = self.proc_registry.get(@intFromEnum(entry_proc)) orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        const wrapper_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+        const wrapper_ty = switch (abi) {
+            .test_runner => builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory,
+            .plugin => builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory,
+        };
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
         wrapper.setLinkage(.external, builder);
@@ -1732,9 +1748,18 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = entry };
 
         const roc_ops = wip.arg(0);
-        const test_context = wip.arg(1);
-        const ret_ptr = wip.arg(2);
-        const args_ptr = wip.arg(3);
+        const test_context = switch (abi) {
+            .test_runner => wip.arg(1),
+            .plugin => builder.nullValue(ptr_ty) catch return error.OutOfMemory,
+        };
+        const ret_ptr = wip.arg(switch (abi) {
+            .test_runner => 2,
+            .plugin => 1,
+        });
+        const args_ptr = wip.arg(switch (abi) {
+            .test_runner => 3,
+            .plugin => 2,
+        });
         self.roc_ops_arg = roc_ops;
         self.test_context_arg = test_context;
 
@@ -1742,6 +1767,44 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyEntrypointArgsToInternalBuffer(args_ptr, args_buf, arg_layouts);
         _ = try self.callFunctionIndex(proc_fn, &.{ roc_ops, test_context, ret_ptr, args_buf }, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
+        try self.finishCurrentWipFunction();
+    }
+
+    fn emitPluginStampFunction(self: *MonoLlvmCodeGen) Error!void {
+        const stamp_bytes = self.plugin_stamp_bytes orelse return;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
+        const stamp_ty = builder.arrayType(stamp_bytes.len, .i8) catch return error.OutOfMemory;
+
+        const stamp_var = builder.addVariable(
+            builder.strtabString("roc_plugin_stamp_v1_bytes") catch return error.OutOfMemory,
+            stamp_ty,
+            .default,
+        ) catch return error.OutOfMemory;
+        stamp_var.ptrConst(builder).global.setLinkage(.internal, builder);
+        stamp_var.setMutability(.constant, builder);
+        stamp_var.setAlignment(LlvmBuilder.Alignment.fromByteUnits(self.plugin_stamp_alignment), builder);
+        stamp_var.setInitializer(
+            builder.stringConst(builder.string(stamp_bytes) catch return error.OutOfMemory) catch return error.OutOfMemory,
+            builder,
+        ) catch return error.OutOfMemory;
+
+        const stamp_fn_ty = builder.fnType(ptr_ty, &.{}, .normal) catch return error.OutOfMemory;
+        const stamp_fn_name = try self.exportedFunctionName(builder, "roc_plugin_stamp_v1");
+        const stamp_fn = builder.addFunction(stamp_fn_ty, stamp_fn_name, .default) catch return error.OutOfMemory;
+        stamp_fn.setLinkage(.external, builder);
+        self.configureExportCallConv(stamp_fn, builder);
+
+        const outer_wip = self.wip;
+        defer self.wip = outer_wip;
+
+        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = stamp_fn, .strip = builder.strip }) catch return error.OutOfMemory;
+        defer wip.deinit();
+        self.wip = &wip;
+
+        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = entry };
+        _ = wip.ret(stamp_var.toValue(builder)) catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
 

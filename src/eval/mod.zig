@@ -27,6 +27,8 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 
 /// Executable memory for running generated code (re-exported from backend module)
 pub const ExecutableMemory = backend.ExecutableMemory;
+/// Shared dynamic-library loader for LLVM-generated libraries.
+pub const DynLib = @import("dynlib.zig").DynLib;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules

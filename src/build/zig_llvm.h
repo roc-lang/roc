@@ -66,6 +66,7 @@ enum ZigLLVMThinOrFullLTOPhase {
 enum ZigLLVMIROptimizationLevel {
     ZigLLVMIROptimizationLevel_Oz = 0,
     ZigLLVMIROptimizationLevel_O3,
+    ZigLLVMIROptimizationLevel_O0,
 };
 
 struct ZigLLVMEmitOptions {

@@ -1251,11 +1251,21 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
                 return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
             }
             self.advance();
-            if (self.peek() != .StringStart) {
+            const value = if (self.peek() == .StringStart)
+                try self.parseStringExprTokens()
+            else if (self.peek() == .LowerIdent and std.mem.eql(u8, self.tokenText(self.pos), "glue")) blk: {
+                const ident_tok = self.pos;
+                self.advance();
+                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                break :blk try self.store.addExpr(.{ .ident = .{
+                    .token = ident_tok,
+                    .qualifiers = empty_qualifiers,
+                    .region = .{ .start = ident_tok, .end = self.pos },
+                } });
+            } else {
                 self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
                 return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
-            }
-            const value = try self.parseStringExprTokens();
+            };
             const field = try self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,

@@ -50,6 +50,7 @@ const ImportResolver = compile_package.ImportResolver;
 const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const package_source = @import("package_source.zig");
+const compiler_platforms = @import("compiler_platforms.zig");
 const package_resolution = @import("package_resolution.zig");
 const package_identity = @import("package_identity.zig");
 const watch_inputs = @import("watch_inputs.zig");
@@ -254,6 +255,9 @@ pub const BuildEnv = struct {
     /// otherwise populated from the environment on first resolution.
     package_cache_dir: ?[]const u8 = null,
 
+    /// Optional root for materialized compiler-owned platform sources.
+    compiler_owned_source_dir: ?[]const u8 = null,
+
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
     owns_builtin_modules: bool,
@@ -355,6 +359,7 @@ pub const BuildEnv = struct {
         }
 
         if (self.package_cache_dir) |dir| self.gpa.free(@constCast(dir));
+        if (self.compiler_owned_source_dir) |dir| self.gpa.free(@constCast(dir));
 
         if (self.root_url) |*url| url.deinit(self.gpa);
         if (self.main_url) |*url| url.deinit(self.gpa);
@@ -535,6 +540,13 @@ pub const BuildEnv = struct {
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
         self.root_source_dir_override = source_dir;
+    }
+
+    pub fn setCompilerOwnedSourceDir(self: *BuildEnv, source_dir: []const u8) Allocator.Error!void {
+        if (self.compiler_owned_source_dir) |old| {
+            self.gpa.free(@constCast(old));
+        }
+        self.compiler_owned_source_dir = try self.gpa.dupe(u8, source_dir);
     }
 
     pub fn setSyntheticRootSourceMapping(
@@ -1941,6 +1953,7 @@ pub const BuildEnv = struct {
             .fs = self.filesystem,
             .gpa = self.gpa,
             .cache_packages_dir = self.package_cache_dir,
+            .compiler_owned_source_dir = self.compiler_owned_source_dir,
         };
         var resolver = package_resolution.Resolver.init(self.gpa, ctx_fetcher.fetcher(), self.resolution_config);
         defer resolver.deinit();
@@ -2833,6 +2846,10 @@ pub const BuildEnv = struct {
     /// cache-directory check also excludes path dependencies that live
     /// inside an extracted bundle.
     pub fn isBundleableModule(self: *BuildEnv, pkg_name: []const u8, module_path: []const u8) bool {
+        // Compiler-owned platforms are embedded in every compiler; their
+        // materialized sources live outside the bundle root and must never
+        // be bundled.
+        if (compiler_platforms.fromIdentity(pkg_name) != null) return false;
         if (self.packages.getPtr(pkg_name)) |pkg| {
             if (pkg.url != null) return false;
         }

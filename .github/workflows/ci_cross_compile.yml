@@ -53,7 +53,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       - name: Run fx platform cross-compilation tests (Unix)

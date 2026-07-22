@@ -20837,6 +20837,9 @@ fn nominalSupportsDerivedParseField(
         if (try self.jsonTryInfoFromNominal(nominal)) |info| {
             return try self.varSupportsDerivedParseShape(info.ok_var, env, region);
         }
+        if (try self.unboundTryInfoFromNominal(nominal)) |info| {
+            return try self.varSupportsDerivedParseShape(info.ok_var, env, region);
+        }
         return false;
     }
 
@@ -21052,6 +21055,31 @@ fn missingTryInfoFromNominal(
     return .{
         .ok_var = try_info.ok_var,
         .err_var = try_info.err_var,
+    };
+}
+
+/// A builtin `Try` whose error row is still an unbound flex var, as in a
+/// record field annotated `Try(ok, _)`. Such a field opts into the
+/// optional-field convention; parse derivation pins the row to `[Missing]`.
+fn unboundTryInfoFromNominal(
+    self: *Self,
+    nominal: types_mod.NominalType,
+) Allocator.Error!?BuiltinTryInfo {
+    const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
+    return switch (self.types.resolveVar(try_info.err_var).desc.content) {
+        .flex => try_info,
+        else => null,
+    };
+}
+
+fn unboundTryInfoForVar(self: *Self, var_: Var) Allocator.Error!?BuiltinTryInfo {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .nominal_type => |nominal| try self.unboundTryInfoFromNominal(nominal),
+            else => null,
+        },
+        .alias => |alias| try self.unboundTryInfoForVar(self.types.getAliasBackingVar(alias)),
+        .err, .flex, .rigid => null,
     };
 }
 
@@ -22790,16 +22818,22 @@ fn validateDerivedParseRecord(
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
+    const fields = self.types.getRecordFieldsSlice(fields_range);
+    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
+    defer self.gpa.free(field_vars);
+
+    for (field_vars) |field_var| {
+        switch (try self.pinWildcardOptionalParseField(field_var, env, region)) {
+            .ok => {},
+            .unsupported, .reported_error => |result| return result,
+        }
+    }
     if (try self.recordParseNeedsRequiredFieldError(fields_range)) {
         switch (try self.constrainDerivedParserRequiredFieldError(err_var, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
     }
-
-    const fields = self.types.getRecordFieldsSlice(fields_range);
-    const field_vars = try self.gpa.dupe(Var, fields.items(.var_));
-    defer self.gpa.free(field_vars);
 
     for (field_vars) |field_var| {
         switch (try self.validateDerivedParseVar(field_var, encoding_var, state_var, err_var, constraint, env, region, visited, .record_field)) {
@@ -22839,6 +22873,24 @@ fn validateDerivedParseTuple(
         }
     }
     return .ok;
+}
+
+/// A record field annotated `Try(ok, _)` opts into the optional-field
+/// convention: pin its unbound error row to the exact `[Missing]` marker so
+/// optional classification and lowering see the one canonical optional shape.
+fn pinWildcardOptionalParseField(
+    self: *Self,
+    field_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const info = (try self.unboundTryInfoForVar(field_var)) orelse return .ok;
+    const tag_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("Missing"));
+    const tag = try self.types.mkTag(tag_name, &.{});
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    const missing_var = try self.freshFromContent(try self.types.mkTagUnion(&.{tag}, ext_var), env, region);
+    const result = try self.unify(info.err_var, missing_var, env);
+    return if (result.isOk()) .ok else .reported_error;
 }
 
 fn recordParseNeedsRequiredFieldError(

@@ -50,7 +50,14 @@ jobs:
           # present across runs: it is read every run, so it stays warm and is
           # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while the setup action's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -60,7 +67,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build run-check-zig-lints
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       - name: code tidiness
@@ -218,7 +224,14 @@ jobs:
           # present across runs: it is read every run, so it stays warm and is
           # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while the setup action's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -237,7 +250,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build run-test-eval -- --llvm
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       # Windows has no fork(), so the runner spawns a fresh worker process per
@@ -253,7 +265,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build run-test-eval -- --llvm --timeout 120000
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       - name: Run CLI platform tests (LLVM size/speed backends)
@@ -330,7 +341,14 @@ jobs:
           # present across runs: it is read every run, so it stays warm and is
           # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while the setup action's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -345,7 +363,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build ${{ matrix.release_jobs_flag }} -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       - name: Run Test Platforms (Unix)
@@ -480,7 +497,14 @@ jobs:
           # present across runs: it is read every run, so it stays warm and is
           # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while the setup action's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -489,8 +513,16 @@ jobs:
       - name: build roc + repro executables for valgrind
         uses: ./.github/actions/flaky-retry
         with:
-          command: git clean -fdx && zig build -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
+          # `-e .zig-cache` is load-bearing: `git clean -x` removes ignored
+          # files, so without it this deletes the `p/` package dir that the
+          # cache step above restored one step earlier -- forcing a full
+          # re-download of every dependency and producing exactly the
+          # HttpConnectionClosing flake that this flaky-retry wrapper then
+          # absorbs. Keeping the rest of `.zig-cache` is safe: Zig keys cache
+          # entries on the full build configuration, so the valgrind build
+          # (-Dvalgrind=true, musl target, ReleaseFast) hashes to different
+          # entries than any other job's and cannot pick up stale artifacts.
+          command: git clean -fdx -e .zig-cache && zig build -Dvalgrind=true -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast -Dcpu=x86_64_v3 -Dtarget=x86_64-linux-musl -Dstrip=false -Dshared-memory-size=268435456
           retry_count: 3
 
       - name: install valgrind
@@ -539,7 +571,14 @@ jobs:
           # present across runs: it is read every run, so it stays warm and is
           # not evicted by the setup action's churnier per-run cache. A cold runner then no
           # longer re-downloads deps from GitHub and hits HttpConnectionClosing,
-          # while the setup action's own cache still handles build artifacts for speed.
+          #
+          # Note this step is currently the ONLY working cache. The setup
+          # action also caches build artifacts, but `.zig-cache` exceeds its
+          # 2048 MiB cache-size-limit on every platform, so the action clears
+          # the directory in its post step and saves nothing -- every run then
+          # starts from a cold build cache. See the "Report .zig-cache
+          # composition" step in ci_manager.yml; sizing the limit is a
+          # follow-up.
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
           restore-keys: |
@@ -549,7 +588,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build -Dtarget=${{ matrix.target }}
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)

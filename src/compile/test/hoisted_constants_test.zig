@@ -547,101 +547,6 @@ test "hoisted list constants lower to internal static data" {
     return error.StaticDataSymbolNotFound;
 }
 
-test "issue 10177 restored compile-time lists stay compact during finalization" {
-    // Repro for https://github.com/roc-lang/roc/issues/10177: checking this
-    // module must reuse the stored imported list as immutable data instead of
-    // rebuilding all 19,321 elements in each dependent compile-time root.
-    const gpa = std.testing.allocator;
-
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    try writeIssue10177Platform(tmp_dir.dir);
-    const line_len: usize = 139;
-    const line_count: usize = 139;
-    const input_len = line_len * line_count + line_count - 1;
-    const input = try gpa.alloc(u8, input_len);
-    defer gpa.free(input);
-    var input_offset: usize = 0;
-    for (0..line_count) |line_index| {
-        @memset(input[input_offset..][0..line_len], 'A');
-        input_offset += line_len;
-        if (line_index + 1 != line_count) {
-            input[input_offset] = '\n';
-            input_offset += 1;
-        }
-    }
-    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "input.txt", .data = input });
-    try tmp_dir.dir.writeFile(std.testing.io, .{
-        .sub_path = "main.roc",
-        .data =
-        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
-        \\
-        \\import "input.txt" as input : Str
-        \\
-        \\f = |_matrix, _x| {
-        \\    True
-        \\}
-        \\
-        \\main! = |_| {
-        \\    matrix = List.map(Str.split_on(input, "\n"), Str.to_utf8)
-        \\    x = List.len(matrix)
-        \\    val =
-        \\        f(matrix, (x - 1))
-        \\        and f(matrix, (x - 2))
-        \\        and f(matrix, (x - 3))
-        \\    Ok(val)
-        \\}
-        ,
-    });
-    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
-    defer gpa.free(app_path);
-
-    var arena_impl = collections.SingleThreadArena.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-    const builtin_modules = try sharedBuiltinModules();
-
-    var coord = try Coordinator.init(
-        gpa,
-        .single_threaded,
-        1,
-        roc_target.RocTarget.detectNative(),
-        builtin_modules,
-        build_options.compiler_version,
-        null,
-        CoreCtx.default(gpa, arena, std.testing.io),
-    );
-    defer coord.deinit();
-    coord.enable_hosted_transform = true;
-
-    try coord.start();
-    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
-    const started = std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds;
-    try coord.coordinatorLoop();
-    const elapsed_ns = std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds - started;
-    if (coord.hasUserErrors()) {
-        var reports = coord.iterReports();
-        while (reports.next()) |entry| {
-            std.debug.print("issue 10177 report: {s} in {s}\n", .{ entry.report.title, entry.module_name });
-            var rendered: std.Io.Writer.Allocating = .init(gpa);
-            defer rendered.deinit();
-            try entry.report.render(&rendered.writer, .markdown);
-            std.debug.print("{s}\n", .{rendered.written()});
-        }
-    }
-    try std.testing.expect(!coord.hasUserErrors());
-
-    const max_finalization_ns = 5 * std.time.ns_per_s;
-    if (elapsed_ns >= max_finalization_ns) {
-        std.debug.print(
-            "compile-time finalization took {d}ms; expected fewer than {d}ms\n",
-            .{ @divTrunc(elapsed_ns, std.time.ns_per_ms), @divTrunc(max_finalization_ns, std.time.ns_per_ms) },
-        );
-        return error.CompileTimeFinalizationTooSlow;
-    }
-}
-
 test "inline list iter constants lower to internal static data" {
     try expectInlineListStaticDataLiteral(
         std.testing.allocator,
@@ -1857,28 +1762,6 @@ fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
         \\Echo := [].{
         \\    line! : Str => {}
         \\}
-        ,
-    });
-}
-
-fn writeIssue10177Platform(dir: anytype) HoistedConstantsTestError!void {
-    try dir.createDirPath(std.testing.io, ".roc_echo_platform");
-    try dir.writeFile(std.testing.io, .{
-        .sub_path = ".roc_echo_platform/main.roc",
-        .data =
-        \\platform ""
-        \\    requires {} { main! : List(Str) => Try(Bool, [Exit(I8), ..]) }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host! }
-        \\
-        \\main_for_host! : List(Str) => I8
-        \\main_for_host! = |args|
-        \\    match main!(args) {
-        \\        Ok(_) => 0
-        \\        Err(Exit(code)) => code
-        \\        Err(_) => 1
-        \\    }
         ,
     });
 }

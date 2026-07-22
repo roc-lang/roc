@@ -49,6 +49,71 @@ const FileToScan = struct {
     include_imports: bool,
 };
 
+const glue_platform_files = [_][]const u8{
+    "AbiFieldLayout.roc",
+    "AbiLayout.roc",
+    "AbiLayoutDetails.roc",
+    "AbiRecordLayout.roc",
+    "AbiTagLayout.roc",
+    "AbiTagUnionLayout.roc",
+    "AbiWidth.roc",
+    "ArgShape.roc",
+    "EntryPoint.roc",
+    "File.roc",
+    "FunctionInfo.roc",
+    "FunctionRepr.roc",
+    "GlueInput.roc",
+    "HostRcPlan.roc",
+    "HostedFunctionInfo.roc",
+    "ModuleTypeInfo.roc",
+    "ProvidesEntry.roc",
+    "RecordField.roc",
+    "RecordFieldInfo.roc",
+    "RecordRepr.roc",
+    "RocName.roc",
+    "TagUnionRepr.roc",
+    "TagVariant.roc",
+    "TypeId.roc",
+    "TypeInfo.roc",
+    "TypeNamePlan.roc",
+    "TypeRepr.roc",
+    "TypeTable.roc",
+    "Types.roc",
+    "main.roc",
+};
+
+fn createCompilerPlatformSourcesModule(b: *Build) *Module {
+    const write_files = b.addWriteFiles();
+    var source = std.ArrayList(u8).empty;
+    source.appendSlice(b.allocator,
+        \\pub const File = struct {
+        \\    path: []const u8,
+        \\    bytes: []const u8,
+        \\};
+        \\
+        \\pub const glue_files = [_]File{
+        \\
+    ) catch @panic("OOM");
+
+    for (glue_platform_files) |file_name| {
+        const source_path = b.fmt("src/glue/platform/{s}", .{file_name});
+        const embed_path = b.fmt("glue-platform/{s}", .{file_name});
+        _ = write_files.addCopyFile(b.path(source_path), embed_path);
+        source.appendSlice(
+            b.allocator,
+            b.fmt("    .{{ .path = \"{s}\", .bytes = @embedFile(\"{s}\") }},\n", .{ file_name, embed_path }),
+        ) catch @panic("OOM");
+    }
+
+    source.appendSlice(b.allocator,
+        \\};
+        \\
+    ) catch @panic("OOM");
+
+    const generated_source = write_files.add("compiler_platform_sources.zig", source.items);
+    return b.createModule(.{ .root_source_file = generated_source });
+}
+
 // Count `test { ... }` blocks (no names) so filtered runs can subtract the
 // wrappers they inevitably execute even when Zig test filters are set.
 fn wrapperTestCount(b: *Build, module_type: ModuleType, module: *Module) usize {
@@ -268,10 +333,17 @@ fn targetMatchesHost(target: ResolvedTarget) bool {
         target.result.abi == builtin.target.abi;
 }
 
-/// Represents a test module with its compilation and execution steps.
+/// Represents a test module's compilation step.
+///
+/// Deliberately does not carry a pre-made `Step.Run`. Every run of these
+/// binaries is created by `TestSuiteRegistry` in build.zig, which builds one
+/// run for the tests summary and a separate one for the public
+/// `run-test-zig-module-*` step. A ready-made run stored here is exactly the
+/// convenient thing to hand to `TestsSummaryStep.addRun` *and* to a public
+/// step -- which is how eleven other suites ended up sharing one run and, on
+/// Windows, dragging the whole serialization chain behind them.
 pub const ModuleTest = struct {
     test_step: *Step.Compile,
-    run_step: *Step.Run,
 };
 
 /// Bundles the per-module test steps with accounting for forced passes (aggregators +
@@ -364,7 +436,7 @@ pub const ModuleType = enum {
             .echo_platform => &.{.builtins},
             .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
             .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
-            .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir },
+            .glue => &.{ .base, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
             .host_alloc => &.{ .builtins, .build_options },
         };
     }
@@ -410,6 +482,7 @@ pub const RocModules = struct {
     bump: *Module,
     glue: *Module,
     embedded_lld: *Module,
+    compiler_platform_sources: *Module,
 
     // The default-platform runtimes (`src/default_platform/*_runtime.zig`) are
     // compiled as standalone freestanding objects without the `builtins` module,
@@ -487,6 +560,7 @@ pub const RocModules = struct {
             .bump = b.addModule("bump", .{ .root_source_file = b.path("src/bump/mod.zig") }),
             .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
             .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
+            .compiler_platform_sources = createCompilerPlatformSourcesModule(b),
             .roc_str_view = b.addModule("roc_str_view", .{ .root_source_file = b.path("src/default_platform/roc_str_view.zig") }),
             .shim_symbols = b.addModule("shim_symbols", .{ .root_source_file = b.path("src/builtins/shim_symbols.zig") }),
             .host_alloc = b.addModule("host_alloc", .{ .root_source_file = b.path("src/host_alloc/mod.zig") }),
@@ -602,6 +676,9 @@ pub const RocModules = struct {
             },
             .eval => {
                 module.addImport("vendor_eval_loader", self.vendor_eval_loader);
+            },
+            .compile, .glue => {
+                module.addImport("compiler_platform_sources", self.compiler_platform_sources);
             },
             else => {},
         }
@@ -809,11 +886,8 @@ pub const RocModules = struct {
                 }
             }
 
-            const run_step = b.addRunArtifact(test_step);
-
             tests[i] = .{
                 .test_step = test_step,
-                .run_step = run_step,
             };
         }
 

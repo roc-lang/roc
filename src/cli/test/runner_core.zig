@@ -56,6 +56,9 @@ fn runRocChildWithOutputLimit(allocator: Allocator, std_io: std.Io, argv: []cons
     // another's cache state.
     const cache_dirs = try util.createIsolatedTestCacheDirs(std_io, allocator);
     defer cache_dirs.deinit(allocator);
+    // This is the per-child-spawn path, so it is the dominant source of these
+    // trees: without this the CLI suite left one behind per subprocess.
+    defer util.cleanupTestCacheDirs(std_io, cache_dirs);
     try env_map.put("ROC_CACHE_DIR", cache_dirs.roc_cache_dir);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", cache_dirs.zig_local_cache_dir);
 

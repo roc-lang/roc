@@ -16,6 +16,7 @@ pub const static_data_exports = @import("static_data");
 pub const package_source = @import("package_source.zig");
 pub const package_resolution = @import("package_resolution.zig");
 pub const package_identity = @import("package_identity.zig");
+pub const compiler_platforms = @import("compiler_platforms.zig");
 pub const watch_inputs = @import("watch_inputs.zig");
 
 // Actor model components
@@ -94,6 +95,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("package_source.zig"));
     std.testing.refAllDecls(@import("package_resolution.zig"));
     std.testing.refAllDecls(@import("package_identity.zig"));
+    std.testing.refAllDecls(@import("compiler_platforms.zig"));
     std.testing.refAllDecls(@import("watch_inputs.zig"));
 
     // Actor model components

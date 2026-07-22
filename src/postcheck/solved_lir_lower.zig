@@ -2237,7 +2237,15 @@ const Lowerer = struct {
     }
 
     fn lowerExprReturn(self: *Lowerer, expr_id: Lifted.ExprId, ret_ty: Type.TypeId) Common.LowerError!LIR.CFStmtId {
-        const ret_local = try self.addTemp(ret_ty);
+        // The proc signature carries the exact context-sensitive layout
+        // committed for this specialization. Recursive types can have an
+        // unboxed ordinary layout and a boxed recursive-slot layout for the
+        // same monomorphic type, so recomputing from `ret_ty` here would lose
+        // the explicit ABI choice.
+        const proc_id = self.current_proc orelse Common.invariant("return lowering ran without a current procedure");
+        const ret_layout = self.result.store.getProcSpec(proc_id).ret_layout;
+        const ret_local = try self.addLocalForLayout(ret_layout);
+        try self.local_types.put(ret_local, ret_ty);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } });
         return try self.lowerExprIntoAtType(ret_local, expr_id, ret_ty, ret_stmt);
     }

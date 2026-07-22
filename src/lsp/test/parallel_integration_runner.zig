@@ -22,8 +22,7 @@ const wrapper_name = "lsp integration tests";
 
 const BuildSpecsError = Allocator.Error;
 const StatsJsonError = Allocator.Error || std.Io.Dir.AccessError || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error;
-const WorkerArgvError = Allocator.Error || std.process.ExecutablePathError || std.process.Args.ToSliceError;
-const RunnerMainError = BuildSpecsError || StatsJsonError || WorkerArgvError || std.process.Args.ToSliceError;
+const RunnerMainError = BuildSpecsError || StatsJsonError || harness.WorkerArgvError || std.process.Args.ToSliceError;
 
 const TestStatus = enum(u8) {
     pass,
@@ -142,11 +141,15 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: integration.Spec, _: u6
     };
 }
 
-fn serializeResult(fd: posix.fd_t, result: TestResult) void {
-    const message_data = result.message orelse "";
-    const max_message = 8192;
-    const message_out = message_data[0..@min(message_data.len, max_message)];
+const max_message = 8192;
 
+fn truncatedMessage(result: TestResult) []const u8 {
+    const message_data = result.message orelse "";
+    return message_data[0..@min(message_data.len, max_message)];
+}
+
+fn serializeResult(fd: posix.fd_t, result: TestResult) void {
+    const message_out = truncatedMessage(result);
     const header = WireHeader{
         .status = @intFromEnum(result.status),
         .duration_ns = result.duration_ns,
@@ -157,21 +160,11 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     harness.writeAll(fd, message_out);
 }
 
+/// Streamed variant for persistent worker mode: the same wire bytes behind a
+/// u32 frame-length prefix.
 fn serializeResultStreamed(fd: posix.fd_t, result: TestResult) void {
-    const message_data = result.message orelse "";
-    const max_message = 8192;
-    const message_out = message_data[0..@min(message_data.len, max_message)];
-
-    const header = WireHeader{
-        .status = @intFromEnum(result.status),
-        .duration_ns = result.duration_ns,
-        .message_len = @intCast(message_out.len),
-    };
-
-    const length: u32 = @intCast(@sizeOf(WireHeader) + message_out.len);
-    harness.writeAll(fd, std.mem.asBytes(&length));
-    harness.writeAll(fd, std.mem.asBytes(&header));
-    harness.writeAll(fd, message_out);
+    harness.writeFrameHeader(fd, @sizeOf(WireHeader) + truncatedMessage(result).len);
+    serializeResult(fd, result);
 }
 
 fn deserializeResult(buf: []const u8, allocator: Allocator) ?TestResult {
@@ -207,6 +200,7 @@ fn getTestName(spec: integration.Spec) []const u8 {
 const Pool = harness.ProcessPool(integration.Spec, TestResult, .{
     .runTest = &runSingleTest,
     .serialize = &serializeResult,
+    .serializeStreamed = &serializeResultStreamed,
     .deserialize = &deserializeResult,
     .default_result = .{ .status = .crash },
     .timeout_result = .{ .status = .timeout },
@@ -354,33 +348,6 @@ fn writeStatsJson(
     });
 }
 
-fn buildWorkerArgvTemplate(io: std.Io, allocator: Allocator, process_args: std.process.Args) WorkerArgvError![]const []const u8 {
-    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path_len = try std.process.executablePath(io, &self_path_buf);
-    const self_path = try allocator.dupe(u8, self_path_buf[0..self_path_len]);
-
-    const raw = try process_args.toSlice(allocator);
-    const original_args: []const []const u8 = @ptrCast(raw);
-
-    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.append(allocator, self_path);
-
-    var i: usize = 1;
-    while (i < original_args.len) : (i += 1) {
-        const arg = original_args[i];
-        if (harness.workerTemplateArgConsumesValue(arg)) {
-            i += 1;
-            continue;
-        }
-        if (harness.workerTemplateDropsFlag(arg)) {
-            continue;
-        }
-        try argv.append(allocator, arg);
-    }
-
-    return try argv.toOwnedSlice(allocator);
-}
-
 fn printUsage() void {
     std.debug.print(
         \\Usage: lsp_integration [options]
@@ -421,41 +388,10 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
         return;
     }
 
-    if (args.worker_index) |idx| {
-        if (idx >= specs.len) std.process.exit(2);
-        var worker_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer worker_arena.deinit();
-        const result = runSingleTest(init.io, worker_arena.allocator(), specs[idx], args.timeout_ms);
-        serializeResult(std.Io.File.stdout().handle, result);
-        return;
-    }
-
-    if (args.worker_stream) {
-        var worker_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-        defer worker_arena.deinit();
-
-        const stdin_handle = std.Io.File.stdin().handle;
-        const stdout_handle = std.Io.File.stdout().handle;
-
-        var line_buf: [32]u8 = undefined;
-        outer: while (true) {
-            var line_len: usize = 0;
-            while (true) {
-                if (line_len >= line_buf.len) break :outer;
-                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
-                if (n == 0) break :outer;
-                if (line_buf[line_len] == '\n') break;
-                line_len += 1;
-            }
-            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
-            if (idx >= specs.len) continue;
-
-            _ = worker_arena.reset(.retain_capacity);
-            const result = runSingleTest(init.io, worker_arena.allocator(), specs[idx], args.timeout_ms);
-            serializeResultStreamed(stdout_handle, result);
-        }
-        return;
-    }
+    // Worker modes: on Windows the harness pool spawned this process with
+    // `--worker <idx>` or `--worker-stream`. The worker re-applied the same
+    // filters above, so indices stay aligned with the parent's spec list.
+    if (Pool.runWorkerMode(init.io, args, specs, args.timeout_ms)) return;
 
     const cpu_count = std.Thread.getCpuCount() catch 4;
     const max_children = args.max_threads orelse @min(cpu_count, specs.len);
@@ -470,7 +406,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     defer gpa.free(spans);
     @memset(spans, null);
 
-    const worker_argv_template = try buildWorkerArgvTemplate(init.io, arena, init.minimal.args);
+    const worker_argv_template = try harness.buildWorkerArgvTemplate(init.io, arena, init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
     Pool.runWithSpans(init.io, specs, results, spans, max_children, args.timeout_ms, gpa, worker_argv_template);

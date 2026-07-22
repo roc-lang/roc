@@ -54,6 +54,7 @@ const cache_manager_mod = @import("cache_manager.zig");
 const cache_module = @import("cache_module.zig");
 const package_source = @import("package_source.zig");
 const package_identity = @import("package_identity.zig");
+const compiler_platforms = @import("compiler_platforms.zig");
 const watch_inputs = @import("watch_inputs.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
@@ -1305,17 +1306,29 @@ pub const Coordinator = struct {
         app_pkg.remaining_modules += 1;
         self.total_remaining += 1;
 
-        if (header_info.platform_spec.len > 0) {
-            if (std.fs.path.isAbsolute(header_info.platform_spec)) {
-                return error.AbsolutePlatformPath;
-            }
-            if (!isRelativeSpec(header_info.platform_spec)) {
-                return error.UnsupportedPlatformSpec;
-            }
-            const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, header_info.platform_spec });
-            const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
+        switch (header_info.platform_ref) {
+            .none => {},
+            .path_or_url => |platform_spec| {
+                if (std.fs.path.isAbsolute(platform_spec)) {
+                    return error.AbsolutePlatformPath;
+                }
+                if (!isRelativeSpec(platform_spec)) {
+                    return error.UnsupportedPlatformSpec;
+                }
+                const platform_main_path = try std.fs.path.join(arena, &.{ app_dir, platform_spec });
+                const platform_dir = std.fs.path.dirname(platform_main_path) orelse return error.InvalidPlatformPath;
 
-            try self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null);
+                try self.registerPlatformPackageWithUrl(app_pkg, platform_dir, platform_main_path, header_info.platform_qualifier, null);
+            },
+            .compiler_owned => |platform| {
+                const materialized = compiler_platforms.materialize(self.gpa, self.roc_ctx, null, platform) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.UnsupportedPlatformSpec,
+                };
+                defer self.gpa.free(materialized.root_file);
+                defer self.gpa.free(materialized.root_dir);
+                try self.registerCompilerOwnedPlatformPackage(app_pkg, materialized.root_dir, materialized.root_file, header_info.platform_qualifier, platform);
+            },
         }
 
         for (header_info.non_platform_packages) |entry| {
@@ -1351,6 +1364,39 @@ pub const Coordinator = struct {
         defer self.gpa.free(platform_identity);
 
         const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, url);
+        self.markPlatformPackage(pf_pkg.name);
+
+        if (qualifier) |qual| {
+            try app_pkg.shorthands.put(
+                try self.gpa.dupe(u8, qual),
+                try self.gpa.dupe(u8, pf_pkg.name),
+            );
+        }
+
+        const pf_module_id = try pf_pkg.ensureModule(self.gpa, "main", platform_main_path);
+        pf_pkg.root_module_id = pf_module_id;
+        pf_pkg.modules.items[pf_module_id].depth = 1;
+        pf_pkg.remaining_modules += 1;
+        self.total_remaining += 1;
+        try self.enqueueParseTask(pf_pkg.name, pf_module_id);
+    }
+
+    pub fn registerCompilerOwnedPlatformPackage(
+        self: *Coordinator,
+        app_pkg: *PackageState,
+        platform_dir: []const u8,
+        platform_main_path: []const u8,
+        qualifier: ?[]const u8,
+        platform: compiler_platforms.CompilerOwnedPlatform,
+    ) package_identity.PackageIdentityError!void {
+        const platform_identity = try package_identity.packageIdentityFor(
+            self.gpa,
+            self.roc_ctx,
+            .{ .compiler_owned_platform = platform },
+        );
+        defer self.gpa.free(platform_identity);
+
+        const pf_pkg = try self.ensurePackageWithUrl(platform_identity, platform_dir, null);
         self.markPlatformPackage(pf_pkg.name);
 
         if (qualifier) |qual| {

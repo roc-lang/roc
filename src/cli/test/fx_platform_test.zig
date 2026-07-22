@@ -814,8 +814,8 @@ test "fx platform run from different cwd" {
     // Get absolute path to roc binary since we'll change cwd
     const roc_abs_path = try std.Io.Dir.cwd().realPathFileAlloc(std.testing.io, util.roc_binary_path, allocator);
     defer allocator.free(roc_abs_path);
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     // Run roc from the test/fx directory with a relative path to app.roc
     const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
@@ -823,7 +823,7 @@ test "fx platform run from different cwd" {
         "app.roc",
     }, .{
         .cwd = "test/fx",
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(run_result.stdout);
@@ -1478,8 +1478,8 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
     // must reject the where-clause contract before post-check lowering.
     const allocator = testing.allocator;
 
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     const check_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
@@ -1487,7 +1487,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         "--no-cache",
         "test/fx/nested_static_dispatch_where_repro.roc",
     }, .{
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(check_result.stdout);
@@ -1519,8 +1519,8 @@ test "fx platform valid nested where-clause static dispatch builds" {
     const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
     defer allocator.free(output_arg);
 
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
@@ -1531,7 +1531,7 @@ test "fx platform valid nested where-clause static dispatch builds" {
         output_arg,
         "test/fx/nested_static_dispatch_where_valid.roc",
     }, .{
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(build_result.stdout);
@@ -1548,8 +1548,8 @@ test "fx platform valid nested where-clause static dispatch builds" {
 test "fx platform divergent if with all crash branches does not hit postcheck invariant" {
     const allocator = testing.allocator;
 
-    var env_map = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
+    defer env.deinit(std.testing.io, allocator);
 
     const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
         util.roc_binary_path,
@@ -1557,7 +1557,7 @@ test "fx platform divergent if with all crash branches does not hit postcheck in
         "--no-cache",
         "test/fx/divergent_if_all_branches_crash_repro.roc",
     }, .{
-        .env_map = &env_map,
+        .env_map = &env.env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
     defer allocator.free(build_result.stdout);

@@ -86,7 +86,37 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    // Lint 2: Check for top level comments in new Zig files
+    // Lint 3: Check first-party DebugAllocator stack trace wiring.
+    try stdout.print("Checking DebugAllocator stack trace wiring...\n", .{});
+
+    {
+        var debug_allocator_files: PathList = .empty;
+        defer freePathList(&debug_allocator_files, gpa);
+
+        try walkTree(gpa, io, "src", &debug_allocator_files);
+        try debug_allocator_files.append(gpa, try gpa.dupe(u8, "build.zig"));
+
+        for (debug_allocator_files.items) |file_path| {
+            const errors = try checkDebugAllocatorConfig(gpa, io, file_path);
+            defer gpa.free(errors);
+
+            if (errors.len > 0) {
+                try stdout.print("{s}", .{errors});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("First-party DebugAllocator instances must use build_options.debug_gpa_stack_trace_frames.\n", .{});
+            try stdout.print("This keeps leak detection and allocator safety enabled while avoiding allocation-site stack traces unless -Ddebug-gpa-traces is passed.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 4: Check for top level comments in new Zig files
     try stdout.print("Checking for top level comments in new Zig files...\n", .{});
 
     var new_zig_files = try getNewZigFiles(gpa, io);
@@ -316,6 +346,84 @@ fn checkPubDocComments(allocator: Allocator, io: std.Io, file_path: []const u8) 
     }
 
     return errors.toOwnedSlice(allocator);
+}
+
+fn checkDebugAllocatorConfig(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
+    const source = readSourceFile(allocator, io, file_path) catch |err| switch (err) {
+        error.FileNotFound => return try allocator.dupe(u8, ""),
+        else => return err,
+    };
+    defer allocator.free(source);
+
+    var errors: std.ArrayList(u8) = .empty;
+    errdefer errors.deinit(allocator);
+
+    var rest = source[0..];
+    var base: usize = 0;
+    while (std.mem.find(u8, rest, "DebugAllocator(")) |relative_index| {
+        const absolute_index = base + relative_index;
+        defer {
+            const next_start = relative_index + "DebugAllocator(".len;
+            base += next_start;
+            rest = rest[next_start..];
+        }
+
+        if (isLineComment(source, absolute_index)) continue;
+
+        const end = debugAllocatorInvocationEnd(source, absolute_index);
+        const invocation = source[absolute_index..end];
+        if (std.mem.find(u8, invocation, "debug_gpa_stack_trace_frames") != null) continue;
+
+        const msg = try std.fmt.allocPrint(
+            allocator,
+            "{s}:{d}: DebugAllocator config must use build_options.debug_gpa_stack_trace_frames\n",
+            .{ file_path, lineNumber(source, absolute_index) },
+        );
+        defer allocator.free(msg);
+        try errors.appendSlice(allocator, msg);
+    }
+
+    return errors.toOwnedSlice(allocator);
+}
+
+fn debugAllocatorInvocationEnd(source: []const u8, start: usize) usize {
+    const open_paren = std.mem.findScalarPos(u8, source, start, '(') orelse return lineEnd(source, start);
+
+    var depth: usize = 0;
+    var i = open_paren;
+    while (i < source.len) : (i += 1) {
+        switch (source[i]) {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if (depth == 0) return i + 1;
+            },
+            else => {},
+        }
+    }
+
+    return lineEnd(source, start);
+}
+
+fn isLineComment(source: []const u8, offset: usize) bool {
+    const start = lineStart(source, offset);
+    const end = lineEnd(source, offset);
+    const line = std.mem.trimStart(u8, source[start..end], " \t");
+    return std.mem.startsWith(u8, line, "//");
+}
+
+fn lineStart(source: []const u8, offset: usize) usize {
+    var start = offset;
+    while (start > 0 and source[start - 1] != '\n') : (start -= 1) {}
+    return start;
+}
+
+fn lineEnd(source: []const u8, offset: usize) usize {
+    return std.mem.findScalarPos(u8, source, offset, '\n') orelse source.len;
+}
+
+fn lineNumber(source: []const u8, offset: usize) usize {
+    return std.mem.count(u8, source[0..offset], "\n") + 1;
 }
 
 fn isReExport(line: []const u8) bool {

@@ -100,8 +100,8 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(output_path);
 
     if (prebuilt_path == null) {
-        var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
-        defer env_map.deinit();
+        var env = try util.buildIsolatedTestEnvMap(io, allocator, null);
+        defer env.deinit(io, allocator);
 
         const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
         defer allocator.free(target_arg);
@@ -117,7 +117,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
             output_arg,
             "test/http-headers/app.roc",
         }, .{
-            .env_map = &env_map,
+            .env_map = &env.env_map,
             .max_output_bytes = 10 * 1024 * 1024,
         });
         defer allocator.free(build_result.stdout);

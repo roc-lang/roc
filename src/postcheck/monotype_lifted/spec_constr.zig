@@ -5100,8 +5100,12 @@ const Cloner = struct {
             try self.putSubst(source_param.local, .{ .expr = local_expr });
         }
         const body = try self.cloneExpr(join_point.body);
-        self.restore(change_start);
+        // The remainder's jumps may forward-reference the join's own params:
+        // an `uninitialized_payload` argument names the flag param carrying
+        // its initialized-ness. Keep the param substitutions active so those
+        // references follow the freshened params.
         const remainder = try self.cloneExpr(join_point.remainder);
+        self.restore(change_start);
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .join_point = .{
             .id = target,
@@ -6337,6 +6341,13 @@ const Cloner = struct {
         // per-argument known-shape gate governs only residual body calls.
         const saved_requires_known_arg = self.inline_direct_requires_known_arg;
         if (self.force_loop_initial_inline) self.inline_direct_requires_known_arg = false;
+        // An initial value may forward-reference the loop's own params: an
+        // `uninitialized_payload` argument names the flag param that carries
+        // its initialized-ness at the loop head. The emitted params do not
+        // exist yet, so pin those references to the source param ids while
+        // cloning; each emission below retargets them to its fresh params.
+        const forward_start = self.changes.items.len;
+        for (params) |param| try self.shadowLocal(param.local);
         for (initial_values, 0..) |initial, index| {
             values[index] = try self.cloneExprValueDemandingShape(initial);
             if (try self.pass.shapeFromValue(values[index])) |shape| {
@@ -6346,6 +6357,7 @@ const Cloner = struct {
                 shapes[index] = .{ .any = valueType(self.pass.program, values[index]) };
             }
         }
+        self.restore(forward_start);
         self.inline_direct_requires_known_arg = saved_requires_known_arg;
 
         const change_start = self.changes.items.len;
@@ -6385,11 +6397,25 @@ const Cloner = struct {
             defer new_initials.deinit(self.pass.allocator);
 
             const split_start = self.changes.items.len;
+            var forward_sources = std.ArrayList(Ast.LocalId).empty;
+            defer forward_sources.deinit(self.pass.allocator);
+            var forward_finals = std.ArrayList(Ast.LocalId).empty;
+            defer forward_finals.deinit(self.pass.allocator);
             for (params, shapes, values, initial_values) |param, shape, value, initial| {
+                const leaf_start = new_params.items.len;
                 const param_value = try self.valueFromShapeArgs(shape, &new_params);
                 try self.putSubst(param.local, param_value);
                 try self.bindInitialCarriedBinder(initial, param_value);
                 try self.appendExprsFromValue(shape, value, &new_initials);
+                switch (shape) {
+                    // An `.any` slot keeps its whole value in one param, so a
+                    // forward reference to the source param means this param.
+                    .any => {
+                        try forward_sources.append(self.pass.allocator, param.local);
+                        try forward_finals.append(self.pass.allocator, new_params.items[leaf_start].local);
+                    },
+                    else => {},
+                }
             }
 
             try self.loop_stack.append(self.pass.allocator, .{
@@ -6401,6 +6427,7 @@ const Cloner = struct {
             const frame = self.loop_stack.pop() orelse Common.invariant("loop stack underflow after split attempt");
 
             if (!frame.any_demoted) {
+                try self.retargetLoopForwardConditions(new_initials.items, forward_sources.items, forward_finals.items);
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
                     .params = try self.pass.program.addTypedLocalSpan(new_params.items),
                     .initial_values = try self.pass.program.addExprSpan(new_initials.items),
@@ -6421,18 +6448,28 @@ const Cloner = struct {
         const whole_shapes = try self.pass.arena.allocator().alloc(Shape, params.len);
         for (params, 0..) |param, index| whole_shapes[index] = .{ .any = param.ty };
 
-        const initial_span = try self.valuesToExprSpan(values);
+        const initial_exprs = try self.pass.allocator.alloc(Ast.ExprId, values.len);
+        defer self.pass.allocator.free(initial_exprs);
+        for (values, initial_exprs) |value, *expr| expr.* = try self.materialize(value);
+
         const whole_params = try self.pass.allocator.alloc(Ast.TypedLocal, params.len);
         defer self.pass.allocator.free(whole_params);
-        for (params, initial_values, 0..) |param, initial, index| {
+        const forward_sources = try self.pass.allocator.alloc(Ast.LocalId, params.len);
+        defer self.pass.allocator.free(forward_sources);
+        const forward_finals = try self.pass.allocator.alloc(Ast.LocalId, params.len);
+        defer self.pass.allocator.free(forward_finals);
+        for (params, initial_values, whole_params, forward_sources, forward_finals) |param, initial, *whole, *source, *final| {
             const local = try self.cloneBinder(param.local, param.ty, .bind_runtime);
-            whole_params[index] = .{
+            whole.* = .{
                 .local = local,
                 .ty = param.ty,
             };
             const current = try self.addExpr(.{ .ty = param.ty, .data = .{ .local = local } });
             try self.bindInitialCarriedBinder(initial, .{ .expr = current });
+            source.* = param.local;
+            final.* = local;
         }
+        try self.retargetLoopForwardConditions(initial_exprs, forward_sources, forward_finals);
         try self.loop_stack.append(self.pass.allocator, .{
             .values = whole_shapes,
             .any_demoted = false,
@@ -6442,9 +6479,36 @@ const Cloner = struct {
         if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
         return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
             .params = try self.pass.program.addTypedLocalSpan(whole_params),
-            .initial_values = initial_span,
+            .initial_values = try self.pass.program.addExprSpan(initial_exprs),
             .body = body,
         } } }) };
+    }
+
+    /// Rewrite loop initial values whose `uninitialized_payload` condition
+    /// names a source loop param to name the emitted param instead. Initial
+    /// values are cloned before the emitted params exist, so that forward
+    /// reference is the one reference cloning cannot resolve by itself.
+    fn retargetLoopForwardConditions(
+        self: *Cloner,
+        initials: []Ast.ExprId,
+        source_locals: []const Ast.LocalId,
+        final_locals: []const Ast.LocalId,
+    ) Allocator.Error!void {
+        for (initials) |*initial| {
+            const expr = self.pass.program.getExpr(initial.*);
+            const payload = switch (expr.data) {
+                .uninitialized_payload => |payload| payload,
+                else => continue,
+            };
+            for (source_locals, final_locals) |source, final| {
+                if (payload.condition != source) continue;
+                initial.* = try self.addExpr(.{ .ty = expr.ty, .data = .{ .uninitialized_payload = .{
+                    .condition = final,
+                    .mask = payload.mask,
+                } } });
+                break;
+            }
+        }
     }
 
     /// Remove the pre-loop `binder_subst` value for the variable carried by a
@@ -6621,15 +6685,6 @@ const Cloner = struct {
         return .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(new_values.items),
         } };
-    }
-
-    fn valuesToExprSpan(self: *Cloner, values: []const Value) Common.LowerError!Ast.Span(Ast.ExprId) {
-        const exprs = try self.pass.allocator.alloc(Ast.ExprId, values.len);
-        defer self.pass.allocator.free(exprs);
-        for (values, 0..) |value, index| {
-            exprs[index] = try self.materialize(value);
-        }
-        return try self.pass.program.addExprSpan(exprs);
     }
 
     fn cloneCallProc(self: *Cloner, call: @import("../monotype/ast.zig").CallProc) Common.LowerError!Ast.ExprData {

@@ -206,9 +206,17 @@ pub fn listEq(elem: ListEqElem) BuiltinFn {
     };
 }
 
-/// Hasher primitives. Scalar writes funnel into the width-normalized
-/// wrappers (everything up to 64 bits hashes through `hasher_write_u64`;
-/// f64 and Dec share `hasher_write_f64_bits`).
+/// Hasher primitives. Scalar writes funnel into the width-normalized wrappers:
+/// everything up to 64 bits hashes through `hasher_write_u64`, and `Dec` --
+/// which is a 128-bit fixed-point value, not a float -- hashes through
+/// `hasher_write_u128` alongside u128/i128.
+///
+/// `Dec` used to be mapped onto `hasher_write_f64_bits` here. That wrapper takes
+/// (seed, bits), while the 128-bit wrapper takes (seed, domain, low, high), so
+/// the one caller that passes a runtime `op` rather than a comptime literal --
+/// the LLVM backend -- emitted a four-argument call to a two-parameter function.
+/// The Dec's actual value was never read, and Dict lookups on Dec-keyed records
+/// and tuples returned KeyNotFound on x86_64-windows.
 pub fn hasherOp(op: LowLevel) BuiltinFn {
     return switch (op) {
         .dict_pseudo_seed => .dict_pseudo_seed,
@@ -223,9 +231,9 @@ pub fn hasherOp(op: LowLevel) BuiltinFn {
         .hasher_write_i32,
         .hasher_write_i64,
         => .hasher_write_u64,
-        .hasher_write_u128, .hasher_write_i128 => .hasher_write_u128,
+        .hasher_write_u128, .hasher_write_i128, .hasher_write_dec => .hasher_write_u128,
         .hasher_write_f32 => .hasher_write_f32_bits,
-        .hasher_write_f64, .hasher_write_dec => .hasher_write_f64_bits,
+        .hasher_write_f64 => .hasher_write_f64_bits,
         .hasher_write_bytes => .hasher_write_bytes,
         .hasher_write_str => .hasher_write_str,
         else => unreachable,

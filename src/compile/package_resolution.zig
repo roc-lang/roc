@@ -44,10 +44,12 @@ const parse = @import("parse");
 const can = @import("can");
 const CoreCtx = @import("ctx").CoreCtx;
 const threading = @import("threading.zig");
+const compiler_platforms = @import("compiler_platforms.zig");
 
 const Allocator = std.mem.Allocator;
 const Version = base.url.Version;
 const ModuleEnv = can.ModuleEnv;
+pub const CompilerOwnedPlatform = compiler_platforms.CompilerOwnedPlatform;
 
 const is_freestanding = threading.is_freestanding;
 
@@ -83,6 +85,8 @@ pub const ScannedDep = struct {
     spec: []const u8,
     /// True only for the platform entry of an app header.
     is_platform: bool,
+    /// Present only for compiler-owned platform references such as `platform glue`.
+    compiler_owned_platform: ?CompilerOwnedPlatform = null,
 };
 
 /// Everything resolution needs to know about one package's contents.
@@ -97,6 +101,8 @@ pub const FetchedPackage = struct {
     /// Combined size of the bundle's extracted files in bytes (0 for local
     /// packages, which are not downloaded and not size-limited).
     content_bytes: u64,
+    /// Present iff this package came from embedded compiler-owned sources.
+    compiler_owned_platform: ?CompilerOwnedPlatform = null,
     deps: []const ScannedDep,
 
     pub fn deinit(self: *FetchedPackage, allocator: Allocator) void {
@@ -132,6 +138,8 @@ pub const Fetcher = struct {
     fetchUrlFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage,
     /// Load and scan the local package rooted at `root_file_abs`.
     loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage,
+    /// Materialize and scan a compiler-owned platform.
+    loadCompilerOwnedPlatformFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage,
 };
 
 /// One rendered resolution problem. Messages are owned by the resolver and
@@ -180,6 +188,8 @@ pub const Resolved = struct {
         root_source_hash: [32]u8,
         /// Present iff this package came from a URL.
         url: ?UrlInfo,
+        /// Present iff this package came from embedded compiler-owned sources.
+        compiler_owned_platform: ?CompilerOwnedPlatform = null,
         deps: []Dep,
     };
 
@@ -266,9 +276,10 @@ pub const Sidecar = struct {
         alias: []const u8,
         spec: []const u8,
         is_platform: bool,
+        compiler_owned_platform: ?CompilerOwnedPlatform = null,
     };
 
-    pub const current_format: u32 = 2;
+    pub const current_format: u32 = 3;
 };
 
 const GroupChoice = struct {
@@ -296,6 +307,7 @@ const Edge = struct {
         url: UrlTarget,
         /// Group key ("l@" ++ absolute root file path).
         local: []const u8,
+        compiler_owned: CompilerOwnedPlatform,
         invalid: InvalidSpec,
     };
 
@@ -328,6 +340,7 @@ const WalkResult = struct {
     parents: std.StringHashMapUnmanaged(ParentLink),
     missing_urls: std.ArrayListUnmanaged(Missing),
     missing_locals: std.ArrayListUnmanaged([]const u8),
+    missing_compiler_owned: std.ArrayListUnmanaged(CompilerOwnedPlatform),
     /// Group keys in the order they were first followed (BFS order).
     followed: std.ArrayListUnmanaged([]const u8),
 };
@@ -344,6 +357,8 @@ pub const Resolver = struct {
     url_nodes: std.StringHashMapUnmanaged(FetchedPackage),
     /// Absolute root file path -> scanned local package.
     local_nodes: std.StringHashMapUnmanaged(FetchedPackage),
+    /// Compiler-owned platform -> materialized and scanned embedded package.
+    compiler_owned_nodes: std.AutoHashMapUnmanaged(CompilerOwnedPlatform, FetchedPackage),
 
     /// "group\x00major.minor.patch" -> hash, across every round (including
     /// retracted edges), to detect the same version being served with two
@@ -376,6 +391,7 @@ pub const Resolver = struct {
             .config = config,
             .url_nodes = .{},
             .local_nodes = .{},
+            .compiler_owned_nodes = .{},
             .seen_version_hashes = .{},
             .seen_group_hashes = .{},
             .seen_group_locals = .{},
@@ -438,8 +454,15 @@ pub const Resolver = struct {
 
             if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
 
-            if (walk_result.missing_urls.items.len > 0 or walk_result.missing_locals.items.len > 0) {
-                try self.fetchMissing(walk_result.missing_urls.items, walk_result.missing_locals.items);
+            if (walk_result.missing_urls.items.len > 0 or
+                walk_result.missing_locals.items.len > 0 or
+                walk_result.missing_compiler_owned.items.len > 0)
+            {
+                try self.fetchMissing(
+                    walk_result.missing_urls.items,
+                    walk_result.missing_locals.items,
+                    walk_result.missing_compiler_owned.items,
+                );
                 if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
                 try self.checkTransitiveLimits(root_node);
                 if (self.diagnostics.items.len > 0) return error.ResolutionFailed;
@@ -520,6 +543,7 @@ pub const Resolver = struct {
             .parents = .{},
             .missing_urls = .empty,
             .missing_locals = .empty,
+            .missing_compiler_owned = .empty,
             .followed = .empty,
         };
 
@@ -531,6 +555,7 @@ pub const Resolver = struct {
         var visited: std.StringHashMapUnmanaged(void) = .{};
         var missing_url_groups: std.StringHashMapUnmanaged(usize) = .{};
         var missing_local_seen: std.StringHashMapUnmanaged(void) = .{};
+        var missing_compiler_owned_seen: std.AutoHashMapUnmanaged(CompilerOwnedPlatform, void) = .{};
         var queue = std.ArrayListUnmanaged(QueueItem).empty;
         try queue.append(self.arena(), .{ .group = null, .node = root_node });
 
@@ -539,7 +564,43 @@ pub const Resolver = struct {
             const item = queue.items[queue_index];
 
             for (item.node.deps) |dep| {
-                if (specIsUrlLike(dep.spec)) {
+                if (dep.compiler_owned_platform) |platform| {
+                    const group = compiler_platforms.groupKey(platform);
+
+                    try result.edges.append(self.arena(), .{
+                        .parent = item.group,
+                        .alias = dep.alias,
+                        .spec = dep.spec,
+                        .is_platform = dep.is_platform,
+                        .target = .{ .compiler_owned = platform },
+                    });
+
+                    if (!result.candidates.contains(group)) {
+                        try result.candidates.put(self.arena(), group, .{
+                            .version = Version.none,
+                            .url = compiler_platforms.identity(platform),
+                            .hash = compiler_platforms.identity(platform),
+                        });
+                    }
+
+                    if (visited.contains(group)) continue;
+                    try visited.put(self.arena(), group, {});
+                    try result.parents.put(self.arena(), group, .{
+                        .parent = item.group,
+                        .alias = dep.alias,
+                        .spec = dep.spec,
+                    });
+
+                    if (self.compiler_owned_nodes.get(platform)) |node| {
+                        try result.followed.append(self.arena(), group);
+                        try queue.append(self.arena(), .{ .group = group, .node = node });
+                    } else {
+                        const missing_gop = try missing_compiler_owned_seen.getOrPut(self.arena(), platform);
+                        if (!missing_gop.found_existing) {
+                            try result.missing_compiler_owned.append(self.arena(), platform);
+                        }
+                    }
+                } else if (specIsUrlLike(dep.spec)) {
                     if (!base.url.isSafeUrl(dep.spec)) {
                         try result.edges.append(self.arena(), .{
                             .parent = item.group,
@@ -705,7 +766,12 @@ pub const Resolver = struct {
         return std.fs.path.resolve(self.arena(), &.{ parent_dir, spec });
     }
 
-    fn fetchMissing(self: *Resolver, missing_urls: []const Missing, missing_locals: []const []const u8) Allocator.Error!void {
+    fn fetchMissing(
+        self: *Resolver,
+        missing_urls: []const Missing,
+        missing_locals: []const []const u8,
+        missing_compiler_owned: []const CompilerOwnedPlatform,
+    ) Allocator.Error!void {
         for (missing_locals) |abs| {
             const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -715,6 +781,22 @@ pub const Resolver = struct {
                 },
             };
             try self.local_nodes.put(self.arena(), abs, node);
+        }
+
+        for (missing_compiler_owned) |platform| {
+            const fetched = self.fetcher.loadCompilerOwnedPlatformFn(self.fetcher.ctx, self.arena(), platform) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => {
+                    try self.addDiagnostic(
+                        "Invalid Compiler Platform",
+                        "Could not load the compiler-owned platform {s}: {s}.",
+                        .{ compiler_platforms.identity(platform), @errorName(err) },
+                    );
+                    continue;
+                },
+            };
+            const copied = try copyFetchedPackage(self.arena(), fetched);
+            try self.compiler_owned_nodes.put(self.arena(), platform, copied);
         }
 
         if (missing_urls.len == 0) return;
@@ -807,7 +889,7 @@ pub const Resolver = struct {
         const limit = self.config.max_transitive_expanded_bytes orelse return;
 
         for (root_node.deps) |dep| {
-            const start_group = (try self.groupKeyForSpec(root_node.root_dir, dep.spec)) orelse continue;
+            const start_group = (try self.groupKeyForDep(root_node.root_dir, dep)) orelse continue;
 
             var seen_groups: std.StringHashMapUnmanaged(void) = .{};
             var seen_hashes: std.StringHashMapUnmanaged(void) = .{};
@@ -837,10 +919,15 @@ pub const Resolver = struct {
                         try nodes.append(self.arena(), node);
                     }
                 }
+                if (compiler_platforms.fromGroupKey(group)) |platform| {
+                    if (self.compiler_owned_nodes.get(platform)) |node| {
+                        try nodes.append(self.arena(), node);
+                    }
+                }
 
                 for (nodes.items) |node| {
                     for (node.deps) |child_dep| {
-                        const child_group = (try self.groupKeyForSpec(node.root_dir, child_dep.spec)) orelse continue;
+                        const child_group = (try self.groupKeyForDep(node.root_dir, child_dep)) orelse continue;
                         const group_gop = try seen_groups.getOrPut(self.arena(), child_group);
                         if (!group_gop.found_existing) {
                             try frontier.append(self.arena(), child_group);
@@ -884,7 +971,12 @@ pub const Resolver = struct {
         });
     }
 
-    fn groupKeyForSpec(self: *Resolver, parent_dir: []const u8, spec: []const u8) Allocator.Error!?[]const u8 {
+    fn groupKeyForDep(self: *Resolver, parent_dir: []const u8, dep: ScannedDep) Allocator.Error!?[]const u8 {
+        if (dep.compiler_owned_platform) |platform| {
+            return compiler_platforms.groupKey(platform);
+        }
+
+        const spec = dep.spec;
         if (specIsUrlLike(spec)) {
             if (!base.url.isSafeUrl(spec)) return null;
             const parsed = base.url.parseUrlPath(spec) catch return null;
@@ -940,6 +1032,10 @@ pub const Resolver = struct {
                 .local => |group| {
                     const abs = group[2..];
                     const node = self.local_nodes.get(abs).?;
+                    try self.checkEdgeKind(walk_result, edge, node.kind);
+                },
+                .compiler_owned => |platform| {
+                    const node = self.compiler_owned_nodes.get(platform).?;
                     try self.checkEdgeKind(walk_result, edge, node.kind);
                 },
             }
@@ -1041,6 +1137,7 @@ pub const Resolver = struct {
             .root_dir = try out.dupe(u8, root_node.root_dir),
             .root_source_hash = root_node.root_source_hash,
             .url = root_url_info,
+            .compiler_owned_platform = root_node.compiler_owned_platform,
             .deps = &.{},
         });
         const root_local_group = try std.fmt.allocPrint(self.arena(), "l@{s}", .{root_path});
@@ -1061,6 +1158,21 @@ pub const Resolver = struct {
                     .root_dir = try out.dupe(u8, node.root_dir),
                     .root_source_hash = node.root_source_hash,
                     .url = null,
+                    .compiler_owned_platform = node.compiler_owned_platform,
+                    .deps = &.{},
+                });
+            } else if (group[0] == 'c') {
+                const platform = compiler_platforms.fromGroupKey(group) orelse return error.ResolutionFailed;
+                const node = self.compiler_owned_nodes.get(platform).?;
+                try group_to_index.put(self.gpa, try self.arena().dupe(u8, group), @intCast(packages.items.len));
+                try packages.append(out, .{
+                    .kind = node.kind,
+                    .identity = try out.dupe(u8, compiler_platforms.identity(platform)),
+                    .root_file = try out.dupe(u8, node.root_file),
+                    .root_dir = try out.dupe(u8, node.root_dir),
+                    .root_source_hash = node.root_source_hash,
+                    .url = null,
+                    .compiler_owned_platform = platform,
                     .deps = &.{},
                 });
             } else {
@@ -1079,6 +1191,7 @@ pub const Resolver = struct {
                         .version = parsed.version,
                         .hash = try out.dupe(u8, parsed.hash),
                     },
+                    .compiler_owned_platform = node.compiler_owned_platform,
                     .deps = &.{},
                 });
             }
@@ -1098,6 +1211,7 @@ pub const Resolver = struct {
             const target_group = switch (edge.target) {
                 .url => |t| t.group,
                 .local => |g| g,
+                .compiler_owned => |platform| compiler_platforms.groupKey(platform),
                 .invalid => unreachable, // would have failed above
             };
             const target_index = group_to_index.get(target_group).?;
@@ -1192,6 +1306,7 @@ pub const Resolver = struct {
             const to = switch (edge.target) {
                 .url => |t| t.group,
                 .local => |g| g,
+                .compiler_owned => |platform| compiler_platforms.groupKey(platform),
                 .invalid => continue,
             };
             const gop = try adjacency.getOrPut(self.arena(), from);
@@ -1285,6 +1400,7 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
             .alias = try allocator.dupe(u8, source.alias),
             .spec = try allocator.dupe(u8, source.spec),
             .is_platform = source.is_platform,
+            .compiler_owned_platform = source.compiler_owned_platform,
         };
     }
     return .{
@@ -1293,6 +1409,7 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
         .root_dir = try allocator.dupe(u8, fetched.root_dir),
         .root_source_hash = fetched.root_source_hash,
         .content_bytes = fetched.content_bytes,
+        .compiler_owned_platform = fetched.compiler_owned_platform,
         .deps = deps,
     };
 }
@@ -1359,8 +1476,18 @@ pub fn scanParsedHeader(
         .app => |a| blk: {
             const platform_field = ast.store.getRecordField(a.platform_idx);
             if (platform_field.value) |value_expr| {
-                const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-                try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
+                switch (ast.store.getExpr(value_expr)) {
+                    .string => {
+                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
+                    },
+                    .ident => |ident| {
+                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
+                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
+                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
+                    },
+                    else => return error.HeaderParseFailed,
+                }
             } else {
                 return error.HeaderParseFailed;
             }
@@ -1387,6 +1514,7 @@ pub fn scanParsedHeader(
         .root_dir = root_dir,
         .root_source_hash = sha256Bytes(src),
         .content_bytes = 0,
+        .compiler_owned_platform = null,
         .deps = try deps.toOwnedSlice(allocator),
     };
 }
@@ -1445,6 +1573,24 @@ fn appendScannedDep(
     });
 }
 
+fn appendCompilerOwnedScannedDep(
+    allocator: Allocator,
+    deps: *std.ArrayListUnmanaged(ScannedDep),
+    alias: []const u8,
+    platform: CompilerOwnedPlatform,
+) Allocator.Error!void {
+    const owned_alias = try allocator.dupe(u8, alias);
+    errdefer allocator.free(owned_alias);
+    const spec = try allocator.dupe(u8, compiler_platforms.headerSpecText(platform));
+    errdefer allocator.free(spec);
+    try deps.append(allocator, .{
+        .alias = owned_alias,
+        .spec = spec,
+        .is_platform = true,
+        .compiler_owned_platform = platform,
+    });
+}
+
 fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) Allocator.Error!?[]const u8 {
     const expr = ast.store.getExpr(expr_idx);
     switch (expr) {
@@ -1477,12 +1623,15 @@ pub const CtxFetcher = struct {
     /// Directory holding one subdirectory per bundle hash, or null when
     /// downloads are unsupported (freestanding targets).
     cache_packages_dir: ?[]const u8,
+    /// Optional root for materialized compiler-owned source packages.
+    compiler_owned_source_dir: ?[]const u8 = null,
 
     pub fn fetcher(self: *CtxFetcher) Fetcher {
         return .{
             .ctx = self,
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
+            .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
         };
     }
 
@@ -1561,6 +1710,19 @@ pub const CtxFetcher = struct {
         return try scanHeaderSource(allocator, self.gpa, root_file_abs, src);
     }
 
+    fn loadCompilerOwnedPlatformImpl(ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage {
+        const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
+        const materialized = compiler_platforms.materialize(allocator, self.fs, self.compiler_owned_source_dir, platform) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Unsupported,
+        };
+        const src = try self.readNormalizedSource(allocator, materialized.root_file);
+        var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src);
+        scanned.content_bytes = materialized.content_bytes;
+        scanned.compiler_owned_platform = platform;
+        return scanned;
+    }
+
     fn readNormalizedSource(self: *CtxFetcher, allocator: Allocator, root_file_abs: []const u8) FetchError![]u8 {
         var src = self.fs.readFile(root_file_abs, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -1606,6 +1768,7 @@ pub const CtxFetcher = struct {
                 .alias = allocator.dupe(u8, source.alias) catch return null,
                 .spec = allocator.dupe(u8, source.spec) catch return null,
                 .is_platform = source.is_platform,
+                .compiler_owned_platform = source.compiler_owned_platform,
             };
         }
 
@@ -1616,6 +1779,7 @@ pub const CtxFetcher = struct {
                 .root_dir = allocator.dupe(u8, package_dir) catch return null,
                 .root_source_hash = parsed.value.root_source_hash,
                 .content_bytes = parsed.value.content_bytes,
+                .compiler_owned_platform = null,
                 .deps = deps,
             },
             .expanded_bytes = parsed.value.expanded_bytes,
@@ -1631,7 +1795,12 @@ pub const CtxFetcher = struct {
     ) (Allocator.Error || error{WriteFailed} || CoreCtx.WriteError || CoreCtx.RenameError)!void {
         const deps = try allocator.alloc(Sidecar.SidecarDep, scanned.deps.len);
         for (deps, scanned.deps) |*dep, source| {
-            dep.* = .{ .alias = source.alias, .spec = source.spec, .is_platform = source.is_platform };
+            dep.* = .{
+                .alias = source.alias,
+                .spec = source.spec,
+                .is_platform = source.is_platform,
+                .compiler_owned_platform = source.compiler_owned_platform,
+            };
         }
         const sidecar = Sidecar{
             .format = Sidecar.current_format,
@@ -1678,6 +1847,25 @@ test "scanHeaderSource ignores tokenizer diagnostics after the header" {
     try std.testing.expectEqualStrings("pf", fetched.deps[0].alias);
     try std.testing.expectEqualStrings("../platform/main.roc", fetched.deps[0].spec);
     try std.testing.expect(fetched.deps[0].is_platform);
+}
+
+test "scanHeaderSource accepts compiler-owned glue platform" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const src =
+        "app [make_glue] { pf: platform glue }\n" ++
+        "make_glue = |_| Ok([])\n";
+
+    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src);
+
+    try std.testing.expectEqual(HeaderKind.app, fetched.kind);
+    try std.testing.expectEqual(@as(usize, 1), fetched.deps.len);
+    try std.testing.expectEqualStrings("pf", fetched.deps[0].alias);
+    try std.testing.expectEqualStrings("platform glue", fetched.deps[0].spec);
+    try std.testing.expect(fetched.deps[0].is_platform);
+    try std.testing.expectEqual(CompilerOwnedPlatform.glue, fetched.deps[0].compiler_owned_platform.?);
 }
 
 test "scanHeaderSource rejects malformed package headers" {
@@ -1733,6 +1921,7 @@ const TestRegistry = struct {
             .ctx = self,
             .fetchUrlFn = fetchUrlImpl,
             .loadLocalFn = loadLocalImpl,
+            .loadCompilerOwnedPlatformFn = loadCompilerOwnedPlatformImpl,
         };
     }
 
@@ -1746,6 +1935,7 @@ const TestRegistry = struct {
                 .alias = try allocator.dupe(u8, source.alias),
                 .spec = try allocator.dupe(u8, source.spec),
                 .is_platform = source.is_platform,
+                .compiler_owned_platform = source.compiler_owned_platform,
             };
         }
         return .{
@@ -1754,6 +1944,7 @@ const TestRegistry = struct {
             .root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file) orelse "/"),
             .root_source_hash = sha256Bytes(root_file),
             .content_bytes = package.content_bytes,
+            .compiler_owned_platform = null,
             .deps = deps,
         };
     }
@@ -1787,6 +1978,22 @@ const TestRegistry = struct {
         const key = normalizedLookupKey(&key_buf, root_file_abs);
         const package = self.locals.get(key) orelse return error.FileNotFound;
         return toFetched(allocator, package, root_file_abs, null);
+    }
+
+    fn loadCompilerOwnedPlatformImpl(_: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage {
+        const deps = try allocator.alloc(ScannedDep, 0);
+        const root_file = switch (platform) {
+            .glue => "/compiler/glue/main.roc",
+        };
+        return .{
+            .kind = .platform,
+            .root_file = try allocator.dupe(u8, root_file),
+            .root_dir = try allocator.dupe(u8, std.fs.path.dirname(root_file) orelse "/"),
+            .root_source_hash = compiler_platforms.sourceHash(platform),
+            .content_bytes = 1,
+            .compiler_owned_platform = platform,
+            .deps = deps,
+        };
     }
 };
 

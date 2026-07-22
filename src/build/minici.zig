@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -30,6 +31,37 @@ const Job = struct {
     kind: JobKind = .single,
     args: []const []const u8 = &.{},
     skip_reason: ?[]const u8 = null,
+};
+
+const Selection = struct {
+    from: ?[]const u8 = null,
+    to: ?[]const u8 = null,
+    after: ?[]const u8 = null,
+    before: ?[]const u8 = null,
+};
+
+const SelectionError = error{
+    UnknownMiniCiFromJob,
+    UnknownMiniCiToJob,
+    UnknownMiniCiAfterJob,
+    UnknownMiniCiBeforeJob,
+    EmptyMiniCiSelection,
+};
+
+const ResolvedSelection = struct {
+    first: usize,
+    last: usize,
+
+    fn includes(self: ResolvedSelection, index: usize) bool {
+        return index >= self.first and index <= self.last;
+    }
+};
+
+const ParsedArgs = struct {
+    zig_exe: []const u8,
+    build_args: []const []const u8,
+    selection: Selection,
+    skip_build: bool,
 };
 
 const jobs = [_]Job{
@@ -109,6 +141,224 @@ const jobs = [_]Job{
     .{ .name = "run-test-archive" },
     .{ .name = "run-coverage-parser" },
 };
+
+fn printUsageError(comptime message: []const u8, arg: []const u8) void {
+    std.debug.print("MiniCI argument error: " ++ message ++ "\n", .{arg});
+    printSelectionUsage();
+}
+
+fn printSelectionUsage() void {
+    std.debug.print(
+        \\MiniCI selection options:
+        \\  --minici-from <job>   first MiniCI run job to execute
+        \\  --minici-to <job>     last MiniCI run job to execute
+        \\  --minici-after <job>  execute MiniCI run jobs after this job
+        \\  --minici-before <job> execute MiniCI run jobs before this job
+        \\  --minici-only <job>   execute exactly one MiniCI run job
+        \\  --minici-skip-build   assume `build-ci` already ran and run selected jobs only
+        \\
+        \\Other arguments are forwarded to child `zig build` commands.
+        \\
+    , .{});
+}
+
+fn printSelectionConflict(comptime message: []const u8, arg: []const u8) void {
+    std.debug.print("MiniCI argument error: " ++ message ++ "\n", .{arg});
+    printSelectionUsage();
+}
+
+fn setSelectionFrom(selection: *Selection, value: []const u8, arg: []const u8) !void {
+    if (selection.from != null or selection.after != null) {
+        printSelectionConflict("conflicting lower-bound option `{s}`; use only one of --minici-from or --minici-after", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    selection.from = value;
+}
+
+fn setSelectionTo(selection: *Selection, value: []const u8, arg: []const u8) !void {
+    if (selection.to != null or selection.before != null) {
+        printSelectionConflict("conflicting upper-bound option `{s}`; use only one of --minici-to or --minici-before", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    selection.to = value;
+}
+
+fn setSelectionAfter(selection: *Selection, value: []const u8, arg: []const u8) !void {
+    if (selection.from != null or selection.after != null) {
+        printSelectionConflict("conflicting lower-bound option `{s}`; use only one of --minici-from or --minici-after", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    selection.after = value;
+}
+
+fn setSelectionBefore(selection: *Selection, value: []const u8, arg: []const u8) !void {
+    if (selection.to != null or selection.before != null) {
+        printSelectionConflict("conflicting upper-bound option `{s}`; use only one of --minici-to or --minici-before", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    selection.before = value;
+}
+
+fn setSelectionOnly(selection: *Selection, value: []const u8, arg: []const u8) !void {
+    if (selection.from != null or selection.to != null or selection.after != null or selection.before != null) {
+        printSelectionConflict("conflicting selection option `{s}`; --minici-only cannot be combined with range options", arg);
+        return error.InvalidMiniCiArgument;
+    }
+    selection.from = value;
+    selection.to = value;
+}
+
+fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
+    const zig_exe = if (args.len >= 2) args[1] else "zig";
+    var build_args = std.ArrayList([]const u8).empty;
+    errdefer build_args.deinit(allocator);
+    var selection = Selection{};
+    var skip_build = false;
+
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--minici-skip-build")) {
+            skip_build = true;
+        } else if (std.mem.eql(u8, arg, "--minici-from")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            try setSelectionFrom(&selection, args[i], arg);
+        } else if (std.mem.startsWith(u8, arg, "--minici-from=")) {
+            const value = arg["--minici-from=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            try setSelectionFrom(&selection, value, arg);
+        } else if (std.mem.eql(u8, arg, "--minici-to")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            try setSelectionTo(&selection, args[i], arg);
+        } else if (std.mem.startsWith(u8, arg, "--minici-to=")) {
+            const value = arg["--minici-to=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            try setSelectionTo(&selection, value, arg);
+        } else if (std.mem.eql(u8, arg, "--minici-after")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            try setSelectionAfter(&selection, args[i], arg);
+        } else if (std.mem.startsWith(u8, arg, "--minici-after=")) {
+            const value = arg["--minici-after=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            try setSelectionAfter(&selection, value, arg);
+        } else if (std.mem.eql(u8, arg, "--minici-before")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            try setSelectionBefore(&selection, args[i], arg);
+        } else if (std.mem.startsWith(u8, arg, "--minici-before=")) {
+            const value = arg["--minici-before=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            try setSelectionBefore(&selection, value, arg);
+        } else if (std.mem.eql(u8, arg, "--minici-only")) {
+            if (i + 1 >= args.len) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            i += 1;
+            try setSelectionOnly(&selection, args[i], arg);
+        } else if (std.mem.startsWith(u8, arg, "--minici-only=")) {
+            const value = arg["--minici-only=".len..];
+            if (value.len == 0) {
+                printUsageError("missing value after `{s}`", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            try setSelectionOnly(&selection, value, arg);
+        } else {
+            try build_args.append(allocator, arg);
+        }
+    }
+
+    return .{
+        .zig_exe = zig_exe,
+        .build_args = try build_args.toOwnedSlice(allocator),
+        .selection = selection,
+        .skip_build = skip_build,
+    };
+}
+
+fn jobIndexByName(name: []const u8) ?usize {
+    for (jobs, 0..) |job, i| {
+        if (std.mem.eql(u8, job.name, name)) return i;
+    }
+    return null;
+}
+
+fn resolveSelection(selection: Selection) SelectionError!ResolvedSelection {
+    const first = if (selection.from) |name|
+        jobIndexByName(name) orelse return error.UnknownMiniCiFromJob
+    else if (selection.after) |name|
+        (jobIndexByName(name) orelse return error.UnknownMiniCiAfterJob) + 1
+    else
+        0;
+
+    const last = if (selection.to) |name|
+        jobIndexByName(name) orelse return error.UnknownMiniCiToJob
+    else if (selection.before) |name| blk: {
+        const before = jobIndexByName(name) orelse return error.UnknownMiniCiBeforeJob;
+        if (before == 0) return error.EmptyMiniCiSelection;
+        break :blk before - 1;
+    } else jobs.len - 1;
+
+    if (first > last) {
+        return error.EmptyMiniCiSelection;
+    }
+
+    return .{ .first = first, .last = last };
+}
+
+fn printSelectionError(selection: Selection, err: SelectionError) void {
+    switch (err) {
+        error.UnknownMiniCiFromJob => {
+            std.debug.print("MiniCI selection error: unknown --minici-from job `{s}`\n", .{selection.from orelse ""});
+        },
+        error.UnknownMiniCiToJob => {
+            std.debug.print("MiniCI selection error: unknown --minici-to job `{s}`\n", .{selection.to orelse ""});
+        },
+        error.UnknownMiniCiAfterJob => {
+            std.debug.print("MiniCI selection error: unknown --minici-after job `{s}`\n", .{selection.after orelse ""});
+        },
+        error.UnknownMiniCiBeforeJob => {
+            std.debug.print("MiniCI selection error: unknown --minici-before job `{s}`\n", .{selection.before orelse ""});
+        },
+        error.EmptyMiniCiSelection => {
+            const from_name = selection.from orelse "";
+            const to_name = selection.to orelse "";
+            const after_name = selection.after orelse "";
+            const before_name = selection.before orelse "";
+            std.debug.print(
+                "MiniCI selection error: empty range from `{s}` to `{s}` after `{s}` before `{s}`\n",
+                .{ from_name, to_name, after_name, before_name },
+            );
+        },
+    }
+}
 
 const CommandResult = struct {
     status: []const u8,
@@ -207,6 +457,7 @@ fn isCheckJob(name: []const u8) bool {
 
 fn buildStatusText(result: CommandResult) []const u8 {
     if (isPass(result)) return "completed";
+    if (std.mem.eql(u8, result.status, "skip")) return "skipped";
     if (std.mem.eql(u8, result.status, "crash")) return "crashed";
     return "failed";
 }
@@ -1182,11 +1433,8 @@ fn applyMemoryAwareCpuLimit(io: std.Io, allocator: std.mem.Allocator, env: *cons
 /// on memory-constrained hosts (see `applyMemoryAwareCpuLimit`).
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    // MiniCI stays standalone (no build_options wiring), so unlike the other
-    // first-party DebugAllocators this one keeps std's default allocation-site
-    // traces; it allocates too little for -Ddebug-gpa-traces to matter here.
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
 
     var arena_impl = std.heap.ArenaAllocator.init(gpa);
@@ -1195,8 +1443,17 @@ pub fn main(init: std.process.Init) !void {
 
     const raw_args = try init.minimal.args.toSlice(allocator);
     const args: []const []const u8 = @ptrCast(raw_args);
-    const zig_exe = if (args.len >= 2) args[1] else "zig";
-    const build_args = if (args.len > 2) args[2..] else &.{};
+    const parsed_args = parseMiniArgs(allocator, args) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => std.process.exit(2),
+    };
+    const selected_jobs = resolveSelection(parsed_args.selection) catch |err| {
+        printSelectionError(parsed_args.selection, err);
+        printSelectionUsage();
+        std.process.exit(2);
+    };
+    const zig_exe = parsed_args.zig_exe;
+    const build_args = parsed_args.build_args;
     const heartbeat_interval_ms = heartbeatIntervalMs(init.environ_map);
 
     std.Io.Dir.cwd().deleteTree(io, out_dir) catch {};
@@ -1208,19 +1465,28 @@ pub fn main(init: std.process.Init) !void {
     const run_started_ns = nowNs(io);
     const run_started_unix_ms = unixMs(io);
     const total_phases = jobs.len + 1;
+    if (selected_jobs.first != 0 or selected_jobs.last != jobs.len - 1) {
+        std.debug.print("MiniCI selection: `{s}` through `{s}`\n", .{
+            jobs[selected_jobs.first].name,
+            jobs[selected_jobs.last].name,
+        });
+    }
 
     const build_argv = try buildCommand(allocator, zig_exe, build_args, "build-ci", null, &.{});
     const build_log = logs_dir ++ "/build-ci.txt";
     const build_progress = Progress{ .current = 1, .total = total_phases };
     printBuildStart(build_progress);
-    const build_result = try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns, build_progress);
+    const build_result = if (parsed_args.skip_build)
+        try skipCommand(io, build_argv, build_log, "skipped by --minici-skip-build\n", run_started_ns)
+    else
+        try runCommand(allocator, io, build_argv, build_log, heartbeat_interval_ms, run_started_ns, build_progress);
     if (build_result.heartbeat_printed) printBuildStart(build_progress);
     std.debug.print("{s} in {d:.3}s\n", .{ buildStatusText(build_result), seconds(build_result.duration_ns) });
 
     var results = std.ArrayList(CommandResult).empty;
     defer results.deinit(allocator);
 
-    if (!isPass(build_result)) {
+    if (!isSuccessful(build_result)) {
         printFailureLog(allocator, io, build_result);
         printRerunHint(build_result);
         try writeReportJson(allocator, io, run_started_unix_ms, build_result, results.items);
@@ -1238,11 +1504,15 @@ pub fn main(init: std.process.Init) !void {
         const argv = try buildCommand(allocator, zig_exe, build_args, job.name, stats_path, job.args);
         const progress = Progress{ .current = job_index + 2, .total = total_phases };
         printRunStart(progress, job.name);
-        var result = if (job.skip_reason) |reason|
+        const skip_reason: ?[]const u8 = if (selected_jobs.includes(job_index))
+            job.skip_reason
+        else
+            "excluded by MiniCI selection\n";
+        var result = if (skip_reason) |reason|
             try skipCommand(io, argv, log_path, reason, run_started_ns)
         else
             try runCommand(allocator, io, argv, log_path, heartbeat_interval_ms, run_started_ns, progress);
-        result.stats_path = if (job.skip_reason == null) stats_path else null;
+        result.stats_path = if (skip_reason == null) stats_path else null;
         try results.append(allocator, result);
         if (result.heartbeat_printed) printRunStart(progress, job.name);
         std.debug.print("{s} in {d:.3}s\n", .{ runStatusText(result), seconds(result.duration_ns) });
@@ -1283,6 +1553,135 @@ test "appendProgressPrefix aligns current phase to total width" {
     out.clearRetainingCapacity();
     try appendProgressPrefix(&out, std.testing.allocator, .{ .current = 7, .total = 123 });
     try std.testing.expectEqualStrings("MiniCI   7/123: ", out.items);
+}
+
+test "parseMiniArgs keeps MiniCI selection out of forwarded build args" {
+    const args = &.{
+        "minici",
+        "zig",
+        "--search-prefix",
+        "/opt/zig",
+        "--minici-after",
+        "run-test-eval",
+        "--minici-before=run-test-cli",
+        "--minici-skip-build",
+        "-Ddebug-gpa-traces",
+    };
+    const parsed = try parseMiniArgs(std.testing.allocator, args);
+    defer std.testing.allocator.free(parsed.build_args);
+
+    try std.testing.expectEqualStrings("zig", parsed.zig_exe);
+    try std.testing.expectEqualStrings("run-test-eval", parsed.selection.after orelse return error.MissingAfter);
+    try std.testing.expectEqualStrings("run-test-cli", parsed.selection.before orelse return error.MissingBefore);
+    try std.testing.expect(parsed.skip_build);
+    try std.testing.expectEqual(@as(usize, 3), parsed.build_args.len);
+    try std.testing.expectEqualStrings("--search-prefix", parsed.build_args[0]);
+    try std.testing.expectEqualStrings("/opt/zig", parsed.build_args[1]);
+    try std.testing.expectEqualStrings("-Ddebug-gpa-traces", parsed.build_args[2]);
+}
+
+test "parseMiniArgs supports selecting one MiniCI job" {
+    const args = &.{ "minici", "zig", "--minici-only", "run-test-zig-minici" };
+    const parsed = try parseMiniArgs(std.testing.allocator, args);
+    defer std.testing.allocator.free(parsed.build_args);
+
+    try std.testing.expectEqualStrings("run-test-zig-minici", parsed.selection.from orelse return error.MissingFrom);
+    try std.testing.expectEqualStrings("run-test-zig-minici", parsed.selection.to orelse return error.MissingTo);
+    try std.testing.expect(!parsed.skip_build);
+    try std.testing.expectEqual(@as(usize, 0), parsed.build_args.len);
+}
+
+test "parseMiniArgs rejects ambiguous MiniCI bounds" {
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-from", "run-check-zig-format", "--minici-after", "run-check-zig-lints" }),
+    );
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-to", "run-check-tidy", "--minici-before", "run-check-git-lints" }),
+    );
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-only", "run-check-tidy", "--minici-to", "run-check-git-lints" }),
+    );
+}
+
+test "resolveSelection defaults to every MiniCI run job" {
+    const selected = try resolveSelection(.{});
+    try std.testing.expect(selected.includes(0));
+    try std.testing.expect(selected.includes(jobs.len - 1));
+}
+
+test "resolveSelection includes the requested MiniCI range" {
+    const selected = try resolveSelection(.{
+        .from = "run-test-zig-snapshot-tool",
+        .to = "run-test-zig-minici",
+    });
+    const first = jobIndexByName("run-test-zig-snapshot-tool") orelse return error.MissingFirst;
+    const last = jobIndexByName("run-test-zig-minici") orelse return error.MissingLast;
+
+    try std.testing.expect(!selected.includes(first - 1));
+    try std.testing.expect(selected.includes(first));
+    try std.testing.expect(selected.includes(last));
+    try std.testing.expect(!selected.includes(last + 1));
+}
+
+test "resolveSelection supports exclusive MiniCI range boundaries" {
+    const selected = try resolveSelection(.{
+        .after = "run-test-zig-module-roc_target",
+        .before = "run-test-eval",
+    });
+    const after = jobIndexByName("run-test-zig-module-roc_target") orelse return error.MissingAfter;
+    const before = jobIndexByName("run-test-eval") orelse return error.MissingBefore;
+
+    try std.testing.expect(!selected.includes(after));
+    try std.testing.expect(selected.includes(after + 1));
+    try std.testing.expect(selected.includes(before - 1));
+    try std.testing.expect(!selected.includes(before));
+}
+
+test "resolveSelection supports exhaustive adjacent MiniCI shards" {
+    const first = try resolveSelection(.{ .to = "run-test-zig-module-roc_target" });
+    const middle = try resolveSelection(.{
+        .after = "run-test-zig-module-roc_target",
+        .before = "run-test-eval",
+    });
+    const last = try resolveSelection(.{ .from = "run-test-eval" });
+
+    const core_boundary = jobIndexByName("run-test-zig-module-roc_target") orelse return error.MissingCoreBoundary;
+    const harness_boundary = jobIndexByName("run-test-eval") orelse return error.MissingHarnessBoundary;
+
+    for (jobs, 0..) |_, i| {
+        const selected_count: usize =
+            @intFromBool(first.includes(i)) +
+            @intFromBool(middle.includes(i)) +
+            @intFromBool(last.includes(i));
+        try std.testing.expectEqual(@as(usize, 1), selected_count);
+    }
+
+    try std.testing.expect(first.includes(core_boundary));
+    try std.testing.expect(!middle.includes(core_boundary));
+    try std.testing.expect(!middle.includes(harness_boundary));
+    try std.testing.expect(last.includes(harness_boundary));
+}
+
+test "resolveSelection rejects unknown and empty MiniCI ranges" {
+    try std.testing.expectError(
+        error.UnknownMiniCiFromJob,
+        resolveSelection(.{ .from = "missing-job" }),
+    );
+    try std.testing.expectError(
+        error.UnknownMiniCiAfterJob,
+        resolveSelection(.{ .after = "missing-job" }),
+    );
+    try std.testing.expectError(
+        error.EmptyMiniCiSelection,
+        resolveSelection(.{ .from = "run-test-cli", .to = "run-test-eval" }),
+    );
+    try std.testing.expectError(
+        error.EmptyMiniCiSelection,
+        resolveSelection(.{ .after = "run-check-zig-format", .before = "run-check-zig-lints" }),
+    );
 }
 
 fn testResult(status: []const u8, duration_ns: u64) CommandResult {

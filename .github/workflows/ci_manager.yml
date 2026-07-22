@@ -100,21 +100,16 @@ jobs:
   # PRs run only `zig build minici` per OS; the full suite (LLVM eval,
   # valgrind, cross-compile, nix, the 6-OS matrix, ...) runs daily on main via
   # nightly_gate.yml, which gates the `nightly` branch.
-  zig-minici:
+  zig-minici-build:
     needs: check-changes
     if: needs.check-changes.outputs.zig == 'true'
+    name: zig-minici-build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: ${{ matrix.timeout_minutes }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-24.04
-            timeout_minutes: 120
-          - os: macos-15
-            timeout_minutes: 120
-          - os: windows-2025
-            timeout_minutes: 120
+        os: [ubuntu-24.04, macos-15, windows-2025]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -122,7 +117,7 @@ jobs:
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
-          use-cache: true
+          use-cache: false
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
@@ -145,6 +140,16 @@ jobs:
           restore-keys: |
             zig-deps-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Restore or save MiniCI build cache
+        id: minici-build-cache
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          path: |
+            .zig-cache
+            zig-out/bin
+            zig-out/lib
+          key: minici-build-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
       # run-test-cli / run-test-dylib / run-test-archive inside minici).
@@ -159,24 +164,160 @@ jobs:
       # warm cache and goes straight to the run steps, so its failures are
       # genuine and never retried.
       - name: Build MiniCI binaries
+        if: steps.minici-build-cache.outputs.cache-hit != 'true'
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build build-ci
           error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
+  zig-minici:
+    needs: [check-changes, zig-minici-build]
+    if: needs.check-changes.outputs.zig == 'true'
+    name: zig-minici (${{ matrix.shard }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout_minutes }}
+    env:
+      # Warning threshold for the explicit MiniCI build cache. This is a
+      # sanity check for the cache artifact size, not a setup-zig setting.
+      MINICI_BUILD_CACHE_WARN_MB: '10240'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            shard: ubuntu-full
+            timeout_minutes: 120
+            minici_args: []
+          - os: macos-15
+            shard: macos-core
+            timeout_minutes: 120
+            minici_args: ["--minici-to", &minici_core_boundary run-test-zig-module-roc_target]
+          - os: macos-15
+            shard: macos-zig
+            timeout_minutes: 120
+            minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", &minici_harness_boundary run-test-eval]
+          - os: macos-15
+            shard: macos-harness
+            timeout_minutes: 120
+            minici_args: ["--minici-from", *minici_harness_boundary]
+          - os: windows-2025
+            shard: windows-core
+            timeout_minutes: 120
+            minici_args: ["--minici-to", *minici_core_boundary]
+          - os: windows-2025
+            shard: windows-zig
+            timeout_minutes: 120
+            minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
+          - os: windows-2025
+            shard: windows-harness
+            timeout_minutes: 120
+            minici_args: ["--minici-from", *minici_harness_boundary]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.16.0
+          use-cache: false
+
+      - name: Restore MiniCI build cache
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
+        with:
+          path: |
+            .zig-cache
+            zig-out/bin
+            zig-out/lib
+          key: minici-build-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          fail-on-cache-miss: true
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install Rust musl target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+
+      # The embedded lld-link resolves /defaultlib via the LIB env and roc's
+      # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
+      # run-test-cli / run-test-dylib / run-test-archive inside minici).
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
+        with:
+          arch: x64
+
       - name: Run MiniCI
-        run: zig build minici
+        run: zig build minici -- --minici-skip-build ${{ join(matrix.minici_args, ' ') }}
+
+      # `.zig-cache` doubles as Zig's global cache, its local cache, and the
+      # build temp dir. It is now restored from the explicit MiniCI build cache,
+      # so report the composition after each shard to measure cache size and
+      # growth from run-time build work.
+      # One level deep on purpose: o/, h/, p/, tmp/ is the whole question.
+      - name: Report .zig-cache composition
+        if: always() && runner.os != 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          root="${ZIG_LOCAL_CACHE_DIR:-$GITHUB_WORKSPACE/.zig-cache}"
+          limit_mb="$MINICI_BUILD_CACHE_WARN_MB"
+          echo "root=$root  TMPDIR=${TMPDIR:-unset}"
+          if [ ! -d "$root" ]; then echo "(no .zig-cache)"; exit 0; fi
+          # `du -sk`, not `-sh`/`--block-size`: -k is POSIX and identical on BSD
+          # (macOS) and GNU du, and its output can be sorted numerically.
+          for d in "$root"/* "$root"/.[!.]*; do
+            [ -e "$d" ] || continue
+            du -sk "$d"
+          done | sort -rn | awk '{ printf "%10.1f MB  %s\n", $1/1024, $2 }'
+          total_kb="$(du -sk "$root" | awk '{ print $1 }')"
+          awk -v k="$total_kb" -v l="$limit_mb" \
+            'BEGIN { printf "%10.1f MB  TOTAL (limit %s MB)\n", k/1024, l }'
+          if [ "$total_kb" -gt "$(( limit_mb * 1024 ))" ]; then
+            echo "::warning::.zig-cache is $(( total_kb / 1024 )) MB, over the ${limit_mb} MB MiniCI build-cache warning threshold."
+          fi
+
+      - name: Report .zig-cache composition (Windows)
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $root = if ($env:ZIG_LOCAL_CACHE_DIR) { $env:ZIG_LOCAL_CACHE_DIR }
+                  else { Join-Path $env:GITHUB_WORKSPACE '.zig-cache' }
+          $limitMb = [int]$env:MINICI_BUILD_CACHE_WARN_MB
+          Write-Host "root=$root  TEMP=$env:TEMP"
+          if (-not (Test-Path -LiteralPath $root)) { Write-Host '(no .zig-cache)'; exit 0 }
+          # -Force is required, or dotted/hidden subdirs are silently missed.
+          # -ErrorAction SilentlyContinue because deep Zig cache paths can exceed
+          # the enumerator's MAX_PATH; a partial number beats a red step.
+          $rows = Get-ChildItem -LiteralPath $root -Force | ForEach-Object {
+            $m = Get-ChildItem -LiteralPath $_.FullName -Recurse -Force -File -ErrorAction SilentlyContinue |
+                 Measure-Object -Property Length -Sum
+            [pscustomobject]@{
+              Name  = $_.Name
+              MB    = [math]::Round(($m.Sum / 1MB), 1)
+              Files = $m.Count
+            }
+          }
+          $rows | Sort-Object MB -Descending | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+          $totalMb = [math]::Round((($rows | Measure-Object MB -Sum).Sum), 1)
+          $totalFiles = ($rows | Measure-Object Files -Sum).Sum
+          Write-Host ("TOTAL {0} MB across {1} files (limit {2} MB)" -f $totalMb, $totalFiles, $limitMb)
+          if ($totalMb -gt $limitMb) {
+            Write-Host ("::warning::.zig-cache is {0} MB, over the {1} MB MiniCI build-cache warning threshold." -f $totalMb, $limitMb)
+          }
 
       - name: Upload MiniCI report and logs
         if: failure()
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
         with:
-          name: minici-${{ matrix.os }}
+          name: minici-${{ matrix.shard }}
           path: zig-out/minici/
 
   finish:
-    needs: [check-changes, zig-minici]
+    needs: [check-changes, zig-minici-build, zig-minici]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -187,6 +328,10 @@ jobs:
             exit 1
           fi
           if [[ "${{ needs.check-changes.outputs.zig }}" == "true" ]]; then
+            if [[ "${{ needs.zig-minici-build.result }}" != "success" ]]; then
+              echo "zig-minici-build failed."
+              exit 1
+            fi
             if [[ "${{ needs.zig-minici.result }}" != "success" ]]; then
               echo "zig-minici failed."
               exit 1

@@ -914,8 +914,11 @@ pub fn writeFdCoordinationFile(ctx: *CliCtx, temp_exe_path: []const u8, shm_hand
     };
     defer fd_file.close(ctx.io.std_io);
 
-    // Write shared memory info to file
-    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ shm_handle.fd, shm_handle.size });
+    // Write shared memory info to file. The handle is written as a plain
+    // integer on both platforms -- on Windows it is a HANDLE (a pointer), and
+    // `ipc.coordination.parseHandle` turns the integer back into one.
+    const handle_int = if (is_windows) @intFromPtr(shm_handle.fd) else shm_handle.fd;
+    const fd_str = try std.fmt.allocPrint(ctx.arena, "{}\n{}", .{ handle_int, shm_handle.size });
     try fd_file.writeStreamingAll(ctx.io.std_io, fd_str);
     try fd_file.sync(ctx.io.std_io);
 }
@@ -1228,7 +1231,12 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args, args[0]),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
-        .glue => |glue_args| try rocGlue(&ctx, glue_args),
+        .glue => |glue_args| rocGlue(&ctx, glue_args) catch |err| switch (err) {
+            error.CliError => {
+                // Problems already recorded in context, render them below
+            },
+            else => return err,
+        },
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .bump => |bump_args| rocBump(&ctx, bump_args) catch |err| switch (err) {
@@ -2319,8 +2327,15 @@ fn rocRunInstalled(ctx: *CliCtx, args: cli_args.RunArgs) CliMainError!void {
     }
 
     const entry = try resolveInstalledEntry(ctx, name);
-    const term = try runCompiledExecutable(ctx, entry.paths.exe_path, args.app_args);
-    try finishCompiledRun(ctx, entry.paths.exe_path, term, 0);
+    if (entry.kind != .executable) {
+        try ctx.io.stderr().print(
+            "Error: `{s}` is installed as a glue spec, not an application. Use it with: roc glue {s} <output-dir> <platform>\n",
+            .{ name, name },
+        );
+        return error.InvalidArguments;
+    }
+    const term = try runCompiledExecutable(ctx, entry.artifact_path, args.app_args);
+    try finishCompiledRun(ctx, entry.artifact_path, term, 0);
 }
 
 const install_manifest_size_limit = 64 * 1024;
@@ -2363,10 +2378,13 @@ fn resolveSourceArg(ctx: *CliCtx, path: []const u8, watch: bool) SourceRefResolv
     }
 }
 
-/// A validated install entry: its paths plus the bundle URL recorded in its
-/// manifest (the entry's compiler-level identity).
+/// A validated install entry: its paths, the kind of artifact it carries,
+/// and the bundle URL recorded in its manifest (the entry's compiler-level
+/// identity).
 const ResolvedInstalledEntry = struct {
     paths: install_store.EntryPaths,
+    kind: install_store.InstallKind,
+    artifact_path: []const u8,
     url: []const u8,
 };
 
@@ -2421,16 +2439,19 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
         } });
     };
     const manifest_url = try ctx.arena.dupe(u8, parsed.manifest().url);
+    // parseManifest already validated the kind string.
+    const kind = install_store.manifestKind(parsed.manifest()).?;
 
-    std.Io.Dir.cwd().access(ctx.io.std_io, entry.exe_path, .{}) catch {
+    const artifact_path = entry.artifactPath(kind);
+    std.Io.Dir.cwd().access(ctx.io.std_io, artifact_path, .{}) catch {
         return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its built executable is missing",
+            .reason = "its built artifact is missing",
         } });
     };
 
-    return .{ .paths = entry, .url = manifest_url };
+    return .{ .paths = entry, .kind = kind, .artifact_path = artifact_path, .url = manifest_url };
 }
 
 fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
@@ -2496,12 +2517,8 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    // First, parse the app file to get the platform reference
-    const platform_spec = try extractPlatformSpecFromApp(ctx, args.path);
-
-    // Resolve platform paths from the platform spec (relative to app file directory)
-    const app_dir = std.fs.path.dirname(args.path) orelse ".";
-    const platform_paths = try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
+    // Resolve platform paths from the app header before linking the host shim.
+    const platform_paths = try resolvePlatformPaths(ctx, args.path);
 
     // Validate platform header and get link spec
     var link_spec: ?roc_target.TargetLinkSpec = null;
@@ -3550,15 +3567,31 @@ fn runWithWindowsHandleInheritance(ctx: *CliCtx, exe_path: []const u8, shm_handl
         } }),
     };
 
-    // Create command line with handle and size as arguments, plus any app arguments
-    const handle_uint = @intFromPtr(shm_handle.fd);
+    // Hand the shared-memory handle and size to the child out of band, the same
+    // way the POSIX path does.
+    //
+    // These used to be passed as the first two command-line arguments. That put
+    // them in the child's argv, where the platform host has no way to tell them
+    // apart from the user's arguments and passes them straight through to the
+    // Roc application: `roc --opt=interpreter app.roc` gave the app
+    // `["...app.roc.exe", "448", "976608"]` instead of just the executable path.
+    // No platform host can be expected to know about roc's IPC plumbing, and
+    // none of them compensate for it, so keep argv clean instead.
+    writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
+        const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
+        const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
+        return ctx.fail(.{ .file_write_failed = .{
+            .path = fd_file_path,
+            .err = err,
+        } });
+    };
 
     // Build command line string with proper quoting for Windows
     var cmd_builder = std.array_list.Managed(u8).initCapacity(ctx.gpa, 256) catch {
         return error.OutOfMemory;
     };
     defer cmd_builder.deinit();
-    try cmd_builder.print("\"{s}\" {} {}", .{ exe_path, handle_uint, shm_handle.size });
+    try cmd_builder.print("\"{s}\"", .{exe_path});
     for (app_args) |arg| {
         try cmd_builder.append(' ');
         try appendWindowsQuotedArg(&cmd_builder, arg);
@@ -3847,29 +3880,24 @@ fn spawnHotShimChild(
     shm_handle: SharedMemoryHandle,
     app_args: []const []const u8,
 ) (CliError || Allocator.Error || std.Thread.SpawnError || std.process.SpawnError)!*HotShimChild {
-    if (comptime !is_windows) {
-        writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
-            const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
-            const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
-            return ctx.fail(.{ .file_write_failed = .{
-                .path = fd_file_path,
-                .err = err,
-            } });
-        };
-    }
+    // Every platform hands the shared-memory handle and size to the child
+    // through the coordination file. Windows used to append them to argv
+    // instead, which leaked roc's IPC plumbing into the Roc application's
+    // arguments -- see the note in `runWithWindowsHandleInheritance`.
+    writeFdCoordinationFile(ctx, exe_path, shm_handle) catch |err| {
+        const temp_dir = std.fs.path.dirname(exe_path) orelse exe_path;
+        const fd_file_path = std.fmt.allocPrint(ctx.arena, "{s}.txt", .{temp_dir}) catch exe_path;
+        return ctx.fail(.{ .file_write_failed = .{
+            .path = fd_file_path,
+            .err = err,
+        } });
+    };
     try makeSharedMemoryHandleInheritable(ctx, shm_handle);
 
-    const coordination_arg_count: usize = if (comptime is_windows) 2 else 0;
-    const argv = try ctx.arena.alloc([]const u8, 1 + coordination_arg_count + app_args.len);
+    const argv = try ctx.arena.alloc([]const u8, 1 + app_args.len);
     argv[0] = exe_path;
-    var app_arg_offset: usize = 1;
-    if (comptime is_windows) {
-        argv[1] = try std.fmt.allocPrint(ctx.arena, "{}", .{@intFromPtr(shm_handle.fd)});
-        argv[2] = try std.fmt.allocPrint(ctx.arena, "{}", .{shm_handle.size});
-        app_arg_offset = 3;
-    }
     for (app_args, 0..) |arg, i| {
-        argv[app_arg_offset + i] = arg;
+        argv[1 + i] = arg;
     }
 
     const child = std.process.spawn(ctx.io.std_io, .{
@@ -6027,114 +6055,64 @@ pub const PlatformPaths = struct {
 
 /// Resolve platform specification from a Roc file to find both host library and platform source.
 /// Returns PlatformPaths with arena-allocated paths (no need to free).
-pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) CliError!PlatformPaths {
-    // Use the parser to extract the platform spec
-    const platform_spec = extractPlatformSpecFromApp(ctx, roc_file_path) catch {
-        return ctx.fail(.{ .file_not_found = .{
-            .path = roc_file_path,
-            .context = .source_file,
-        } });
-    };
+pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) (CliError || Allocator.Error)!PlatformPaths {
+    const header_info = try parseCliAppHeader(ctx, roc_file_path);
     const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    return resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
+    return resolvePlatformRefToPaths(ctx, header_info.platform_ref, roc_file_path, app_dir);
 }
 
-/// Extract platform specification from app file header by parsing it properly.
-/// Takes a CliCtx which provides allocators and error reporting.
-fn extractPlatformSpecFromApp(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})![]const u8 {
-    // Read the app file
-    var source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, app_file_path, ctx.gpa, .unlimited) catch |err| {
-        return ctx.fail(switch (err) {
-            error.FileNotFound => .{ .file_not_found = .{
-                .path = app_file_path,
-                .context = .source_file,
-            } },
-            else => .{ .file_read_failed = .{
-                .path = app_file_path,
-                .err = err,
-            } },
-        });
-    };
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from file path (strips .roc extension)
-    const module_name = try base.module_path.getModuleNameAlloc(ctx.arena, app_file_path);
-
-    // Create ModuleEnv for parsing
-    var env = ModuleEnv.init(ctx.gpa, source) catch {
-        return ctx.fail(.{ .module_init_failed = .{
+fn parseCliAppHeader(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})!compile.app_header.AppHeaderInfo {
+    return compile.app_header.parseAppHeader(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.NotAnAppHeader => ctx.fail(.{ .expected_app_header = .{
             .path = app_file_path,
-            .err = error.OutOfMemory,
-        } });
-    };
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    env.common.calcLineStarts(ctx.gpa) catch {
-        return ctx.fail(.{ .module_init_failed = .{
+            .found = "non-app",
+        } }),
+        error.FileNotFound => ctx.fail(.{ .file_not_found = .{
             .path = app_file_path,
-            .err = error.OutOfMemory,
-        } });
-    };
-
-    // Parse the source
-    const ast = parse.file(ctx.gpa, &env.common) catch {
-        return ctx.fail(.{ .module_init_failed = .{
+            .context = .source_file,
+        } }),
+        error.AccessDenied => ctx.fail(.{ .file_read_failed = .{
             .path = app_file_path,
-            .err = error.OutOfMemory,
-        } });
+            .err = error.AccessDenied,
+        } }),
+        error.StreamTooLong => ctx.fail(.{ .file_read_failed = .{
+            .path = app_file_path,
+            .err = error.StreamTooLong,
+        } }),
+        error.IoError => ctx.fail(.{ .file_read_failed = .{
+            .path = app_file_path,
+            .err = error.ReadFailed,
+        } }),
     };
-    defer ast.deinit();
-
-    // Get the file header
-    const file = ast.store.getFile();
-    const header = ast.store.getHeader(file.header);
-
-    // Check if this is an app file
-    switch (header) {
-        .app => |a| {
-            // Get the platform field
-            const pf = ast.store.getRecordField(a.platform_idx);
-            const value_expr = pf.value orelse {
-                return ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } });
-            };
-
-            // Extract the string value from the expression
-            const platform_spec = stringFromExpr(ast, value_expr) catch {
-                return ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } });
-            };
-            return try ctx.arena.dupe(u8, platform_spec);
-        },
-        else => {
-            return ctx.fail(.{ .expected_app_header = .{
-                .path = app_file_path,
-                .found = @tagName(header),
-            } });
-        },
-    }
 }
 
-/// Extract a string value from an expression (for platform/package paths).
-fn stringFromExpr(ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) error{ExpectedString}![]const u8 {
-    const e = ast.store.getExpr(expr_idx);
-    return switch (e) {
-        .string => |s| {
-            // For simple strings, iterate through the parts
-            for (ast.store.exprSlice(s.parts)) |part_idx| {
-                const part = ast.store.getExpr(part_idx);
-                if (part == .string_part) {
-                    // Return the first string part (platform specs are simple strings)
-                    return ast.resolve(part.string_part.token);
-                }
-            }
-            return error.ExpectedString;
+fn resolvePlatformRefToPaths(
+    ctx: *CliCtx,
+    platform_ref: compile.app_header.PlatformRef,
+    app_file_path: []const u8,
+    base_dir: []const u8,
+) (CliError || Allocator.Error)!PlatformPaths {
+    return switch (platform_ref) {
+        .none => ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } }),
+        .path_or_url => |platform_spec| resolvePlatformSpecToPaths(ctx, platform_spec, base_dir),
+        .compiler_owned => |platform| blk: {
+            const materialized = compile.compiler_platforms.materialize(ctx.arena, ctx.coreCtx(), null, platform) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NoHomeDirectory => return ctx.fail(.{ .cache_dir_unavailable = .{
+                    .reason = "Could not determine cache directory",
+                } }),
+                error.AccessDenied => return ctx.fail(.{ .file_write_failed = .{
+                    .path = compile.compiler_platforms.identity(platform),
+                    .err = error.AccessDenied,
+                } }),
+                error.IoError => return ctx.fail(.{ .file_write_failed = .{
+                    .path = compile.compiler_platforms.identity(platform),
+                    .err = error.WriteFailed,
+                } }),
+            };
+            break :blk .{ .platform_source_path = materialized.root_file };
         },
-        else => error.ExpectedString,
     };
 }
 
@@ -6451,19 +6429,24 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
         if (std.mem.eql(u8, parsed.manifest().url, args.url)) {
             // Same name + same URL: an intact entry makes this a no-op, and a
             // damaged one is safe to repair since the URL matches.
-            const exe_intact = intact: {
-                std.Io.Dir.cwd().access(ctx.io.std_io, entry.exe_path, .{}) catch break :intact false;
+            // parseManifest already validated the kind string.
+            const existing_kind = install_store.manifestKind(parsed.manifest()).?;
+            const artifact_intact = intact: {
+                std.Io.Dir.cwd().access(ctx.io.std_io, entry.artifactPath(existing_kind), .{}) catch break :intact false;
                 break :intact true;
             };
-            if (exe_intact) {
-                try ctx.io.stdout().print("`{s}` is already installed. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand });
+            if (artifact_intact) {
+                switch (existing_kind) {
+                    .executable => try ctx.io.stdout().print("`{s}` is already installed. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand }),
+                    .glue => try ctx.io.stdout().print("`{s}` is already installed. Use it with: roc glue {s} <output-dir> <platform>\n", .{ args.shorthand, args.shorthand }),
+                }
                 return;
             }
             std.Io.Dir.cwd().deleteTree(ctx.io.std_io, entry.entry_dir) catch {
                 return ctx.fail(.{ .install_entry_corrupt = .{
                     .name = args.shorthand,
                     .path = entry.entry_dir,
-                    .reason = "its built executable is missing, and the damaged entry could not be removed for repair",
+                    .reason = "its built artifact is missing, and the damaged entry could not be removed for repair",
                 } });
             };
         } else {
@@ -6521,37 +6504,63 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
         } });
     };
 
-    try ctx.io.stdout().print("Building {s} with --opt=speed ...\n", .{args.shorthand});
-    ctx.io.flush();
+    // An app on a compiler-owned plugin platform (a glue spec) builds to a
+    // plugin dylib; every other bundle goes through the executable pipeline,
+    // which owns the diagnostics for non-app headers. Header-parse failures
+    // are classified as executable for the same reason: that pipeline
+    // reports them properly.
+    const install_kind: install_store.InstallKind = kind: {
+        const header = compile.app_header.parseAppHeader(ctx.coreCtx(), ctx.gpa, ctx.arena, staging.main_roc_path) catch break :kind .executable;
+        break :kind switch (header.platform_ref) {
+            .compiler_owned => |plugin_platform| switch (plugin_platform) {
+                .glue => .glue,
+            },
+            else => .executable,
+        };
+    };
 
-    var warning_count: usize = 0;
-    try rocBuild(ctx, .{
-        .path = staging.main_roc_path,
-        .opt = .speed,
-        .target = null,
-        .output = staging.exe_path,
-        .debug = false,
-        .allow_errors = false,
-        .verbose = false,
-        .no_cache = false,
-        .max_threads = args.max_threads,
-        .wasm_memory = null,
-        .wasm_stack_size = null,
-        .exit_on_warnings = false,
-        .warning_count_out = &warning_count,
-        .require_executable_output = true,
-        .require_host_runnable_output = true,
-        .suppress_build_status = true,
-        .resolve_limits = args.resolve_limits,
-        .synthetic_default_platform = false,
-        .source_dir_override = null,
-        .root_source_url = args.url,
-    }, arg0);
+    switch (install_kind) {
+        .executable => {
+            try ctx.io.stdout().print("Building {s} with --opt=speed ...\n", .{args.shorthand});
+            ctx.io.flush();
+
+            var warning_count: usize = 0;
+            try rocBuild(ctx, .{
+                .path = staging.main_roc_path,
+                .opt = .speed,
+                .target = null,
+                .output = staging.exe_path,
+                .debug = false,
+                .allow_errors = false,
+                .verbose = false,
+                .no_cache = false,
+                .max_threads = args.max_threads,
+                .wasm_memory = null,
+                .wasm_stack_size = null,
+                .exit_on_warnings = false,
+                .warning_count_out = &warning_count,
+                .require_executable_output = true,
+                .require_host_runnable_output = true,
+                .suppress_build_status = true,
+                .resolve_limits = args.resolve_limits,
+                .synthetic_default_platform = false,
+                .source_dir_override = null,
+                .root_source_url = args.url,
+            }, arg0);
+        },
+        .glue => {
+            try ctx.io.stdout().print("Building {s} glue plugin with --opt=speed ...\n", .{args.shorthand});
+            ctx.io.flush();
+
+            try glue.buildGlueSpecDylibFile(ctx.gpa, ctx.io.stderr(), staging.main_roc_path, staging.glue_dylib_path, .speed, ctx.io.std_io);
+        },
+    }
 
     // The manifest is written last, so a staged entry is complete by the time
     // it can be published.
     const manifest_json = try install_store.manifestToJson(ctx.arena, .{
         .format_version = install_store.manifest_format_version,
+        .kind = @tagName(install_kind),
         .url = args.url,
         .hash = parsed_url.hash,
         .compiler_version = build_options.compiler_version,
@@ -6580,7 +6589,10 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
         }
     };
 
-    try ctx.io.stdout().print("Installed {s}. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand });
+    switch (install_kind) {
+        .executable => try ctx.io.stdout().print("Installed {s}. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand }),
+        .glue => try ctx.io.stdout().print("Installed {s}. Use it with: roc glue {s} <output-dir> <platform>\n", .{ args.shorthand, args.shorthand }),
+    }
 }
 
 /// Resolve a URL platform specification by downloading and caching the bundle.
@@ -13597,22 +13609,57 @@ fn envVarEquals(allocator: Allocator, name: []const u8, expected: []const u8) Al
 
 const glue = @import("glue");
 
-fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) glue.GlueError!void {
-    const temp_dir = createUniqueTempDir(ctx) catch {
-        return error.TempDirCreation;
-    };
-    defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
+const RocGlueError = glue.GlueError || CliError || SourceRefResolveError || error{InvalidArguments};
+
+fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
+    // The glue spec accepts a local path, a bundle URL, or an installed
+    // shorthand. An installed glue entry also carries the plugin dylib that
+    // was built with --opt=speed at install time, so it is loaded directly
+    // instead of compiling a dylib on the fly.
+    var glue_spec = args.glue_spec;
+    var installed_dylib_path: ?[]const u8 = null;
+    switch (install_store.classifySourceRef(args.glue_spec)) {
+        .local_path => {},
+        .url => glue_spec = (try resolveUrlBundle(ctx, args.glue_spec)).source_path,
+        .shorthand => {
+            const entry = try resolveInstalledEntry(ctx, args.glue_spec);
+            if (entry.kind != .glue) {
+                try ctx.io.stderr().print(
+                    "Error: `{s}` is installed as an application, not a glue spec. Run it with: roc run {s}\n",
+                    .{ args.glue_spec, args.glue_spec },
+                );
+                return error.InvalidArguments;
+            }
+            glue_spec = entry.paths.main_roc_path;
+            installed_dylib_path = entry.artifact_path;
+        },
+    }
+    const platform_path = (try resolveSourceArg(ctx, args.platform_path, false)).path;
+
     return glue.rocGlue(ctx.gpa, ctx.io.stderr(), ctx.io.stdout(), .{
-        .glue_spec = args.glue_spec,
+        .glue_spec = glue_spec,
         .output_dir = args.output_dir,
-        .platform_path = args.platform_path,
+        .platform_path = platform_path,
         .no_cache = args.no_cache,
+        .installed_dylib_path = installed_dylib_path,
         .opt = switch (args.opt) {
             .dev => .dev,
-            .interpreter => .interpreter,
-            .size, .speed => unreachable,
+            .size => .size,
+            .speed => .speed,
+            .interpreter => unreachable,
         },
-    }, temp_dir, ctx.io.std_io);
+    }, ctx.coreCtx(), ctx.io.std_io) catch |err| {
+        switch (err) {
+            error.GlueDylibStampMismatch, error.GlueDylibUnavailable => if (installed_dylib_path != null) {
+                try ctx.io.stderr().print(
+                    "The installed glue plugin for `{s}` cannot be used by this compiler. Reinstall it with: roc install {s} <URL>\n",
+                    .{ args.glue_spec, args.glue_spec },
+                );
+            },
+            else => {},
+        }
+        return err;
+    };
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.

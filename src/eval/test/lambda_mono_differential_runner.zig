@@ -21,6 +21,12 @@
 //! Generated corpus cases additionally run under the dev JIT backend and must
 //! agree with the interpreter (cross-backend agreement on the sweep corpus).
 //!
+//! Cases run through `test_harness.ProcessPool`: forked children on POSIX,
+//! persistent `--worker-stream` worker processes on Windows. Either way each
+//! case is isolated, so a compiler panic, evaluator crash, or hang is
+//! attributed to that case instead of killing the whole run. The `fail-fast`
+//! flag switches to sequential in-process execution for debugging.
+//!
 //! The harness only works in Debug builds: release builds never materialize
 //! the Lambda Mono tree.
 
@@ -30,6 +36,7 @@ const eval = @import("eval");
 const collections = @import("collections");
 const postcheck = @import("postcheck");
 const test_harness = @import("test_harness");
+const build_options = @import("build_options");
 
 const helpers = eval.test_helpers;
 const eval_tests = @import("eval_tests.zig");
@@ -38,7 +45,7 @@ const LambdaMonoEval = postcheck.LambdaMono.Eval;
 const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
 
 /// Errors the runner's entry point can surface.
-const RunnerError = std.mem.Allocator.Error || test_harness.Timer.Error || std.fmt.ParseIntError || error{
+const RunnerError = std.mem.Allocator.Error || test_harness.Timer.Error || test_harness.WorkerArgvError || std.fmt.ParseIntError || error{
     RequiresDebugBuild,
     InvalidArgument,
     Diverged,
@@ -82,6 +89,10 @@ const CaseResult = struct {
     status: CaseStatus,
     /// Owned detail text for diverged/unsupported/interpreter_error.
     detail: ?[]u8 = null,
+    /// Set only by the pool's watchdog (`timeout_result`): the isolated case
+    /// process exceeded its budget and was killed, so there is no owned
+    /// detail text to attribute the failure with.
+    timed_out: bool = false,
 };
 
 const Totals = struct {
@@ -111,11 +122,15 @@ const Report = struct {
     total_cases: usize,
     executed: usize = 0,
     saw_failure: bool = false,
+    /// True when cases record as they execute (fail-fast sequential mode),
+    /// where a periodic progress line is useful. Pool runs record all results
+    /// after completion and rely on the pool's own progress reporting.
+    live_progress: bool = false,
 
     fn record(self: *Report, case: Case, result: *CaseResult) std.mem.Allocator.Error!void {
         const gpa = self.gpa;
         self.executed += 1;
-        if (!verbose_logging and self.executed % 200 == 0) {
+        if (self.live_progress and !verbose_logging and self.executed % 200 == 0) {
             std.debug.print("... {d}/{d} cases\n", .{ self.executed, self.total_cases });
         }
         switch (result.status) {
@@ -173,10 +188,14 @@ const Report = struct {
                     self.totals.unexpected_child_failed += 1;
                     self.saw_failure = true;
                 }
+                const fallback: []const u8 = if (result.timed_out)
+                    "timed out"
+                else
+                    "child died without a result (compiler panic or signal)";
                 std.debug.print("CHILD-FAIL {s}{s}: {s}\n", .{
                     case.name,
                     if (case.known_panic) " (known panic)" else "",
-                    result.detail orelse "(no detail)",
+                    result.detail orelse fallback,
                 });
                 if (result.detail) |detail| gpa.free(detail);
             },
@@ -193,9 +212,8 @@ fn logVerbose(comptime fmt: []const u8, args: anytype) void {
 }
 
 const posix = std.posix;
-const has_fork = builtin.os.tag != .windows;
 
-/// Wire status bytes for the child-to-parent result protocol.
+/// Wire status bytes for the case-to-parent result protocol.
 fn statusByte(status: CaseStatus) u8 {
     return switch (status) {
         .pass => 'P',
@@ -221,218 +239,65 @@ fn statusFromByte(byte: u8) ?CaseStatus {
     };
 }
 
-/// One forked case whose result the parent has not yet collected.
-const PendingChild = struct {
-    case: Case,
-    pid: posix.pid_t,
-    fd: posix.fd_t,
-    deadline_ns: u64,
-    payload: std.ArrayList(u8),
-};
-
-/// Fork one case into an isolated child so a compiler panic, evaluator
-/// crash, or hang is attributed to that case instead of killing the whole
-/// run. The child writes one status byte plus the detail text and exits.
-/// Returns null when the fork machinery is unavailable (caller runs inline).
-fn spawnCase(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    case: Case,
-    timeout_ms: u64,
-    siblings: []const PendingChild,
-) std.mem.Allocator.Error!?PendingChild {
-    if (comptime !has_fork) return null;
-
-    const pipe_fds = test_harness.pipe() catch return null;
-    const pipe_read = pipe_fds[0];
-    const pipe_write = pipe_fds[1];
-
-    const fork_result = test_harness.fork() catch {
-        test_harness.closeFd(pipe_read);
-        test_harness.closeFd(pipe_write);
-        return null;
+/// Run one case for the process pool. Harness errors (only OOM) are folded
+/// into a child-failed result so the pool's fixed Result type can carry them.
+fn runCaseForPool(io: std.Io, allocator: std.mem.Allocator, case: Case, timeout_ms: u64) CaseResult {
+    _ = timeout_ms; // the pool's parent-side watchdog enforces the budget
+    return runCase(allocator, io, case) catch |err| .{
+        .status = .child_failed,
+        .detail = std.fmt.allocPrint(allocator, "child error: {s}", .{@errorName(err)}) catch null,
     };
+}
 
-    if (fork_result == 0) {
-        // Child: close inherited pipe ends (ours and every sibling's, so
-        // sibling EOFs are not held open by this process), run the case, and
-        // serialize the result. The child _exit()s, so the OS reclaims all
-        // memory — no deinit needed.
-        test_harness.closeFd(pipe_read);
-        for (siblings) |sibling| test_harness.closeFd(sibling.fd);
-        _ = std.c.setsid();
-        var child_arena = collections.SingleThreadArena.init(gpa);
-        const result = runCase(child_arena.allocator(), io, case) catch |err| {
-            test_harness.writeAll(pipe_write, &[_]u8{'E'});
-            test_harness.writeAll(pipe_write, @errorName(err));
-            test_harness.closeFd(pipe_write);
-            std.c._exit(2);
-        };
-        test_harness.writeAll(pipe_write, &[_]u8{statusByte(result.status)});
-        if (result.detail) |detail| test_harness.writeAll(pipe_write, detail);
-        test_harness.closeFd(pipe_write);
-        std.c._exit(0);
-    }
+/// Serialize a case result for the pool: one status byte followed by the
+/// detail text, uncapped — divergence details are the harness's product.
+fn serializeCaseResult(fd: posix.fd_t, result: CaseResult) void {
+    test_harness.writeAll(fd, &[_]u8{statusByte(result.status)});
+    if (result.detail) |detail| test_harness.writeAll(fd, detail);
+}
 
-    test_harness.closeFd(pipe_write);
+/// Streamed variant for persistent worker mode: the same bytes behind a u32
+/// frame-length prefix.
+fn serializeCaseResultStreamed(fd: posix.fd_t, result: CaseResult) void {
+    const detail_len = if (result.detail) |detail| detail.len else 0;
+    test_harness.writeFrameHeader(fd, 1 + detail_len);
+    serializeCaseResult(fd, result);
+}
+
+fn deserializeCaseResult(buf: []const u8, gpa: std.mem.Allocator) ?CaseResult {
+    if (buf.len == 0) return null;
+    const status = statusFromByte(buf[0]) orelse return null;
+    const detail: ?[]u8 = if (buf.len > 1) gpa.dupe(u8, buf[1..]) catch null else null;
+    return .{ .status = status, .detail = detail };
+}
+
+fn stabilizeCaseResult(gpa: std.mem.Allocator, result: CaseResult) CaseResult {
     return .{
-        .case = case,
-        .pid = fork_result,
-        .fd = pipe_read,
-        .deadline_ns = test_harness.monotonicNs() + timeout_ms * 1_000_000,
-        .payload = .empty,
+        .status = result.status,
+        .detail = if (result.detail) |detail| gpa.dupe(u8, detail) catch null else null,
+        .timed_out = result.timed_out,
     };
 }
 
-/// Reap a finished (or timed-out) child and turn its payload into a result.
-/// Closes the pipe and frees the payload buffer.
-fn finalizeChild(gpa: std.mem.Allocator, child: *PendingChild, timed_out: bool) std.mem.Allocator.Error!CaseResult {
-    if (timed_out) {
-        posix.kill(-child.pid, posix.SIG.KILL) catch {
-            posix.kill(child.pid, posix.SIG.KILL) catch {};
-        };
-    }
-    const wait_result = test_harness.waitpid(child.pid, 0);
-    test_harness.closeFd(child.fd);
-    defer child.payload.deinit(gpa);
-
-    if (timed_out) {
-        return CaseResult{
-            .status = .child_failed,
-            .detail = try gpa.dupe(u8, "timed out"),
-        };
-    }
-    if (child.payload.items.len == 0) {
-        return CaseResult{
-            .status = .child_failed,
-            .detail = try std.fmt.allocPrint(
-                gpa,
-                "child died without a result (compiler panic or signal; wait status {d})",
-                .{wait_result.status},
-            ),
-        };
-    }
-    const first = child.payload.items[0];
-    if (first == 'E') {
-        return CaseResult{
-            .status = .child_failed,
-            .detail = try std.fmt.allocPrint(gpa, "child error: {s}", .{child.payload.items[1..]}),
-        };
-    }
-    const status = statusFromByte(first) orelse {
-        return CaseResult{
-            .status = .child_failed,
-            .detail = try std.fmt.allocPrint(gpa, "malformed child payload ({d} bytes)", .{child.payload.items.len}),
-        };
-    };
-    const detail: ?[]u8 = if (child.payload.items.len > 1)
-        try gpa.dupe(u8, child.payload.items[1..])
-    else
-        null;
-    return CaseResult{ .status = status, .detail = detail };
+fn getCaseName(case: Case) []const u8 {
+    return case.name;
 }
 
-/// Run cases through a pool of forked children, collecting results as each
-/// child finishes. Result ordering follows completion, not submission.
-fn runPool(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    run_list: []const Case,
-    job_limit: usize,
-    timeout_ms: u64,
-    fail_fast: bool,
-    report: *Report,
-) std.mem.Allocator.Error!void {
-    var pending: std.ArrayList(PendingChild) = .empty;
-    defer {
-        for (pending.items) |*child| {
-            posix.kill(-child.pid, posix.SIG.KILL) catch {
-                posix.kill(child.pid, posix.SIG.KILL) catch {};
-            };
-            _ = test_harness.waitpid(child.pid, 0);
-            test_harness.closeFd(child.fd);
-            child.payload.deinit(gpa);
-        }
-        pending.deinit(gpa);
-    }
-
-    var next: usize = 0;
-    var read_buf: [4096]u8 = undefined;
-    while (next < run_list.len or pending.items.len > 0) {
-        const stop_spawning = fail_fast and report.saw_failure;
-        while (next < run_list.len and pending.items.len < job_limit and !stop_spawning) {
-            const case = run_list[next];
-            next += 1;
-            if (try spawnCase(gpa, io, case, timeout_ms, pending.items)) |child| {
-                try pending.append(gpa, child);
-            } else {
-                var result = try runCase(gpa, io, case);
-                try report.record(case, &result);
-            }
-        }
-        if (pending.items.len == 0) {
-            if (stop_spawning) break;
-            continue;
-        }
-
-        const poll_fds = try gpa.alloc(posix.pollfd, pending.items.len);
-        defer gpa.free(poll_fds);
-        var min_deadline: u64 = std.math.maxInt(u64);
-        for (pending.items, poll_fds) |child, *pfd| {
-            pfd.* = .{
-                .fd = child.fd,
-                .events = posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL,
-                .revents = 0,
-            };
-            min_deadline = @min(min_deadline, child.deadline_ns);
-        }
-        const now_ns = test_harness.monotonicNs();
-        const poll_timeout_ms: i32 = if (min_deadline <= now_ns)
-            0
-        else
-            @intCast(@min((min_deadline - now_ns) / 1_000_000 + 1, 60_000));
-        _ = posix.poll(poll_fds, poll_timeout_ms) catch {};
-
-        // Scan with stable indices, then remove finished children from the
-        // highest index down so swapRemove never disturbs a lower index.
-        var finished_buf: [64]struct { index: usize, timed_out: bool } = undefined;
-        var finished_count: usize = 0;
-        const scan_now_ns = test_harness.monotonicNs();
-        for (pending.items, poll_fds, 0..) |*child, pfd, index| {
-            if (finished_count == finished_buf.len) break;
-            const revents = pfd.revents;
-            var eof = false;
-            if (revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR | posix.POLL.NVAL) != 0) {
-                const bytes_read = posix.read(child.fd, &read_buf) catch blk: {
-                    eof = true;
-                    break :blk 0;
-                };
-                if (bytes_read == 0) {
-                    eof = true;
-                } else {
-                    try child.payload.appendSlice(gpa, read_buf[0..bytes_read]);
-                }
-            }
-            if (eof) {
-                finished_buf[finished_count] = .{ .index = index, .timed_out = false };
-                finished_count += 1;
-            } else if (scan_now_ns >= child.deadline_ns) {
-                finished_buf[finished_count] = .{ .index = index, .timed_out = true };
-                finished_count += 1;
-            }
-        }
-
-        var f = finished_count;
-        while (f > 0) {
-            f -= 1;
-            const entry = finished_buf[f];
-            var child = pending.items[entry.index];
-            _ = pending.swapRemove(entry.index);
-            var result = try finalizeChild(gpa, &child, entry.timed_out);
-            try report.record(child.case, &result);
-        }
-    }
-}
+/// Process pool: forked children on POSIX, persistent `--worker-stream`
+/// worker processes on Windows. Both isolate each case, so a compiler panic,
+/// evaluator crash, or hang is attributed to that case instead of killing
+/// the whole run.
+const Pool = test_harness.ProcessPool(Case, CaseResult, .{
+    .runTest = &runCaseForPool,
+    .serialize = &serializeCaseResult,
+    .serializeStreamed = &serializeCaseResultStreamed,
+    .deserialize = &deserializeCaseResult,
+    .default_result = .{ .status = .child_failed },
+    .timeout_result = .{ .status = .child_failed, .timed_out = true },
+    .stabilizeResult = &stabilizeCaseResult,
+    .getName = &getCaseName,
+    .use_process_groups = true,
+});
 
 /// Entry point for the Lambda Mono differential harness.
 pub fn main(init: std.process.Init) RunnerError!void {
@@ -443,8 +308,8 @@ pub fn main(init: std.process.Init) RunnerError!void {
         return error.RequiresDebugBuild;
     }
 
-    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
+    var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
 
     var args_arena = collections.SingleThreadArena.init(gpa);
@@ -552,16 +417,35 @@ pub fn main(init: std.process.Init) RunnerError!void {
         .total_cases = run_list.items.len,
     };
 
-    if (comptime has_fork) {
-        const cpu_count = std.Thread.getCpuCount() catch 4;
-        const default_jobs = @min(@max(cpu_count / 2, 1), 12);
-        const job_limit = @max(cli.max_threads orelse default_jobs, 1);
-        try runPool(gpa, io, run_list.items, job_limit, cli.timeout_ms, fail_fast, &report);
-    } else {
+    // Worker modes: the Windows pool spawned this process to execute specific
+    // cases. The worker argv template preserves every selection flag, so the
+    // run_list built above matches the parent's and indices stay aligned.
+    if (Pool.runWorkerMode(io, cli, run_list.items, cli.timeout_ms)) return;
+
+    if (fail_fast) {
+        // Sequential in-process debugging mode: deterministic order, live
+        // output, stop at the first failure. No crash isolation — a compiler
+        // panic surfaces directly in this process.
+        report.live_progress = true;
         for (run_list.items) |case| {
             var result = try runCase(gpa, io, case);
             try report.record(case, &result);
-            if (fail_fast and report.saw_failure) break;
+            if (report.saw_failure) break;
+        }
+    } else {
+        const results = try gpa.alloc(CaseResult, run_list.items.len);
+        defer gpa.free(results);
+        @memset(results, .{ .status = .child_failed });
+
+        const worker_argv_template = try test_harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
+
+        const cpu_count = std.Thread.getCpuCount() catch 4;
+        const job_limit = @max(cli.max_threads orelse @min(cpu_count, run_list.items.len), 1);
+        Pool.run(io, run_list.items, results, job_limit, cli.timeout_ms, gpa, worker_argv_template);
+
+        for (run_list.items, results) |case, pool_result| {
+            var result = pool_result;
+            try report.record(case, &result);
         }
     }
     const executed = report.executed;
@@ -624,13 +508,18 @@ fn printHelp() void {
     std.debug.print(
         "lambda-mono differential runner\n\n" ++
             "Compares the LIR interpreter (direct solved-to-LIR lowering) against a\n" ++
-            "tree-walking evaluator over the Debug-materialized Lambda Mono program.\n\n" ++
+            "tree-walking evaluator over the Debug-materialized Lambda Mono program.\n" ++
+            "Cases run in parallel isolated processes (forked children on POSIX,\n" ++
+            "persistent worker processes on Windows).\n\n" ++
             "Options:\n" ++
             "  --filter <substr>   only run cases whose name/source matches (repeatable)\n" ++
+            "  --threads <N>       max concurrent case processes (default: min(cpu_count, cases))\n" ++
+            "  --timeout <ms>      per-case watchdog budget (default: 120000)\n" ++
             "  --verbose           per-case logging\n" ++
             "  corpus-only         only the checked-in eval corpus\n" ++
             "  generated-only      only the generated sweep corpus\n" ++
-            "  fail-fast           stop at the first divergence\n" ++
+            "  fail-fast           stop at the first failure; runs cases sequentially\n" ++
+            "                      in-process (no crash isolation) for debugging\n" ++
             "  max-cases=N         stop after N cases\n",
         .{},
     );

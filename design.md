@@ -1075,18 +1075,19 @@ alias roots union-find representatives for concrete structures.
 
 The compile coordinator records phase progress separately from terminal module
 outcome. A terminal module has exactly one explicit outcome: success or failure.
-Successful completion means the module produced all checked module data
-required by importers, including its final content identity. Failed completion
-is terminal only for scheduling and accounting; any partial `ModuleEnv` retained
-for diagnostics or watch inputs is not checked import data.
+Successful completion means the module produced the complete `ModuleEnv` and
+checked module data required by importers, including its final content identity.
+Failed completion is terminal only for scheduling and accounting; any partial
+`ModuleEnv` retained for diagnostics or watch inputs is not valid importer input.
 
-Every checked-module dependency edge requires successful completion. Canonicalization,
-content-identity construction, checking, checked module cache insertion, and platform
-requirement checking may consume only successful imported modules. A known
-failed module causes failure to propagate iteratively through all local-import,
-cross-package-import, and registered platform/app dependency edges. An import
-that cannot be resolved is distinct from a known failed module and proceeds only
-far enough for canonicalization to emit its source diagnostic.
+Every scheduling edge that consumes imported `ModuleEnv` or checked module data
+requires successful completion. Canonicalization, content-identity construction,
+checking, checked module cache construction, and platform requirement checking
+may consume only successful imported modules. A known failed module causes
+failure to propagate iteratively through all local-import, cross-package-import,
+and registered platform/app dependency edges. An import that cannot be resolved
+is distinct from a known failed module and proceeds only far enough for
+canonicalization to emit its source diagnostic.
 
 When a local import closes a cycle, the coordinator records the closing edge
 before reporting it. It then identifies the exact strongly connected component
@@ -1904,8 +1905,9 @@ Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,
 only that ordinary form may be rewritten into a hosted declaration. Checking and
-method-registry construction consume the explicit derived-method kind and must not
-recover compiler intent from identifier text or the annotation shape.
+insertion into the checked method registry consume the explicit derived-method
+kind and must not recover compiler intent from identifier text or the annotation
+shape.
 
 Derived `map` and `map!` apply only to tag-union backing shapes. The checker
 selects one direct tag payload slot; it never descends into records, tuples, or

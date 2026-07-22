@@ -2916,13 +2916,9 @@ pub const Interpreter = struct {
         args: ?[*]const u8,
         capture: ?[*]u8,
     ) callconv(.c) void {
-        const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
-        const active_interpreter = env.active_interpreter orelse {
-            ops.crash("LIR/interpreter erased callable trampoline ran without an active interpreter");
-            unreachable;
-        };
-        const self: *LirInterpreter = @ptrCast(@alignCast(active_interpreter));
-        const callable = self.resolveInterpreterCallable(capture);
+        const resolved = resolveTrampolineCallable(ops, capture);
+        const self = resolved.interpreter;
+        const callable = resolved.callable;
         self.callInterpreterErasedCallable(callable.proc_id, callable.capture_value_ptr, ret, args) catch |err| switch (err) {
             error.OutOfMemory => ops.crash("LIR/interpreter erased callable trampoline ran out of memory"),
             error.RuntimeError => ops.crash("LIR/interpreter erased callable trampoline hit runtime error"),
@@ -2940,11 +2936,57 @@ pub const Interpreter = struct {
         capture_value_ptr: [*]u8,
     };
 
+    const ResolvedTrampolineCallable = struct {
+        interpreter: *LirInterpreter,
+        callable: ResolvedInterpreterCallable,
+    };
+
+    fn resolveTrampolineCallable(ops: *RocOps, capture: ?[*]u8) ResolvedTrampolineCallable {
+        const capture_ptr = capture orelse {
+            ops.crash("LIR/interpreter invariant violated: erased callable trampoline received a null capture pointer");
+            unreachable;
+        };
+
+        if (rocOpsAreInterpreterManaged(ops)) {
+            const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
+            const active_interpreter = env.active_interpreter orelse {
+                ops.crash("LIR/interpreter erased callable trampoline ran without an active interpreter");
+                unreachable;
+            };
+            const interpreter: *LirInterpreter = @ptrCast(@alignCast(active_interpreter));
+            return .{
+                .interpreter = interpreter,
+                .callable = interpreter.resolveInterpreterCallableFromCapture(capture_ptr),
+            };
+        }
+
+        const context = erasedCallableInterpreterContextFromCapture(capture_ptr);
+        const interpreter = context.interpreter;
+        return .{
+            .interpreter = interpreter,
+            .callable = .{
+                .proc_id = @enumFromInt(context.proc_id),
+                .capture_value_ptr = capture_ptr + context.capture_value_offset,
+            },
+        };
+    }
+
+    fn rocOpsAreInterpreterManaged(ops: *const RocOps) bool {
+        return @intFromPtr(ops.roc_alloc) == @intFromPtr(&InterpreterRocEnv.rocAllocFn) and
+            @intFromPtr(ops.roc_dealloc) == @intFromPtr(&InterpreterRocEnv.rocDeallocFn) and
+            @intFromPtr(ops.roc_realloc) == @intFromPtr(&InterpreterRocEnv.rocReallocFn) and
+            @intFromPtr(ops.roc_crashed) == @intFromPtr(&InterpreterRocEnv.rocCrashedFn);
+    }
+
     fn resolveInterpreterCallable(self: *LirInterpreter, capture: ?[*]u8) ResolvedInterpreterCallable {
         const capture_ptr = capture orelse self.invariantFailed(
             "LIR/interpreter invariant violated: erased callable trampoline received a null capture pointer",
             .{},
         );
+        return self.resolveInterpreterCallableFromCapture(capture_ptr);
+    }
+
+    fn resolveInterpreterCallableFromCapture(self: *LirInterpreter, capture_ptr: [*]u8) ResolvedInterpreterCallable {
         for (self.static_erased_callables) |entry| {
             if (@intFromPtr(entry.capture_ptr) == @intFromPtr(capture_ptr)) {
                 return .{ .proc_id = entry.proc_id, .capture_value_ptr = capture_ptr };

@@ -13,7 +13,7 @@
 //!   --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
 //!   --include-llvm       Include size and speed LLVM backend jobs
 //!   --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
-//!   --glue-opt <opt>     Glue execution mode; supported value: interpreter
+//!   --glue-opt <opt>     Glue execution mode: default, dev, size, or speed
 //!   --verbose            Print PASS results and timing details
 
 const std = @import("std");
@@ -142,19 +142,25 @@ const llvm_test_opts = [_]OptMode{ .size, .speed };
 
 const GlueExecutionMode = enum(u8) {
     default,
-    interpreter,
+    dev,
+    size,
+    speed,
 
     fn cliName(self: GlueExecutionMode) []const u8 {
         return switch (self) {
             .default => "default",
-            .interpreter => "interpreter",
+            .dev => "dev",
+            .size => "size",
+            .speed => "speed",
         };
     }
 
     fn optArg(self: GlueExecutionMode) ?[]const u8 {
         return switch (self) {
             .default => null,
-            .interpreter => "--opt=interpreter",
+            .dev => "--opt=dev",
+            .size => "--opt=size",
+            .speed => "--opt=speed",
         };
     }
 };
@@ -406,8 +412,10 @@ const CustomCase = enum {
     bundle_complex_package,
     install_run_roundtrip,
     install_hash_mismatch,
+    install_glue_roundtrip,
     glue_debug,
-    glue_debug_interpreter,
+    glue_debug_dev,
+    glue_dylib_cache_hit,
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
@@ -745,7 +753,8 @@ const echo_cases = [_]CliCase{
 
 const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds", .body = .{ .custom = .glue_debug } },
-    .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=interpreter", .body = .{ .custom = .glue_debug_interpreter } },
+    .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=dev", .body = .{ .custom = .glue_debug_dev } },
+    .{ .id = 0, .suite = .glue, .name = "glue command reuses cached compiler-owned dylib", .body = .{ .custom = .glue_dylib_cache_hit } },
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
@@ -837,6 +846,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch runs headerless default app", .body = .{ .custom = .hot_reload_default_app } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports missing host symbols before linking", .body = .{ .command = .{ .args = &.{ "build", "--no-cache", "--target=x64musl" }, .roc_file = "test/missing-host-symbol/app.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "MISSING HOST SYMBOLS" }, .{ .stream = .stderr, .text = "roc_host_vanish" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check writes parse errors to stderr", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains_any = &.{.{ .needles = &parse_error_needles }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "direct roc rejects compiler-owned glue platform as hostless", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "src/glue/src/DebugGlue.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "EMPTY TARGETS SECTION" }, .{ .stream = .stderr, .text = "roc glue" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "EXPECTED PLATFORM STRING" }, .{ .stream = .stderr, .text = "PANIC" }, .{ .stream = .stderr, .text = "unreachable" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check displays correct file path in parse error messages", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/has_parse_error.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "has_parse_error.roc" }}, .not_contains = &.{.{ .stream = .stderr, .text = "\xaa\xaa\xaa\xaa\xaa\xaa\xaa\xaa" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check rejects invalid hosted sections", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/hosted-section-errors/platform/main.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }, .{ .stream = .stderr, .text = "Host.nonexistent" }, .{ .stream = .stderr, .text = "Host.quadruple" }, .{ .stream = .stderr, .text = "roc-host-bad" }, .{ .stream = .stderr, .text = "roc_alloc" }, .{ .stream = .stderr, .text = "roc__sneaky" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check accepts a valid hosted section", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx/platform/main.roc", .not_contains = &.{.{ .stream = .stderr, .text = "INVALID HOSTED SECTION" }} } } },
@@ -1073,6 +1083,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test restores stored parser FieldNames metadata", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserStoredTryFieldCaseless.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test derives optional parser field with exact Missing tag", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserOptionalAbsentTagName.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test derives optional non-Str parser field", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserOptionalNonStrField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test derives optional parser field from wildcard Try error row", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserWildcardOptionalField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test uses custom nominal parser_for inside derived record", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserCustomNominalField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test uses block-local parser_for inside derived record", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserLocalCustomNominalField.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test supports structural encoder_for on records", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/EncoderForStructuralRecord.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -1223,6 +1234,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc run rejects --watch for installed shorthands", .body = .{ .command = .{ .args = &.{ "run", "sometool", "--watch" }, .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "--watch is not supported for installed shorthands" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install/run roundtrip over loopback HTTP", .body = .{ .custom = .install_run_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc install rejects a hash mismatch and leaves no entry", .body = .{ .custom = .install_hash_mismatch } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc install/glue roundtrip for a glue spec dylib", .body = .{ .custom = .install_glue_roundtrip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test runs pure expects for a wasm-only platform (issue 9668)", .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "shared libraries" }, .{ .stream = .stderr, .text = ".so/.dylib/.dll" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc explains wasm-only Shared output as a wasm module (issue 9668)", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9668_wasm_only_platform.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "targets wasm32" }, .{ .stream = .stderr, .text = ".wasm module" }, .{ .stream = .stderr, .text = "roc build" }, .{ .stream = .stderr, .text = "wasm artifact" } }, .not_contains = &.{.{ .stream = .stderr, .text = ".so/.dylib/.dll" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --opt=dev rejects non executable targets", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--target=wasm32" }, .roc_file = "test/wasm/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "only produces static libraries" }, .{ .stream = .stderr, .text = "TARGET NOT SUPPORTED" }, .{ .stream = .stderr, .text = "unsupported target" } } }} } } },
@@ -1406,15 +1418,17 @@ const TestResult = struct {
     message: ?[]const u8 = null,
 };
 
-fn serializeResult(fd: posix.fd_t, result: TestResult) void {
-    const stderr_data = result.stderr_capture orelse "";
-    const stdout_data = result.stdout_capture orelse "";
-    const message_data = result.message orelse "";
+const max_capture = 8192;
 
-    const max_capture = 8192;
-    const stderr_out = stderr_data[0..@min(stderr_data.len, max_capture)];
-    const stdout_out = stdout_data[0..@min(stdout_data.len, max_capture)];
-    const message_out = message_data[0..@min(message_data.len, max_capture)];
+fn cappedCapture(data: ?[]const u8) []const u8 {
+    const bytes = data orelse "";
+    return bytes[0..@min(bytes.len, max_capture)];
+}
+
+fn serializeResult(fd: posix.fd_t, result: TestResult) void {
+    const stderr_out = cappedCapture(result.stderr_capture);
+    const stdout_out = cappedCapture(result.stdout_capture);
+    const message_out = cappedCapture(result.message);
 
     const header = WireHeader{
         .status = @intFromEnum(result.status),
@@ -1434,37 +1448,15 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     harness.writeAll(fd, message_out);
 }
 
-/// Streamed variant for persistent worker mode: writes a `u32` length prefix
-/// before the wire bytes so the parent can frame multiple results sharing
-/// the same stdout pipe.
+/// Streamed variant for persistent worker mode: the same wire bytes behind a
+/// u32 frame-length prefix.
 fn serializeResultStreamed(fd: posix.fd_t, result: TestResult) void {
-    const stderr_data = result.stderr_capture orelse "";
-    const stdout_data = result.stdout_capture orelse "";
-    const message_data = result.message orelse "";
-
-    const max_capture = 8192;
-    const stderr_out = stderr_data[0..@min(stderr_data.len, max_capture)];
-    const stdout_out = stdout_data[0..@min(stdout_data.len, max_capture)];
-    const message_out = message_data[0..@min(message_data.len, max_capture)];
-
-    const header = WireHeader{
-        .status = @intFromEnum(result.status),
-        .phase = @intFromEnum(result.phase),
-        .duration_ns = result.duration_ns,
-        .build_ns = result.build_ns,
-        .run_ns = result.run_ns,
-        .exit_code = result.exit_code,
-        .stderr_len = @intCast(stderr_out.len),
-        .stdout_len = @intCast(stdout_out.len),
-        .message_len = @intCast(message_out.len),
-    };
-
-    const length: u32 = @intCast(@sizeOf(WireHeader) + stderr_out.len + stdout_out.len + message_out.len);
-    harness.writeAll(fd, std.mem.asBytes(&length));
-    harness.writeAll(fd, std.mem.asBytes(&header));
-    harness.writeAll(fd, stderr_out);
-    harness.writeAll(fd, stdout_out);
-    harness.writeAll(fd, message_out);
+    const payload_len = @sizeOf(WireHeader) +
+        cappedCapture(result.stderr_capture).len +
+        cappedCapture(result.stdout_capture).len +
+        cappedCapture(result.message).len;
+    harness.writeFrameHeader(fd, payload_len);
+    serializeResult(fd, result);
 }
 
 fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
@@ -2258,8 +2250,10 @@ fn runCustomCase(
         .bundle_complex_package => customBundleComplexPackage(io, allocator, &env, &timer, timeout_ms),
         .install_run_roundtrip => customInstallRunRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .install_hash_mismatch => customInstallHashMismatch(io, allocator, &env, &timer, timeout_ms),
+        .install_glue_roundtrip => customInstallGlueRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
-        .glue_debug_interpreter => customGlueDebugInterpreter(io, allocator, &env, &timer, timeout_ms),
+        .glue_debug_dev => customGlueDebugDev(io, allocator, &env, &timer, timeout_ms),
+        .glue_dylib_cache_hit => customGlueDylibCacheHit(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
@@ -2389,9 +2383,13 @@ fn customCliCacheRootsDistinct(io: std.Io, allocator: Allocator, timer: *harness
     const first = util.createIsolatedTestCacheDirs(io, allocator) catch |err|
         return customInfraFailure(allocator, timer, "failed to create first cache dirs: {}", .{err});
     defer first.deinit(allocator);
+    // Registered after the deinit defers so they run first, and after the
+    // openability assertions below, which need the directories to still exist.
+    defer util.cleanupTestCacheDirs(io, first);
     const second = util.createIsolatedTestCacheDirs(io, allocator) catch |err|
         return customInfraFailure(allocator, timer, "failed to create second cache dirs: {}", .{err});
     defer second.deinit(allocator);
+    defer util.cleanupTestCacheDirs(io, second);
 
     if (std.mem.eql(u8, first.roc_cache_dir, second.roc_cache_dir)) {
         return customFailure(allocator, timer, "ROC_CACHE_DIR paths were not distinct", .{});
@@ -6482,6 +6480,104 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
     return null;
 }
 
+fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // A glue spec on the compiler-owned glue platform, bundled from its own
+    // directory. The bundle carries only the spec: the platform is embedded
+    // in every compiler.
+    const spec_dir = createWorkSubdir(io, allocator, env, "glue-spec") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create spec dir: {}", .{err});
+    const spec_main = std.fs.path.join(allocator, &.{ spec_dir, "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate spec path: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = spec_main, .data = "app [make_glue] { pf: platform glue }\n\nimport pf.Types exposing [Types]\nimport pf.File exposing [File]\n\nmake_glue : List(Types) -> Try(List(File), Str)\nmake_glue = |_types| Ok([File.{ name: \"generated.txt\", content: \"installed glue ran\" }])\n" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write glue spec: {}", .{err});
+
+    const serve_dir = createWorkSubdir(io, allocator, env, "glue-serve") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create serve dir: {}", .{err});
+
+    const roc_abs = if (std.fs.path.isAbsolute(roc_binary_path))
+        roc_binary_path
+    else
+        std.fs.path.join(allocator, &.{ project_root_path, roc_binary_path }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate roc path: {}", .{err});
+
+    const bundle_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+        return timeoutFailure(allocator, timer, .run, "case timeout exhausted before bundling");
+    const bundle_result = runRawInEnv(io, allocator, env, &.{ roc_abs, "bundle", "--output-dir", serve_dir, "main.roc" }, spec_dir, null, bundle_timeout) catch |err|
+        return customInfraFailure(allocator, timer, "bundle spawn error: {}", .{err});
+    if (exitCode(bundle_result.term) != 0) {
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle of glue spec failed");
+    }
+    const created_prefix = "Created: ";
+    const created_idx = std.mem.find(u8, bundle_result.stdout, created_prefix) orelse
+        return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
+    const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
+    const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
+    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    const bundle_filename = std.fs.path.basename(bundle_path);
+
+    const bundle_bytes = std.Io.Dir.cwd().readFileAlloc(io, bundle_path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read bundle {s}: {}", .{ bundle_path, err });
+
+    const loopback = std.Io.net.IpAddress.parse("127.0.0.1", 0) catch |err|
+        return customInfraFailure(allocator, timer, "failed to parse loopback address: {}", .{err});
+    var server = loopback.listen(io, .{ .reuse_address = true }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to listen on loopback: {}", .{err});
+    defer server.deinit(io);
+    const port = server.socket.address.getPort();
+
+    var server_ctx = InstallBundleServer{
+        .server = &server,
+        .bundle_data = bundle_bytes,
+        .io = io,
+    };
+    const server_thread = std.Thread.spawn(.{}, InstallBundleServer.run, .{&server_ctx}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to spawn server thread: {}", .{err});
+
+    const url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}", .{ port, bundle_filename }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate url: {}", .{err});
+
+    // 1. Install: detects the glue spec and builds the plugin dylib with
+    //    --opt=speed (the only download in this test).
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "install", "glue_tool", url },
+        .contains = &.{ .{ .stream = .stdout, .text = "glue plugin" }, .{ .stream = .stdout, .text = "Installed glue_tool" }, .{ .stream = .stdout, .text = "roc glue glue_tool" } },
+    })) |failure| {
+        pokeInstallBundleServer(io, port);
+        server_thread.join();
+        return failure;
+    }
+    server_thread.join();
+
+    // 2. Use the installed shorthand against a real platform.
+    const glue_out = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue out dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "glue_tool", glue_out, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stdout, .text = "generated.txt" }},
+    })) |failure| return failure;
+
+    // 3. Desert island: delete the cache; the installed spec source and
+    //    prebuilt dylib must still work (the glue platform is embedded, and
+    //    the server is gone).
+    std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
+    const glue_out2 = createWorkSubdir(io, allocator, env, "glue-out2") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue out dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "glue_tool", glue_out2, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stdout, .text = "generated.txt" }},
+    })) |failure| return failure;
+
+    // 4. Kind mismatch is a specific error, not a fallback.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "run", "glue_tool" },
+        .exit = .failure,
+        .contains = &.{.{ .stream = .stderr, .text = "installed as a glue spec" }},
+    })) |failure| return failure;
+
+    return null;
+}
+
 fn customInstallHashMismatch(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // Serve a well-formed bundle under a URL whose filename hash does not
     // match its content: decompression succeeds but BLAKE3 verification must
@@ -7353,11 +7449,11 @@ fn customGlueDebug(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer:
     return null;
 }
 
-fn customGlueDebugInterpreter(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+fn customGlueDebugDev(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
         return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
-        .args = &.{ "glue", "--opt=interpreter", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
+        .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
         .not_contains = &.{
             .{ .stream = .stderr, .text = "PANIC" },
@@ -7365,6 +7461,109 @@ fn customGlueDebugInterpreter(io: std.Io, allocator: Allocator, env: *const Case
             .{ .stream = .stderr, .text = "name: \"\"" },
         },
     })) |failure| return failure;
+    return null;
+}
+
+const GlueDylibCacheFileCounts = struct {
+    dylibs: usize = 0,
+    temps: usize = 0,
+};
+
+fn hostSharedLibraryExtension() []const u8 {
+    return switch (builtin.os.tag) {
+        .windows => ".dll",
+        .macos => ".dylib",
+        else => ".so",
+    };
+}
+
+fn countGlueDylibCacheFiles(io: std.Io, allocator: Allocator, cache_path: []const u8, opt_name: []const u8) CliRunnerError!GlueDylibCacheFileCounts {
+    var cache_dir = std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => return err,
+    };
+    defer cache_dir.close(io);
+
+    var walker = try cache_dir.walk(allocator);
+    defer walker.deinit();
+
+    const opt_segment = try std.fmt.allocPrint(allocator, "{s}{s}{s}", .{ std.fs.path.sep_str, opt_name, std.fs.path.sep_str });
+    defer allocator.free(opt_segment);
+
+    const extension = hostSharedLibraryExtension();
+    var counts = GlueDylibCacheFileCounts{};
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.find(u8, entry.path, "glue-dylib") == null) continue;
+
+        if (std.mem.endsWith(u8, entry.basename, ".tmp")) {
+            counts.temps += 1;
+            continue;
+        }
+
+        if (std.mem.find(u8, entry.path, opt_segment) == null) continue;
+        if (std.mem.endsWith(u8, entry.basename, extension)) {
+            counts.dylibs += 1;
+        }
+    }
+    return counts;
+}
+
+fn customGlueDylibCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const link_count_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "glue-llvm-shared-link-count.txt" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate glue link count path: {}", .{err});
+    defer allocator.free(link_count_path);
+
+    var link_count_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone environment for glue link-count run: {}", .{err}),
+    };
+    defer link_count_env.env_map.deinit();
+    link_count_env.env_map.put("ROC_TEST_LLVM_SHARED_LINK_COUNT_FILE", link_count_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to set glue link-count file environment: {}", .{err});
+
+    const first_output_dir = createWorkSubdir(io, allocator, env, "glue-cache-one") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create first glue cache output dir: {}", .{err});
+    const second_output_dir = createWorkSubdir(io, allocator, env, "glue-cache-two") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create second glue cache output dir: {}", .{err});
+
+    const common_not_contains = [_]OutputNeedle{
+        .{ .stream = .stderr, .text = "PANIC" },
+        .{ .stream = .stderr, .text = "unreachable" },
+        .{ .stream = .stderr, .text = "stamp" },
+    };
+
+    if (runRocAndCheck(io, allocator, &link_count_env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", first_output_dir, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .not_contains = &common_not_contains,
+    })) |failure| return failure;
+
+    if (runRocAndCheck(io, allocator, &link_count_env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", second_output_dir, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .not_contains = &common_not_contains,
+    })) |failure| return failure;
+
+    const count_bytes = std.Io.Dir.cwd().readFileAlloc(io, link_count_path, allocator, .limited(1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read glue LLVM shared-library link count file {s}: {}", .{ link_count_path, err });
+    defer allocator.free(count_bytes);
+
+    const link_count = countLinkRecords(count_bytes);
+    if (link_count != 1) {
+        return customFailure(allocator, timer, "expected two identical roc glue runs to perform exactly one shared-library link, observed {d}", .{link_count});
+    }
+
+    const cache_counts = countGlueDylibCacheFiles(io, allocator, env.dirs.roc_cache_dir, "dev") catch |err|
+        return customFailure(allocator, timer, "failed to inspect glue dylib cache: {}", .{err});
+    if (cache_counts.dylibs != 1) {
+        return customFailure(allocator, timer, "expected one dev glue dylib cache entry with extension {s}, found {d}", .{ hostSharedLibraryExtension(), cache_counts.dylibs });
+    }
+    if (cache_counts.temps != 0) {
+        return customFailure(allocator, timer, "expected no staged glue dylib temp entries to remain, found {d}", .{cache_counts.temps});
+    }
+
     return null;
 }
 
@@ -8112,33 +8311,6 @@ fn customGlueCTests(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer
 /// this runner. Starts with `selfExePath`, then preserves every original arg
 /// *except* `--worker N` / `--worker-backend NAME` (stripped to avoid
 /// duplication when the harness appends `--worker <idx>` per spawn).
-fn buildCliWorkerArgvTemplate(io: std.Io, arena: Allocator, process_args: std.process.Args) CliRunnerError![]const []const u8 {
-    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const self_path_len = try std.process.executablePath(io, &self_path_buf);
-    const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
-
-    const raw = try process_args.toSlice(arena);
-    const original_args: []const []const u8 = @ptrCast(raw);
-
-    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.append(arena, self_path);
-
-    var i: usize = 1;
-    while (i < original_args.len) : (i += 1) {
-        const arg = original_args[i];
-        if (harness.workerTemplateArgConsumesValue(arg)) {
-            i += 1;
-            continue;
-        }
-        if (harness.workerTemplateDropsFlag(arg)) {
-            continue;
-        }
-        try argv.append(arena, arg);
-    }
-
-    return try argv.toOwnedSlice(arena);
-}
-
 fn getTestName(spec: CliCase) []const u8 {
     return spec.name;
 }
@@ -8166,6 +8338,7 @@ fn stabilizeResult(gpa: Allocator, result: TestResult) TestResult {
 const Pool = harness.ProcessPool(CliCase, TestResult, .{
     .runTest = &runSingleTest,
     .serialize = &serializeResult,
+    .serializeStreamed = &serializeResultStreamed,
     .deserialize = &deserializeResult,
     .default_result = .{ .status = .crash },
     .timeout_result = .{ .status = .timeout },
@@ -8514,7 +8687,7 @@ fn printUsage() void {
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs
         \\  --glue-roc <path>    Roc binary to use for glue generation (default: <roc_binary>)
-        \\  --glue-opt <opt>     Glue execution mode; supported value: interpreter
+        \\  --glue-opt <opt>     Glue execution mode: default, dev, size, or speed
         \\  --verbose            Show PASS results with timing
         \\
     , .{});
@@ -8535,7 +8708,10 @@ fn parseSuiteName(value: []const u8) ?Suite {
 }
 
 fn parseGlueExecutionMode(value: []const u8) ?GlueExecutionMode {
-    if (std.mem.eql(u8, value, "interpreter")) return .interpreter;
+    if (std.mem.eql(u8, value, "default")) return .default;
+    if (std.mem.eql(u8, value, "dev")) return .dev;
+    if (std.mem.eql(u8, value, "size")) return .size;
+    if (std.mem.eql(u8, value, "speed")) return .speed;
     return null;
 }
 
@@ -8684,50 +8860,13 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     if (tests.len == 0) return;
     const timeout_ms = effectiveTimeoutMs(args, parsed.suites);
 
-    // Worker mode: parent spawned us with `--worker <idx>` to run a single
-    // test and serialize the result to stdout. Used on Windows where the
-    // harness runs N worker processes in parallel instead of forking.
-    if (args.worker_index) |idx| {
-        if (idx >= tests.len) std.process.exit(2);
-        var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
-        defer arena.deinit();
-        const result = runSingleTest(init.io, arena.allocator(), tests[idx], timeout_ms);
-        serializeResult(std.Io.File.stdout().handle, result);
-        return;
-    }
-
-    // Persistent worker mode: read test indices from stdin (one decimal per
-    // line), run each, write a u32-length-prefixed result to stdout, loop
-    // until stdin EOFs. Amortizes the per-Child process-boot cost across
-    // many tests on the same worker. Without this branch, a worker spawned
-    // with `--worker-stream` would fall through to the parent path below
-    // and reentrantly spawn its own pool of workers — fork-bombing the box.
-    if (args.worker_stream) {
-        var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
-        defer arena.deinit();
-
-        const stdin_handle = std.Io.File.stdin().handle;
-        const stdout_handle = std.Io.File.stdout().handle;
-
-        var line_buf: [32]u8 = undefined;
-        outer: while (true) {
-            var line_len: usize = 0;
-            while (true) {
-                if (line_len >= line_buf.len) break :outer;
-                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
-                if (n == 0) break :outer;
-                if (line_buf[line_len] == '\n') break;
-                line_len += 1;
-            }
-            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
-            if (idx >= tests.len) continue;
-
-            _ = arena.reset(.retain_capacity);
-            const result = runSingleTest(init.io, arena.allocator(), tests[idx], timeout_ms);
-            serializeResultStreamed(stdout_handle, result);
-        }
-        return;
-    }
+    // Worker modes: on Windows the harness pool spawned this process with
+    // `--worker <idx>` (single test) or `--worker-stream` (persistent). The
+    // worker rebuilt the same case list above, so indices stay aligned with
+    // the parent's. Handling these before the parent path matters: a worker
+    // that fell through would reentrantly spawn its own pool of workers —
+    // fork-bombing the box.
+    if (Pool.runWorkerMode(init.io, args, tests, timeout_ms)) return;
 
     const cpu_count = std.Thread.getCpuCount() catch 4;
     const max_children = args.max_threads orelse @min(cpu_count, tests.len);
@@ -8757,7 +8896,7 @@ pub fn main(init: std.process.Init) CliRunnerError!void {
     // single-test Child worker. On POSIX it's unused (fork path doesn't
     // re-exec). Always pass the positional `roc_binary` path through so the
     // child uses the same binary.
-    const worker_argv_template = try buildCliWorkerArgvTemplate(init.io, spec_arena.allocator(), init.minimal.args);
+    const worker_argv_template = try harness.buildWorkerArgvTemplate(init.io, spec_arena.allocator(), init.minimal.args);
 
     var wall_timer = harness.Timer.start() catch @panic("no clock");
     Pool.runWithSpans(init.io, tests, results, spans, max_children, timeout_ms, gpa, worker_argv_template);

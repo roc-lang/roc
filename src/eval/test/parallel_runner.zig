@@ -848,13 +848,13 @@ fn runAllocationTest(
     const skips = if (comptime coverage_mode)
         [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
     else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, true };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
         helpers.devEvaluatorStrWithStats,
         helpers.wasmEvaluatorStrWithStats,
-        helpers.devEvaluatorStrWithStats, // llvm placeholder
+        helpers.devEvaluatorStrWithStats, // unused; LLVM allocation stats are not implemented
     };
 
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
@@ -1401,8 +1401,7 @@ fn serializeOutcomeStreamed(fd: posix.fd_t, outcome: TestOutcome, duration_ns: u
     defer buf.deinit(base.defaultGpa());
     serializeOutcomeToBuffer(&buf, base.defaultGpa(), outcome, duration_ns) catch return;
 
-    const length: u32 = @intCast(buf.items.len);
-    harness.writeAll(fd, std.mem.asBytes(&length));
+    harness.writeFrameHeader(fd, buf.items.len);
     harness.writeAll(fd, buf.items);
 }
 
@@ -1486,36 +1485,6 @@ fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
     skip.dev = !std.mem.eql(u8, name, "dev");
     skip.wasm = !std.mem.eql(u8, name, "wasm");
     skip.llvm = !std.mem.eql(u8, name, "llvm");
-}
-
-/// Build argv used by the Windows ChildProcessPool to spawn worker copies of
-/// this runner. Starts with `selfExePath`, then preserves every original arg
-/// *except* `--worker N` / `--worker-backend NAME` (the harness appends those
-/// per-worker; we strip any pre-existing instance so we don't double-add).
-fn buildWorkerArgvTemplate(io: std.Io, arena: std.mem.Allocator, process_args: std.process.Args) RunnerError![]const []const u8 {
-    // std.fs.selfExePath was removed in Zig 0.16; use std.process.executablePathAlloc instead.
-    const self_path = try std.process.executablePathAlloc(io, arena);
-
-    const raw = try process_args.toSlice(arena);
-    const original_args: []const []const u8 = @ptrCast(raw);
-
-    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.append(arena, self_path);
-
-    var i: usize = 1;
-    while (i < original_args.len) : (i += 1) {
-        const arg = original_args[i];
-        if (harness.workerTemplateArgConsumesValue(arg)) {
-            i += 1;
-            continue;
-        }
-        if (harness.workerTemplateDropsFlag(arg)) {
-            continue;
-        }
-        try argv.append(arena, arg);
-    }
-
-    return try argv.toOwnedSlice(arena);
 }
 
 /// Phase-2 retry: re-run each failing/crashing/timed-out test once per
@@ -1633,6 +1602,12 @@ fn getTestName(tc: TestCase) []const u8 {
     return tc.name;
 }
 
+/// Pool hook: restrict a spec to one named backend in `--worker` mode
+/// (Phase-2 crash attribution; see `retryFailedForAttribution`).
+fn applyWorkerBackendToSpec(tc: *TestCase, name: []const u8) void {
+    applyBackendIsolation(&tc.skip, name);
+}
+
 fn dupeOptional(gpa: std.mem.Allocator, value: ?[]const u8) ?[]const u8 {
     return if (value) |slice| gpa.dupe(u8, slice) catch null else null;
 }
@@ -1677,6 +1652,7 @@ const timeout_result: TestResult = .{
 const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .runTest = &runTestForPool,
     .serialize = &serializeResultForPool,
+    .serializeStreamed = &serializeResultStreamed,
     .deserialize = &deserializeOutcome,
     .default_result = default_result,
     .timeout_result = timeout_result,
@@ -1688,6 +1664,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     // being killed at the same instant.
     .timeout_report_grace_ms = LLVM_BACKEND_TIMEOUT_MS + BACKEND_TIMEOUT_REPORT_GRACE_MS,
     .onTestStarted = &onTestStarted,
+    .applyWorkerBackend = &applyWorkerBackendToSpec,
 });
 
 //
@@ -2222,84 +2199,15 @@ pub fn main(init: std.process.Init) RunnerError!void {
     const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
     llvm_eval_slot_count = max_children;
 
-    // Worker mode: the parent spawned us with `--worker <idx>` (and optionally
-    // `--worker-backend <name>`) to run a single test, serialize the result to
-    // stdout, and exit. Used on Windows where the harness runs N worker
-    // processes in parallel instead of forking. The child re-applies the same
-    // filters so idx is stable between parent and child.
-    if (cli.worker_index) |idx| {
-        if (idx >= tests.len) std.process.exit(2);
-        var tc = tests[idx];
-        if (cli.worker_backend) |name| applyBackendIsolation(&tc.skip, name);
-        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else DEFAULT_EVAL_TIMEOUT_MS;
-
-        var arena = collections.SingleThreadArena.init(base.defaultGpa());
-        defer arena.deinit();
-
-        trace_worker.stamp("pre runSingleTest");
-        var timer = Timer.start() catch unreachable;
-        const outcome = runSingleTest(io, arena.allocator(), tc, worker_timeout_ms);
-        const duration = timer.read();
-        trace_worker.stamp("post runSingleTest");
-        var backends: [NUM_BACKENDS]BackendDetail = undefined;
-        if (outcome.has_backend_details) backends = outcome.backends;
-        const result = TestResult{
-            .status = outcome.status,
-            .message = outcome.message,
-            .duration_ns = duration,
-            .timings = outcome.timings,
-            .has_backend_details = outcome.has_backend_details,
-            .backends = backends,
-            .expected_str = outcome.expected_str,
-        };
-        serializeResultForPool(harness.stdoutFd(), result);
-        trace_worker.stamp("serialize done");
-        return;
-    }
-
-    // Persistent worker mode: read test indices from stdin (one decimal per
-    // line), run each, write a u32-length-prefixed result to stdout, loop
-    // until stdin EOFs. Amortizes the per-Child process-boot cost across
-    // many tests on the same worker.
-    if (cli.worker_stream) {
-        const worker_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0) cli.timeout_ms else DEFAULT_EVAL_TIMEOUT_MS;
-        var arena = collections.SingleThreadArena.init(base.defaultGpa());
-        defer arena.deinit();
-
-        const stdout_handle = harness.stdoutFd();
-        const stdin_handle = harness.stdinFd();
-
-        var line_buf: [32]u8 = undefined;
-        outer: while (true) {
-            var line_len: usize = 0;
-            while (true) {
-                if (line_len >= line_buf.len) break :outer; // malformed
-                const n = harness.posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch break :outer;
-                if (n == 0) break :outer; // EOF — parent done
-                if (line_buf[line_len] == '\n') break;
-                line_len += 1;
-            }
-            const idx = std.fmt.parseInt(usize, line_buf[0..line_len], 10) catch continue;
-            if (idx >= tests.len) continue;
-
-            _ = arena.reset(.retain_capacity);
-
-            var timer = Timer.start() catch unreachable;
-            const outcome = runSingleTest(io, arena.allocator(), tests[idx], worker_timeout_ms);
-            const duration = timer.read();
-            var backends: [NUM_BACKENDS]BackendDetail = undefined;
-            if (outcome.has_backend_details) backends = outcome.backends;
-            const result = TestResult{
-                .status = outcome.status,
-                .message = outcome.message,
-                .duration_ns = duration,
-                .timings = outcome.timings,
-                .has_backend_details = outcome.has_backend_details,
-                .backends = backends,
-                .expected_str = outcome.expected_str,
-            };
-            serializeResultStreamed(stdout_handle, result);
-        }
+    // Worker modes: on Windows the harness pool spawned this process with
+    // `--worker <idx>` (single test, optionally `--worker-backend <name>` for
+    // Phase-2 attribution) or `--worker-stream` (persistent: indices arrive
+    // on stdin, u32-length-prefixed results leave on stdout). The worker
+    // re-applied the same filters above, so indices stay aligned with the
+    // parent's test list.
+    trace_worker.stamp("pre worker mode");
+    if (Pool.runWorkerMode(io, cli, tests, effectiveHangTimeoutMs(cli))) {
+        trace_worker.stamp("worker mode done");
         return;
     }
 
@@ -2361,7 +2269,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // Build a worker_argv_template so Windows can spawn `Child` workers that
     // re-invoke this binary with `--worker <idx>`. On POSIX the template is
     // unused (fork path doesn't re-exec) but we build it uniformly.
-    const worker_argv_template = try buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
+    const worker_argv_template = try harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
     Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template);
 
