@@ -917,6 +917,62 @@ const CheckPostcheckArchitectureStep = struct {
     }
 };
 
+/// Build step that checks the reunify migration manifest: exact pinned
+/// counts for every Monotype logical re-derivation mechanism scheduled for
+/// replacement, plus the Lambda Solved special-relation census.
+const CheckReunifyManifestStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckReunifyManifestStep {
+        const self = b.allocator.create(CheckReunifyManifestStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-reunify-manifest",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+
+        if (builtin.os.tag == .windows) {
+            std.debug.print("Skipping reunify manifest check on Windows (perl not available)\n", .{});
+            return;
+        }
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, "perl");
+        try child_argv.append(b.allocator, "ci/check_reunify_manifest.pl");
+
+        const io = b.graph.io;
+        var child = try std.process.spawn(io, .{
+            .argv = child_argv.items,
+            .environ_map = &b.graph.environ_map,
+        });
+        const term = try child.wait(io);
+
+        switch (term) {
+            .exited => |code| {
+                if (code != 0) {
+                    return step.fail(
+                        "Reunify manifest check failed. Run 'perl ci/check_reunify_manifest.pl' to see details.",
+                        .{},
+                    );
+                }
+            },
+            else => {
+                return step.fail("ci/check_reunify_manifest.pl terminated abnormally", .{});
+            },
+        }
+    }
+};
+
 const CheckWasmBuiltinRoutingStep = struct {
     step: Step,
 
@@ -2447,6 +2503,7 @@ pub fn build(b: *std.Build) void {
     const run_check_unused_suppression_step = b.step("run-check-unused-suppression", "Check unused-variable suppression patterns");
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
+    const run_check_reunify_manifest_step = b.step("run-check-reunify-manifest", "Check the reunify migration manifest of pinned re-derivation sites");
     const run_check_wasm_builtin_routing_step = b.step("run-check-wasm-builtin-routing", "Check that WASM builtin calls use explicit host/relocation routing");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
@@ -5093,6 +5150,11 @@ pub fn build(b: *std.Build) void {
     // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
+
+    // Add check that pinned Monotype re-derivation sites only shrink or move
+    // into a declared replacement category (reunify migration manifest).
+    const check_reunify_manifest = CheckReunifyManifestStep.create(b);
+    run_check_reunify_manifest_step.dependOn(&check_reunify_manifest.step);
 
     const check_wasm_builtin_routing = CheckWasmBuiltinRoutingStep.create(b);
     run_check_wasm_builtin_routing_step.dependOn(&check_wasm_builtin_routing.step);

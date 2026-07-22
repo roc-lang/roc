@@ -45,6 +45,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-unused-suppression" },
     .{ .name = "run-check-semantic-audit" },
     .{ .name = "run-check-postcheck-architecture" },
+    .{ .name = "run-check-reunify-manifest" },
     .{ .name = "run-check-wasm-builtin-routing" },
     .{ .name = "run-check-panic" },
     .{ .name = "run-check-cli-global-stdio" },

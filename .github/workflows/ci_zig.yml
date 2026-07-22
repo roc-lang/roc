@@ -101,6 +101,9 @@ jobs:
       - name: Check post-check architecture
         run: zig build run-check-postcheck-architecture
 
+      - name: Check reunify migration manifest
+        run: zig build run-check-reunify-manifest
+
       - name: Check panic usage
         run: zig build run-check-panic
 
