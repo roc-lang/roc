@@ -1890,7 +1890,7 @@ Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,
 only that ordinary form may be rewritten into a hosted declaration. Checking and
-method-registry publication consume the explicit derived-method kind and must not
+method-registry construction consume the explicit derived-method kind and must not
 recover compiler intent from identifier text or the annotation shape.
 
 Derived `map` and `map!` apply only to tag-union backing shapes. The checker
@@ -2480,6 +2480,44 @@ specialization queues. A specialization queue is driven by explicit calls or
 roots discovered while lowering the previous stage. It is not a general
 post-demand repair list.
 
+### Logical Type Ownership After Checking
+
+Value-type meaning is decided exactly once, during checking. The stages after
+checking divide type work as follows:
+
+```text
+checking
+  owns logical types, type schemes, per-use scheme bindings, literal and row
+  defaults, and static-dispatch targets
+Monotype instantiation
+  substitutes checker-recorded scheme bindings into immutable logical
+  monotypes
+Monotype representation closure
+  joins only representation data Monotype itself creates (iterator tiers,
+  generated evidence backings), under declared join rules, between types
+  whose logical identity is already equal
+Lambda Solved
+  computes callable flow and callable representation
+LIR and backends
+  consume the explicit results without recomputing any of the above
+```
+
+Outside checking, no stage creates or solves a logical type variable. The only
+post-check equality closures are the declared representation join rules and
+Lambda Solved callable-slot solving. When a post-check stage needs a logical
+relation the checked module does not record, that is a checking-side output
+gap; the fix is to record the relation at the checked boundary, never to
+re-derive it downstream.
+
+The Monotype instantiation machinery described later in this document does not
+yet meet this rule everywhere: it still solves logical constraints inside
+per-specialization instantiation graphs. Those sections are marked as
+scheduled for replacement, and `reunify.md` records the migration plan and its
+measurement gates. Throughout the migration there is exactly one production
+lowering route; replacements land as debug-only comparisons whose results
+cannot select compiler behavior, and authority changes hands once, by
+deletion.
+
 ## Monotype IR
 
 Monotype IR is the first post-check typed representation. It keeps only the
@@ -2609,6 +2647,16 @@ per-specialization residue of generalized literals.
 
 ### Monotype Instantiation
 
+**Scheduled for replacement.** This section describes the current
+instantiation-graph implementation — pre-existing code that is scheduled for
+deletion once directed instantiation of checker-recorded scheme bindings
+replaces it (see Logical Type Ownership After Checking; `reunify.md` records
+the migration). The constraint-replay model below must not gain new call
+sites; the reunify manifest check pins the existing ones. The checked-data
+invariants stated in this section (nominal declaration templates, root
+identity, ownership of checked-type-to-Monotype state) survive the
+replacement; the graph mechanism that consumes them does not.
+
 Monotype lowering is a specialization-time instantiation of checked type graphs.
 This is the same core model as Cor/LSS: each reachable monomorphic
 specialization starts with the checked function/value type graph, creates a
@@ -2616,7 +2664,7 @@ fresh stage-local instantiation for that specialization, constrains the root of
 that instantiation to the requested monomorphic type, and lowers the body from
 that constrained graph.
 
-The long-term invariant is:
+The current per-specialization shape is:
 
 ```text
 one reachable specialization
@@ -2669,8 +2717,8 @@ explicit declaration template:
 - every rigid occurrence in the backing template that refers to a header
   parameter must point at the same checked root as that header formal.
 
-This root identity is the long-term ideal because it makes nominal
-instantiation dataflow explicit. `Codec(input, value)` does not require
+This root identity is required because it makes nominal instantiation
+dataflow explicit. `Codec(input, value)` does not require
 Monotype, layout lowering, or a backend to rediscover that the `input` in
 `run : input -> ...` is the first nominal parameter by reading source text or
 matching display names. CheckedModule data stores that relation once, as
@@ -2740,9 +2788,9 @@ unconstrained operand can default to an uninhabited type before the other
 operand provides evidence. A shared instantiated operand type preserves the
 checked equality relation directly.
 
-The reason this is the long-term design rather than a local implementation
-detail is that it makes specialization, dispatch, lambda lowering, and equality
-all obey the same ownership rule:
+The reason this ownership rule outlives the instantiation-graph
+implementation is that it makes specialization, dispatch, lambda lowering, and
+equality all obey the same rule:
 
 ```text
 checked stage owns meaning and relations
@@ -3042,6 +3090,13 @@ loaded from another shard's cache is a finished snapshot and matches only at
 its solved shape: a requester that matches it already has the solved type, so
 no evidence needs to flow back.
 
+**Scheduled for replacement.** Request-view refinement and solved-shape alias
+lookup entries are pre-existing code that is scheduled for deletion. In the
+replacement lifecycle (Specialization Discovery, Representation Closure, And
+Sealing, below), a reserved request's logical identity never changes and no
+lookup entry is added for a solved shape; representation differences flow
+through explicit interface slots instead of request rewrites.
+
 The in-memory builder owns a transient hash table from lookup keys to
 `SpecId`, plus the append-only `SpecRecord` array. The output program owns the
 records and the function bodies, not the hash table. A loaded cache file may
@@ -3092,6 +3147,12 @@ authority for type identity. This gives generic higher-order code the desired
 shape: repeated calls at the same closed function type reuse one specialization
 after the first request, and growing structural accumulator types add only the
 new record/function nodes instead of redigesting every previous layer.
+
+**Scheduled for replacement.** The draft type cells below hold instantiation
+graph nodes; that half of the mechanism is pre-existing code that is scheduled
+for deletion. In the replacement, a draft defers only representation identity:
+it contains no logical unknowns, and every logical type is fixed by directed
+substitution before body lowering begins.
 
 Open instantiation graphs do not write directly into final Monotype body
 sections. While a specialization is being solved, lowering writes to a
@@ -3285,6 +3346,58 @@ lowering path. A loaded `SpecRecord` must pass the same identity and exact type
 checks as a freshly produced record before it can satisfy a request. If no
 loaded record matches, the builder creates the specialization normally and may
 append it to a new cache file after the program is complete.
+
+### Specialization Discovery, Representation Closure, And Sealing
+
+The replacement specialization lifecycle is one pre-output, stage-local
+computation with three phases. It operates over explicit representation
+dependency components, not call-graph recursion: a non-recursive call
+argument can gain representation information while its caller's body draft is
+still being discovered, so every open interface is provisional until its
+component closes.
+
+1. Discover representation-neutral drafts. Starting from explicit roots,
+   reserve a provisional record and a representation interface before
+   inspecting the body. One walk over the checked body records expression
+   structure, checked evidence, calls through provisional record handles, and
+   every representation-rule site. No iterator- or ABI-sensitive Monotype
+   choice is emitted during discovery; each sensitive site records the
+   complete set of declared emission alternatives it could activate.
+   Discovering a call fixes and reserves its logical identity immediately —
+   the checker-recorded scheme binding made that identity final. Direct and
+   mutual recursion terminate by citing the already-reserved handle.
+
+2. Close representation dependencies. Nodes are provisional specializations,
+   interface slots, and pending representation-rule applications; an edge
+   says one node cannot seal until another's representation output is known.
+   Dependency-ready components seal in condensation order; mutually dependent
+   nodes seal together through the terminating representation join rules. A
+   component is closed only when its discovery queue is empty and every
+   outgoing dependency either targets a sealed component or is part of the
+   component being solved.
+
+3. Finalize identity and emit. Seal every interface and draft, compute the
+   final specialization identity from the fixed logical identity plus the
+   digests of the sealed representation inputs, resolve provisional call
+   handles, assign final function ids, then elaborate the neutral draft into
+   representation-sensitive Monotype IR. Only this phase outputs bodies or
+   cache records. A body is never generated against a representation that
+   can still move, and emission never reopens a sealed component.
+
+The lifecycle states are `reserved → discovering → representation_ready →
+ready`. A reserved logical identity never changes. Draft discovery may join
+reserved representation-interface slots through the declared join rules only;
+it may not refine the request's logical type or mutate a Monotype type id
+that is already visible outside the component.
+
+This scheduling residue is deliberately narrow. The dependency scheduler
+stabilizes only explicit representation slots — postcheck-created iterator
+tiers and generated evidence backings — between types whose logical identity
+is already equal. It never carries a logical unknown and never revises a
+checker-recorded scheme binding, and it is not the deferred-template
+mechanism under another name: no final identity, function id, body, or cache
+entry exists before its component closes, and nothing already output is
+later patched.
 
 ### Static Dispatch In Monotype
 
@@ -3519,7 +3632,7 @@ not a side representation store.
 const LambdaType = union(enum) {
     link: TypeVarId,
     unbound,
-    forall,
+    forall, // invariant trap only; never constructed
     content: LambdaContent,
 };
 
@@ -3587,10 +3700,22 @@ The solver:
 - treats references to lifted function symbols as singleton lambda sets
 - unifies callable slots through value flow and calls
 - propagates erased callable requirements through the same type graph
-- generalizes and instantiates polymorphic definitions
+- gives each lifted function exactly one solved type: every use site unifies
+  against that same type, so one function's lambda sets pool across all of
+  its uses
 - solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+The solver never generalizes. `forall` exists only as an invariant trap — a
+generalized Lambda Solved type reaching local unification is a compiler bug —
+and no code constructs it. This is a deliberate divergence from Cor's `lss`
+experiment, which generalizes lambda-set variables per definition and
+instantiates them fresh at every use, yielding finer per-use sets. Roc pools
+the sets flowing through all uses of one lifted function into one equivalence
+class: coarser but self-consistent, because every connected position shares
+one set and one layout. Changing this is a separate design decision, not a
+cleanup.
 
 The solved type graph is the callable representation source of truth. There is
 no descriptor replacement, no callable repointing, no post-demand payload
