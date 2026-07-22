@@ -4,8 +4,16 @@ Companion to `reunify.md` §13 (Slice 0). Records what the declared
 measurements and audits found, and the disposition of each finding as
 **publication gap** / **algebra rule** / **deletable bookkeeping**.
 
-Status: static audits complete; Debug census instrumentation landed; corpus
-census numbers below.
+Status: complete. Static audits, Debug census instrumentation, corpus
+numbers, and dispositions below. Local verification battery: minici 70/74
+phases pass; the 4 failures are pre-existing on main at the branch base
+(`afef911919`), each verified by rerun at that commit in a clean worktree or
+by input analysis: run-test-zig-module-compile (serialization golden hash +
+wall-clock threshold), run-test-eval (two issue-8754 recursive-tag crashes,
+reproduce without the census), run-test-zig-fx-platform
+(host_boxed_fn_boundary interpreter abort), run-test-wasm-static-lib
+(iter_list_hoist app). Snapshot regeneration with census enabled leaves all
+tracked snapshots byte-identical.
 
 ---
 
