@@ -11,17 +11,6 @@ const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
 
-pub const QualifiedIdentDoesNotExistContext = union(enum) {
-    missing_module_or_type: struct {
-        name: Ident.Idx,
-        suggested_import: Ident.Idx,
-    },
-    missing_exposed_value: struct {
-        module_name: Ident.Idx,
-        value_name: Ident.Idx,
-    },
-};
-
 /// Different types of diagnostic errors
 pub const Diagnostic = union(enum) {
     not_implemented: struct {
@@ -1970,4 +1959,16 @@ pub const Diagnostic = union(enum) {
 
         return report;
     }
+};
+
+/// An error for an unknown qualified ident
+pub const QualifiedIdentDoesNotExistContext = union(enum) {
+    missing_module_or_type: struct {
+        name: Ident.Idx,
+        suggested_import: Ident.Idx,
+    },
+    missing_exposed_value: struct {
+        module_name: Ident.Idx,
+        value_name: Ident.Idx,
+    },
 };

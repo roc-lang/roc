@@ -1772,12 +1772,10 @@ pub const PackageEnv = struct {
 
         // The platform root of an app build does not publish here: finalization
         // publishes the relation-bearing platform root once, so a check-time
-        // publish would be immediately superseded. The one exception is a
-        // requires signature that still carries erroneous type content — the
-        // env-derived requirement context a deferred root needs is a canonical
-        // key digest, and erroneous content has no canonical key, so those
-        // shapes keep the check-time publish and its diagnostics.
-        if (defer_publication and !(try checker.requiresTypesContainError())) {
+        // publish would be immediately superseded. Erroneous requirement types
+        // have explicit canonical keys and remain total checked-error relation
+        // outcomes, so they follow this same deferred path.
+        if (defer_publication) {
             return .{
                 .checker = checker,
                 .publication = .deferred,
