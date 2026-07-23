@@ -551,3 +551,32 @@ expect {
 
 	round_tripped == Ok(original)
 }
+
+# the maximum code point (U+10FFFF) arrives as the highest surrogate pair
+expect {
+	result : Try(Str, [InvalidJson(Str)])
+	result = Json.parse("\"\\uDBFF\\uDFFF\"")
+
+	expected = Str.from_utf8([244, 143, 191, 191])
+
+	match (result, expected) {
+		(Ok(parsed), Ok(want)) => parsed == want
+		_ => False
+	}
+}
+
+# a surrogate pair truncated inside its second escape is rejected
+expect {
+	result : Try(Str, [InvalidJson(Str)])
+	result = Json.parse("\"\\uD83D\\uDE\"")
+
+	result == Err(Json.invalid_json)
+}
+
+# a high surrogate followed by literal characters is rejected
+expect {
+	result : Try(Str, [InvalidJson(Str)])
+	result = Json.parse("\"\\uD83Dxy\"")
+
+	result == Err(Json.invalid_json)
+}
