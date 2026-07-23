@@ -421,7 +421,7 @@ Builtin :: [].{
 					if trimmed.point > 21 or trimmed.point < -18 {
 						Err(BadNumStr)
 					} else {
-						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.digits_len, trimmed.point)?
+						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.point)?
 						dec_from_str(normalized)
 					}
 				}
@@ -429,9 +429,7 @@ Builtin :: [].{
 
 			json_dec_digits_are_zero : Str -> Bool
 			json_dec_digits_are_zero = |digits| {
-				bytes = Str.to_utf8(digits)
-
-				for byte in bytes {
+				for byte in Str.iter_utf8(digits) {
 					if byte != 48 {
 						return False
 					}
@@ -440,25 +438,24 @@ Builtin :: [].{
 				True
 			}
 
-			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, digits_len : U64, point : I64 }
+			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, point : I64 }
 			trim_json_dec_leading_zeros = |digits, point| {
-				bytes = Str.to_utf8(digits)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(digits)
 				var $index = 0
 
-				while $index < len and list_get_unsafe(bytes, $index) == 48 {
+				while $index < len and str_get_utf8_byte_unsafe(digits, $index) == 48 {
 					$index = $index + 1
 				}
 
 				{
-					digits: Str.from_utf8_lossy(List.drop_first(bytes, $index)),
-					digits_len: len - $index,
+					# the dropped prefix is ASCII zeros, so the cut is a UTF-8 boundary
+					digits: str_drop_first_bytes_unsafe(digits, $index),
 					point: point - $index.to_i64_wrap(),
 				}
 			}
 
-			normalize_json_dec_digits : Bool, Str, U64, I64 -> Try(Str, [BadNumStr])
-			normalize_json_dec_digits = |negative, digits, digits_len, point| {
+			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
+			normalize_json_dec_digits = |negative, digits, point| {
 				sign = if negative "-" else ""
 
 				if point <= 0 {
@@ -472,14 +469,15 @@ Builtin :: [].{
 					)
 				} else {
 					point_u64 = point.to_u64_wrap()
+					digits_len = Str.count_utf8_bytes(digits)
 
 					if point_u64 >= digits_len {
 						zero_count = point_u64 - digits_len
 						Ok(Str.concat(sign, Str.concat(digits, Str.repeat("0", zero_count))))
 					} else {
-						bytes = Str.to_utf8(digits)
-						before = Str.from_utf8_lossy(List.take_first(bytes, point_u64))
-						after = Str.from_utf8_lossy(List.drop_first(bytes, point_u64))
+						# digits holds only ASCII digits, so any cut is a UTF-8 boundary
+						before = str_substring_unsafe(digits, 0, point_u64)
+						after = str_drop_first_bytes_unsafe(digits, point_u64)
 
 						Ok(Str.concat(sign, Str.concat(before, Str.concat(".", after))))
 					}
@@ -1072,8 +1070,7 @@ Builtin :: [].{
 
 			is_json_number : Str -> Bool
 			is_json_number = |value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 
 				if len == 0 {
 					return False
@@ -1081,7 +1078,7 @@ Builtin :: [].{
 
 				var $index = 0
 
-				first = list_get_unsafe(bytes, $index)
+				first = str_get_utf8_byte_unsafe(value, $index)
 
 				if first == 45 {
 					$index = $index + 1
@@ -1091,7 +1088,7 @@ Builtin :: [].{
 					}
 				}
 
-				int_first = list_get_unsafe(bytes, $index)
+				int_first = str_get_utf8_byte_unsafe(value, $index)
 
 				if int_first == 48 {
 					$index = $index + 1
@@ -1099,7 +1096,7 @@ Builtin :: [].{
 					$index = $index + 1
 
 					while $index < len {
-						byte = list_get_unsafe(bytes, $index)
+						byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_digit(byte) {
 							$index = $index + 1
@@ -1112,7 +1109,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if byte == 46 {
 						$index = $index + 1
@@ -1121,14 +1118,14 @@ Builtin :: [].{
 							return False
 						}
 
-						first_fraction_byte = list_get_unsafe(bytes, $index)
+						first_fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_fraction_byte) {
 							return False
 						}
 
 						while $index < len {
-							fraction_byte = list_get_unsafe(bytes, $index)
+							fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(fraction_byte) {
 								$index = $index + 1
@@ -1140,7 +1137,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if Json.is_json_exponent_marker(byte) {
 						$index = $index + 1
@@ -1149,7 +1146,7 @@ Builtin :: [].{
 							return False
 						}
 
-						exponent_first_byte = list_get_unsafe(bytes, $index)
+						exponent_first_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_sign(exponent_first_byte) {
 							$index = $index + 1
@@ -1159,14 +1156,14 @@ Builtin :: [].{
 							}
 						}
 
-						first_exponent_digit = list_get_unsafe(bytes, $index)
+						first_exponent_digit = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_exponent_digit) {
 							return False
 						}
 
 						while $index < len {
-							exponent_byte = list_get_unsafe(bytes, $index)
+							exponent_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(exponent_byte) {
 								$index = $index + 1
