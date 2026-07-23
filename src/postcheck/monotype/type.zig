@@ -278,6 +278,14 @@ pub const Store = struct {
     tags: StoreList(Tag, "tags"),
     declared_fields: StoreList(DeclaredField, "declared_fields"),
     frozen: bool,
+    /// Content-dedup buckets (digest -> id list). When null, the `intern*`
+    /// constructor methods behave as plain adds: they build the node and return
+    /// its fresh id with no dedup or registration. When present, structurally
+    /// equal nodes share one id. Head/alias canonicalization intrinsic to the
+    /// constructors (row sorting, storage-transparent alias erase) applies in
+    /// both modes; only dedup is gated by this field. Defaults to null so a
+    /// store cloned by field-wise copy starts as a plain (non-interning) store.
+    intern_buckets: ?std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)) = null,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -295,10 +303,30 @@ pub const Store = struct {
             .tags = .empty,
             .declared_fields = .empty,
             .frozen = false,
+            .intern_buckets = null,
         };
     }
 
+    /// Turn on content dedup for this store's `intern*` constructor methods.
+    /// Idempotent. Stage C flips production stores through this so the same
+    /// construction boundary that plain-adds today starts hash-consing.
+    pub fn enableInterning(self: *Store) void {
+        if (self.intern_buckets == null) {
+            self.intern_buckets = std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)).init(self.allocator);
+        }
+    }
+
+    /// Whether this store's constructors dedup structurally equal nodes.
+    pub fn internEnabled(self: *const Store) bool {
+        return self.intern_buckets != null;
+    }
+
     pub fn deinit(self: *Store) void {
+        if (self.intern_buckets) |*buckets| {
+            var lists = buckets.valueIterator();
+            while (lists.next()) |list| list.deinit(self.allocator);
+            buckets.deinit();
+        }
         self.declared_fields.deinit(self.allocator);
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
@@ -447,6 +475,494 @@ pub const Store = struct {
 
     pub fn declaredFieldSpan(self: *const Store, span_: Span) StoreSpanBorrow(DeclaredField, "declared_fields") {
         return self.declared_fields.borrowSpan(span_.start, span_.len);
+    }
+
+    // Hash-consing construction boundary.
+    //
+    // These constructors are child-first for acyclic types: callers pass
+    // already-built child ids, and every successful call returns an id whose
+    // content the store never mutates afterward. Recursive groups reserve
+    // private slots, fill each once, and expose member ids only after the
+    // whole group has a rooted digest and equality bucket. With
+    // `intern_buckets` present the result is deduplicated; without it each call
+    // is a plain add. The opaque `Interner` below is a thin delegate over a
+    // store with interning enabled.
+
+    pub const TagInput = struct {
+        name: names.TagNameId,
+        checked_name: names.TagNameId,
+        payloads: []const TypeId,
+    };
+
+    pub const NamedInput = struct {
+        named_type: NamedType,
+        def: TypeDef,
+        kind: NamedKind,
+        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        args: []const TypeId = &.{},
+        backing: ?NamedBacking = null,
+        declared_order: []const DeclaredField = &.{},
+    };
+
+    pub fn internPrimitive(self: *Store, name_store: *const names.NameStore, primitive: Primitive) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .primitive = primitive });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internZst(self: *Store, name_store: *const names.NameStore) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.zst);
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internList(self: *Store, name_store: *const names.NameStore, elem: TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .list = elem });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internBox(self: *Store, name_store: *const names.NameStore, elem: TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .box = elem });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internTuple(self: *Store, name_store: *const names.NameStore, items: []const TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+        const span_ = try self.addSpan(items);
+        const ty = try self.add(.{ .tuple = span_ });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internFunc(self: *Store, name_store: *const names.NameStore, args: []const TypeId, ret: TypeId) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+        const span_ = try self.addSpan(args);
+        const ty = try self.add(.{ .func = .{ .args = span_, .ret = ret } });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internRecord(self: *Store, name_store: *const names.NameStore, raw_fields: []const Field) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+        const span_ = try self.addRecordFields(name_store, raw_fields);
+        const ty = try self.add(.{ .record = span_ });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internTagUnion(self: *Store, name_store: *const names.NameStore, raw_tags: []const TagInput) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+
+        const lowered = try self.allocator.alloc(Tag, raw_tags.len);
+        defer self.allocator.free(lowered);
+        for (raw_tags, 0..) |tag, index| {
+            lowered[index] = .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = try self.addSpan(tag.payloads),
+            };
+        }
+
+        const span_ = try self.addTagVariants(name_store, lowered);
+        const ty = try self.add(.{ .tag_union = span_ });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internNamed(self: *Store, name_store: *const names.NameStore, named: NamedInput) std.mem.Allocator.Error!TypeId {
+        // A storage-transparent alias — backed, with no builtin dispatch owner —
+        // is erased before insertion: the already-built backing is returned so
+        // no id names the alias node. A backing-less alias stays a retained
+        // marker, and a builtin-owned alias retains its dispatch owner. This
+        // canonicalization is independent of `intern_buckets`.
+        if (named.kind == .alias and named.builtin_owner == null) {
+            if (named.backing) |backing| {
+                return backing.ty;
+            }
+        }
+
+        const mark_ = self.mark();
+        errdefer self.restore(mark_);
+
+        const args = try self.addSpan(named.args);
+        const declared_order = try self.addDeclaredFields(named.declared_order);
+        const content: NamedContent = .{
+            .named_type = named.named_type,
+            .def = named.def,
+            .kind = named.kind,
+            .builtin_owner = named.builtin_owner,
+            .args = args,
+            .backing = named.backing,
+            .declared_order = declared_order,
+        };
+        const ty = try self.add(.{ .named = content });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub fn internErased(self: *Store, name_store: *const names.NameStore, digest: names.TypeDigest) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.{ .erased = digest });
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
+    pub const RecursiveLink = union(enum(u8)) {
+        interned: TypeId,
+        node: RecursiveNodeId,
+        root,
+    };
+
+    pub const RecursiveNodeId = enum(u32) { _ };
+
+    pub fn recursiveNodeId(index: usize) RecursiveNodeId {
+        return @enumFromInt(@as(u32, @intCast(index)));
+    }
+
+    pub const RecursiveField = struct {
+        name: names.RecordFieldNameId,
+        ty: RecursiveLink,
+    };
+
+    pub const RecursiveTag = struct {
+        name: names.TagNameId,
+        checked_name: names.TagNameId,
+        payloads: []const RecursiveLink,
+    };
+
+    pub const RecursiveNamedBacking = struct {
+        ty: RecursiveLink,
+        use: BackingUse,
+    };
+
+    pub const RecursiveNamed = struct {
+        named_type: NamedType,
+        def: TypeDef,
+        kind: NamedKind,
+        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        args: []const RecursiveLink,
+        backing: ?RecursiveNamedBacking = null,
+        declared_order: Span = Span.empty(),
+    };
+
+    pub const RecursiveContent = union(enum(u8)) {
+        primitive: Primitive,
+        named: RecursiveNamed,
+        record: []const RecursiveField,
+        tuple: []const RecursiveLink,
+        tag_union: []const RecursiveTag,
+        list: RecursiveLink,
+        box: RecursiveLink,
+        func: struct {
+            args: []const RecursiveLink,
+            ret: RecursiveLink,
+        },
+        erased: names.TypeDigest,
+        zst,
+    };
+
+    /// Intern one recursive root without exposing the reserved root id before
+    /// its content has been sealed. The input may refer to the root with
+    /// `RecursiveLink.root`; every other child must already be an immutable
+    /// interned `TypeId`.
+    pub fn internRecursiveRoot(self: *Store, name_store: *const names.NameStore, content: RecursiveContent) std.mem.Allocator.Error!TypeId {
+        return try self.internRecursiveGroupRoot(name_store, &.{content}, recursiveNodeId(0));
+    }
+
+    /// Intern one public root from a private recursive group. Group nodes may
+    /// reference each other through `RecursiveLink.node`; only the selected root
+    /// is returned to the caller, and it is returned only after every private
+    /// node has been filled exactly once.
+    ///
+    /// With interning enabled, every member of the group is registered by its
+    /// rooted digest, so a later equivalent rooted graph deduplicates to an
+    /// existing member regardless of which node it is entered from, and members
+    /// equal as roots share one id. Without interning, the group is built into
+    /// fresh slots and the selected root returned with no dedup or registration.
+    pub fn internRecursiveGroupRoot(
+        self: *Store,
+        name_store: *const names.NameStore,
+        contents: []const RecursiveContent,
+        root_node: RecursiveNodeId,
+    ) std.mem.Allocator.Error!TypeId {
+        const root_index = @intFromEnum(root_node);
+        if (root_index >= contents.len) {
+            Common.invariant("Monotype recursive type group root is outside the group");
+        }
+        const ids = try self.allocator.alloc(TypeId, contents.len);
+        defer self.allocator.free(ids);
+        try self.internRecursiveGroupInto(name_store, contents, ids);
+        return ids[root_index];
+    }
+
+    /// Build a whole recursive group and write every member's resolved id into
+    /// `out_ids` (one per `contents` entry, same order). Callers that need more
+    /// than one member's id — moving a cyclic component with several entry
+    /// points into the pool — read them all from one build instead of
+    /// re-entering the group per member, which a symmetric collapse would
+    /// otherwise duplicate (a collapsed self-referential member and its
+    /// un-collapsed cyclic form are equal but digest differently).
+    pub fn internRecursiveGroupInto(
+        self: *Store,
+        name_store: *const names.NameStore,
+        contents: []const RecursiveContent,
+        out_ids: []TypeId,
+    ) std.mem.Allocator.Error!void {
+        if (out_ids.len != contents.len) {
+            Common.invariant("Monotype recursive group output length must match the group");
+        }
+
+        const allocator = self.allocator;
+
+        // Phase A: build the group into provisional slots so each member has a
+        // rooted digest. `.node` links resolve to sibling members. `.root`
+        // links are meaningful only for a single-node group, so they resolve to
+        // member zero.
+        const provisional_mark = self.mark();
+        errdefer self.restore(provisional_mark);
+
+        const provisional = try allocator.alloc(TypeId, contents.len);
+        defer allocator.free(provisional);
+        for (provisional) |*id| id.* = try self.reserveSlot();
+        for (contents, 0..) |content, index| {
+            const lowered = try self.lowerRecursiveContent(name_store, provisional, provisional[0], content);
+            self.fillReservedSlot(provisional[index], lowered);
+        }
+
+        // Without dedup the provisional slots are the final ids for every member.
+        if (self.intern_buckets == null) {
+            @memcpy(out_ids, provisional);
+            return;
+        }
+
+        // Phase B: resolve each member to an existing id where possible. A
+        // member equal as a root to an existing pool type reuses it; a member
+        // equal to an earlier member of this same group shares that member's
+        // id; the rest are new.
+        const existing_id = try allocator.alloc(?TypeId, contents.len);
+        defer allocator.free(existing_id);
+        const representative = try allocator.alloc(usize, contents.len);
+        defer allocator.free(representative);
+        var has_dedup = false;
+        for (provisional, 0..) |member, index| {
+            existing_id[index] = null;
+            representative[index] = index;
+            for (0..index) |earlier| {
+                if (try self.typeEql(name_store, provisional[earlier], member)) {
+                    representative[index] = representative[earlier];
+                    has_dedup = true;
+                    break;
+                }
+            }
+            if (representative[index] == index) {
+                existing_id[index] = try self.findExistingRoot(name_store, member);
+                if (existing_id[index] != null) has_dedup = true;
+            }
+        }
+
+        // Common case: every member is a distinct new root. Keep the provisional
+        // slots and register each so any entry node deduplicates a future graph.
+        if (!has_dedup) {
+            for (provisional) |member| try self.registerRoot(name_store, member);
+            census.bump("intern_miss");
+            @memcpy(out_ids, provisional);
+            return;
+        }
+
+        // Phase C: some member deduplicated. Drop the provisional slots and
+        // build only the genuinely new representatives, resolving every
+        // reference through the resolved-id mapping.
+        self.restore(provisional_mark);
+
+        const final_ids = try allocator.alloc(TypeId, contents.len);
+        defer allocator.free(final_ids);
+        for (representative, 0..) |rep, index| {
+            if (rep != index) continue;
+            if (existing_id[index]) |existing| {
+                final_ids[index] = existing;
+            } else {
+                final_ids[index] = try self.reserveSlot();
+            }
+        }
+        for (representative, 0..) |rep, index| {
+            if (rep != index) final_ids[index] = final_ids[rep];
+        }
+        for (representative, 0..) |rep, index| {
+            if (rep != index or existing_id[index] != null) continue;
+            const lowered = try self.lowerRecursiveContent(name_store, final_ids, final_ids[0], contents[index]);
+            self.fillReservedSlot(final_ids[index], lowered);
+        }
+        for (representative, 0..) |rep, index| {
+            if (rep != index or existing_id[index] != null) continue;
+            try self.registerRoot(name_store, final_ids[index]);
+        }
+        census.bump("intern_miss");
+        @memcpy(out_ids, final_ids);
+    }
+
+    /// Look up a type equal as a root to `member` among the registered pool
+    /// types, returning it if one exists. Only pre-registered types are probed,
+    /// so a provisional group member never matches itself or a sibling here.
+    fn findExistingRoot(self: *Store, name_store: *const names.NameStore, member: TypeId) std.mem.Allocator.Error!?TypeId {
+        const digest = self.typeDigestCached(name_store, member, null);
+        const key = InternerLookupDigest.from(digest);
+        if (self.intern_buckets.?.getPtr(key)) |bucket| {
+            for (bucket.items) |existing| {
+                if (try self.typeEql(name_store, existing, member)) {
+                    return existing;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Register `member` under its rooted digest so a future equivalent graph
+    /// entered at this node deduplicates to it.
+    fn registerRoot(self: *Store, name_store: *const names.NameStore, member: TypeId) std.mem.Allocator.Error!void {
+        const digest = self.typeDigestCached(name_store, member, null);
+        const key = InternerLookupDigest.from(digest);
+        const gop = try self.intern_buckets.?.getOrPut(key);
+        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TypeId).empty;
+        try gop.value_ptr.append(self.allocator, member);
+    }
+
+    fn lowerRecursiveLink(_: *Store, ids: []const TypeId, root: TypeId, link: RecursiveLink) TypeId {
+        return switch (link) {
+            .interned => |ty| ty,
+            .node => |node| blk: {
+                const raw = @intFromEnum(node);
+                if (raw >= ids.len) Common.invariant("Monotype recursive type reference is outside the group");
+                break :blk ids[raw];
+            },
+            .root => root,
+        };
+    }
+
+    fn lowerRecursiveLinkSpan(
+        self: *Store,
+        ids: []const TypeId,
+        root: TypeId,
+        links: []const RecursiveLink,
+    ) std.mem.Allocator.Error!Span {
+        if (links.len == 0) return .empty();
+        const lowered = try self.allocator.alloc(TypeId, links.len);
+        defer self.allocator.free(lowered);
+        for (links, 0..) |link, index| {
+            lowered[index] = self.lowerRecursiveLink(ids, root, link);
+        }
+        return try self.addSpan(lowered);
+    }
+
+    fn lowerRecursiveFields(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ids: []const TypeId,
+        root: TypeId,
+        fields: []const RecursiveField,
+    ) std.mem.Allocator.Error!Span {
+        if (fields.len == 0) return .empty();
+        const lowered = try self.allocator.alloc(Field, fields.len);
+        defer self.allocator.free(lowered);
+        for (fields, 0..) |field, index| {
+            lowered[index] = .{
+                .name = field.name,
+                .ty = self.lowerRecursiveLink(ids, root, field.ty),
+            };
+        }
+        return try self.addRecordFields(name_store, lowered);
+    }
+
+    fn lowerRecursiveTags(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ids: []const TypeId,
+        root: TypeId,
+        tags_: []const RecursiveTag,
+    ) std.mem.Allocator.Error!Span {
+        if (tags_.len == 0) return .empty();
+        const lowered = try self.allocator.alloc(Tag, tags_.len);
+        defer self.allocator.free(lowered);
+        for (tags_, 0..) |tag, index| {
+            lowered[index] = .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = try self.lowerRecursiveLinkSpan(ids, root, tag.payloads),
+            };
+        }
+        return try self.addTagVariants(name_store, lowered);
+    }
+
+    fn lowerRecursiveNamed(
+        self: *Store,
+        ids: []const TypeId,
+        root: TypeId,
+        named: RecursiveNamed,
+    ) std.mem.Allocator.Error!NamedContent {
+        return .{
+            .named_type = named.named_type,
+            .def = named.def,
+            .kind = named.kind,
+            .builtin_owner = named.builtin_owner,
+            .args = try self.lowerRecursiveLinkSpan(ids, root, named.args),
+            .backing = if (named.backing) |backing| .{
+                .ty = self.lowerRecursiveLink(ids, root, backing.ty),
+                .use = backing.use,
+            } else null,
+            .declared_order = named.declared_order,
+        };
+    }
+
+    fn lowerRecursiveContent(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ids: []const TypeId,
+        root: TypeId,
+        content: RecursiveContent,
+    ) std.mem.Allocator.Error!Content {
+        return switch (content) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| .{ .named = try self.lowerRecursiveNamed(ids, root, named) },
+            .record => |fields| .{ .record = try self.lowerRecursiveFields(name_store, ids, root, fields) },
+            .tuple => |items| .{ .tuple = try self.lowerRecursiveLinkSpan(ids, root, items) },
+            .tag_union => |tags_| .{ .tag_union = try self.lowerRecursiveTags(name_store, ids, root, tags_) },
+            .list => |elem| .{ .list = self.lowerRecursiveLink(ids, root, elem) },
+            .box => |elem| .{ .box = self.lowerRecursiveLink(ids, root, elem) },
+            .func => |function| .{ .func = .{
+                .args = try self.lowerRecursiveLinkSpan(ids, root, function.args),
+                .ret = self.lowerRecursiveLink(ids, root, function.ret),
+            } },
+            .erased => |digest| .{ .erased = digest },
+            .zst => .zst,
+        };
+    }
+
+    fn internCandidate(self: *Store, name_store: *const names.NameStore, mark_: Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
+        // Plain-add mode: the candidate is already installed; hand back its id.
+        if (self.intern_buckets == null) return candidate;
+
+        errdefer self.restore(mark_);
+        const digest = self.typeDigestCached(name_store, candidate, null);
+        const key = InternerLookupDigest.from(digest);
+        const buckets = &self.intern_buckets.?;
+        if (buckets.getPtr(key)) |bucket| {
+            for (bucket.items) |existing| {
+                if (try self.typeEql(name_store, existing, candidate)) {
+                    self.restore(mark_);
+                    census.bump("intern_hit");
+                    return existing;
+                }
+            }
+            try bucket.append(self.allocator, candidate);
+            census.bump("intern_miss");
+            return candidate;
+        }
+
+        var bucket = std.ArrayList(TypeId).empty;
+        errdefer bucket.deinit(self.allocator);
+        try bucket.append(self.allocator, candidate);
+        try buckets.put(key, bucket);
+        census.bump("intern_miss");
+        return candidate;
     }
 
     const Mark = struct {
@@ -2140,23 +2656,37 @@ fn directionalTypePair(lhs: TypeId, rhs: TypeId, named_mode: NamedDigestMode) u1
     return (@as(u128, @intFromEnum(named_mode)) << 64) | (@as(u128, @intFromEnum(lhs)) << 32) | @as(u128, @intFromEnum(rhs));
 }
 
-/// Mutable builder for immutable Monotype type nodes.
-///
-/// The interner is child-first for acyclic types: callers provide
-/// already-interned child `TypeId`s, and every successful call returns a
-/// `TypeId` whose content is not mutated by the interner afterwards. Recursive
-/// roots are sealed through `internRecursiveRoot`, which keeps the temporary
-/// back-reference slots private until the root has immutable content and a
-/// digest/equality bucket.
+/// Interning state: a store with content dedup enabled plus the name store its
+/// digests and row ordering consult.
 const InternerState = struct {
     allocator: std.mem.Allocator,
     name_store: *const names.NameStore,
     store: Store,
-    by_digest: std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)),
 };
 
 /// Opaque builder handle for interning immutable Monotype type ids.
+///
+/// This is a thin delegate over a `Store` with interning enabled: every method
+/// forwards to the matching `Store.intern*` constructor, threading the name
+/// store. The hash-consing logic and the recursive-group builder live on
+/// `Store` so production stores (Stage C) can dedup through the same boundary
+/// without an interner handle. The `Recursive*` input types are re-exported
+/// here for callers that still address them through `Interner`.
 pub const Interner = opaque {
+    pub const TagInput = Store.TagInput;
+    pub const NamedInput = Store.NamedInput;
+    pub const RecursiveLink = Store.RecursiveLink;
+    pub const RecursiveNodeId = Store.RecursiveNodeId;
+    pub const RecursiveField = Store.RecursiveField;
+    pub const RecursiveTag = Store.RecursiveTag;
+    pub const RecursiveNamedBacking = Store.RecursiveNamedBacking;
+    pub const RecursiveNamed = Store.RecursiveNamed;
+    pub const RecursiveContent = Store.RecursiveContent;
+
+    pub fn recursiveNodeId(index: usize) RecursiveNodeId {
+        return Store.recursiveNodeId(index);
+    }
+
     fn state(self: *Interner) *InternerState {
         return @ptrCast(@alignCast(self));
     }
@@ -2173,22 +2703,23 @@ pub const Interner = opaque {
         return &self.constState().store;
     }
 
+    fn nameStore(self: *Interner) *const names.NameStore {
+        return self.state().name_store;
+    }
+
     pub fn init(allocator: std.mem.Allocator, name_store: *const names.NameStore) std.mem.Allocator.Error!*Interner {
         const state_ = try allocator.create(InternerState);
         state_.* = .{
             .allocator = allocator,
             .name_store = name_store,
             .store = Store.init(allocator),
-            .by_digest = std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)).init(allocator),
         };
+        state_.store.enableInterning();
         return @ptrCast(state_);
     }
 
     pub fn deinit(self: *Interner) void {
         const state_ = self.state();
-        var lists = state_.by_digest.valueIterator();
-        while (lists.next()) |list| list.deinit(state_.allocator);
-        state_.by_digest.deinit();
         state_.store.deinit();
         const allocator = state_.allocator;
         allocator.destroy(state_);
@@ -2230,459 +2761,514 @@ pub const Interner = opaque {
     }
 
     pub fn internPrimitive(self: *Interner, primitive: Primitive) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .primitive = primitive });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internPrimitive(self.nameStore(), primitive);
     }
 
     pub fn internZst(self: *Interner) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.zst);
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internZst(self.nameStore());
     }
 
     pub fn internList(self: *Interner, elem: TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .list = elem });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internList(self.nameStore(), elem);
     }
 
     pub fn internBox(self: *Interner, elem: TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .box = elem });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internBox(self.nameStore(), elem);
     }
 
     pub fn internTuple(self: *Interner, items: []const TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const span_ = try store_.addSpan(items);
-        const ty = try store_.add(.{ .tuple = span_ });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internTuple(self.nameStore(), items);
     }
 
     pub fn internFunc(self: *Interner, args: []const TypeId, ret: TypeId) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const span_ = try store_.addSpan(args);
-        const ty = try store_.add(.{ .func = .{ .args = span_, .ret = ret } });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internFunc(self.nameStore(), args, ret);
     }
 
     pub fn internRecord(self: *Interner, raw_fields: []const Field) std.mem.Allocator.Error!TypeId {
-        const state_ = self.state();
-        const mark_ = state_.store.mark();
-        const span_ = try state_.store.addRecordFields(state_.name_store, raw_fields);
-        const ty = try state_.store.add(.{ .record = span_ });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internRecord(self.nameStore(), raw_fields);
     }
-
-    pub const TagInput = struct {
-        name: names.TagNameId,
-        checked_name: names.TagNameId,
-        payloads: []const TypeId,
-    };
 
     pub fn internTagUnion(self: *Interner, raw_tags: []const TagInput) std.mem.Allocator.Error!TypeId {
-        const state_ = self.state();
-        const mark_ = state_.store.mark();
-        errdefer state_.store.restore(mark_);
-
-        const lowered = try state_.allocator.alloc(Tag, raw_tags.len);
-        defer state_.allocator.free(lowered);
-        for (raw_tags, 0..) |tag, index| {
-            lowered[index] = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try state_.store.addSpan(tag.payloads),
-            };
-        }
-
-        const span_ = try state_.store.addTagVariants(state_.name_store, lowered);
-        const ty = try state_.store.add(.{ .tag_union = span_ });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internTagUnion(self.nameStore(), raw_tags);
     }
 
-    pub const NamedInput = struct {
-        named_type: NamedType,
-        def: TypeDef,
-        kind: NamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
-        args: []const TypeId = &.{},
-        backing: ?NamedBacking = null,
-        declared_order: []const DeclaredField = &.{},
-    };
-
     pub fn internNamed(self: *Interner, named: NamedInput) std.mem.Allocator.Error!TypeId {
-        // A storage-transparent alias — backed, with no builtin dispatch owner —
-        // is erased before insertion: the already-interned backing is returned
-        // so no interned id names the alias node. A backing-less alias stays a
-        // retained marker, and a builtin-owned alias retains its dispatch owner.
-        if (named.kind == .alias and named.builtin_owner == null) {
-            if (named.backing) |backing| {
-                return backing.ty;
-            }
-        }
-
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        errdefer store_.restore(mark_);
-
-        const args = try store_.addSpan(named.args);
-        const declared_order = try store_.addDeclaredFields(named.declared_order);
-        const content: NamedContent = .{
-            .named_type = named.named_type,
-            .def = named.def,
-            .kind = named.kind,
-            .builtin_owner = named.builtin_owner,
-            .args = args,
-            .backing = named.backing,
-            .declared_order = declared_order,
-        };
-        const ty = try store_.add(.{ .named = content });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internNamed(self.nameStore(), named);
     }
 
     pub fn internErased(self: *Interner, digest: names.TypeDigest) std.mem.Allocator.Error!TypeId {
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        const ty = try store_.add(.{ .erased = digest });
-        return try self.internCandidate(mark_, ty);
+        return try self.store().internErased(self.nameStore(), digest);
     }
 
-    pub const RecursiveLink = union(enum(u8)) {
-        interned: TypeId,
-        node: RecursiveNodeId,
-        root,
-    };
-
-    pub const RecursiveNodeId = enum(u32) { _ };
-
-    pub fn recursiveNodeId(index: usize) RecursiveNodeId {
-        return @enumFromInt(@as(u32, @intCast(index)));
-    }
-
-    pub const RecursiveField = struct {
-        name: names.RecordFieldNameId,
-        ty: RecursiveLink,
-    };
-
-    pub const RecursiveTag = struct {
-        name: names.TagNameId,
-        checked_name: names.TagNameId,
-        payloads: []const RecursiveLink,
-    };
-
-    pub const RecursiveNamedBacking = struct {
-        ty: RecursiveLink,
-        use: BackingUse,
-    };
-
-    pub const RecursiveNamed = struct {
-        named_type: NamedType,
-        def: TypeDef,
-        kind: NamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
-        args: []const RecursiveLink,
-        backing: ?RecursiveNamedBacking = null,
-        declared_order: Span = Span.empty(),
-    };
-
-    pub const RecursiveContent = union(enum(u8)) {
-        primitive: Primitive,
-        named: RecursiveNamed,
-        record: []const RecursiveField,
-        tuple: []const RecursiveLink,
-        tag_union: []const RecursiveTag,
-        list: RecursiveLink,
-        box: RecursiveLink,
-        func: struct {
-            args: []const RecursiveLink,
-            ret: RecursiveLink,
-        },
-        erased: names.TypeDigest,
-        zst,
-    };
-
-    /// Intern one recursive root without exposing the reserved root id before
-    /// its content has been sealed. The input may refer to the root with
-    /// `RecursiveLink.root`; every other child must already be an immutable
-    /// interned `TypeId`.
     pub fn internRecursiveRoot(self: *Interner, content: RecursiveContent) std.mem.Allocator.Error!TypeId {
-        return try self.internRecursiveGroupRoot(&.{content}, recursiveNodeId(0));
+        return try self.store().internRecursiveRoot(self.nameStore(), content);
     }
 
-    /// Intern one public root from a private recursive group. Group nodes may
-    /// reference each other through `RecursiveLink.node`; only the selected root
-    /// is returned to the caller, and it is returned only after every private
-    /// node has been filled exactly once.
-    ///
-    /// Every member of the group is registered by its digest as a root, so a
-    /// later equivalent rooted graph deduplicates to an existing member
-    /// regardless of which node it is entered from. Members that are equal as
-    /// roots — either to an existing pool type or to another member of a
-    /// symmetric group — share one id.
     pub fn internRecursiveGroupRoot(
         self: *Interner,
         contents: []const RecursiveContent,
         root_node: RecursiveNodeId,
     ) std.mem.Allocator.Error!TypeId {
-        const root_index = @intFromEnum(root_node);
-        if (root_index >= contents.len) {
-            Common.invariant("Monotype recursive type group root is outside the group");
-        }
+        return try self.store().internRecursiveGroupRoot(self.nameStore(), contents, root_node);
+    }
+};
 
-        const state_ = self.state();
-        const allocator = state_.allocator;
-        const store_ = &state_.store;
+/// Re-intern the type rooted at `root` in `source` into the interning `dest`
+/// store, producing the equivalent (deduplicated) type. `source` and `dest`
+/// share `name_store`, so row/tag/name ids carry over directly.
+///
+/// The reachable subgraph is split into strongly connected components (Tarjan,
+/// explicit-stack). Components are emitted children-first: each acyclic node is
+/// built through the plain `intern*` constructors with its children already
+/// resolved, and each cyclic component is built through the recursive-group
+/// builder, with in-component edges as `RecursiveLink.node` and edges leaving
+/// the component as `RecursiveLink.interned`. A component with more than one
+/// externally-referenced member is resolved by rooting the recursive-group
+/// build at each member in turn; dedup makes the repeated builds share ids, so
+/// `dest` must have interning enabled.
+pub fn reintern(
+    dest: *Store,
+    name_store: *const names.NameStore,
+    source: Store.View,
+    root: TypeId,
+) std.mem.Allocator.Error!TypeId {
+    if (!dest.internEnabled()) {
+        Common.invariant("reintern target store must have interning enabled");
+    }
+    var arena_impl = std.heap.ArenaAllocator.init(dest.allocator);
+    defer arena_impl.deinit();
+    var reinterner = Reintern{
+        .arena = arena_impl.allocator(),
+        .dest = dest,
+        .name_store = name_store,
+        .source = source,
+        .index_of = std.AutoHashMap(TypeId, u32).init(arena_impl.allocator()),
+    };
+    const root_index = try reinterner.collect(root);
+    try reinterner.run();
+    return reinterner.resolved.items[root_index] orelse
+        Common.invariant("reintern left the root component unresolved");
+}
 
-        // Phase A: build the group into provisional slots so each member has a
-        // rooted digest. `.root` links resolve to the selected root; `.node`
-        // links resolve to sibling members.
-        const provisional_mark = store_.mark();
-        errdefer store_.restore(provisional_mark);
+/// Working state for `reintern`. Local indices densely number the reachable
+/// source nodes; every buffer below is indexed by local index.
+const Reintern = struct {
+    arena: std.mem.Allocator,
+    dest: *Store,
+    name_store: *const names.NameStore,
+    source: Store.View,
+    index_of: std.AutoHashMap(TypeId, u32),
+    nodes: std.ArrayList(TypeId) = .empty,
+    children: std.ArrayList([]const u32) = .empty,
+    resolved: std.ArrayList(?TypeId) = .empty,
 
-        const provisional = try allocator.alloc(TypeId, contents.len);
-        defer allocator.free(provisional);
-        for (provisional) |*id| id.* = try store_.reserveSlot();
-        const provisional_root = provisional[root_index];
-        for (contents, 0..) |content, index| {
-            const lowered = try self.lowerRecursiveContent(provisional, provisional_root, content);
-            store_.fillReservedSlot(provisional[index], lowered);
-        }
+    /// Discover every reachable source node, assign it a dense local index, and
+    /// record its child edges. Returns the root's local index.
+    fn collect(self: *Reintern, root: TypeId) std.mem.Allocator.Error!u32 {
+        // Explicit-stack post-order: reserve a node's index on first sight, then
+        // record its child edges once children are known.
+        const Frame = struct { ty: TypeId, index: u32 };
+        var stack = std.ArrayList(Frame).empty;
+        defer stack.deinit(self.arena);
 
-        // Phase B: resolve each member to an existing id where possible. A
-        // member equal as a root to an existing pool type reuses it; a member
-        // equal to an earlier member of this same group shares that member's
-        // id; the rest are new.
-        const existing_id = try allocator.alloc(?TypeId, contents.len);
-        defer allocator.free(existing_id);
-        const representative = try allocator.alloc(usize, contents.len);
-        defer allocator.free(representative);
-        var has_dedup = false;
-        for (provisional, 0..) |member, index| {
-            existing_id[index] = null;
-            representative[index] = index;
-            for (0..index) |earlier| {
-                if (try store_.typeEql(state_.name_store, provisional[earlier], member)) {
-                    representative[index] = representative[earlier];
-                    has_dedup = true;
-                    break;
+        const root_index = try self.reserveNode(root);
+        try self.index_of.put(root, root_index);
+        try stack.append(self.arena, .{ .ty = root, .index = root_index });
+        while (stack.items.len != 0) {
+            const frame = stack.pop().?;
+            var child_list = std.ArrayList(u32).empty;
+            var it = ChildIterator.init(self.source, self.source.get(frame.ty));
+            while (it.next()) |child| {
+                const gop = try self.index_of.getOrPut(child);
+                if (!gop.found_existing) {
+                    // reserveNode never touches `index_of`, so `gop.value_ptr`
+                    // stays valid while the reservation appends to the buffers.
+                    const child_index = try self.reserveNode(child);
+                    gop.value_ptr.* = child_index;
+                    try stack.append(self.arena, .{ .ty = child, .index = child_index });
                 }
+                try child_list.append(self.arena, gop.value_ptr.*);
             }
-            if (representative[index] == index) {
-                existing_id[index] = try self.findExistingRoot(member);
-                if (existing_id[index] != null) has_dedup = true;
-            }
+            self.children.items[frame.index] = try child_list.toOwnedSlice(self.arena);
         }
-
-        // Common case: every member is a distinct new root. Keep the provisional
-        // slots and register each so any entry node deduplicates a future graph.
-        if (!has_dedup) {
-            for (provisional) |member| try self.registerRoot(member);
-            census.bump("intern_miss");
-            return provisional_root;
-        }
-
-        // Phase C: some member deduplicated. Drop the provisional slots and
-        // build only the genuinely new representatives, resolving every
-        // reference through the resolved-id mapping.
-        store_.restore(provisional_mark);
-
-        const final_ids = try allocator.alloc(TypeId, contents.len);
-        defer allocator.free(final_ids);
-        for (representative, 0..) |rep, index| {
-            if (rep != index) continue;
-            if (existing_id[index]) |existing| {
-                final_ids[index] = existing;
-            } else {
-                final_ids[index] = try store_.reserveSlot();
-            }
-        }
-        for (representative, 0..) |rep, index| {
-            if (rep != index) final_ids[index] = final_ids[rep];
-        }
-        const final_root = final_ids[root_index];
-        for (representative, 0..) |rep, index| {
-            if (rep != index or existing_id[index] != null) continue;
-            const lowered = try self.lowerRecursiveContent(final_ids, final_root, contents[index]);
-            store_.fillReservedSlot(final_ids[index], lowered);
-        }
-        for (representative, 0..) |rep, index| {
-            if (rep != index or existing_id[index] != null) continue;
-            try self.registerRoot(final_ids[index]);
-        }
-        if (existing_id[root_index] != null) census.bump("intern_hit") else census.bump("intern_miss");
-        return final_root;
+        return root_index;
     }
 
-    /// Look up a type equal as a root to `member` among the registered pool
-    /// types, returning it if one exists. Only pre-registered types are probed,
-    /// so a provisional group member never matches itself or a sibling here.
-    fn findExistingRoot(self: *Interner, member: TypeId) std.mem.Allocator.Error!?TypeId {
-        const state_ = self.state();
-        const digest = state_.store.typeDigestCached(state_.name_store, member, null);
-        const key = InternerLookupDigest.from(digest);
-        if (state_.by_digest.getPtr(key)) |bucket| {
-            for (bucket.items) |existing| {
-                if (try state_.store.typeEql(state_.name_store, existing, member)) {
-                    return existing;
+    fn reserveNode(self: *Reintern, ty: TypeId) std.mem.Allocator.Error!u32 {
+        const index: u32 = @intCast(self.nodes.items.len);
+        try self.nodes.append(self.arena, ty);
+        try self.children.append(self.arena, &.{});
+        try self.resolved.append(self.arena, null);
+        return index;
+    }
+
+    /// Split the reachable graph into strongly connected components (Tarjan with
+    /// an explicit work stack) and build each into `dest` children-first.
+    fn run(self: *Reintern) std.mem.Allocator.Error!void {
+        const n = self.nodes.items.len;
+        const disc = try self.arena.alloc(i64, n);
+        const low = try self.arena.alloc(i64, n);
+        const on_stack = try self.arena.alloc(bool, n);
+        @memset(disc, -1);
+        @memset(low, 0);
+        @memset(on_stack, false);
+
+        var scc_stack = std.ArrayList(u32).empty;
+        defer scc_stack.deinit(self.arena);
+        const Frame = struct { node: u32, child_pos: usize };
+        var work = std.ArrayList(Frame).empty;
+        defer work.deinit(self.arena);
+
+        var counter: i64 = 0;
+        for (0..n) |start| {
+            if (disc[start] != -1) continue;
+            try work.append(self.arena, .{ .node = @intCast(start), .child_pos = 0 });
+            while (work.items.len != 0) {
+                const frame = &work.items[work.items.len - 1];
+                const v = frame.node;
+                if (frame.child_pos == 0) {
+                    disc[v] = counter;
+                    low[v] = counter;
+                    counter += 1;
+                    try scc_stack.append(self.arena, v);
+                    on_stack[v] = true;
+                }
+                var recursed = false;
+                const kids = self.children.items[v];
+                while (frame.child_pos < kids.len) {
+                    const w = kids[frame.child_pos];
+                    frame.child_pos += 1;
+                    if (disc[w] == -1) {
+                        try work.append(self.arena, .{ .node = w, .child_pos = 0 });
+                        recursed = true;
+                        break;
+                    } else if (on_stack[w]) {
+                        low[v] = @min(low[v], disc[w]);
+                    }
+                }
+                if (recursed) continue;
+
+                if (low[v] == disc[v]) {
+                    var component = std.ArrayList(u32).empty;
+                    defer component.deinit(self.arena);
+                    while (true) {
+                        const member = scc_stack.pop().?;
+                        on_stack[member] = false;
+                        try component.append(self.arena, member);
+                        if (member == v) break;
+                    }
+                    try self.buildComponent(component.items);
+                }
+
+                _ = work.pop();
+                if (work.items.len != 0) {
+                    const parent = work.items[work.items.len - 1].node;
+                    low[parent] = @min(low[parent], low[v]);
                 }
             }
+        }
+    }
+
+    fn hasSelfEdge(self: *Reintern, node: u32) bool {
+        for (self.children.items[node]) |child| {
+            if (child == node) return true;
+        }
+        return false;
+    }
+
+    fn buildComponent(self: *Reintern, component: []const u32) std.mem.Allocator.Error!void {
+        if (component.len == 1 and !self.hasSelfEdge(component[0])) {
+            const node = component[0];
+            self.resolved.items[node] = try self.buildAcyclic(node);
+            return;
+        }
+        try self.buildCyclic(component);
+    }
+
+    /// Build one acyclic node through the plain constructors; every child is in
+    /// an earlier component and therefore already resolved.
+    fn buildAcyclic(self: *Reintern, node: u32) std.mem.Allocator.Error!TypeId {
+        const ty = self.nodes.items[node];
+        return switch (self.source.get(ty)) {
+            .primitive => |primitive| try self.dest.internPrimitive(self.name_store, primitive),
+            .zst => try self.dest.internZst(self.name_store),
+            .erased => |digest| try self.dest.internErased(self.name_store, digest),
+            .list => |elem| try self.dest.internList(self.name_store, self.resolvedChild(elem)),
+            .box => |elem| try self.dest.internBox(self.name_store, self.resolvedChild(elem)),
+            .tuple => |span_| blk: {
+                const items = try self.resolvedSpan(span_);
+                break :blk try self.dest.internTuple(self.name_store, items);
+            },
+            .func => |func| blk: {
+                const args = try self.resolvedSpan(func.args);
+                break :blk try self.dest.internFunc(self.name_store, args, self.resolvedChild(func.ret));
+            },
+            .record => |span_| blk: {
+                const source_fields = self.source.fieldSpan(span_);
+                const fields = try self.arena.alloc(Field, source_fields.len);
+                for (source_fields, 0..) |field, index| {
+                    fields[index] = .{ .name = field.name, .ty = self.resolvedChild(field.ty) };
+                }
+                break :blk try self.dest.internRecord(self.name_store, fields);
+            },
+            .tag_union => |span_| blk: {
+                const source_tags = self.source.tagSpan(span_);
+                const tags = try self.arena.alloc(Store.TagInput, source_tags.len);
+                for (source_tags, 0..) |tag, index| {
+                    tags[index] = .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try self.resolvedSpan(tag.payloads),
+                    };
+                }
+                break :blk try self.dest.internTagUnion(self.name_store, tags);
+            },
+            .named => |named| try self.dest.internNamed(self.name_store, .{
+                .named_type = named.named_type,
+                .def = named.def,
+                .kind = named.kind,
+                .builtin_owner = named.builtin_owner,
+                .args = try self.resolvedSpan(named.args),
+                .backing = if (named.backing) |backing| .{
+                    .ty = self.resolvedChild(backing.ty),
+                    .use = backing.use,
+                } else null,
+                .declared_order = try self.resolvedDeclaredOrderSlice(named.declared_order),
+            }),
+        };
+    }
+
+    /// Build a cyclic component through the recursive-group builder in one pass,
+    /// reading every member's resolved id so each externally-referenced member
+    /// is placed without re-entering the group per member.
+    fn buildCyclic(self: *Reintern, component: []const u32) std.mem.Allocator.Error!void {
+        var group_index = std.AutoHashMap(u32, u32).init(self.arena);
+        defer group_index.deinit();
+        for (component, 0..) |node, position| {
+            try group_index.put(node, @intCast(position));
+        }
+
+        const contents = try self.arena.alloc(Store.RecursiveContent, component.len);
+        for (component, 0..) |node, position| {
+            contents[position] = try self.recursiveContent(node, &group_index);
+        }
+
+        const member_ids = try self.arena.alloc(TypeId, component.len);
+        try self.dest.internRecursiveGroupInto(self.name_store, contents, member_ids);
+        for (component, 0..) |node, position| {
+            self.resolved.items[node] = member_ids[position];
+        }
+    }
+
+    fn recursiveContent(
+        self: *Reintern,
+        node: u32,
+        group_index: *std.AutoHashMap(u32, u32),
+    ) std.mem.Allocator.Error!Store.RecursiveContent {
+        const ty = self.nodes.items[node];
+        return switch (self.source.get(ty)) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .zst => .zst,
+            .erased => |digest| .{ .erased = digest },
+            .list => |elem| .{ .list = self.recursiveLink(elem, group_index) },
+            .box => |elem| .{ .box = self.recursiveLink(elem, group_index) },
+            .tuple => |span_| .{ .tuple = try self.recursiveLinkSpan(span_, group_index) },
+            .func => |func| .{ .func = .{
+                .args = try self.recursiveLinkSpan(func.args, group_index),
+                .ret = self.recursiveLink(func.ret, group_index),
+            } },
+            .record => |span_| blk: {
+                const source_fields = self.source.fieldSpan(span_);
+                const fields = try self.arena.alloc(Store.RecursiveField, source_fields.len);
+                for (source_fields, 0..) |field, index| {
+                    fields[index] = .{ .name = field.name, .ty = self.recursiveLink(field.ty, group_index) };
+                }
+                break :blk .{ .record = fields };
+            },
+            .tag_union => |span_| blk: {
+                const source_tags = self.source.tagSpan(span_);
+                const tags = try self.arena.alloc(Store.RecursiveTag, source_tags.len);
+                for (source_tags, 0..) |tag, index| {
+                    tags[index] = .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try self.recursiveLinkSpan(tag.payloads, group_index),
+                    };
+                }
+                break :blk .{ .tag_union = tags };
+            },
+            .named => |named| .{
+                .named = .{
+                    .named_type = named.named_type,
+                    .def = named.def,
+                    .kind = named.kind,
+                    .builtin_owner = named.builtin_owner,
+                    .args = try self.recursiveLinkSpan(named.args, group_index),
+                    .backing = if (named.backing) |backing| .{
+                        .ty = self.recursiveLink(backing.ty, group_index),
+                        .use = backing.use,
+                    } else null,
+                    // Declared-order padding types are always leaf representations
+                    // outside the cycle, so they resolve as an already-built span.
+                    .declared_order = try self.resolvedDeclaredOrderSpan(named.declared_order),
+                },
+            },
+        };
+    }
+
+    fn recursiveLink(
+        self: *Reintern,
+        child: TypeId,
+        group_index: *std.AutoHashMap(u32, u32),
+    ) Store.RecursiveLink {
+        const child_index = self.index_of.get(child) orelse
+            Common.invariant("reintern child was not collected");
+        if (group_index.get(child_index)) |position| {
+            return .{ .node = Store.recursiveNodeId(position) };
+        }
+        return .{ .interned = self.resolved.items[child_index] orelse
+            Common.invariant("reintern cyclic child left an out-of-component node unresolved") };
+    }
+
+    fn recursiveLinkSpan(
+        self: *Reintern,
+        span_: Span,
+        group_index: *std.AutoHashMap(u32, u32),
+    ) std.mem.Allocator.Error![]const Store.RecursiveLink {
+        const children = self.source.span(span_);
+        if (children.len == 0) return &.{};
+        const links = try self.arena.alloc(Store.RecursiveLink, children.len);
+        for (children, 0..) |child, index| {
+            links[index] = self.recursiveLink(child, group_index);
+        }
+        return links;
+    }
+
+    fn resolvedChild(self: *Reintern, child: TypeId) TypeId {
+        const child_index = self.index_of.get(child) orelse
+            Common.invariant("reintern child was not collected");
+        return self.resolved.items[child_index] orelse
+            Common.invariant("reintern acyclic child was not resolved before its parent");
+    }
+
+    fn resolvedSpan(self: *Reintern, span_: Span) std.mem.Allocator.Error![]const TypeId {
+        const children = self.source.span(span_);
+        if (children.len == 0) return &.{};
+        const out = try self.arena.alloc(TypeId, children.len);
+        for (children, 0..) |child, index| {
+            out[index] = self.resolvedChild(child);
+        }
+        return out;
+    }
+
+    fn resolvedDeclaredOrderSlice(self: *Reintern, span_: Span) std.mem.Allocator.Error![]const DeclaredField {
+        const source_fields = self.source.declaredFieldSpan(span_);
+        if (source_fields.len == 0) return &.{};
+        const out = try self.arena.alloc(DeclaredField, source_fields.len);
+        for (source_fields, 0..) |field, index| {
+            out[index] = switch (field) {
+                .named => |name| .{ .named = name },
+                .padding => |ty| .{ .padding = self.resolvedChild(ty) },
+            };
+        }
+        return out;
+    }
+
+    fn resolvedDeclaredOrderSpan(self: *Reintern, span_: Span) std.mem.Allocator.Error!Span {
+        const slice = try self.resolvedDeclaredOrderSlice(span_);
+        return try self.dest.addDeclaredFields(slice);
+    }
+};
+
+/// Yields the child `TypeId`s of one source content in a stable order, so the
+/// reachability walk and the component builders agree on the edge set.
+const ChildIterator = struct {
+    view: Store.View,
+    content: Content,
+    phase: usize = 0,
+    cursor: usize = 0,
+    tag_cursor: usize = 0,
+
+    fn init(view: Store.View, content: Content) ChildIterator {
+        return .{ .view = view, .content = content };
+    }
+
+    fn next(self: *ChildIterator) ?TypeId {
+        switch (self.content) {
+            .primitive, .erased, .zst => return null,
+            .list => |elem| return self.oneShot(elem),
+            .box => |elem| return self.oneShot(elem),
+            .tuple => |span_| return self.fromSpan(self.view.span(span_)),
+            .func => |func| {
+                const args = self.view.span(func.args);
+                if (self.cursor < args.len) {
+                    const child = args[self.cursor];
+                    self.cursor += 1;
+                    return child;
+                }
+                return self.oneShot(func.ret);
+            },
+            .record => |span_| {
+                const fields = self.view.fieldSpan(span_);
+                if (self.cursor < fields.len) {
+                    const child = fields[self.cursor].ty;
+                    self.cursor += 1;
+                    return child;
+                }
+                return null;
+            },
+            .tag_union => |span_| {
+                const tags = self.view.tagSpan(span_);
+                while (self.tag_cursor < tags.len) {
+                    const payloads = self.view.span(tags[self.tag_cursor].payloads);
+                    if (self.cursor < payloads.len) {
+                        const child = payloads[self.cursor];
+                        self.cursor += 1;
+                        return child;
+                    }
+                    self.tag_cursor += 1;
+                    self.cursor = 0;
+                }
+                return null;
+            },
+            .named => |named| {
+                const args = self.view.span(named.args);
+                if (self.cursor < args.len) {
+                    const child = args[self.cursor];
+                    self.cursor += 1;
+                    return child;
+                }
+                if (self.phase == 0) {
+                    self.phase = 1;
+                    if (named.backing) |backing| return backing.ty;
+                }
+                const declared = self.view.declaredFieldSpan(named.declared_order);
+                while (self.tag_cursor < declared.len) {
+                    const entry = declared[self.tag_cursor];
+                    self.tag_cursor += 1;
+                    switch (entry) {
+                        .named => {},
+                        .padding => |ty| return ty,
+                    }
+                }
+                return null;
+            },
+        }
+    }
+
+    fn oneShot(self: *ChildIterator, child: TypeId) ?TypeId {
+        if (self.phase != 0) return null;
+        self.phase = 1;
+        return child;
+    }
+
+    fn fromSpan(self: *ChildIterator, items: []const TypeId) ?TypeId {
+        if (self.cursor < items.len) {
+            const child = items[self.cursor];
+            self.cursor += 1;
+            return child;
         }
         return null;
-    }
-
-    /// Register `member` under its rooted digest so a future equivalent graph
-    /// entered at this node deduplicates to it.
-    fn registerRoot(self: *Interner, member: TypeId) std.mem.Allocator.Error!void {
-        const state_ = self.state();
-        const digest = state_.store.typeDigestCached(state_.name_store, member, null);
-        const key = InternerLookupDigest.from(digest);
-        const gop = try state_.by_digest.getOrPut(key);
-        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TypeId).empty;
-        try gop.value_ptr.append(state_.allocator, member);
-    }
-
-    fn lowerRecursiveLink(_: *Interner, ids: []const TypeId, root: TypeId, link: RecursiveLink) TypeId {
-        return switch (link) {
-            .interned => |ty| ty,
-            .node => |node| blk: {
-                const raw = @intFromEnum(node);
-                if (raw >= ids.len) Common.invariant("Monotype recursive type reference is outside the group");
-                break :blk ids[raw];
-            },
-            .root => root,
-        };
-    }
-
-    fn lowerRecursiveLinkSpan(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        links: []const RecursiveLink,
-    ) std.mem.Allocator.Error!Span {
-        if (links.len == 0) return .empty();
-        const state_ = self.state();
-        const lowered = try state_.allocator.alloc(TypeId, links.len);
-        defer state_.allocator.free(lowered);
-        for (links, 0..) |link, index| {
-            lowered[index] = self.lowerRecursiveLink(ids, root, link);
-        }
-        return try state_.store.addSpan(lowered);
-    }
-
-    fn lowerRecursiveFields(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        fields: []const RecursiveField,
-    ) std.mem.Allocator.Error!Span {
-        if (fields.len == 0) return .empty();
-        const state_ = self.state();
-        const lowered = try state_.allocator.alloc(Field, fields.len);
-        defer state_.allocator.free(lowered);
-        for (fields, 0..) |field, index| {
-            lowered[index] = .{
-                .name = field.name,
-                .ty = self.lowerRecursiveLink(ids, root, field.ty),
-            };
-        }
-        return try state_.store.addRecordFields(state_.name_store, lowered);
-    }
-
-    fn lowerRecursiveTags(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        tags_: []const RecursiveTag,
-    ) std.mem.Allocator.Error!Span {
-        if (tags_.len == 0) return .empty();
-        const state_ = self.state();
-        const lowered = try state_.allocator.alloc(Tag, tags_.len);
-        defer state_.allocator.free(lowered);
-        for (tags_, 0..) |tag, index| {
-            lowered[index] = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try self.lowerRecursiveLinkSpan(ids, root, tag.payloads),
-            };
-        }
-        return try state_.store.addTagVariants(state_.name_store, lowered);
-    }
-
-    fn lowerRecursiveNamed(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        named: RecursiveNamed,
-    ) std.mem.Allocator.Error!NamedContent {
-        return .{
-            .named_type = named.named_type,
-            .def = named.def,
-            .kind = named.kind,
-            .builtin_owner = named.builtin_owner,
-            .args = try self.lowerRecursiveLinkSpan(ids, root, named.args),
-            .backing = if (named.backing) |backing| .{
-                .ty = self.lowerRecursiveLink(ids, root, backing.ty),
-                .use = backing.use,
-            } else null,
-            .declared_order = named.declared_order,
-        };
-    }
-
-    fn lowerRecursiveContent(
-        self: *Interner,
-        ids: []const TypeId,
-        root: TypeId,
-        content: RecursiveContent,
-    ) std.mem.Allocator.Error!Content {
-        return switch (content) {
-            .primitive => |primitive| .{ .primitive = primitive },
-            .named => |named| .{ .named = try self.lowerRecursiveNamed(ids, root, named) },
-            .record => |fields| .{ .record = try self.lowerRecursiveFields(ids, root, fields) },
-            .tuple => |items| .{ .tuple = try self.lowerRecursiveLinkSpan(ids, root, items) },
-            .tag_union => |tags_| .{ .tag_union = try self.lowerRecursiveTags(ids, root, tags_) },
-            .list => |elem| .{ .list = self.lowerRecursiveLink(ids, root, elem) },
-            .box => |elem| .{ .box = self.lowerRecursiveLink(ids, root, elem) },
-            .func => |function| .{ .func = .{
-                .args = try self.lowerRecursiveLinkSpan(ids, root, function.args),
-                .ret = self.lowerRecursiveLink(ids, root, function.ret),
-            } },
-            .erased => |digest| .{ .erased = digest },
-            .zst => .zst,
-        };
-    }
-
-    fn internCandidate(self: *Interner, mark_: Store.Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
-        const state_ = self.state();
-        errdefer state_.store.restore(mark_);
-
-        const digest = state_.store.typeDigestCached(state_.name_store, candidate, null);
-        const key = InternerLookupDigest.from(digest);
-        if (state_.by_digest.getPtr(key)) |bucket| {
-            for (bucket.items) |existing| {
-                if (try state_.store.typeEql(state_.name_store, existing, candidate)) {
-                    state_.store.restore(mark_);
-                    census.bump("intern_hit");
-                    return existing;
-                }
-            }
-            try bucket.append(state_.allocator, candidate);
-            census.bump("intern_miss");
-            return candidate;
-        }
-
-        var bucket = std.ArrayList(TypeId).empty;
-        errdefer bucket.deinit(state_.allocator);
-        try bucket.append(state_.allocator, candidate);
-        try state_.by_digest.put(key, bucket);
-        census.bump("intern_miss");
-        return candidate;
     }
 };
 
@@ -3997,4 +4583,213 @@ test "monotype named type digest includes padding backing" {
     const i64_digest = store.typeDigest(&name_store, named_i64);
     const str_digest = store.typeDigest(&name_store, named_str);
     try std.testing.expect(!std.mem.eql(u8, i64_digest.bytes[0..], str_digest.bytes[0..]));
+}
+
+test "reintern rebuilds acyclic nested types and dedups equal leaves" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const a_name = try name_store.internRecordFieldLabel("a");
+    const b_name = try name_store.internRecordFieldLabel("b");
+
+    // Source: List { a: I64, b: I64 } with the two I64 leaves built as
+    // distinct nodes so dedup has something to collapse.
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const i64_a = try source.add(.{ .primitive = .i64 });
+    const i64_b = try source.add(.{ .primitive = .i64 });
+    const record = try source.add(.{ .record = try source.addRecordFields(&name_store, &.{
+        .{ .name = a_name, .ty = i64_a },
+        .{ .name = b_name, .ty = i64_b },
+    }) });
+    const list = try source.add(.{ .list = record });
+
+    var dest = Store.init(std.testing.allocator);
+    dest.enableInterning();
+    defer dest.deinit();
+    const root = try reintern(&dest, &name_store, source.view(), list);
+
+    try std.testing.expect(dest.get(root) == .list);
+    const elem = dest.get(root).list;
+    try std.testing.expect(dest.get(elem) == .record);
+    const fields = dest.fieldSpan(dest.get(elem).record);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
+    // Both fields resolved to the one deduplicated I64 leaf.
+    try std.testing.expectEqual(GuardedList.at(fields, 0).ty, GuardedList.at(fields, 1).ty);
+    try std.testing.expect(dest.get(GuardedList.at(fields, 0).ty) == .primitive);
+    // Exactly three types: the leaf, the record, and the list.
+    try std.testing.expectEqual(@as(usize, 3), dest.view().types.len);
+    try std.testing.expectEqual(@as(?Store.VerifyError, null), dest.verify(&name_store));
+}
+
+test "reintern rebuilds a self-recursive type" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const next_name = try name_store.internRecordFieldLabel("next");
+
+    // Source: a self-referential record { next: self } built with addRecursive.
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const Ctx = struct {
+        source: *Store,
+        name_store: *const names.NameStore,
+        field: names.RecordFieldNameId,
+        fn fill(ctx: @This(), reserved: TypeId) std.mem.Allocator.Error!Content {
+            return .{ .record = try ctx.source.addRecordFields(ctx.name_store, &.{
+                .{ .name = ctx.field, .ty = reserved },
+            }) };
+        }
+    };
+    const source_root = try source.addRecursive(
+        Ctx{ .source = &source, .name_store = &name_store, .field = next_name },
+        Ctx.fill,
+    );
+
+    var dest = Store.init(std.testing.allocator);
+    dest.enableInterning();
+    defer dest.deinit();
+    const root = try reintern(&dest, &name_store, source.view(), source_root);
+
+    try std.testing.expect(dest.get(root) == .record);
+    const fields = dest.fieldSpan(dest.get(root).record);
+    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    try std.testing.expectEqual(root, GuardedList.at(fields, 0).ty);
+    try std.testing.expectEqual(@as(usize, 1), dest.view().types.len);
+    try std.testing.expectEqual(@as(?Store.VerifyError, null), dest.verify(&name_store));
+}
+
+test "reintern rebuilds a mutually recursive group" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const a_name = try name_store.internRecordFieldLabel("a");
+    const b_name = try name_store.internRecordFieldLabel("b");
+
+    // Source: A = { a: B }, B = { b: A } — distinct rooted types. Built through
+    // the plain (non-interning) group builder so the cycle exists in `source`.
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const node0 = Store.recursiveNodeId(0);
+    const node1 = Store.recursiveNodeId(1);
+    const source_a = try source.internRecursiveGroupRoot(&name_store, &.{
+        .{ .record = &.{.{ .name = a_name, .ty = .{ .node = node1 } }} },
+        .{ .record = &.{.{ .name = b_name, .ty = .{ .node = node0 } }} },
+    }, node0);
+
+    var dest = Store.init(std.testing.allocator);
+    dest.enableInterning();
+    defer dest.deinit();
+    const root = try reintern(&dest, &name_store, source.view(), source_a);
+
+    // A -> B -> A, with A != B and both distinct records preserved.
+    try std.testing.expect(dest.get(root) == .record);
+    const a_fields = dest.fieldSpan(dest.get(root).record);
+    const b = GuardedList.at(a_fields, 0).ty;
+    try std.testing.expect(b != root);
+    try std.testing.expect(dest.get(b) == .record);
+    const b_fields = dest.fieldSpan(dest.get(b).record);
+    try std.testing.expectEqual(root, GuardedList.at(b_fields, 0).ty);
+    try std.testing.expectEqual(@as(usize, 2), dest.view().types.len);
+    try std.testing.expectEqual(@as(?Store.VerifyError, null), dest.verify(&name_store));
+}
+
+test "reintern collapses a symmetric recursive group to one id" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const field_name = try name_store.internRecordFieldLabel("x");
+
+    // Source: A = { x: B }, B = { x: A } — symmetric, so one rooted type.
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const node0 = Store.recursiveNodeId(0);
+    const node1 = Store.recursiveNodeId(1);
+    const source_a = try source.internRecursiveGroupRoot(&name_store, &.{
+        .{ .record = &.{.{ .name = field_name, .ty = .{ .node = node1 } }} },
+        .{ .record = &.{.{ .name = field_name, .ty = .{ .node = node0 } }} },
+    }, node0);
+
+    var dest = Store.init(std.testing.allocator);
+    dest.enableInterning();
+    defer dest.deinit();
+    const root = try reintern(&dest, &name_store, source.view(), source_a);
+
+    // The symmetric members share one self-referential record id.
+    try std.testing.expectEqual(@as(usize, 1), dest.view().types.len);
+    const fields = dest.fieldSpan(dest.get(root).record);
+    try std.testing.expectEqual(root, GuardedList.at(fields, 0).ty);
+    try std.testing.expectEqual(@as(?Store.VerifyError, null), dest.verify(&name_store));
+}
+
+test "reintern canonicalizes empty row and head forms" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    // Source: an empty record built as a general zero-length record row, and an
+    // empty tag union. §8.4 requires one interned id per head.
+    var source = Store.init(std.testing.allocator);
+    defer source.deinit();
+    const empty_record = try source.add(.{ .record = try source.addRecordFields(&name_store, &.{}) });
+    const empty_tags = try source.add(.{ .tag_union = Span.empty() });
+
+    var dest = Store.init(std.testing.allocator);
+    dest.enableInterning();
+    defer dest.deinit();
+
+    const reint_record = try reintern(&dest, &name_store, source.view(), empty_record);
+    const reint_tags = try reintern(&dest, &name_store, source.view(), empty_tags);
+    // A freshly interned empty record shares the reinterned one's id.
+    const direct_record = try dest.internRecord(&name_store, &.{});
+    const direct_tags = try dest.internTagUnion(&name_store, &.{});
+    try std.testing.expectEqual(reint_record, direct_record);
+    try std.testing.expectEqual(reint_tags, direct_tags);
+    try std.testing.expect(reint_record != reint_tags);
+    try std.testing.expectEqual(@as(usize, 2), dest.view().types.len);
+}
+
+test "reintern is construction-order independent and dedups across roots" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    const field_name = try name_store.internRecordFieldLabel("v");
+
+    // Two sources build the same logical type { v: Box I64 } in different node
+    // orders (leaf-first vs parent-first allocation), so their internal ids
+    // differ.
+    var source_a = Store.init(std.testing.allocator);
+    defer source_a.deinit();
+    const a_i64 = try source_a.add(.{ .primitive = .i64 });
+    const a_box = try source_a.add(.{ .box = a_i64 });
+    const a_record = try source_a.add(.{ .record = try source_a.addRecordFields(&name_store, &.{
+        .{ .name = field_name, .ty = a_box },
+    }) });
+
+    var source_b = Store.init(std.testing.allocator);
+    defer source_b.deinit();
+    // Reserve the record slot first, then fill its children, inverting order.
+    const RecordCtx = struct {
+        source: *Store,
+        name_store: *const names.NameStore,
+        field: names.RecordFieldNameId,
+        fn fill(ctx: @This(), _: TypeId) std.mem.Allocator.Error!Content {
+            const i64_ty = try ctx.source.add(.{ .primitive = .i64 });
+            const box_ty = try ctx.source.add(.{ .box = i64_ty });
+            return .{ .record = try ctx.source.addRecordFields(ctx.name_store, &.{
+                .{ .name = ctx.field, .ty = box_ty },
+            }) };
+        }
+    };
+    const b_record = try source_b.addRecursive(
+        RecordCtx{ .source = &source_b, .name_store = &name_store, .field = field_name },
+        RecordCtx.fill,
+    );
+
+    var dest = Store.init(std.testing.allocator);
+    dest.enableInterning();
+    defer dest.deinit();
+    const from_a = try reintern(&dest, &name_store, source_a.view(), a_record);
+    const type_count_after_a = dest.view().types.len;
+    const from_b = try reintern(&dest, &name_store, source_b.view(), b_record);
+
+    // Both entry orders reintern to the same id, and the second reintern adds
+    // no new types.
+    try std.testing.expectEqual(from_a, from_b);
+    try std.testing.expectEqual(type_count_after_a, dest.view().types.len);
+    try std.testing.expectEqual(@as(?Store.VerifyError, null), dest.verify(&name_store));
 }

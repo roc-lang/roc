@@ -244,6 +244,15 @@ pub const InstGraph = struct {
     /// id. The id's own payload is never mutated. Stored raw and resolved with
     /// `find` on read, so node merges need no fixup here.
     view_nodes: std.AutoHashMap(Type.TypeId, NodeId),
+    /// The point-in-time read domain: every immutable id minted by a
+    /// point-in-time read of this graph. These ids are transient snapshots with
+    /// live provenance in `view_nodes`; they are never embedded into durable IR
+    /// (consumers resolve them through provenance or re-seal at terminal
+    /// commit). Recording them here splits the point-in-time output domain from
+    /// the final-commit domain so content dedup cannot fold two distinct reads
+    /// onto one id and corrupt `view_nodes`: content interning consults this set
+    /// and keeps these ids out of its buckets.
+    point_in_time_ids: std.AutoHashMap(Type.TypeId, void),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
@@ -301,6 +310,7 @@ pub const InstGraph = struct {
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
             .mono_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
             .view_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
+            .point_in_time_ids = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
             .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingDeclarationContext, 80).init(allocator),
@@ -321,6 +331,7 @@ pub const InstGraph = struct {
         self.unify_related.deinit();
         self.unify_pending.deinit(allocator);
         self.deferred_templates.deinit(allocator);
+        self.point_in_time_ids.deinit();
         self.view_nodes.deinit();
         var parents = self.row_parents.valueIterator();
         while (parents.next()) |list| {
@@ -1650,6 +1661,14 @@ pub const InstGraph = struct {
         const raw_node = self.view_nodes.get(ty) orelse return null;
         return self.find(raw_node);
     }
+
+    /// Whether `ty` is a point-in-time read of this graph rather than a
+    /// final-commit id. Content interning consults this so a point-in-time id
+    /// stays out of the dedup buckets and each read keeps a distinct id with
+    /// intact provenance.
+    pub fn isPointInTimeId(self: *const InstGraph, ty: Type.TypeId) bool {
+        return self.point_in_time_ids.contains(ty);
+    }
 };
 
 /// Shared finalization state for materializing graph nodes into immutable
@@ -1674,11 +1693,13 @@ pub const GraphTypeFinals = struct {
 
     /// Record every node just materialized by `sealNode` as the provenance of
     /// its point-in-time id, so a later import or seal of that id follows back
-    /// to the live node.
+    /// to the live node. The id also joins the point-in-time domain so content
+    /// dedup never folds it onto another read's id.
     fn recordPointInTimeProvenance(self: *GraphTypeFinals) Allocator.Error!void {
         var it = self.sealed.iterator();
         while (it.next()) |entry| {
             try self.graph.view_nodes.put(entry.value_ptr.*, entry.key_ptr.*);
+            try self.graph.point_in_time_ids.put(entry.value_ptr.*, {});
         }
     }
 
@@ -2268,6 +2289,12 @@ test "point-in-time and sealed monotype ids stay immutable while the graph keeps
     // A fresh point-in-time read observes the node's current solution.
     const later = try graph.pointInTimeTypeForNode(row);
     try std.testing.expectEqual(@as(usize, 2), type_store.fieldSpan(type_store.get(later).record).len);
+
+    // The point-in-time reads belong to the isolated read domain; the terminal
+    // seal does not, so content dedup will keep the reads out of its buckets.
+    try std.testing.expect(graph.isPointInTimeId(draft));
+    try std.testing.expect(graph.isPointInTimeId(later));
+    try std.testing.expect(!graph.isPointInTimeId(sealed));
 }
 
 test "sealed graph function copy recursively seals graph-owned argument views" {
