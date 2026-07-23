@@ -55,6 +55,15 @@ pub const Census = struct {
     // is the content-key lookup used only when the binding stored no id.
     scheme_lookup_by_id: Counter = Counter.init(0),
     scheme_lookup_by_content_digest: Counter = Counter.init(0),
+    // reunify.md 8.1, Slice 3: how often a type digest walk exhausts its fixed
+    // visiting stack and digests the content shape instead of recursing. The
+    // count measures whether any corpus type is deep enough to reach the cap;
+    // the shape digest uses the content variant, never an allocation id.
+    digest_stack_depth_exceeded: Counter = Counter.init(0),
+    // reunify.md 8.1, Slice 3: interner outcomes. `intern_hit` reuses an existing
+    // id after an exact-equality bucket match; `intern_miss` adds a fresh id.
+    intern_hit: Counter = Counter.init(0),
+    intern_miss: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the

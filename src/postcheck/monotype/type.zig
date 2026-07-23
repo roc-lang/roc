@@ -879,7 +879,7 @@ pub const Store = struct {
 
         if (ctx.len == digest_visiting_max) {
             ctx.saw_cycle = true;
-            return deepDigest(ty);
+            return deepDigest(std.meta.activeTag(self.get(ty)));
         }
 
         ctx.items[ctx.len] = ty;
@@ -930,11 +930,7 @@ pub const Store = struct {
                 }
             }
             if (self.visiting.len == digest_visiting_max) {
-                // Deeper nesting than the stack tracks cannot contain an
-                // unrecorded cycle shorter than the stack, so digest the
-                // type's identity instead of recursing further.
-                writeBytes(hasher, "deep");
-                writeU32(hasher, @intFromEnum(child_ty));
+                writeDeepShape(hasher, std.meta.activeTag(self.store.get(child_ty)));
                 return;
             }
             self.visiting.items[self.visiting.len] = child_ty;
@@ -1007,6 +1003,12 @@ pub const Store = struct {
             fn alias(self: *Self) Error!bool {
                 const named = self.content.named;
                 if (named.kind != .alias) return false;
+                // A builtin-owned alias carries an explicit checked dispatch
+                // owner that must survive interning, so it is nontransparent:
+                // fall through to the named identity walk, which hashes the
+                // owner. Only a storage-transparent alias — backed, with no
+                // builtin owner — unwraps to its backing here.
+                if (named.builtin_owner != null) return false;
                 const backing = named.backing orelse {
                     writeBytes(self.hasher, "alias-without-backing");
                     return true;
@@ -1656,15 +1658,19 @@ fn typeViewEqlInner(
 ) std.mem.Allocator.Error!bool {
     if (raw_lhs == raw_rhs) return true;
 
+    // A storage-transparent alias — backed, with no builtin owner — unwraps to
+    // its backing. A builtin-owned alias is nontransparent: its checked dispatch
+    // owner is part of its interning identity, so it falls through to the named
+    // identity comparison, which compares the owner.
     const lhs_content = type_view.get(raw_lhs);
-    if (lhs_content == .named and lhs_content.named.kind == .alias) {
+    if (lhs_content == .named and lhs_content.named.kind == .alias and lhs_content.named.builtin_owner == null) {
         if (lhs_content.named.backing) |backing| {
             return try typeViewEqlInner(type_view, name_store, backing.ty, raw_rhs, named_mode, visited);
         }
     }
 
     const rhs_content = type_view.get(raw_rhs);
-    if (rhs_content == .named and rhs_content.named.kind == .alias) {
+    if (rhs_content == .named and rhs_content.named.kind == .alias and rhs_content.named.builtin_owner == null) {
         if (rhs_content.named.backing) |backing| {
             return try typeViewEqlInner(type_view, name_store, raw_lhs, backing.ty, named_mode, visited);
         }
@@ -2097,15 +2103,18 @@ fn typeEqlAcrossStoresInner(
     named_mode: NamedDigestMode,
     visited: *std.AutoHashMap(u128, void),
 ) std.mem.Allocator.Error!bool {
+    // Match the storage/digest alias split: a storage-transparent alias (backed,
+    // no builtin owner) unwraps to its backing; a builtin-owned alias is
+    // nontransparent and compares through the named identity walk.
     const lhs_content = lhs_view.get(raw_lhs);
-    if (lhs_content == .named and lhs_content.named.kind == .alias) {
+    if (lhs_content == .named and lhs_content.named.kind == .alias and lhs_content.named.builtin_owner == null) {
         if (lhs_content.named.backing) |backing| {
             return try typeEqlAcrossStoresInner(name_store, lhs_view, backing.ty, rhs_view, raw_rhs, named_mode, visited);
         }
     }
 
     const rhs_content = rhs_view.get(raw_rhs);
-    if (rhs_content == .named and rhs_content.named.kind == .alias) {
+    if (rhs_content == .named and rhs_content.named.kind == .alias and rhs_content.named.builtin_owner == null) {
         if (rhs_content.named.backing) |backing| {
             return try typeEqlAcrossStoresInner(name_store, lhs_view, raw_lhs, rhs_view, backing.ty, named_mode, visited);
         }
@@ -2309,6 +2318,16 @@ pub const Interner = opaque {
     };
 
     pub fn internNamed(self: *Interner, named: NamedInput) std.mem.Allocator.Error!TypeId {
+        // A storage-transparent alias — backed, with no builtin dispatch owner —
+        // is erased before insertion: the already-interned backing is returned
+        // so no interned id names the alias node. A backing-less alias stays a
+        // retained marker, and a builtin-owned alias retains its dispatch owner.
+        if (named.kind == .alias and named.builtin_owner == null) {
+            if (named.backing) |backing| {
+                return backing.ty;
+            }
+        }
+
         const store_ = self.store();
         const mark_ = store_.mark();
         errdefer store_.restore(mark_);
@@ -2401,32 +2420,132 @@ pub const Interner = opaque {
     /// reference each other through `RecursiveLink.node`; only the selected root
     /// is returned to the caller, and it is returned only after every private
     /// node has been filled exactly once.
+    ///
+    /// Every member of the group is registered by its digest as a root, so a
+    /// later equivalent rooted graph deduplicates to an existing member
+    /// regardless of which node it is entered from. Members that are equal as
+    /// roots — either to an existing pool type or to another member of a
+    /// symmetric group — share one id.
     pub fn internRecursiveGroupRoot(
         self: *Interner,
         contents: []const RecursiveContent,
         root_node: RecursiveNodeId,
     ) std.mem.Allocator.Error!TypeId {
-        if (@intFromEnum(root_node) >= contents.len) {
+        const root_index = @intFromEnum(root_node);
+        if (root_index >= contents.len) {
             Common.invariant("Monotype recursive type group root is outside the group");
         }
 
-        const store_ = self.store();
-        const mark_ = store_.mark();
-        errdefer store_.restore(mark_);
+        const state_ = self.state();
+        const allocator = state_.allocator;
+        const store_ = &state_.store;
 
-        const allocator = self.state().allocator;
-        const ids = try allocator.alloc(TypeId, contents.len);
-        defer allocator.free(ids);
+        // Phase A: build the group into provisional slots so each member has a
+        // rooted digest. `.root` links resolve to the selected root; `.node`
+        // links resolve to sibling members.
+        const provisional_mark = store_.mark();
+        errdefer store_.restore(provisional_mark);
 
-        for (ids) |*id| {
-            id.* = try store_.reserveSlot();
-        }
-        const root = ids[@intFromEnum(root_node)];
+        const provisional = try allocator.alloc(TypeId, contents.len);
+        defer allocator.free(provisional);
+        for (provisional) |*id| id.* = try store_.reserveSlot();
+        const provisional_root = provisional[root_index];
         for (contents, 0..) |content, index| {
-            const lowered = try self.lowerRecursiveContent(ids, root, content);
-            store_.fillReservedSlot(ids[index], lowered);
+            const lowered = try self.lowerRecursiveContent(provisional, provisional_root, content);
+            store_.fillReservedSlot(provisional[index], lowered);
         }
-        return try self.internCandidate(mark_, root);
+
+        // Phase B: resolve each member to an existing id where possible. A
+        // member equal as a root to an existing pool type reuses it; a member
+        // equal to an earlier member of this same group shares that member's
+        // id; the rest are new.
+        const existing_id = try allocator.alloc(?TypeId, contents.len);
+        defer allocator.free(existing_id);
+        const representative = try allocator.alloc(usize, contents.len);
+        defer allocator.free(representative);
+        var has_dedup = false;
+        for (provisional, 0..) |member, index| {
+            existing_id[index] = null;
+            representative[index] = index;
+            for (0..index) |earlier| {
+                if (try store_.typeEql(state_.name_store, provisional[earlier], member)) {
+                    representative[index] = representative[earlier];
+                    has_dedup = true;
+                    break;
+                }
+            }
+            if (representative[index] == index) {
+                existing_id[index] = try self.findExistingRoot(member);
+                if (existing_id[index] != null) has_dedup = true;
+            }
+        }
+
+        // Common case: every member is a distinct new root. Keep the provisional
+        // slots and register each so any entry node deduplicates a future graph.
+        if (!has_dedup) {
+            for (provisional) |member| try self.registerRoot(member);
+            census.bump("intern_miss");
+            return provisional_root;
+        }
+
+        // Phase C: some member deduplicated. Drop the provisional slots and
+        // build only the genuinely new representatives, resolving every
+        // reference through the resolved-id mapping.
+        store_.restore(provisional_mark);
+
+        const final_ids = try allocator.alloc(TypeId, contents.len);
+        defer allocator.free(final_ids);
+        for (representative, 0..) |rep, index| {
+            if (rep != index) continue;
+            if (existing_id[index]) |existing| {
+                final_ids[index] = existing;
+            } else {
+                final_ids[index] = try store_.reserveSlot();
+            }
+        }
+        for (representative, 0..) |rep, index| {
+            if (rep != index) final_ids[index] = final_ids[rep];
+        }
+        const final_root = final_ids[root_index];
+        for (representative, 0..) |rep, index| {
+            if (rep != index or existing_id[index] != null) continue;
+            const lowered = try self.lowerRecursiveContent(final_ids, final_root, contents[index]);
+            store_.fillReservedSlot(final_ids[index], lowered);
+        }
+        for (representative, 0..) |rep, index| {
+            if (rep != index or existing_id[index] != null) continue;
+            try self.registerRoot(final_ids[index]);
+        }
+        if (existing_id[root_index] != null) census.bump("intern_hit") else census.bump("intern_miss");
+        return final_root;
+    }
+
+    /// Look up a type equal as a root to `member` among the registered pool
+    /// types, returning it if one exists. Only pre-registered types are probed,
+    /// so a provisional group member never matches itself or a sibling here.
+    fn findExistingRoot(self: *Interner, member: TypeId) std.mem.Allocator.Error!?TypeId {
+        const state_ = self.state();
+        const digest = state_.store.typeDigestCached(state_.name_store, member, null);
+        const key = InternerLookupDigest.from(digest);
+        if (state_.by_digest.getPtr(key)) |bucket| {
+            for (bucket.items) |existing| {
+                if (try state_.store.typeEql(state_.name_store, existing, member)) {
+                    return existing;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Register `member` under its rooted digest so a future equivalent graph
+    /// entered at this node deduplicates to it.
+    fn registerRoot(self: *Interner, member: TypeId) std.mem.Allocator.Error!void {
+        const state_ = self.state();
+        const digest = state_.store.typeDigestCached(state_.name_store, member, null);
+        const key = InternerLookupDigest.from(digest);
+        const gop = try state_.by_digest.getOrPut(key);
+        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TypeId).empty;
+        try gop.value_ptr.append(state_.allocator, member);
     }
 
     fn lowerRecursiveLink(_: *Interner, ids: []const TypeId, root: TypeId, link: RecursiveLink) TypeId {
@@ -2549,10 +2668,12 @@ pub const Interner = opaque {
             for (bucket.items) |existing| {
                 if (try state_.store.typeEql(state_.name_store, existing, candidate)) {
                     state_.store.restore(mark_);
+                    census.bump("intern_hit");
                     return existing;
                 }
             }
             try bucket.append(state_.allocator, candidate);
+            census.bump("intern_miss");
             return candidate;
         }
 
@@ -2560,6 +2681,7 @@ pub const Interner = opaque {
         errdefer bucket.deinit(state_.allocator);
         try bucket.append(state_.allocator, candidate);
         try state_.by_digest.put(key, bucket);
+        census.bump("intern_miss");
         return candidate;
     }
 };
@@ -2605,10 +2727,22 @@ fn cycleDigest(position: u32) names.TypeDigest {
     return .{ .bytes = hasher.finalResult() };
 }
 
-fn deepDigest(ty: TypeId) names.TypeDigest {
+/// Digest the shape of a type whose walk has exhausted the fixed visiting
+/// stack. The stack tracks cycles by stack position, so a walk deeper than the
+/// stack cannot contain an unrecorded cycle shorter than the stack, and a
+/// finite type of depth greater than the stack digests by its content shape
+/// rather than recursing further. The shape is the content variant, never the
+/// allocation id, so the digest is independent of construction order; any
+/// resulting bucket collision is resolved by exact `typeEql`.
+fn writeDeepShape(hasher: *std.crypto.hash.sha2.Sha256, content_tag: ContentTag) void {
+    census.bump("digest_stack_depth_exceeded");
+    writeBytes(hasher, "deep");
+    writeBytes(hasher, @tagName(content_tag));
+}
+
+fn deepDigest(content_tag: ContentTag) names.TypeDigest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    writeBytes(&hasher, "deep");
-    writeU32(&hasher, @intFromEnum(ty));
+    writeDeepShape(&hasher, content_tag);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -2807,6 +2941,85 @@ test "monotype type interner checks exact equality after digest match" {
     try std.testing.expect(first != second);
 }
 
+test "monotype interner erases a storage-transparent alias to its backing" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const type_name = try name_store.internTypeName("Transparent");
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+
+    const backing = try interner.internPrimitive(.i64);
+    const aliased = try interner.internNamed(.{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .builtin_owner = null,
+        .backing = .{ .ty = backing, .use = .inspectable },
+    });
+
+    // No interned id names the storage-transparent alias node: the already
+    // interned backing is returned, and the pool holds only the backing.
+    try std.testing.expectEqual(backing, aliased);
+    try std.testing.expect(interner.get(aliased) == .primitive);
+    try std.testing.expectEqual(@as(usize, 1), interner.view().types.len);
+}
+
+test "monotype interner keeps a builtin-owned alias nontransparent" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xEF} ** 32));
+    const type_name = try name_store.internTypeName("Owned");
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+
+    const backing = try interner.internPrimitive(.i64);
+
+    const owned = try interner.internNamed(.{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .builtin_owner = .str,
+        .backing = .{ .ty = backing, .use = .inspectable },
+    });
+
+    // Accepted: an identical builtin-owned alias interns to the same id.
+    const owned_again = try interner.internNamed(.{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .builtin_owner = .str,
+        .backing = .{ .ty = backing, .use = .inspectable },
+    });
+    try std.testing.expectEqual(owned, owned_again);
+
+    // The alias node survives insertion; it is not erased to its backing.
+    try std.testing.expect(owned != backing);
+    try std.testing.expect(interner.get(owned) == .named);
+
+    // Rejected: the alias is not equal to its bare backing, and its digest
+    // differs, because the checked dispatch owner is part of its identity.
+    try std.testing.expect(!try interner.typeEql(owned, backing));
+    const owned_digest = interner.typeDigest(owned);
+    const backing_digest = interner.typeDigest(backing);
+    try std.testing.expect(!std.mem.eql(u8, owned_digest.bytes[0..], backing_digest.bytes[0..]));
+
+    // Rejected: a same-shape alias with a different owner is a distinct id.
+    const other_owner = try interner.internNamed(.{
+        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .alias,
+        .builtin_owner = .bool,
+        .backing = .{ .ty = backing, .use = .inspectable },
+    });
+    try std.testing.expect(owned != other_owner);
+    try std.testing.expect(!try interner.typeEql(owned, other_owner));
+}
+
 test "monotype type interner seals recursive root before exposing type id" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -2883,6 +3096,116 @@ test "monotype type interner seals multi-node recursive group privately" {
     const step_ty = GuardedList.at(fields, 0).ty;
     const step_fn = interner.get(step_ty).func;
     try std.testing.expectEqual(first, step_fn.ret);
+
+    // Every member is registered as a root, so re-interning the group entered
+    // at the func node deduplicates to the func member reachable from `first`,
+    // and re-interning entered at the record node deduplicates to `first`. No
+    // new ids are created either way.
+    const record_rooted = try interner.internRecursiveGroupRoot(&.{
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = func_node } },
+        } },
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = record_node },
+        } },
+    }, record_node);
+    const func_rooted = try interner.internRecursiveGroupRoot(&.{
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = func_node } },
+        } },
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = record_node },
+        } },
+    }, func_node);
+    try std.testing.expectEqual(first, record_rooted);
+    try std.testing.expectEqual(step_ty, func_rooted);
+    try std.testing.expectEqual(@as(usize, 2), interner.view().types.len);
+}
+
+test "monotype type interner interns a recursive group independent of node order" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("step");
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+
+    // Node order [record, func]: record.step -> func, func.ret -> record.
+    const record_first = try interner.internRecursiveGroupRoot(&.{
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = Interner.recursiveNodeId(1) } },
+        } },
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = Interner.recursiveNodeId(0) },
+        } },
+    }, Interner.recursiveNodeId(0));
+    const func_first = try interner.internRecursiveGroupRoot(&.{
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = Interner.recursiveNodeId(1) } },
+        } },
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = Interner.recursiveNodeId(0) },
+        } },
+    }, Interner.recursiveNodeId(1));
+
+    // Swapped node order [func, record]: same logical graph, different indices.
+    const record_second = try interner.internRecursiveGroupRoot(&.{
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = Interner.recursiveNodeId(1) },
+        } },
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = Interner.recursiveNodeId(0) } },
+        } },
+    }, Interner.recursiveNodeId(1));
+    const func_second = try interner.internRecursiveGroupRoot(&.{
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = Interner.recursiveNodeId(1) },
+        } },
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = Interner.recursiveNodeId(0) } },
+        } },
+    }, Interner.recursiveNodeId(0));
+
+    // Each node interns to the same id regardless of construction order.
+    try std.testing.expectEqual(record_first, record_second);
+    try std.testing.expectEqual(func_first, func_second);
+    try std.testing.expectEqual(@as(usize, 2), interner.view().types.len);
+}
+
+test "monotype type interner shares one id for symmetric recursive members" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("x");
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+
+    // A = { x: B }, B = { x: A }: two nodes whose rooted graphs are equal, so
+    // they denote one rooted type and must share a single id.
+    const a_node = Interner.recursiveNodeId(0);
+    const b_node = Interner.recursiveNodeId(1);
+    const root = try interner.internRecursiveGroupRoot(&.{
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = b_node } },
+        } },
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = a_node } },
+        } },
+    }, a_node);
+
+    // The symmetric group collapses to a single self-referential record id.
+    try std.testing.expectEqual(@as(usize, 1), interner.view().types.len);
+    const fields = interner.fieldSpan(interner.get(root).record);
+    try std.testing.expectEqual(root, GuardedList.at(fields, 0).ty);
+    try std.testing.expectEqual(@as(?Store.VerifyError, null), interner.verify());
 }
 
 test "monotype type interner keeps distinct recursive roots with different children" {
@@ -2906,6 +3229,47 @@ test "monotype type interner keeps distinct recursive roots with different child
 
     try std.testing.expect(recursive_only != recursive_with_bool);
     try std.testing.expect(!try interner.typeEql(recursive_only, recursive_with_bool));
+}
+
+test "monotype interner interns empty rows and heads to one id" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+
+    // Empty record: every zero-field construction interns to a single id.
+    const empty_record_a = try interner.internRecord(&.{});
+    const empty_record_b = try interner.internRecord(&.{});
+    try std.testing.expectEqual(empty_record_a, empty_record_b);
+    try std.testing.expect(interner.get(empty_record_a) == .record);
+    try std.testing.expectEqual(@as(u32, 0), interner.get(empty_record_a).record.len);
+
+    // Empty tag union: interns to a single id for the other head.
+    const empty_tags_a = try interner.internTagUnion(&.{});
+    const empty_tags_b = try interner.internTagUnion(&.{});
+    try std.testing.expectEqual(empty_tags_a, empty_tags_b);
+    try std.testing.expect(interner.get(empty_tags_a) == .tag_union);
+    try std.testing.expectEqual(@as(u32, 0), interner.get(empty_tags_a).tag_union.len);
+
+    // The empty record and empty tag union are distinct interned heads.
+    try std.testing.expect(empty_record_a != empty_tags_a);
+    try std.testing.expectEqual(@as(usize, 2), interner.view().types.len);
+}
+
+test "monotype store empty field span equals a zero-length record-field span" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    // A zero-length field row normalizes to the empty span, whether it goes
+    // through the label-normalizing appender or the raw one, so no record head
+    // is distinguished by which empty form built its row.
+    const from_record_fields = try store.addRecordFields(&name_store, &.{});
+    const from_fields = try store.addFields(&.{});
+    try std.testing.expectEqual(Span.empty(), from_record_fields);
+    try std.testing.expectEqual(Span.empty(), from_fields);
 }
 
 test "monotype store keeps function-containing shapes distinct" {

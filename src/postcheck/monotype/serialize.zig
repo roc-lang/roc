@@ -30,7 +30,12 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// scope whose generated dispatch targets are embedded in the body.
 /// Version 7: expression tags include post-lift join-point control forms.
 /// Version 8: cached type digests are alias-transparent.
-pub const FORMAT_VERSION: u32 = 8;
+/// Version 9: cached type digests keep a builtin-owned alias nontransparent
+/// (its dispatch owner is part of its identity) and digest a walk deeper than
+/// the visiting stack by content shape rather than by allocation id. Both paths
+/// are measured inert on the current corpus, so the bump only guards against
+/// reading a record written under the old digest algorithm.
+pub const FORMAT_VERSION: u32 = 9;
 
 const SECTION_COUNT = 40;
 /// Required byte alignment for every section payload. This covers all typed
