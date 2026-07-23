@@ -818,7 +818,6 @@ const Builder = struct {
             self.batched_requester_drain_needed = true;
             return;
         }
-        try graph.drainDirty();
     }
 
     fn initHostedCatalog(self: *Builder) Allocator.Error!void {
@@ -1588,17 +1587,18 @@ const Builder = struct {
         const public_constraint_fn_ty = try body_ctx.publicOpaqueFunctionUnificationType(lower_fn_ty);
         try body_ctx.constrainTypeToMono(template.checked_fn_root, public_constraint_fn_ty);
 
-        // The requested function type becomes a view of this specialization's
-        // root: every later stage compares call-site and definition types for
-        // exact equality, so body evidence that refines the root (rows the
-        // request narrowed, slots only the body pins) must reach the
-        // requester's id in place. Builder-global types stay snapshots; they
-        // serve many specializations.
+        // The requested function type reads this specialization's root node:
+        // every later stage compares call-site and definition types for exact
+        // equality, so body evidence that refines the root (rows the request
+        // narrowed, slots only the body pins) must reach the requester's id
+        // when it seals. Recording the node behind the requested id lets its
+        // later seal follow to the solved root. Builder-global types stay
+        // snapshots; they serve many specializations.
         const root_node = try body_ctx.instNode(template.checked_fn_root);
         const body_uses_generated_evidence =
             !self.unsolved_monos.contains(lower_fn_ty) and try body_ctx.functionHasGeneratedOpaqueEvidence(lower_fn_ty);
         if (!self.unsolved_monos.contains(lower_fn_ty) and !body_uses_generated_evidence) {
-            try graph.addMonoView(root_node, lower_fn_ty);
+            try graph.registerNodeType(lower_fn_ty, root_node);
         }
         const draft = FinalBodyOutputGuard.begin(self);
         const live_fn_ty = try body_ctx.activeTypeFromNode(root_node);
@@ -1609,7 +1609,6 @@ const Builder = struct {
         if (requester) |requester_graph| {
             const live_requester_fn_node = requester_fn_node orelse
                 Common.invariant("deferred Monotype specialization lost its requester function type node");
-            try graph.drainDirty();
             const requester_fn_ty = if (body_uses_generated_evidence) body_fn_ty else live_fn_ty;
             const solved_requester_fn_ty = try graph.sealType(requester_fn_ty);
             try requester_graph.unify(
@@ -1662,7 +1661,7 @@ const Builder = struct {
         self.count("template_requests");
         const request_has_generated_evidence = try self.monoTypeHasGeneratedOpaqueEvidence(fn_ty);
         if (!request_has_generated_evidence) {
-            try requester.addMonoView(try requester.importMono(fn_ty), fn_ty);
+            try requester.registerNodeType(fn_ty, try requester.importMono(fn_ty));
         }
         const fn_ty_digest = self.specializationTypeDigest(fn_ty);
         const identity = templateSpecIdentity(template_ref, method_scope.key, source_fn_key, fn_ty, fn_ty_digest);
@@ -2267,7 +2266,6 @@ const Builder = struct {
         fn_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         if (!try self.monoTypeHasGeneratedOpaqueEvidence(fn_ty)) return fn_ty;
-        try graph.drainDirty();
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         const sealed = try sealer.sealType(fn_ty);
@@ -3196,9 +3194,8 @@ const Builder = struct {
         if (!body_uses_generated_evidence) {
             if (request.ctx.graph.monoViewNode(fn_template.mono_fn_ty)) |request_node| {
                 try request.ctx.graph.unify(root_node, request_node);
-                try request.ctx.graph.drainDirty();
             } else if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
-                try request.ctx.graph.addMonoView(root_node, fn_template.mono_fn_ty);
+                try request.ctx.graph.registerNodeType(fn_template.mono_fn_ty, root_node);
             }
         }
         const live_fn_ty = try request.ctx.activeTypeFromNode(root_node);
@@ -3233,7 +3230,6 @@ const Builder = struct {
     fn sealDeferredSpecRequestsFrom(self: *Builder, graph: *InstGraph, start_len: usize) Allocator.Error!void {
         if (graph.deferred_templates.items.len == start_len) return;
 
-        try graph.drainDirty();
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
 
@@ -3331,9 +3327,7 @@ const Builder = struct {
         const drain_needed = self.batched_requester_drain_needed;
         self.batched_requester_drain_graph = saved_batched_graph;
         self.batched_requester_drain_needed = saved_batched_needed or (drain_needed and saved_batched_graph == graph);
-        if (drain_needed and saved_batched_graph != graph) {
-            try graph.drainDirty();
-        }
+        if (drain_needed and saved_batched_graph != graph) {}
     }
 
     const ActiveBodyDraftSeal = struct {
@@ -3355,7 +3349,6 @@ const Builder = struct {
         const body_ids = BodyDraftStore.finalIdOffsets(self.program);
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
-        try graph.drainDirty();
         graph.assertNoDeferredRequestsBeforeBodySeal();
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
         if (sealed_root) |ty| try graph.assertTypeHasNoGraphViews(ty);
@@ -6137,7 +6130,6 @@ const BodyDraftStore = struct {
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
     ) Allocator.Error!void {
-        try graph.drainDirty();
         graph.assertNoDeferredRequestsBeforeBodySeal();
 
         const ids = BodyDraftStore.finalIdOffsets(program);
@@ -7327,7 +7319,7 @@ const BodyContext = struct {
     }
 
     fn activeTypeFromNode(self: *BodyContext, node: NodeId) Allocator.Error!Type.TypeId {
-        return try self.graph.activeTypeViewForNode(node);
+        return try self.graph.pointInTimeTypeForNode(node);
     }
 
     fn activeTypeFromCell(self: *BodyContext, cell: DraftTypeCell) Allocator.Error!Type.TypeId {
@@ -8494,7 +8486,6 @@ const BodyContext = struct {
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
         try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(try self.publicOpaqueUnificationType(mono_ty)));
-        if (self.builder.constrain_depth == 1) try self.graph.drainDirty();
     }
 
     fn constrainTypeToCell(
@@ -8505,7 +8496,6 @@ const BodyContext = struct {
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
         try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
-        if (self.builder.constrain_depth == 1) try self.graph.drainDirty();
     }
 
     /// Constrain two checked types from (possibly different) instantiation
@@ -8522,7 +8512,6 @@ const BodyContext = struct {
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
         try self.graph.unify(try self.instNode(left_ty), try right_ctx.instNode(right_ty));
-        if (self.builder.constrain_depth == 1) try self.graph.drainDirty();
     }
 
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
@@ -8557,8 +8546,16 @@ const BodyContext = struct {
     }
 
     fn activeTypeFromType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        try self.graph.drainDirty();
         return try self.activeTypeFromNode(try self.activeNodeFromType(ty));
+    }
+
+    /// Re-read a context type through its graph node so a content decision sees
+    /// the node's current solution rather than the snapshot captured when the
+    /// context was first read. Closed types from outside the graph are
+    /// returned unchanged.
+    fn currentType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (self.graph.monoViewNode(ty)) |node| return try self.activeTypeFromNode(node);
+        return ty;
     }
 
     fn lowerTypeCell(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!DraftTypeCell {
@@ -9162,7 +9159,6 @@ const BodyContext = struct {
 
         const body_ty = try self.exprType(body);
         try self.graph.unify(try self.graph.importMono(ret_ty), try self.graph.importMono(body_ty));
-        try self.graph.drainDirty();
         const solved_ret_ty = if (try self.builder.monoTypeHasGeneratedOpaqueEvidence(ret_ty))
             ret_ty
         else
@@ -16738,7 +16734,6 @@ const BodyContext = struct {
         } else {
             try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
         }
-        try self.graph.drainDirty();
         if (saw_generated_opaque_evidence) {
             const args = try self.allocator.alloc(Type.TypeId, function.args.len);
             defer self.allocator.free(args);
@@ -16819,7 +16814,6 @@ const BodyContext = struct {
         } else {
             try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
         }
-        try self.graph.drainDirty();
         if (saw_generated_opaque_evidence) {
             const args = try self.allocator.alloc(Type.TypeId, function.args.len);
             defer self.allocator.free(args);
@@ -16864,7 +16858,6 @@ const BodyContext = struct {
         if (expected_ret_ty) |expected| {
             try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
-        try self.graph.drainDirty();
         return fn_node;
     }
 
@@ -16919,7 +16912,6 @@ const BodyContext = struct {
         for (function.args, operands) |formal_ty, operand| {
             try self.relateFormalToOperand(formal_ty, caller, operand);
         }
-        try self.graph.drainDirty();
         return try self.activeTypeFromNode(fn_node);
     }
 
@@ -16931,7 +16923,6 @@ const BodyContext = struct {
         const function = self.checkedFunctionType(source_fn_ty);
         const fn_node = try self.instNode(source_fn_ty);
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
-        try self.graph.drainDirty();
         return try self.activeTypeFromNode(fn_node);
     }
 
@@ -16960,7 +16951,6 @@ const BodyContext = struct {
             try self.graph.unify(try self.instNode(formal_ty), try self.graph.importMono(arg_ty));
         }
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
-        try self.graph.drainDirty();
         return fn_node;
     }
 
@@ -16978,7 +16968,6 @@ const BodyContext = struct {
             try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(arg_ty)), try self.instNode(formal_ty));
         }
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
-        try self.graph.drainDirty();
         return try self.activeTypeFromNode(try self.graphFunctionNodeFromMono(arg_tys, ret_ty));
     }
 
@@ -16996,7 +16985,6 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
-        try self.graph.drainDirty();
         return try self.activeTypeFromNode(fn_node);
     }
 
@@ -17012,7 +17000,6 @@ const BodyContext = struct {
         }
         const fn_node = try self.instNode(source_fn_ty);
         try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
-        try self.graph.drainDirty();
         return fn_node;
     }
 
@@ -17114,7 +17101,6 @@ const BodyContext = struct {
         if (expected_ty) |expected| {
             try self.graph.unify(field_node, try self.graph.importMono(expected));
         }
-        try self.graph.drainDirty();
         return field_node;
     }
 
@@ -17648,7 +17634,7 @@ const BodyContext = struct {
 
         const result_node = try body_ctx.instNode(body.checked_type);
         if (!self.builder.unsolved_monos.contains(ty)) {
-            try self.graph.addMonoView(result_node, ty);
+            try self.graph.registerNodeType(ty, result_node);
         }
         const live_ty = try self.activeTypeFromNode(result_node);
         const lowered = try body_ctx.lowerComptimeRootExprAtType(body.body_expr, live_ty);
@@ -19134,6 +19120,15 @@ const BodyContext = struct {
         visiting: *std.AutoHashMap(TypePair, void),
     ) bool {
         if (expected == actual) return true;
+        // Two point-in-time reads of one graph node denote the same type even
+        // when each froze the node at a different moment: they carry the node's
+        // occurrence identity, and the node is the single authority for its
+        // eventual solution.
+        if (self.graph.monoViewNode(expected)) |expected_node| {
+            if (self.graph.monoViewNode(actual)) |actual_node| {
+                if (expected_node == actual_node) return true;
+            }
+        }
         if (monoAliasBacking(&self.builder.program.types, expected)) |backing| {
             if (self.sameTypeInner(backing, actual, visiting)) return true;
         }
@@ -19721,8 +19716,12 @@ const BodyContext = struct {
         self: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
         numeral: checked.CheckedNumeralData,
-        target_ty: Type.TypeId,
+        target_ty_arg: Type.TypeId,
     ) Allocator.Error!DraftExprId {
+        // Read the target through its graph node: a literal whose concrete
+        // primitive was pinned after this context was first read must reach the
+        // scalar-bits path, not the generic from_numeral dispatch.
+        const target_ty = try self.currentType(target_ty_arg);
         const primitive = switch (self.builder.shapeContent(target_ty)) {
             .primitive => |p| p,
             else => return try self.lowerNumeralCall(checked_ret_ty, numeral.plan, target_ty),
@@ -26230,7 +26229,6 @@ const BodyContext = struct {
         if (expected_ret_ty) |expected| {
             try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
-        try self.graph.drainDirty();
         return try self.activeTypeFromNode(fn_node);
     }
 
@@ -27442,9 +27440,14 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
 
     var builder: Builder = undefined;
     builder.program = &program;
+    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(std.testing.allocator);
+    defer unsolved_monos.deinit();
+    const graph = try InstGraph.create(std.testing.allocator, &program.types, &program.names, &unsolved_monos);
+    defer graph.destroy();
     var ctx: BodyContext = undefined;
     ctx.allocator = std.testing.allocator;
     ctx.builder = &builder;
+    ctx.graph = graph;
 
     try std.testing.expect(ctx.sameType(alias_i64, i64_ty));
     try std.testing.expect(ctx.sameType(str_ty, alias_str));
@@ -28477,7 +28480,7 @@ test "draft sealed type cell validation distinguishes closed snapshots from grap
         .graph_node => return error.TestExpectedEqual,
     }
 
-    const graph_view = try graph.activeTypeViewForNode(try graph.newNode(.{ .primitive = .u64 }));
+    const graph_view = try graph.pointInTimeTypeForNode(try graph.newNode(.{ .primitive = .u64 }));
     const graph_view_cell: DraftTypeCell = .{ .sealed = graph_view };
     try std.testing.expect(try graph_view_cell.sealedHasGraphViews(graph));
     switch (try DraftTypeCell.fromActiveType(graph, graph_view)) {

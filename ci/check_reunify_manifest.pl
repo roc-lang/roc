@@ -3,10 +3,11 @@
 #
 # Pins the exact per-file line counts of every mechanism by which the
 # Monotype stage re-derives logical typing conclusions after checking:
-# instantiation-graph creation, logical unification, mutable Monotype view
-# refills, deferred template requests, specialization request refinement,
-# method-registry lookups for compiler-generated call edges, and the
-# Lambda Solved special-relation census (reunify.md sections 6.6-6.7, 12.4).
+# instantiation-graph creation, logical unification, the logical-graph import
+# and point-in-time read boundary, deferred template requests, specialization
+# request refinement, method-registry lookups for compiler-generated call
+# edges, and the Lambda Solved special-relation census (reunify.md sections
+# 6.6-6.7, 12.4).
 #
 # The gate fails when:
 #   - a pinned pattern's line count in a file differs from the manifest
@@ -32,7 +33,6 @@ use warnings;
 my $SOLVE = 'src/postcheck/monotype/solve.zig';
 my $LOWER = 'src/postcheck/monotype/lower.zig';
 my $SPEC  = 'src/postcheck/monotype/specialize.zig';
-my $MTYPE = 'src/postcheck/monotype/type.zig';
 my $LS    = 'src/postcheck/lambda_solved/solve.zig';
 my $LSTY  = 'src/postcheck/lambda_solved/type.zig';
 my $SLL   = 'src/postcheck/solved_lir_lower.zig';
@@ -46,9 +46,9 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'InstGraph.create(', re => qr/InstGraph\.create\(/,
-              counts => { $SOLVE => 15, $LOWER => 13 } },
+              counts => { $SOLVE => 13, $LOWER => 14 } },
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
-              counts => { $SOLVE => 15, $LOWER => 1 } },
+              counts => { $SOLVE => 14, $LOWER => 1 } },
         ],
     },
     {
@@ -77,23 +77,21 @@ my @categories = (
         ],
     },
     {
-        name    => 'mutable-monotype-refill',
+        # The graph-read boundary: a solved graph node is read into an
+        # immutable point-in-time Monotype id, and an external Monotype is
+        # imported as a node. No visible id is mutated after it is read; the
+        # mutable-view/refill API this category replaced was deleted in Slice 3
+        # (see ci/check_postcheck_architecture.pl for the deleted-API gate).
+        # These readers stay until Slice 7 deletes logical graph solving.
+        name    => 'logical-graph-import',
         exempt  => [],
         patterns => [
-            { label => 'addMonoView', re => qr/\baddMonoView\b/,
-              counts => { $SOLVE => 2, $LOWER => 4 } },
-            { label => 'fillMono', re => qr/\bfillMono\b/,
-              counts => { $SOLVE => 6 } },
-            { label => 'monoFor', re => qr/\bmonoFor\b/,
-              counts => { $SOLVE => 12 } },
             { label => 'importMono', re => qr/\bimportMono\b/,
               counts => { $SOLVE => 9, $LOWER => 43 } },
-            { label => 'activeTypeViewForNode', re => qr/\bactiveTypeViewForNode\b/,
-              counts => { $SOLVE => 1, $LOWER => 2 } },
-            { label => 'drainDirty', re => qr/\bdrainDirty\b/,
-              counts => { $SOLVE => 9, $LOWER => 24 } },
-            { label => 'replaceGraphView', re => qr/\breplaceGraphView\b/,
-              counts => { $SOLVE => 1, $MTYPE => 1 } },
+            { label => 'pointInTimeTypeForNode', re => qr/\bpointInTimeTypeForNode\b/,
+              counts => { $SOLVE => 7, $LOWER => 2 } },
+            { label => 'registerNodeType', re => qr/\bregisterNodeType\b/,
+              counts => { $SOLVE => 1, $LOWER => 4 } },
         ],
     },
     {
@@ -113,7 +111,7 @@ my @categories = (
             { label => 'pinDeferredTemplateRequestToCheckedRoot', re => qr/\bpinDeferredTemplateRequestToCheckedRoot\b/,
               counts => { $LOWER => 3 } },
             { label => 'unsolved_monos', re => qr/\bunsolved_monos\b/,
-              counts => { $SOLVE => 48, $LOWER => 30 } },
+              counts => { $SOLVE => 42, $LOWER => 33 } },
         ],
     },
     {

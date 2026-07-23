@@ -63,10 +63,10 @@ pub const DeferredTemplate = struct {
 /// Identity of a node in a specialization's instantiation graph.
 pub const NodeId = enum(u32) { _ };
 
-// Current mutable Monotype output points to remove during graph sealing:
-// `addMonoView`, `monoFor`, `fillMono`, `importMono`, row
-// flattening, and the span materializers below. Completed Monotype views must
-// expose only `TypeId`s and durable AST ids, never these graph-local ids.
+// Point-in-time reads (`pointInTimeTypeForNode`, `importMono`, row flattening,
+// and the span materializers below) produce immutable `TypeId`s from graph
+// nodes. Completed Monotype output must expose only `TypeId`s and durable AST
+// ids, never these graph-local ids.
 /// Tag variant inside an instantiation-graph row. Names are program NameStore
 /// ids translated at instantiation so rows from different checked modules
 /// compare uniformly.
@@ -219,11 +219,11 @@ const NominalBackingInstance = struct {
 
 /// Per-specialization type solver. Checked types instantiate into union-find
 /// nodes with explicit row extension links; constraints unify nodes
-/// order-independently; Monotypes are materialized views of solved nodes and
-/// are refilled in place when their node gains evidence. Cross-specialization
-/// edges import final Monotypes as closed structure, so a specialization that
-/// tries to exceed its requested type is a unification conflict, not a silent
-/// divergence.
+/// order-independently; a node's solved content is read out on demand as an
+/// immutable point-in-time Monotype id, and that id's payload never changes
+/// afterward. Cross-specialization edges import final Monotypes as closed
+/// structure, so a specialization that tries to exceed its requested type is a
+/// unification conflict, not a silent divergence.
 pub const InstGraph = struct {
     allocator: Allocator,
     types: *Type.Store,
@@ -235,18 +235,15 @@ pub const InstGraph = struct {
     nodes: std.ArrayList(InstNode),
     versions: std.ArrayList(u32),
     processed_relations: std.AutoHashMap(RelationStamp, void),
-    /// Materialized Monotype views per node root. The same root may have
-    /// several views when roots with existing views are merged; all views of a
-    /// root hold identical content.
-    node_monos: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
-    /// Reverse view links, also the import memo: a Monotype already connected
-    /// to this graph unifies with its node instead of being copied.
+    /// The import memo: a Monotype already connected to this graph unifies with
+    /// its node instead of being copied.
     mono_nodes: std.AutoHashMap(Type.TypeId, NodeId),
-    /// Roots whose Monotype views need their content refilled. Drained when no
-    /// constraint walk holds slices into the type store.
-    dirty: std.ArrayList(NodeId),
-    /// Set matching `dirty`, so each current root is queued at most once.
-    dirty_set: std.AutoHashMap(NodeId, void),
+    /// Provenance for immutable point-in-time Monotype ids read out of this
+    /// graph: an id maps to the node whose content it captured, so a later
+    /// import or seal reads that node's current solution rather than the frozen
+    /// id. The id's own payload is never mutated. Stored raw and resolved with
+    /// `find` on read, so node merges need no fixup here.
+    view_nodes: std.AutoHashMap(Type.TypeId, NodeId),
     /// Current extension root for each row root. This is the authority for
     /// maintaining `row_parents`; stale extension edges are removed when row
     /// content changes.
@@ -273,10 +270,6 @@ pub const InstGraph = struct {
     unify_pending: std.ArrayList(NodePair) = .empty,
     unify_related: std.AutoHashMap(NodePair, void),
     unify_active: bool = false,
-    /// Reused traversal state for `markDirty` (never re-entered: dirty marking
-    /// only walks row back references).
-    dirty_mark_pending: std.ArrayList(NodeId) = .empty,
-    dirty_mark_visited: std.AutoHashMap(NodeId, void),
     /// Reused row-collection state for `flattenTagRow`/`flattenRecordRow`.
     /// Flattening reads node contents and allocates only fresh nodes and arena
     /// copies, so no call inside the collection window can start another
@@ -306,15 +299,12 @@ pub const InstGraph = struct {
             .nodes = .empty,
             .versions = .empty,
             .processed_relations = std.AutoHashMap(RelationStamp, void).init(allocator),
-            .node_monos = std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)).init(allocator),
             .mono_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
-            .dirty = .empty,
-            .dirty_set = std.AutoHashMap(NodeId, void).init(allocator),
+            .view_nodes = std.AutoHashMap(Type.TypeId, NodeId).init(allocator),
             .row_exts = std.AutoHashMap(NodeId, NodeId).init(allocator),
             .row_parents = std.AutoHashMap(NodeId, std.ArrayList(NodeId)).init(allocator),
             .nominal_backings = std.HashMap(NominalBackingDeclaration, std.ArrayList(NominalBackingInstance), NominalBackingDeclarationContext, 80).init(allocator),
             .unify_related = std.AutoHashMap(NodePair, void).init(allocator),
-            .dirty_mark_visited = std.AutoHashMap(NodeId, void).init(allocator),
             .row_seen_scratch = std.AutoHashMap(NodeId, void).init(allocator),
             .import_ext_nodes = if (track_import_ext) std.AutoHashMap(NodeId, void).init(allocator) else {},
         };
@@ -328,16 +318,10 @@ pub const InstGraph = struct {
         self.row_seen_scratch.deinit();
         self.flat_fields_scratch.deinit(allocator);
         self.flat_tags_scratch.deinit(allocator);
-        self.dirty_mark_visited.deinit();
-        self.dirty_mark_pending.deinit(allocator);
         self.unify_related.deinit();
         self.unify_pending.deinit(allocator);
         self.deferred_templates.deinit(allocator);
-        var views = self.node_monos.valueIterator();
-        while (views.next()) |list| {
-            list.deinit(allocator);
-        }
-        self.node_monos.deinit();
+        self.view_nodes.deinit();
         var parents = self.row_parents.valueIterator();
         while (parents.next()) |list| {
             list.deinit(allocator);
@@ -349,9 +333,7 @@ pub const InstGraph = struct {
         self.nominal_backings.deinit();
         self.row_parents.deinit();
         self.row_exts.deinit();
-        self.dirty_set.deinit();
         self.mono_nodes.deinit();
-        self.dirty.deinit(allocator);
         self.processed_relations.deinit();
         self.versions.deinit(allocator);
         self.nodes.deinit(allocator);
@@ -550,55 +532,14 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Queue the views of a changed root and of every row whose flattened view
-    /// chains through it for a content refill.
-    fn markDirty(self: *InstGraph, changed: NodeId) Allocator.Error!void {
-        self.dirty_mark_pending.clearRetainingCapacity();
-        self.dirty_mark_visited.clearRetainingCapacity();
-        try self.dirty_mark_pending.append(self.allocator, changed);
-        while (self.dirty_mark_pending.pop()) |raw| {
-            const root = self.find(raw);
-            if (self.dirty_mark_visited.contains(root)) continue;
-            try self.dirty_mark_visited.put(root, {});
-            if (self.node_monos.contains(root)) {
-                try self.queueDirty(root);
-            }
-            if (self.row_parents.get(root)) |parents| {
-                try self.dirty_mark_pending.appendSlice(self.allocator, parents.items);
-            }
-            if (self.row_parents.get(raw)) |parents| {
-                if (raw != root) try self.dirty_mark_pending.appendSlice(self.allocator, parents.items);
-            }
-        }
-    }
-
-    fn queueDirty(self: *InstGraph, raw_root: NodeId) Allocator.Error!void {
-        const root = self.find(raw_root);
-        const entry = try self.dirty_set.getOrPut(root);
-        if (entry.found_existing) return;
-        try self.dirty.append(self.allocator, root);
-    }
-
-    /// Redirect `loser` into `winner`, moving Monotype views and row back
-    /// references across, and queueing affected views for a content refill.
+    /// Redirect `loser` into `winner`, moving row back references across.
     fn union_(self: *InstGraph, raw_winner: NodeId, raw_loser: NodeId) Allocator.Error!void {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
-        _ = self.dirty_set.remove(loser);
         try self.unregisterRowParent(loser);
         self.nodes.items[@intFromEnum(loser)] = .{ .redirect = winner };
         self.versions.items[@intFromEnum(winner)] +%= 1;
-        if (self.node_monos.fetchRemove(loser)) |moved| {
-            var moved_list = moved.value;
-            const entry = try self.node_monos.getOrPut(winner);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.appendSlice(self.allocator, moved_list.items);
-            for (moved_list.items) |ty| {
-                try self.mono_nodes.put(ty, winner);
-            }
-            moved_list.deinit(self.allocator);
-        }
         if (self.row_parents.fetchRemove(loser)) |moved| {
             var moved_list = moved.value;
             for (moved_list.items) |parent| {
@@ -608,11 +549,10 @@ pub const InstGraph = struct {
             }
             moved_list.deinit(self.allocator);
         }
-        try self.markDirty(winner);
     }
 
-    /// Replace a root's content in place without queueing a Monotype refill.
-    /// Returns whether the root's observable content changed.
+    /// Replace a root's content in place. Returns whether the root's observable
+    /// content changed.
     fn replaceContentNoDirty(self: *InstGraph, raw_root: NodeId, new_content: InstNode) Allocator.Error!bool {
         const root = self.find(raw_root);
         if (instNodeEql(self.nodes.items[@intFromEnum(root)], new_content)) return false;
@@ -622,10 +562,9 @@ pub const InstGraph = struct {
         return true;
     }
 
-    /// Replace a root's content in place and queue affected views for refill.
+    /// Replace a root's content in place.
     fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) Allocator.Error!void {
-        if (!try self.replaceContentNoDirty(root, new_content)) return;
-        try self.markDirty(root);
+        _ = try self.replaceContentNoDirty(root, new_content);
     }
 
     pub fn unify(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
@@ -1457,6 +1396,10 @@ pub const InstGraph = struct {
     /// later attempt to widen it is a unification conflict rather than a silent
     /// mutation of another specialization's final type.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
+        // A point-in-time id read out of this graph unifies with the live node
+        // it captured, so a requester connects to that node's ongoing solution
+        // instead of copying the frozen snapshot.
+        if (self.view_nodes.get(ty)) |node| return self.find(node);
         if (self.mono_nodes.get(ty)) |existing| return existing;
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         // One-way memo: every import is a finished Monotype from outside this
@@ -1579,61 +1522,37 @@ pub const InstGraph = struct {
         return out;
     }
 
-    /// Register an existing Monotype as a view of a node, so the node's
-    /// evidence refills that id in place.
-    pub fn addMonoView(self: *InstGraph, node: NodeId, ty: Type.TypeId) Allocator.Error!void {
-        const root = self.find(node);
-        try self.mono_nodes.put(ty, root);
-        try self.registerMonoView(root, ty);
-        try self.fillMono(root, ty);
-        try self.drainDirty();
+    /// Record that an existing immutable Monotype id reads a node's current
+    /// solved content. A later import or seal of that id resolves through the
+    /// node, so the requester observes the node's ongoing solution while the id
+    /// itself is never mutated.
+    pub fn registerNodeType(self: *InstGraph, ty: Type.TypeId, node: NodeId) Allocator.Error!void {
+        try self.view_nodes.put(ty, self.find(node));
     }
 
-    fn registerMonoView(self: *InstGraph, raw_node: NodeId, ty: Type.TypeId) Allocator.Error!void {
-        const root = self.find(raw_node);
-        const entry = try self.node_monos.getOrPut(root);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        for (entry.value_ptr.items) |existing| {
-            if (existing == ty) return;
-        }
-        try entry.value_ptr.append(self.allocator, ty);
-    }
-
-    /// Materialize the active Monotype view of a node, reserving the id first
-    /// so recursive types tie their own knot. The returned TypeId is mutable
-    /// graph state and must not be written to completed Monotype output.
-    pub fn activeTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        return try self.monoFor(node);
-    }
-
-    fn monoFor(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        const root = self.find(node);
-        if (self.node_monos.get(root)) |views| {
-            if (views.items.len != 0) return views.items[0];
-        }
-        const ty = try self.types.add(.zst);
-        const entry = try self.node_monos.getOrPut(root);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.allocator, ty);
-        try self.mono_nodes.put(ty, root);
-        try self.fillMono(root, ty);
+    /// Read a node's current solved content into a fresh immutable Monotype id,
+    /// tying recursive knots through the seal machinery. The id is a
+    /// point-in-time snapshot: its payload never changes, and its provenance is
+    /// recorded so a later import or seal follows back to the live node.
+    pub fn pointInTimeTypeForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        var sealer = GraphTypeFinals.init(self);
+        defer sealer.deinit();
+        const ty = try sealer.sealNode(node);
+        try sealer.recordPointInTimeProvenance();
         return ty;
     }
 
-    /// Materialize a graph node directly into a final TypeId without first
-    /// exposing or copying a mutable Monotype view.
+    /// Materialize a graph node directly into a final immutable TypeId.
     pub fn sealNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        try self.drainDirty();
         var sealer = GraphTypeFinals.init(self);
         defer sealer.deinit();
         return try sealer.sealNode(node);
     }
 
-    /// Materialize a TypeId into a final copy. If the TypeId is a graph view,
-    /// this snapshots its current solved node instead of returning the mutable
-    /// view id.
+    /// Materialize a TypeId into a final copy. If the TypeId is a point-in-time
+    /// id read out of this graph, this reads its live node's current solution
+    /// instead of copying the snapshot id.
     pub fn sealType(self: *InstGraph, ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        try self.drainDirty();
         var sealer = GraphTypeFinals.init(self);
         defer sealer.deinit();
         return try sealer.sealType(ty);
@@ -1722,286 +1641,14 @@ pub const InstGraph = struct {
     }
 
     fn isGraphViewType(self: *InstGraph, ty: Type.TypeId) bool {
-        const raw_node = self.mono_nodes.get(ty) orelse return false;
-        const node = self.find(raw_node);
-        const views = self.node_monos.get(node) orelse return false;
-        for (views.items) |view| {
-            if (view == ty) return true;
-        }
-        return false;
+        return self.view_nodes.contains(ty);
     }
 
-    /// Return the current root node for a TypeId that is one of this graph's
-    /// temporary Monotype views. Closed TypeIds and stale view ids return null.
+    /// Return the current root node a point-in-time Monotype id read out of
+    /// this graph captured. Closed TypeIds from outside the graph return null.
     pub fn monoViewNode(self: *InstGraph, ty: Type.TypeId) ?NodeId {
-        const raw_node = self.mono_nodes.get(ty) orelse return null;
-        const node = self.find(raw_node);
-        const views = self.node_monos.get(node) orelse return null;
-        for (views.items) |view| {
-            if (view == ty) return node;
-        }
-        return null;
-    }
-
-    /// Write a node's current content into one of its Monotype views.
-    fn fillMono(self: *InstGraph, raw_root: NodeId, ty: Type.TypeId) Allocator.Error!void {
-        const root = self.find(raw_root);
-        const types = self.types;
-        const previous = types.get(ty);
-        const filled: Type.Content = switch (self.nodes.items[@intFromEnum(root)]) {
-            .redirect => unreachable,
-            .unresolved => |variable| materializeUnresolved(variable),
-            .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.monoForWithReuse(elem, switch (previous) {
-                .list => |old| old,
-                else => null,
-            }) },
-            .box => |elem| .{ .box = try self.monoForWithReuse(elem, switch (previous) {
-                .box => |old| old,
-                else => null,
-            }) },
-            .tuple => |items| .{ .tuple = try self.monoSpanWithReuse(items, switch (previous) {
-                .tuple => |span| span,
-                else => null,
-            }) },
-            .func => |func| .{ .func = .{
-                .args = try self.monoSpanWithReuse(func.args, switch (previous) {
-                    .func => |old| old.args,
-                    else => null,
-                }),
-                .ret = try self.monoForWithReuse(func.ret, switch (previous) {
-                    .func => |old| old.ret,
-                    else => null,
-                }),
-            } },
-            .empty_tag_union => .{ .tag_union = Type.Span.empty() },
-            .empty_record => .{ .record = Type.Span.empty() },
-            .tag_union => blk: {
-                const flat = try self.flattenTagRow(root);
-                const existing = switch (previous) {
-                    .tag_union => |span| span,
-                    else => null,
-                };
-                var tags = std.ArrayList(PendingTag).empty;
-                defer tags.deinit(self.allocator);
-                try tags.ensureTotalCapacity(self.allocator, flat.tags.len);
-                for (flat.tags) |tag| {
-                    tags.appendAssumeCapacity(.{
-                        .name = tag.name,
-                        .checked_name = tag.checked_name,
-                        .payloads = try self.monoSliceWithReuse(tag.payloads, self.existingTagPayloads(existing, tag)),
-                    });
-                }
-                break :blk .{ .tag_union = try self.tagSpanWithReuse(tags.items, existing) };
-            },
-            .record => blk: {
-                const flat = try self.flattenRecordRow(root);
-                const existing = switch (previous) {
-                    .record => |span| span,
-                    else => null,
-                };
-                var fields = std.ArrayList(Type.Field).empty;
-                defer fields.deinit(self.allocator);
-                try fields.ensureTotalCapacity(self.allocator, flat.fields.len);
-                for (flat.fields) |field| {
-                    fields.appendAssumeCapacity(.{
-                        .name = field.name,
-                        .ty = try self.monoForWithReuse(field.ty, self.existingRecordFieldType(existing, field.name)),
-                    });
-                }
-                break :blk .{ .record = try self.recordSpanWithReuse(fields.items, existing) };
-            },
-            .named => |named| blk: {
-                const backing: ?Type.NamedBacking = if (named.backing) |raw_backing| backing: {
-                    const structural = try self.structuralBackingNode(raw_backing.node, named);
-                    break :backing .{
-                        .ty = try self.monoForWithReuse(structural.node, switch (previous) {
-                            .named => |old| if (old.backing) |old_backing| old_backing.ty else null,
-                            else => null,
-                        }),
-                        .use = raw_backing.use,
-                    };
-                } else null;
-                break :blk .{ .named = .{
-                    .named_type = named.named_type,
-                    .def = named.def,
-                    .kind = named.kind,
-                    .builtin_owner = named.builtin_owner,
-                    .args = try self.monoSpanWithReuse(named.args, switch (previous) {
-                        .named => |old| old.args,
-                        else => null,
-                    }),
-                    .backing = backing,
-                    .declared_order = try self.declaredFieldSpanWithReuse(named.declared_order, switch (previous) {
-                        .named => |old| old.declared_order,
-                        else => null,
-                    }),
-                } };
-            },
-            .erased => |digest| .{ .erased = digest },
-            .zst => .zst,
-        };
-        types.replaceGraphView(ty, filled);
-    }
-
-    fn monoForWithReuse(
-        self: *InstGraph,
-        node: NodeId,
-        existing: ?Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        const ty = existing orelse return try self.monoFor(node);
-        const root = self.find(node);
-        const previous_root = self.monoViewNode(ty) orelse return try self.monoFor(root);
-        if (previous_root != root) return try self.monoFor(root);
-        return ty;
-    }
-
-    fn monoSliceWithReuse(
-        self: *InstGraph,
-        nodes_slice: []const NodeId,
-        existing: ?Type.Span,
-    ) Allocator.Error![]Type.TypeId {
-        const existing_copy = if (existing) |old_span| blk: {
-            const old = self.types.span(old_span);
-            break :blk if (old.len == nodes_slice.len) try GuardedList.dupe(self.allocator, Type.TypeId, old) else null;
-        } else null;
-        defer if (existing_copy) |old| self.allocator.free(old);
-
-        const out = try self.arena().alloc(Type.TypeId, nodes_slice.len);
-        for (nodes_slice, 0..) |node, index| {
-            out[index] = try self.monoForWithReuse(
-                node,
-                if (existing_copy) |old| old[index] else null,
-            );
-        }
-        return out;
-    }
-
-    fn monoSpanWithReuse(
-        self: *InstGraph,
-        nodes_slice: []const NodeId,
-        existing: ?Type.Span,
-    ) Allocator.Error!Type.Span {
-        const values = try self.monoSliceWithReuse(nodes_slice, existing);
-        if (existing) |span| {
-            if (typeSpanEql(self.types.span(span), values)) return span;
-        }
-        return try self.types.addSpan(values);
-    }
-
-    fn existingRecordFieldType(
-        self: *InstGraph,
-        existing: ?Type.Span,
-        name: names.RecordFieldNameId,
-    ) ?Type.TypeId {
-        const span = existing orelse return null;
-        const wanted = self.fieldLabelText(name);
-        const fields = self.types.fieldSpan(span);
-        for (0..fields.len) |index| {
-            const field = GuardedList.at(fields, index);
-            if (Ident.textEql(wanted, self.fieldLabelText(field.name))) return field.ty;
-        }
-        return null;
-    }
-
-    fn existingTagPayloads(
-        self: *InstGraph,
-        existing: ?Type.Span,
-        tag: InstTag,
-    ) ?Type.Span {
-        const span = existing orelse return null;
-        const wanted = self.tagLabelText(tag.name);
-        const tags = self.types.tagSpan(span);
-        for (0..tags.len) |index| {
-            const old_tag = GuardedList.at(tags, index);
-            if (!Ident.textEql(wanted, self.tagLabelText(old_tag.name))) continue;
-            const old_payloads = self.types.span(old_tag.payloads);
-            return if (old_payloads.len == tag.payloads.len) old_tag.payloads else null;
-        }
-        return null;
-    }
-
-    fn declaredFieldSpanWithReuse(
-        self: *InstGraph,
-        fields: []const InstDeclaredField,
-        existing: ?Type.Span,
-    ) Allocator.Error!Type.Span {
-        if (fields.len == 0) return .empty();
-        const materialized = try self.allocator.alloc(Type.DeclaredField, fields.len);
-        defer self.allocator.free(materialized);
-        for (fields, 0..) |field, index| {
-            materialized[index] = switch (field) {
-                .named => |name| .{ .named = name },
-                .padding => |node| .{ .padding = try self.monoFor(node) },
-            };
-        }
-        if (existing) |span| {
-            if (declaredFieldSpanEql(self.types.declaredFieldSpan(span), materialized)) return span;
-        }
-        return try self.types.addDeclaredFields(materialized);
-    }
-
-    fn recordSpanWithReuse(
-        self: *InstGraph,
-        fields: []const Type.Field,
-        existing: ?Type.Span,
-    ) Allocator.Error!Type.Span {
-        const normalized = try self.allocator.dupe(Type.Field, fields);
-        defer self.allocator.free(normalized);
-        std.mem.sort(Type.Field, normalized, self.name_store, recordFieldLessThan);
-        assertNoDuplicateRecordFields(self.name_store, normalized, "instantiation produced a record row with duplicate fields");
-
-        if (existing) |span| {
-            if (recordSpanEql(self.types.fieldSpan(span), normalized)) return span;
-        }
-        return try self.types.addFields(normalized);
-    }
-
-    const PendingTag = struct {
-        name: names.TagNameId,
-        checked_name: names.TagNameId,
-        payloads: []const Type.TypeId,
-    };
-
-    fn tagSpanWithReuse(
-        self: *InstGraph,
-        tags: []const PendingTag,
-        existing: ?Type.Span,
-    ) Allocator.Error!Type.Span {
-        const normalized = try self.allocator.dupe(PendingTag, tags);
-        defer self.allocator.free(normalized);
-        std.mem.sort(PendingTag, normalized, self.name_store, pendingTagLessThan);
-        assertNoDuplicatePendingTags(self.name_store, normalized, "instantiation produced a tag row with duplicate tags");
-
-        if (existing) |span| {
-            if (tagSpanEql(self.types, self.types.tagSpan(span), normalized)) return span;
-        }
-
-        var materialized = std.ArrayList(Type.Tag).empty;
-        defer materialized.deinit(self.allocator);
-        try materialized.ensureTotalCapacity(self.allocator, normalized.len);
-        for (normalized) |tag| {
-            materialized.appendAssumeCapacity(.{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try self.types.addSpan(tag.payloads),
-            });
-        }
-        return try self.types.addTags(materialized.items);
-    }
-
-    /// Refill the Monotype views of every node that changed since the last
-    /// drain. Run only when no constraint walk holds slices into the type
-    /// store.
-    pub fn drainDirty(self: *InstGraph) Allocator.Error!void {
-        while (self.dirty.pop()) |raw_root| {
-            const root = self.find(raw_root);
-            if (!self.dirty_set.remove(root)) continue;
-            const views = self.node_monos.get(root) orelse continue;
-            for (views.items) |ty| {
-                try self.fillMono(root, ty);
-            }
-        }
+        const raw_node = self.view_nodes.get(ty) orelse return null;
+        return self.find(raw_node);
     }
 };
 
@@ -2025,19 +1672,24 @@ pub const GraphTypeFinals = struct {
         self.sealed.deinit();
     }
 
+    /// Record every node just materialized by `sealNode` as the provenance of
+    /// its point-in-time id, so a later import or seal of that id follows back
+    /// to the live node.
+    fn recordPointInTimeProvenance(self: *GraphTypeFinals) Allocator.Error!void {
+        var it = self.sealed.iterator();
+        while (it.next()) |entry| {
+            try self.graph.view_nodes.put(entry.value_ptr.*, entry.key_ptr.*);
+        }
+    }
+
     pub fn sealType(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.isGeneratedIteratorEvidenceType(ty)) {
-            if (self.graph.monoViewNode(ty) != null) return try self.sealStoreType(ty);
+            if (self.graph.view_nodes.contains(ty)) return try self.sealStoreType(ty);
             if (try self.typeHasGraphViews(ty)) return try self.sealStoreType(ty);
             return ty;
         }
-        if (self.graph.mono_nodes.get(ty)) |raw_node| {
-            const node = self.graph.find(raw_node);
-            if (self.graph.node_monos.get(node)) |views| {
-                for (views.items) |view| {
-                    if (view == ty) return try self.sealNode(node);
-                }
-            }
+        if (self.graph.view_nodes.get(ty)) |raw_node| {
+            return try self.sealNode(self.graph.find(raw_node));
         }
         if (try self.typeHasGraphViews(ty)) return try self.sealStoreType(ty);
         return ty;
@@ -2281,28 +1933,9 @@ fn materializeUnresolved(variable: InstVariable) Type.Content {
     };
 }
 
-/// Orders record fields by label text for layout-stable sorting.
-pub fn recordFieldLessThan(name_store: *const names.NameStore, lhs: Type.Field, rhs: Type.Field) bool {
-    return name_store.recordFieldLabelTextLessThan(lhs.name, rhs.name);
-}
-
 /// Orders tag union tags by label text for layout-stable sorting.
 pub fn tagLessThan(name_store: *const names.NameStore, lhs: Type.Tag, rhs: Type.Tag) bool {
     return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
-}
-
-fn pendingTagLessThan(name_store: *const names.NameStore, lhs: InstGraph.PendingTag, rhs: InstGraph.PendingTag) bool {
-    return name_store.tagLabelTextLessThan(lhs.name, rhs.name);
-}
-
-/// Panics with the given message if a sorted field list contains a repeated label.
-pub fn assertNoDuplicateRecordFields(name_store: *const names.NameStore, fields: []const Type.Field, comptime message: []const u8) void {
-    if (fields.len < 2) return;
-    for (fields[1..], 1..) |field, i| {
-        if (name_store.recordFieldLabelTextEql(fields[i - 1].name, field.name)) {
-            Common.invariant(message);
-        }
-    }
 }
 
 /// Panics with the given message if a sorted tag list contains a repeated label.
@@ -2313,65 +1946,6 @@ pub fn assertNoDuplicateTags(name_store: *const names.NameStore, tags: []const T
             Common.invariant(message);
         }
     }
-}
-
-fn assertNoDuplicatePendingTags(name_store: *const names.NameStore, tags: []const InstGraph.PendingTag, comptime message: []const u8) void {
-    if (tags.len < 2) return;
-    for (tags[1..], 1..) |tag, i| {
-        if (name_store.tagLabelTextEql(tags[i - 1].name, tag.name)) {
-            Common.invariant(message);
-        }
-    }
-}
-
-fn typeSpanEql(left: anytype, right: anytype) bool {
-    if (left.len != right.len) return false;
-    for (0..left.len) |index| {
-        const left_ty = GuardedList.at(left, index);
-        const right_ty = GuardedList.at(right, index);
-        if (left_ty != right_ty) return false;
-    }
-    return true;
-}
-
-fn recordSpanEql(left: anytype, right: anytype) bool {
-    if (left.len != right.len) return false;
-    for (0..left.len) |index| {
-        const left_field = GuardedList.at(left, index);
-        const right_field = GuardedList.at(right, index);
-        if (left_field.name != right_field.name or left_field.ty != right_field.ty) return false;
-    }
-    return true;
-}
-
-fn tagSpanEql(types: *const Type.Store, left: anytype, right: anytype) bool {
-    if (left.len != right.len) return false;
-    for (0..left.len) |index| {
-        const left_tag = GuardedList.at(left, index);
-        const right_tag = GuardedList.at(right, index);
-        if (left_tag.name != right_tag.name or left_tag.checked_name != right_tag.checked_name) return false;
-        if (!typeSpanEql(types.span(left_tag.payloads), right_tag.payloads)) return false;
-    }
-    return true;
-}
-
-fn declaredFieldSpanEql(left: anytype, right: anytype) bool {
-    if (left.len != right.len) return false;
-    for (0..left.len) |index| {
-        const left_field = GuardedList.at(left, index);
-        const right_field = GuardedList.at(right, index);
-        switch (left_field) {
-            .named => |left_name| switch (right_field) {
-                .named => |right_name| if (left_name != right_name) return false,
-                .padding => return false,
-            },
-            .padding => |left_ty| switch (right_field) {
-                .named => return false,
-                .padding => |right_ty| if (left_ty != right_ty) return false,
-            },
-        }
-    }
-    return true;
 }
 
 fn instNodeEql(left: InstNode, right: InstNode) bool {
@@ -2545,43 +2119,6 @@ fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
     }
 }
 
-test "issue 9647: row refills do not duplicate dependencies or materialized spans" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
-    defer unsolved_monos.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
-    defer graph.destroy();
-
-    const field_name = try name_store.internRecordFieldLabel("value");
-    const field_ty = try graph.newNode(.{ .primitive = .u64 });
-    const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = field_ty };
-
-    const ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
-    const row = try graph.newNode(.{ .record = .{
-        .fields = fields,
-        .ext = ext,
-    } });
-
-    const view = try graph.monoFor(row);
-    for (0..32) |_| {
-        try graph.fillMono(row, view);
-    }
-
-    const parents = graph.row_parents.get(graph.find(ext)) orelse
-        return error.TestExpectedEqual;
-    try std.testing.expectEqual(@as(usize, 1), parents.items.len);
-    try std.testing.expectEqual(@as(usize, 1), type_store.view().fields.len);
-}
-
 test "record field node carries contextual row evidence into receiver" {
     const gpa = std.testing.allocator;
 
@@ -2644,31 +2181,6 @@ test "record field node carries contextual row evidence into receiver" {
     try std.testing.expectEqual(exit, GuardedList.at(sealed_tags, 1).name);
 }
 
-test "monotype reuse keeps views of different roots distinct" {
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    var unsolved_monos = std.AutoHashMap(Type.TypeId, void).init(gpa);
-    defer unsolved_monos.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store, &unsolved_monos);
-    defer graph.destroy();
-
-    const old_root = try graph.newNode(.{ .primitive = .u64 });
-    const new_root = try graph.newNode(.{ .primitive = .str });
-    const old_view = try graph.monoFor(old_root);
-    const new_view = try graph.monoForWithReuse(new_root, old_view);
-
-    try std.testing.expect(old_view != new_view);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(old_view));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(new_view));
-}
-
 test "alias unification does not make the alias its own backing" {
     const gpa = std.testing.allocator;
 
@@ -2697,7 +2209,7 @@ test "alias unification does not make the alias its own backing" {
     try graph.unify(alias, backing);
     try std.testing.expect(graph.find(alias) != graph.find(backing));
 
-    const alias_ty = try graph.monoFor(alias);
+    const alias_ty = try graph.pointInTimeTypeForNode(alias);
     const named = switch (type_store.get(alias_ty)) {
         .named => |named| named,
         else => return error.TestExpectedEqual,
@@ -2706,7 +2218,7 @@ test "alias unification does not make the alias its own backing" {
     try std.testing.expect(named_backing.ty != alias_ty);
 }
 
-test "sealed monotype copy is not refilled by later graph evidence" {
+test "point-in-time and sealed monotype ids stay immutable while the graph keeps solving" {
     const gpa = std.testing.allocator;
 
     var type_store = Type.Store.init(gpa);
@@ -2734,12 +2246,10 @@ test "sealed monotype copy is not refilled by later graph evidence" {
         .ext = ext,
     } });
 
-    const draft = try graph.monoFor(row);
-    try graph.drainDirty();
-    var finals = GraphTypeFinals.init(graph);
-    defer finals.deinit();
-    const sealed = try finals.sealType(draft);
+    const draft = try graph.pointInTimeTypeForNode(row);
+    const sealed = try graph.sealType(draft);
     try std.testing.expect(sealed != draft);
+    try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(draft).record).len);
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
 
     const extra_fields = try graph.arena().alloc(InstField, 1);
@@ -2749,10 +2259,15 @@ test "sealed monotype copy is not refilled by later graph evidence" {
         .ext = try graph.newNode(.empty_record),
     } });
     try graph.unify(ext, extra);
-    try graph.drainDirty();
 
-    try std.testing.expectEqual(@as(usize, 2), type_store.fieldSpan(type_store.get(draft).record).len);
+    // Neither the point-in-time id nor the sealed copy changes after the node
+    // gains a second field: their payloads are frozen at read time.
+    try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(draft).record).len);
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
+
+    // A fresh point-in-time read observes the node's current solution.
+    const later = try graph.pointInTimeTypeForNode(row);
+    try std.testing.expectEqual(@as(usize, 2), type_store.fieldSpan(type_store.get(later).record).len);
 }
 
 test "sealed graph function copy recursively seals graph-owned argument views" {
@@ -2789,8 +2304,7 @@ test "sealed graph function copy recursively seals graph-owned argument views" {
         .args = args,
         .ret = row,
     } });
-    const draft_fn = try graph.monoFor(fn_node);
-    try graph.drainDirty();
+    const draft_fn = try graph.pointInTimeTypeForNode(fn_node);
 
     var finals = GraphTypeFinals.init(graph);
     defer finals.deinit();
@@ -2806,11 +2320,17 @@ test "sealed graph function copy recursively seals graph-owned argument views" {
         .ext = try graph.newNode(.empty_record),
     } });
     try graph.unify(ext, extra);
-    try graph.drainDirty();
 
+    // The sealed copy recursively froze its argument row, so a later second
+    // field on the shared node cannot reach it.
     const draft_arg = GuardedList.at(type_store.span(type_store.get(draft_fn).func.args), 0);
-    try std.testing.expectEqual(@as(usize, 2), type_store.fieldSpan(type_store.get(draft_arg).record).len);
+    try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(draft_arg).record).len);
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed_arg).record).len);
+
+    // A fresh read of the same function node observes the widened argument row.
+    const later_fn = try graph.pointInTimeTypeForNode(fn_node);
+    const later_arg = GuardedList.at(type_store.span(type_store.get(later_fn).func.args), 0);
+    try std.testing.expectEqual(@as(usize, 2), type_store.fieldSpan(type_store.get(later_arg).record).len);
 }
 
 test "sealed graph node does not allocate a mutable monotype view" {
@@ -2842,7 +2362,7 @@ test "sealed graph node does not allocate a mutable monotype view" {
     } });
 
     const sealed = try graph.sealNode(row);
-    try std.testing.expectEqual(@as(usize, 0), graph.node_monos.count());
+    try std.testing.expectEqual(@as(usize, 0), graph.view_nodes.count());
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
 
     const extra_fields = try graph.arena().alloc(InstField, 1);
@@ -2852,7 +2372,6 @@ test "sealed graph node does not allocate a mutable monotype view" {
         .ext = try graph.newNode(.empty_record),
     } });
     try graph.unify(ext, extra);
-    try graph.drainDirty();
 
     try std.testing.expectEqual(@as(usize, 1), type_store.fieldSpan(type_store.get(sealed).record).len);
 }

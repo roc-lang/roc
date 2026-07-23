@@ -106,6 +106,18 @@ my @RULES = (
     { category => 'text-identity-public-api-dep', regex => qr/\bisSelfPublicApiModuleName\b/, allowed => {} },
     { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
     { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
+    # Slice 3 deleted the mutable-view/refill API: a graph node's solved
+    # content is read into an immutable point-in-time id, never refilled into a
+    # visible id in place. These deleted APIs must stay gone; graph reads go
+    # through pointInTimeTypeForNode/importMono/registerNodeType, and no
+    # Monotype payload is mutated after its id becomes visible.
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\baddMonoView\b/, allowed => {} },
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\bregisterMonoView\b/, allowed => {} },
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\bfillMono\b/, allowed => {} },
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\bdrainDirty\b/, allowed => {} },
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\breplaceGraphView\b/, allowed => {} },
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\bmonoFor\b/, allowed => {} },
+    { category => 'deleted-mutable-monotype-refill', regex => qr/\bactiveTypeViewForNode\b/, allowed => {} },
 );
 
 sub iter_zig_files {
@@ -287,7 +299,7 @@ sub check_active_body_draft_seal_access {
             }
         }
         if (!$in_test && ($current_fn // '') ne 'activeTypeFromNode') {
-            if ($line =~ /\bactiveTypeViewForNode\(/) {
+            if ($line =~ /\bpointInTimeTypeForNode\(/) {
                 push @violations, "$rel:$line_no: active-graph-view-bypass: $line";
             }
         }
