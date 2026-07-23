@@ -106,13 +106,14 @@ pub fn run(
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
     // Content dedup on the one production store is built end to end — the
-    // intern constructors, committed graph seals, live-node dedup exclusion,
-    // and occurrence-independent imports — but activation stays off until
-    // occurrence-based lambda cloning lands (interning structurally equal
-    // function types otherwise merges callable slots) and until generated
-    // iterator materializers taint their view-bearing outputs. With this call
-    // absent the intern constructors plain-add, so behavior matches the
-    // pre-dedup store; enabling it flips dedup on for the whole store.
+    // intern constructors, committed graph seals, and live-node dedup exclusion
+    // propagated transitively at construction. Activation stays off: content
+    // dedup gives independent occurrences one id, but the graph import shares
+    // one node per id, so two independent occurrences that only coincide in
+    // content couple their solving. The import needs the occurrence identity a
+    // deduped id no longer carries; that identity returns with directed
+    // instantiation from checked structure. With this call absent the intern
+    // constructors plain-add, so behavior matches the pre-dedup store.
     // program.types.enableInterning();
 
     var builder = Builder.init(allocator, modules, &program, options);

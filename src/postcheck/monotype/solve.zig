@@ -1550,6 +1550,13 @@ pub const InstGraph = struct {
     /// node, so the requester observes the node's ongoing solution while the id
     /// itself is never mutated.
     pub fn registerNodeType(self: *InstGraph, ty: Type.TypeId, node: NodeId) Allocator.Error!void {
+        // Binding `ty` here reconnects every later import of it to this node.
+        // That is sound only when `ty` names one occurrence. A content-deduped
+        // id already shared as a dedup bucket entry names unrelated occurrences,
+        // so binding it would couple their solving; leave it a pure one-way
+        // structural import instead. Pre-dedup every id was occurrence-unique,
+        // so this reconnected exactly where it was sound then.
+        if (self.types.isBucketEntry(self.name_store, ty)) return;
         // This id now reads a live node: keep dedup from ever handing it back so
         // a committed final type never resolves through the node and the read
         // stays one id per node. A re-registration rebinds to the current node

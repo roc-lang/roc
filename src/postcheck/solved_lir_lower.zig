@@ -1954,29 +1954,62 @@ const Lowerer = struct {
         for (self.fn_reachable.items) |reachable| {
             if (reachable) reachable_count += 1;
         }
-        if (reachable_count > materialized.fnCount()) {
+        const materialized_fns = materialized.fnsView();
+        if (reachable_count > materialized_fns.len) {
             Common.invariant("debug Lambda Mono verifier saw too many direct function specs");
         }
-        const materialized_fns = materialized.fnsView();
-        const used = try self.allocator.alloc(bool, materialized_fns.len);
-        defer self.allocator.free(used);
-        @memset(used, false);
 
-        for (self.fn_entries.items, 0..) |entry, entry_index| {
+        // A source template and lowered type no longer pin one materialized
+        // function to one direct spec: content dedup can give two
+        // occurrence-distinct specs the same monotype function-type id, so
+        // `Mono.FnTemplate` equality plus structural type equality leave several
+        // direct entries interchangeable. Each reachable direct spec still has
+        // its own materialized twin — both sides lower the same solved spec — so
+        // a complete assignment exists. A maximum bipartite matching finds it
+        // where a first-fit walk could strand a spec by taking an
+        // interchangeable twin early.
+        const matched_entry = try self.allocator.alloc(?usize, materialized_fns.len);
+        defer self.allocator.free(matched_entry);
+        @memset(matched_entry, null);
+
+        const visited = try self.allocator.alloc(bool, materialized_fns.len);
+        defer self.allocator.free(visited);
+
+        for (self.fn_entries.items, 0..) |_, entry_index| {
             // Direct LIR keeps type-level entries so callable layouts and
             // ConstStore metadata can refer to source templates without forcing
             // every queued Lambda Mono function into a LIR proc.
             if (!self.fn_reachable.items[entry_index]) continue;
-            for (materialized_fns, 0..) |fn_, index| {
-                if (used[index]) continue;
-                if (try self.fnEntryMatchesMaterialized(entry, fn_, materialized)) {
-                    used[index] = true;
-                    break;
-                }
-            } else {
+            @memset(visited, false);
+            if (!try self.augmentFnMatch(entry_index, materialized, matched_entry, visited)) {
                 Common.invariant("debug Lambda Mono verifier could not match a direct function spec");
             }
         }
+    }
+
+    /// One augmenting-path step of the direct-entry-to-materialized-function
+    /// bipartite matching: find a materialized function this entry matches that
+    /// is either free or whose current owner can move aside, and claim it.
+    fn augmentFnMatch(
+        self: *Lowerer,
+        entry_index: usize,
+        materialized: *const LambdaMono.Program,
+        matched_entry: []?usize,
+        visited: []bool,
+    ) Common.LowerError!bool {
+        const entry = self.fn_entries.items[entry_index];
+        const materialized_fns = materialized.fnsView();
+        for (materialized_fns, 0..) |fn_, index| {
+            if (visited[index]) continue;
+            if (!try self.fnEntryMatchesMaterialized(entry, fn_, materialized)) continue;
+            visited[index] = true;
+            if (matched_entry[index]) |owner_index| {
+                if (!try self.augmentFnMatch(owner_index, materialized, matched_entry, visited)) continue;
+            }
+            matched_entry[index] = entry_index;
+            return true;
+        }
+        return false;
     }
 
     fn fnEntryMatchesMaterialized(

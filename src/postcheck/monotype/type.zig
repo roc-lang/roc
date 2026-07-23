@@ -424,7 +424,9 @@ pub const Store = struct {
         errdefer _ = self.type_digest_generations.pop();
         try self.specialization_digest_generations.append(self.allocator, 0);
         errdefer _ = self.specialization_digest_generations.pop();
-        return @enumFromInt(@as(u32, @intCast(index)));
+        const ty: TypeId = @enumFromInt(@as(u32, @intCast(index)));
+        try self.propagateExclusion(ty);
+        return ty;
     }
 
     /// Add one recursive type without returning its id to the caller until the
@@ -440,7 +442,7 @@ pub const Store = struct {
         errdefer self.restore(mark_);
         const reserved = try self.reserveSlot();
         const content = try fill(context, reserved);
-        self.fillReservedSlot(reserved, content);
+        try self.fillReservedSlot(reserved, content);
         return reserved;
     }
 
@@ -448,10 +450,11 @@ pub const Store = struct {
         return try self.add(.zst);
     }
 
-    fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) void {
+    fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) std.mem.Allocator.Error!void {
         self.assertMutable();
         self.types.set(@intFromEnum(ty), content);
         self.clearTypeDigestCache();
+        try self.propagateExclusion(ty);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
@@ -731,7 +734,7 @@ pub const Store = struct {
         for (provisional) |*id| id.* = try self.reserveSlot();
         for (contents, 0..) |content, index| {
             const lowered = try self.lowerRecursiveContent(name_store, provisional, provisional[0], content);
-            self.fillReservedSlot(provisional[index], lowered);
+            try self.fillReservedSlot(provisional[index], lowered);
         }
 
         // Without dedup the provisional slots are the final ids for every member.
@@ -795,7 +798,7 @@ pub const Store = struct {
         for (representative, 0..) |rep, index| {
             if (rep != index or existing_id[index] != null) continue;
             const lowered = try self.lowerRecursiveContent(name_store, final_ids, final_ids[0], contents[index]);
-            self.fillReservedSlot(final_ids[index], lowered);
+            try self.fillReservedSlot(final_ids[index], lowered);
         }
         for (representative, 0..) |rep, index| {
             if (rep != index or existing_id[index] != null) continue;
@@ -819,6 +822,24 @@ pub const Store = struct {
             }
         }
         return null;
+    }
+
+    /// Whether `ty` is currently a dedup bucket entry — an id the constructors
+    /// can hand back to a later structurally equal request. Such an id names
+    /// shared content across unrelated occurrences, so graph provenance must not
+    /// bind it to one live node. Point-in-time reads and excluded ids never
+    /// enter a bucket, so they answer false and stay bindable. A no-op false
+    /// while dedup is off.
+    pub fn isBucketEntry(self: *Store, name_store: *const names.NameStore, ty: TypeId) bool {
+        if (self.intern_buckets == null) return false;
+        const digest = self.typeDigestCached(name_store, ty, null);
+        const key = InternerLookupDigest.from(digest);
+        if (self.intern_buckets.?.getPtr(key)) |bucket| {
+            for (bucket.items) |existing| {
+                if (existing == ty) return true;
+            }
+        }
+        return false;
     }
 
     /// Register `member` under its rooted digest so a future equivalent graph
@@ -941,10 +962,10 @@ pub const Store = struct {
         };
     }
 
-    /// Whether any direct child of `ty` is excluded from dedup. Because taint
-    /// propagates — a parent built over a tainted child is itself excluded —
-    /// checking direct children detects a type that transitively holds a
-    /// live-node view.
+    /// Whether any direct child of `ty` is excluded from dedup. Because
+    /// exclusion propagates — a parent built over an excluded child is itself
+    /// excluded at construction — checking direct children detects a type that
+    /// transitively holds a live-node view.
     fn hasExcludedChild(self: *Store, ty: TypeId) bool {
         if (self.dedup_excluded.count() == 0) return false;
         var it = ChildIterator.init(self.view(), self.get(ty));
@@ -952,6 +973,20 @@ pub const Store = struct {
             if (self.dedup_excluded.contains(child)) return true;
         }
         return false;
+    }
+
+    /// Propagate dedup exclusion to a freshly finalized node: a node built over
+    /// an excluded child transitively reads a live graph node, so it must never
+    /// be handed back as a shared dedup result either. Every construction path
+    /// routes its finalized nodes through here — plain `add`, the reserve-fill
+    /// `addRecursive`, and the recursive-group builder — so exclusion stays
+    /// transitive without any call site opting in. Excluding at construction is
+    /// what lets `hasExcludedChild` stay a direct-child scan. A no-op while
+    /// dedup is off, where exclusion is never consulted, and while nothing is
+    /// excluded yet.
+    fn propagateExclusion(self: *Store, ty: TypeId) std.mem.Allocator.Error!void {
+        if (self.intern_buckets == null) return;
+        if (self.hasExcludedChild(ty)) try self.dedup_excluded.put(ty, {});
     }
 
     fn internCandidate(self: *Store, name_store: *const names.NameStore, mark_: Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
@@ -4051,7 +4086,7 @@ test "monotype cached digest reuses acyclic child digests and invalidates on res
     try std.testing.expectEqual(@as(u64, 1), outer_stats.cache_misses);
     try std.testing.expectEqual(@as(u64, 1), outer_stats.nodes_visited);
 
-    store.fillReservedSlot(inner, .{ .record = Span.empty() });
+    try store.fillReservedSlot(inner, .{ .record = Span.empty() });
 
     var after_refill_stats: Store.DigestStats = .{};
     const after_refill = store.typeDigestCached(&name_store, inner, &after_refill_stats);
@@ -4240,14 +4275,14 @@ test "monotype cached and uncached digests agree on type identity" {
         const rec = try store.reserveSlot();
         const fn_ret = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec } });
         const flds = try store.addFields(&.{.{ .name = f_step, .ty = fn_ret }});
-        store.fillReservedSlot(rec, .{ .record = flds });
+        try store.fillReservedSlot(rec, .{ .record = flds });
         H.push(&types, &groups, &count, rec, cyc_group);
     }
     {
         const rec = try store.reserveSlot();
         const fn_ret = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec } });
         const flds = try store.addFields(&.{.{ .name = f_step, .ty = fn_ret }});
-        store.fillReservedSlot(rec, .{ .record = flds });
+        try store.fillReservedSlot(rec, .{ .record = flds });
         H.push(&types, &groups, &count, rec, cyc_group);
     }
     // A different cycle (distinct field name) is its own group.
@@ -4255,7 +4290,7 @@ test "monotype cached and uncached digests agree on type identity" {
         const rec = try store.reserveSlot();
         const fn_ret = try store.add(.{ .func = .{ .args = Span.empty(), .ret = rec } });
         const flds = try store.addFields(&.{.{ .name = f_other, .ty = fn_ret }});
-        store.fillReservedSlot(rec, .{ .record = flds });
+        try store.fillReservedSlot(rec, .{ .record = flds });
         H.push(&types, &groups, &count, rec, next_group);
         next_group += 1;
     }
