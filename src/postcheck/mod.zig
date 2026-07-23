@@ -39,6 +39,12 @@ pub const RepresentationPolicy = @import("representation_policy.zig");
 /// Monotype's representation slot equality-closure engine (not yet wired into
 /// production lowering).
 pub const RepresentationClosure = @import("representation_closure.zig");
+/// Debug-only, state-isolated shadow of directed scheme instantiation
+/// (reunify.md Slice 5). Not wired into production output; off by default.
+pub const ReunifyShadow = struct {
+    pub const LogicalIdentity = @import("reunify_shadow/logical_identity.zig");
+    pub const Shadow = @import("reunify_shadow/shadow.zig");
+};
 /// Decision-tree match compiler shared by both LIR lowerers.
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
@@ -68,6 +74,8 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
     std.testing.refAllDecls(@import("representation_policy.zig"));
     std.testing.refAllDecls(@import("representation_closure.zig"));
+    std.testing.refAllDecls(@import("reunify_shadow/logical_identity.zig"));
+    std.testing.refAllDecls(@import("reunify_shadow/shadow.zig"));
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));

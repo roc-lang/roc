@@ -39,6 +39,8 @@ my $SLL   = 'src/postcheck/solved_lir_lower.zig';
 my $LMLOW = 'src/postcheck/lambda_mono/lower.zig';
 my $RPOL  = 'src/postcheck/representation_policy.zig';
 my $RCLO  = 'src/postcheck/representation_closure.zig';
+my $RSLOG = 'src/postcheck/reunify_shadow/logical_identity.zig';
+my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -253,6 +255,25 @@ my @categories = (
               counts => { $RCLO => 17 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
+        ],
+    },
+    {
+        # The reunify.md Slice 5 shadow: eager logical identity, checked-node
+        # translation, scheme instantiation, and the harness hook. Unlike the
+        # shrinking re-derivation categories above, this shadow surface grows as
+        # it expands to the full lifecycle (Slice 6); its pins move up in the
+        # same change that grows it, so every entry point stays tracked.
+        name    => 'reunify-shadow',
+        exempt  => [],
+        patterns => [
+            { label => 'checkedLogicalIdentity', re => qr/\bcheckedLogicalIdentity\b/,
+              counts => { $RSLOG => 16, $RSHAD => 3 } },
+            { label => 'monoLogicalIdentity', re => qr/\bmonoLogicalIdentity\b/,
+              counts => { $RSLOG => 2, $RSHAD => 1 } },
+            { label => 'instantiateScheme', re => qr/\binstantiateScheme\b/,
+              counts => { $RSLOG => 4, $RSHAD => 1 } },
+            { label => 'runReunifyShadow', re => qr/\brunReunifyShadow\b/,
+              counts => { $LOWER => 2 } },
         ],
     },
 );

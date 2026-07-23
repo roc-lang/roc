@@ -14,6 +14,7 @@ const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
 const serialize = @import("serialize.zig");
 const census = @import("census.zig");
+const reunify_shadow = @import("../reunify_shadow/shadow.zig");
 
 const InstGraph = solve.InstGraph;
 const NodeId = solve.NodeId;
@@ -141,6 +142,11 @@ pub fn run(
         builder.spec_store.validateLookupIntegrity();
         verifyMonotypeSpecsReady(&program);
     }
+
+    // Debug-only, state-isolated reunify shadow (reunify.md Slice 5): runs
+    // strictly after the sealed program above, reads only immutable output, and
+    // is off unless ROC_REUNIFY_SHADOW is set.
+    if (reunify_shadow.shouldRun()) builder.runReunifyShadow() catch {};
 
     return program;
 }
@@ -2554,6 +2560,54 @@ const Builder = struct {
             if (moduleBytesEqual(module_id.bytes, relation.key.bytes)) return moduleView(relation);
         }
         Common.invariant("checked module id was not present in the lowering input");
+    }
+
+    /// Assemble the sealed inputs the reunify shadow reads and run it
+    /// (reunify.md Slice 5). Everything it touches is immutable output; it
+    /// writes to its own store only. Any resource failure ends the shadow with
+    /// no effect on the returned program.
+    fn runReunifyShadow(self: *Builder) Allocator.Error!void {
+        var modules = std.ArrayList(reunify_shadow.ShadowModule).empty;
+        defer modules.deinit(self.allocator);
+        var module_index = std.AutoHashMap([32]u8, usize).init(self.allocator);
+        defer module_index.deinit();
+
+        var roots = std.ArrayList(reunify_shadow.ConcreteRoot).empty;
+        defer roots.deinit(self.allocator);
+
+        var it = self.type_cache.iterator();
+        while (it.next()) |entry| {
+            const address = entry.key_ptr.*;
+            const gop = try module_index.getOrPut(address.module_bytes);
+            if (!gop.found_existing) {
+                const mv = self.moduleForDigest(.{ .bytes = address.module_bytes });
+                gop.value_ptr.* = modules.items.len;
+                try modules.append(self.allocator, .{
+                    .key_bytes = mv.key.bytes,
+                    .view = mv.types,
+                    .source_names = mv.names,
+                });
+            }
+            try roots.append(self.allocator, .{
+                .module_index = gop.value_ptr.*,
+                .checked_ty = @enumFromInt(address.type_id),
+                .mono_ty = entry.value_ptr.*,
+            });
+        }
+
+        var scheme_sources = [_]reunify_shadow.SchemeSource{.{
+            .module_bytes = self.root_view.key.bytes,
+            .store = &self.modules.root.module.checked_types,
+            .source_names = checked.importedNames(self.root_view),
+        }};
+
+        reunify_shadow.run(self.allocator, .{
+            .program_store = &self.program.types,
+            .program_names = &self.program.names,
+            .concrete_modules = modules.items,
+            .concrete_roots = roots.items,
+            .scheme_sources = &scheme_sources,
+        });
     }
 
     const NominalDeclLookup = struct {

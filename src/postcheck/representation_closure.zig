@@ -479,7 +479,6 @@ const testing = std.testing;
 
 const MonoType = @import("monotype/type.zig");
 const check = @import("check");
-const static_dispatch = check.StaticDispatchRegistry;
 
 const IterOptions = struct {
     representation: MonoType.IteratorRepresentation,
