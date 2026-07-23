@@ -132,7 +132,6 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-backend-llvm" },
     .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
-    .{ .name = "run-test-lambda-mono-differential", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },

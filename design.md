@@ -4138,6 +4138,10 @@ Lambda Mono-to-LIR builder and compare that LIR to the direct LIR result. This
 comparison is a debug assertion only. A mismatch is a compiler bug. The compiler
 must not continue by using the materialized Lambda Mono LIR.
 
+The full Lambda Mono body-lowering differential sweep over the ordinary eval
+corpus runs once per day on Ubuntu through `nightly_gate.yml`; it is not part of
+PR MiniCI.
+
 ### Direct Builder Internal Contracts
 
 The direct LIR builder is one compiler stage, but its internal components have
