@@ -36,6 +36,7 @@ const MonoType = @import("../monotype/type.zig");
 const monotype_ast = @import("../monotype/ast.zig");
 const census = @import("../monotype/census.zig");
 const logic = @import("logical_identity.zig");
+const closure = @import("../representation_closure.zig");
 
 const names = check.CheckedNames;
 const checked = check.CheckedModule;
@@ -150,6 +151,23 @@ const SpecDiffDetail = struct {
     }
 };
 
+/// One FinalSpecId collision whose two records reduce to DIFFERENT solved logical
+/// skeletons (reunify.md 11.1/11.5, Slice 6). Records sharing one FinalSpecId are
+/// the same specialization, so their solved types must be structurally equivalent;
+/// a divergent pair is a red flag. Bounded to `max_mismatch_details`.
+const SpecCollisionDetail = struct {
+    final_spec_id: [32]u8,
+    first_solved_digest: [32]u8,
+    repeat_solved_digest: [32]u8,
+    first_shape: []u8,
+    repeat_shape: []u8,
+
+    fn deinit(self: SpecCollisionDetail, allocator: Allocator) void {
+        allocator.free(self.first_shape);
+        allocator.free(self.repeat_shape);
+    }
+};
+
 /// The shadow's outcome counters. Single-threaded (the shadow runs on the
 /// lowering thread after sealing), so plain integers suffice.
 const ShadowCensus = struct {
@@ -229,6 +247,54 @@ const ShadowCensus = struct {
     spec_diff_logical_divergent: u64 = 0,
     spec_diff_skipped: u64 = 0,
 
+    // Argument-position disposition coverage of the logically-divergent records
+    // (reunify.md 7.4/11.4, Slice 6). A logically-divergent request-vs-solved record
+    // carries a residual the checked default materialized as the uninhabited empty
+    // tag union that body solving later refined to a concrete type. The §7.4
+    // disposition pass now records a disposition for every argument position, so
+    // each such divergence must sit at argument positions whose request side is the
+    // uninhabited leaf: `spec_diff_arg_position_covered` counts a divergent record
+    // whose entire logical divergence is argument positions all carrying that leaf
+    // (the disposition that covers it is `uninhabited`), and
+    // `spec_diff_arg_position_uncovered` counts a divergent record with any
+    // divergence the argument-position uninhabited disposition does not account for
+    // (a return divergence, an arity change, or an argument refined some other way).
+    // Proving the second is zero is §11.4's precondition on this corpus.
+    spec_diff_arg_position_covered: u64 = 0,
+    spec_diff_arg_position_uncovered: u64 = 0,
+
+    // FinalSpecId sealing and collision detection (reunify.md 11.1/11.2/11.5, Slice 6).
+    // For each record the shadow erases the request type's representation to its
+    // logical binding and collects its representation-input positions (iterator
+    // tier/kind/depth, generated owner), then seals them through the section 10.3
+    // representation-closure engine (`spec_seal_closure_runs` records that ran a
+    // closure, `spec_seal_relate_calls` the relate steps the engine performed), and
+    // computes a FinalSpecId = logical-identity digest + sorted sealed
+    // representation-input digests. `spec_seal_computed`/`spec_seal_skipped` split
+    // records by whether the request erased to a logical binding (a recursive or
+    // open-row request still leaves the reducible subset). `spec_seal_with_representation`
+    // counts records carrying at least one representation-input position.
+    //
+    // Collision detection: records sharing one FinalSpecId must have structurally
+    // equivalent solved types. `spec_collisions_equivalent` counts a repeat
+    // FinalSpecId whose solved logical skeleton matches the first record's;
+    // `spec_collisions_divergent` counts one that does not (a red flag, bounded
+    // detail). `spec_seal_representation_split` counts a record whose logical
+    // identity (callable + erased binding + scope) equals a prior record's but whose
+    // FinalSpecId differs because its representation inputs differ — the mechanism by
+    // which the representation-only records get DISTINCT FinalSpecIds and therefore do
+    // not collide. `spec_seal_solved_skipped` counts a collision comparison skipped
+    // because the solved type would not erase to a logical skeleton.
+    spec_seal_computed: u64 = 0,
+    spec_seal_skipped: u64 = 0,
+    spec_seal_with_representation: u64 = 0,
+    spec_seal_closure_runs: u64 = 0,
+    spec_seal_relate_calls: u64 = 0,
+    spec_seal_representation_split: u64 = 0,
+    spec_seal_solved_skipped: u64 = 0,
+    spec_collisions_equivalent: u64 = 0,
+    spec_collisions_divergent: u64 = 0,
+
     fn bumpSkip(self: *ShadowCensus, reason: SkipReason) void {
         switch (reason) {
             .recursive_cycle => self.skipped_recursive_cycle += 1,
@@ -290,12 +356,325 @@ fn runInner(allocator: Allocator, inputs: Inputs) Allocator.Error!void {
         spec_diffs.deinit(allocator);
     }
 
+    var collisions = std.ArrayList(SpecCollisionDetail).empty;
+    defer {
+        for (collisions.items) |collision| collision.deinit(allocator);
+        collisions.deinit(allocator);
+    }
+
     try runConcreteRoots(allocator, &logical, inputs, &counts, &details);
     try runSchemeEdges(allocator, &logical, inputs, &counts, &details);
     try runSiteEvidenceCensus(allocator, inputs, &counts, &evidence_gaps);
     try runSpecRegistryCensus(allocator, &logical, inputs, &counts, &spec_diffs);
+    try runSpecSealingCensus(allocator, &logical, inputs, &counts, &collisions);
 
-    dump(allocator, &counts, details.items, evidence_gaps.items, spec_diffs.items);
+    dump(allocator, &counts, details.items, evidence_gaps.items, spec_diffs.items, collisions.items);
+}
+
+/// A FinalSpecId cache-value stand-in retained while grouping records: the erased
+/// solved logical skeleton and its digest, present only when the solved type reduced.
+const SealedSolved = struct {
+    solved_logical: logic.LogicalTypeIdentity,
+    solved_digest: [32]u8,
+    has_solved: bool,
+};
+
+/// Seal every record's declared representation inputs through the section 10.3
+/// closure engine, compute its FinalSpecId, and detect collisions (reunify.md
+/// 11.1/11.2/11.5, Slice 6). Read-only over the sealed registry: it owns a fresh
+/// engine per record, writes nothing to any authoritative store, and only compares
+/// deterministic digests. Two records that seal to one FinalSpecId are the same
+/// specialization and must reduce to structurally equivalent solved types; a
+/// divergence is a red flag with bounded detail. A record whose logical identity
+/// matches a prior record but whose FinalSpecId differs is a representation split:
+/// the sealed representation inputs, not the logical binding, separated them.
+fn runSpecSealingCensus(
+    allocator: Allocator,
+    logical: *LogicalStore,
+    inputs: Inputs,
+    counts: *ShadowCensus,
+    collisions: *std.ArrayList(SpecCollisionDetail),
+) Allocator.Error!void {
+    var by_final = std.AutoHashMap([32]u8, SealedSolved).init(allocator);
+    defer by_final.deinit();
+    // logical-identity digest (callable + erased binding + method scope) -> the first
+    // FinalSpecId observed for it, so a later record with a different FinalSpecId is a
+    // representation split.
+    var by_logical = std.AutoHashMap([32]u8, [32]u8).init(allocator);
+    defer by_logical.deinit();
+
+    for (inputs.program_specs) |record| {
+        var rep_inputs = std.ArrayList(logic.RepresentationInput).empty;
+        defer rep_inputs.deinit(allocator);
+
+        var request_reason: SkipReason = undefined;
+        const erased_request = logical.walkRequestSealing(
+            inputs.program_store,
+            inputs.program_names,
+            record.request_fn_ty,
+            &rep_inputs,
+            &request_reason,
+        ) catch |err| switch (err) {
+            error.Skip => {
+                counts.spec_seal_skipped += 1;
+                continue;
+            },
+            else => |other| return other,
+        };
+        counts.spec_seal_computed += 1;
+        if (rep_inputs.items.len > 0) counts.spec_seal_with_representation += 1;
+
+        var relate_calls: u64 = 0;
+        var sealed_digests = try sealRepresentationInputs(
+            allocator,
+            inputs.program_names,
+            rep_inputs.items,
+            &relate_calls,
+        );
+        defer sealed_digests.deinit(allocator);
+        if (rep_inputs.items.len > 0) counts.spec_seal_closure_runs += 1;
+        counts.spec_seal_relate_calls += relate_calls;
+
+        const logical_id_digest = logicalIdentityDigest(logical, record, erased_request);
+        const final_spec_id = finalSpecIdDigest(logical_id_digest, sealed_digests.items);
+
+        const split_entry = try by_logical.getOrPut(logical_id_digest);
+        if (split_entry.found_existing) {
+            if (!std.mem.eql(u8, &split_entry.value_ptr.*, &final_spec_id)) {
+                counts.spec_seal_representation_split += 1;
+            }
+        } else {
+            split_entry.value_ptr.* = final_spec_id;
+        }
+
+        var solved_inputs = std.ArrayList(logic.RepresentationInput).empty;
+        defer solved_inputs.deinit(allocator);
+        var solved_reason: SkipReason = undefined;
+        const solved_erased: ?logic.LogicalTypeIdentity = logical.walkRequestSealing(
+            inputs.program_store,
+            inputs.program_names,
+            record.solved_fn_ty,
+            &solved_inputs,
+            &solved_reason,
+        ) catch |err| switch (err) {
+            error.Skip => null,
+            else => |other| return other,
+        };
+
+        const collision_entry = try by_final.getOrPut(final_spec_id);
+        if (!collision_entry.found_existing) {
+            collision_entry.value_ptr.* = .{
+                .solved_logical = solved_erased orelse erased_request,
+                .solved_digest = if (solved_erased) |solved| logical.digestBytes(solved) else undefined,
+                .has_solved = solved_erased != null,
+            };
+            continue;
+        }
+
+        const prior = collision_entry.value_ptr.*;
+        if (!prior.has_solved or solved_erased == null) {
+            counts.spec_seal_solved_skipped += 1;
+        } else if (prior.solved_logical == solved_erased.?) {
+            counts.spec_collisions_equivalent += 1;
+        } else {
+            counts.spec_collisions_divergent += 1;
+            if (collisions.items.len < max_mismatch_details) {
+                const first_shape = try logical.describe(allocator, prior.solved_logical);
+                errdefer allocator.free(first_shape);
+                const repeat_shape = try logical.describe(allocator, solved_erased.?);
+                errdefer allocator.free(repeat_shape);
+                try collisions.append(allocator, .{
+                    .final_spec_id = final_spec_id,
+                    .first_solved_digest = prior.solved_digest,
+                    .repeat_solved_digest = logical.digestBytes(solved_erased.?),
+                    .first_shape = first_shape,
+                    .repeat_shape = repeat_shape,
+                });
+            }
+        }
+    }
+}
+
+/// A fixed atom for an iterator's backing leaf: the backing is representation the
+/// tier rules relate as a paired component, so same-identity iterators must present
+/// equal backing atoms for `relate` to close them.
+const backing_leaf_atom: u64 = 0;
+
+/// Seal a record's representation-input positions through the section 10.3 closure
+/// engine and return the sorted distinct digests of the sealed representatives. Each
+/// position becomes an engine slot; two positions carrying one logical identity are
+/// related, driving the tier rules to a fixpoint. `relate_calls` accumulates the
+/// relate steps the engine ran.
+fn sealRepresentationInputs(
+    allocator: Allocator,
+    program_names: *const names.NameStore,
+    rep_inputs: []const logic.RepresentationInput,
+    relate_calls: *u64,
+) Allocator.Error!std.ArrayList([32]u8) {
+    var engine = closure.Engine.init(allocator);
+    defer engine.deinit();
+
+    var top_slots = std.ArrayList(closure.RepresentationSlotId).empty;
+    defer top_slots.deinit(allocator);
+    var by_token = std.AutoHashMap(u64, closure.RepresentationSlotId).init(allocator);
+    defer by_token.deinit();
+
+    var atom_counter: u32 = 0;
+    for (rep_inputs) |input| {
+        const token: closure.LogicalToken = @enumFromInt(@as(u64, @intFromEnum(input.logical)));
+        const slot: closure.RepresentationSlotId = if (input.is_iterator) blk: {
+            const item_token: closure.LogicalToken = @enumFromInt(@as(u64, @intFromEnum(input.item_logical)));
+            const item = try engine.createSlot(item_token, @enumFromInt(atom_counter), .{ .leaf = @intFromEnum(input.item_logical) });
+            atom_counter += 1;
+            const backing = try engine.createSlot(token, @enumFromInt(atom_counter), .{ .leaf = backing_leaf_atom });
+            atom_counter += 1;
+            const iterator = try engine.createSlot(token, @enumFromInt(atom_counter), .{ .iterator = .{
+                .descriptor = input.descriptor,
+                .item = item,
+                .backing = backing,
+            } });
+            atom_counter += 1;
+            break :blk iterator;
+        } else blk: {
+            const leaf_atom: u64 = if (input.descriptor.def.generated) |generated|
+                firstBytesToU64(&generated.bytes)
+            else
+                0;
+            const leaf = try engine.createSlot(token, @enumFromInt(atom_counter), .{ .leaf = leaf_atom });
+            atom_counter += 1;
+            break :blk leaf;
+        };
+
+        if (by_token.get(@intFromEnum(token))) |prior| {
+            engine.relate(prior, slot, .component_equality) catch |err| switch (err) {
+                // Two same-logical positions whose sub-components are not logically
+                // equal are left in separate classes; the shadow only measures.
+                error.LogicallyUnequal => {},
+                else => |other| return other,
+            };
+            relate_calls.* += 1;
+        } else {
+            try by_token.put(@intFromEnum(token), slot);
+        }
+        try top_slots.append(allocator, slot);
+    }
+
+    var seen_reps = std.AutoHashMap(u32, void).init(allocator);
+    defer seen_reps.deinit();
+    var digests = std.ArrayList([32]u8).empty;
+    errdefer digests.deinit(allocator);
+    for (top_slots.items) |slot| {
+        const rep = engine.find(slot);
+        const rep_entry = try seen_reps.getOrPut(@intFromEnum(rep));
+        if (rep_entry.found_existing) continue;
+        try digests.append(allocator, sealedShapeDigest(program_names, engine.shapeOf(rep)));
+    }
+    std.sort.pdq([32]u8, digests.items, {}, lessThanDigest);
+    return digests;
+}
+
+fn lessThanDigest(_: void, a: [32]u8, b: [32]u8) bool {
+    return std.mem.order(u8, &a, &b) == .lt;
+}
+
+/// The leading eight bytes of a digest as a u64 atom, so two positions carrying the
+/// same generated owner present equal leaf atoms and relate as equal representations.
+fn firstBytesToU64(bytes: *const [32]u8) u64 {
+    var atom: u64 = 0;
+    for (bytes[0..8]) |byte| atom = (atom << 8) | byte;
+    return atom;
+}
+
+/// The deterministic digest of one sealed representation representative (reunify.md
+/// 11.5): an iterator digests its declared identity and recorded tier/kind/depth and
+/// generated owner; a leaf digests its atom.
+fn sealedShapeDigest(program_names: *const names.NameStore, shape: closure.SlotShape) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    switch (shape) {
+        .iterator => |iter| {
+            hasher.update("iterator");
+            const def = iter.descriptor.def;
+            hasher.update(program_names.moduleIdentityBytes(def.module));
+            const type_name: u32 = @intFromEnum(def.type_name);
+            hasher.update(std.mem.asBytes(&type_name));
+            const source_decl: u32 = def.source_decl orelse std.math.maxInt(u32);
+            hasher.update(std.mem.asBytes(&source_decl));
+            hasher.update(&.{@intFromEnum(def.iterator_representation)});
+            hasher.update(&.{@intFromEnum(def.iterator_kind)});
+            hasher.update(&.{def.iterator_depth});
+            if (def.generated) |generated| {
+                hasher.update("gen");
+                hasher.update(&generated.bytes);
+            } else {
+                hasher.update("nogen");
+            }
+        },
+        .evidence => |ev| {
+            hasher.update("evidence");
+            hasher.update(&.{ev.score});
+        },
+        .wrapper => hasher.update("wrapper"),
+        .leaf => |atom| {
+            hasher.update("leaf");
+            hasher.update(std.mem.asBytes(&atom));
+        },
+    }
+    return hasher.finalResult();
+}
+
+/// The LogicalSpecIdentity digest (reunify.md 11.1): callable identity, the erased
+/// logical binding of the request, and the method scope — everything that fixes the
+/// specialization's logical identity before any representation input.
+fn logicalIdentityDigest(
+    logical: *LogicalStore,
+    record: monotype_ast.SpecRecord,
+    erased_request: logic.LogicalTypeIdentity,
+) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hashCallable(&hasher, record.identity.callable);
+    const erased_digest = logical.digestBytes(erased_request);
+    hasher.update(&erased_digest);
+    hasher.update(&record.identity.method_scope.bytes);
+    return hasher.finalResult();
+}
+
+/// FinalSpecId (reunify.md 11.1): the logical-identity digest plus the sorted sealed
+/// representation-input digests. Body-produced outputs never enter this key.
+fn finalSpecIdDigest(logical_id_digest: [32]u8, sealed: []const [32]u8) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(&logical_id_digest);
+    const count: u32 = @intCast(sealed.len);
+    hasher.update(std.mem.asBytes(&count));
+    for (sealed) |digest| hasher.update(&digest);
+    return hasher.finalResult();
+}
+
+/// Hash a callable identity field-by-field: its in-memory bytes carry union padding,
+/// so hashing the declared fields keeps the digest deterministic.
+fn hashCallable(hasher: *std.crypto.hash.sha2.Sha256, callable: monotype_ast.CallableIdentity) void {
+    hasher.update(&.{@intFromEnum(std.meta.activeTag(callable))});
+    switch (callable) {
+        .proc_template => |proc| {
+            hasher.update(&proc.module.bytes);
+            hasher.update(std.mem.asBytes(&proc.proc_base));
+            hasher.update(std.mem.asBytes(&proc.template));
+        },
+        .nested_site => |nested| {
+            hasher.update(&nested.module.bytes);
+            hasher.update(std.mem.asBytes(&nested.owner_proc_base));
+            hasher.update(std.mem.asBytes(&nested.owner_template));
+            hasher.update(&nested.owner_fn_digest.bytes);
+            hasher.update(std.mem.asBytes(&nested.site));
+        },
+        .hosted => |hosted| {
+            const raw: u32 = @intFromEnum(hosted);
+            hasher.update(std.mem.asBytes(&raw));
+        },
+        .generated => |generated| {
+            const raw: u32 = @intFromEnum(generated);
+            hasher.update(std.mem.asBytes(&raw));
+        },
+    }
 }
 
 /// Census the sealed specialization registry (reunify.md 11, Slice 6). Read-only: the
@@ -348,6 +727,24 @@ fn runSpecRegistryCensus(
             // reunify.md 11.4: the solved skeleton is not logically equal to the
             // requested one — a corrected checked output or a rejected bug.
             counts.spec_diff_logical_divergent += 1;
+
+            // reunify.md 7.4/11.4: locate the divergence by argument position and
+            // classify whether the §7.4 disposition pass covers it. A divergence
+            // that is entirely argument positions all carrying the uninhabited leaf
+            // on the request side is covered by an `uninhabited` disposition; any
+            // other divergence is uncovered.
+            const divergence = logical.classifyFunctionDivergence(request_logical, solved_logical);
+            const covered = divergence.both_functions and
+                divergence.same_arity and
+                !divergence.ret_diverges and
+                divergence.divergent_arg_positions > 0 and
+                divergence.request_uninhabited_arg_positions == divergence.divergent_arg_positions;
+            if (covered) {
+                counts.spec_diff_arg_position_covered += 1;
+            } else {
+                counts.spec_diff_arg_position_uncovered += 1;
+            }
+
             if (spec_diffs.items.len < max_mismatch_details) {
                 const request_shape = try logical.describe(allocator, request_logical);
                 errdefer allocator.free(request_shape);
@@ -727,6 +1124,7 @@ fn dump(
     details: []const MismatchDetail,
     evidence_gaps: []const EvidenceGapDetail,
     spec_diffs: []const SpecDiffDetail,
+    collisions: []const SpecCollisionDetail,
 ) void {
     if (comptime !enabled) return;
     const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
@@ -767,6 +1165,19 @@ fn dump(
         out.appendSlice(allocator, line) catch return;
     }
 
+    for (collisions) |collision| {
+        const final_hex = std.fmt.bytesToHex(collision.final_spec_id[0..8].*, .lower);
+        const first_hex = std.fmt.bytesToHex(collision.first_solved_digest[0..8].*, .lower);
+        const repeat_hex = std.fmt.bytesToHex(collision.repeat_solved_digest[0..8].*, .lower);
+        const line = std.fmt.allocPrint(
+            allocator,
+            "shadow_spec_collision_detail final_spec_id={s} first_solved={s} repeat_solved={s}\n  first_shape={s}\n  repeat_shape={s}\n",
+            .{ &final_hex, &first_hex, &repeat_hex, collision.first_shape, collision.repeat_shape },
+        ) catch return;
+        defer allocator.free(line);
+        out.appendSlice(allocator, line) catch return;
+    }
+
     for (details) |detail| {
         const module_hex = std.fmt.bytesToHex(detail.module_bytes[0..8].*, .lower);
         const shadow_hex = std.fmt.bytesToHex(detail.shadow_digest[0..8].*, .lower);
@@ -782,6 +1193,220 @@ fn dump(
 
     if (out.items.len == 0) return;
     census.appendToFile(raw_path, out.items);
+}
+
+/// A minimal relocatable serialization of one sealed representation-dependency
+/// component (reunify.md 11.5, Slice 6), built and round-tripped only inside the
+/// isolated shadow — it never touches the authoritative cache. The format is a flat
+/// sequence of fixed-width 32-byte digests and little-endian u32 counts, so it holds
+/// no process-local slot or draft id and reloads without relocation:
+///
+///   [32]   logical identity digest              (callable + logical binding + scope)
+///   [4]    binding digest count                 (n)
+///   [32*n] binding digests                      (the logical binding halves)
+///   [4]    sealed representation-input count     (m)
+///   [32*m] sealed representation-input digests   (sorted)
+///   [32]   output solved logical digest          (the body's solved logical skeleton)
+///   [4]    output representation count           (k)
+///   [32*k] output representation digests         (body-produced representation outputs)
+///
+/// The output summary is what a cache hit replays into fresh caller slots; a reload
+/// followed by a replay reproduces every digest, which the round-trip test asserts.
+pub const SealedComponent = struct {
+    logical_identity_digest: [32]u8,
+    binding_digests: [][32]u8,
+    sealed_input_digests: [][32]u8,
+    output_solved_logical_digest: [32]u8,
+    output_representation_digests: [][32]u8,
+
+    /// Errors a truncated or trailing-garbage byte stream produces on reload.
+    pub const ReadError = error{ Truncated, TrailingBytes } || Allocator.Error;
+
+    pub fn deinit(self: *SealedComponent, allocator: Allocator) void {
+        allocator.free(self.binding_digests);
+        allocator.free(self.sealed_input_digests);
+        allocator.free(self.output_representation_digests);
+    }
+
+    pub fn serialize(self: SealedComponent, allocator: Allocator) Allocator.Error![]u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(allocator);
+        try out.appendSlice(allocator, &self.logical_identity_digest);
+        try appendDigestList(allocator, &out, self.binding_digests);
+        try appendDigestList(allocator, &out, self.sealed_input_digests);
+        try out.appendSlice(allocator, &self.output_solved_logical_digest);
+        try appendDigestList(allocator, &out, self.output_representation_digests);
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn deserialize(allocator: Allocator, bytes: []const u8) ReadError!SealedComponent {
+        var cursor: usize = 0;
+        const logical_identity = try readDigest(bytes, &cursor);
+        const bindings = try readDigestList(allocator, bytes, &cursor);
+        errdefer allocator.free(bindings);
+        const inputs = try readDigestList(allocator, bytes, &cursor);
+        errdefer allocator.free(inputs);
+        const solved = try readDigest(bytes, &cursor);
+        const outputs = try readDigestList(allocator, bytes, &cursor);
+        errdefer allocator.free(outputs);
+        if (cursor != bytes.len) return error.TrailingBytes;
+        return .{
+            .logical_identity_digest = logical_identity,
+            .binding_digests = bindings,
+            .sealed_input_digests = inputs,
+            .output_solved_logical_digest = solved,
+            .output_representation_digests = outputs,
+        };
+    }
+};
+
+fn appendDigestList(allocator: Allocator, out: *std.ArrayList(u8), list: []const [32]u8) Allocator.Error!void {
+    var count_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &count_buf, @intCast(list.len), .little);
+    try out.appendSlice(allocator, &count_buf);
+    for (list) |digest| try out.appendSlice(allocator, &digest);
+}
+
+fn readDigest(bytes: []const u8, cursor: *usize) SealedComponent.ReadError![32]u8 {
+    if (cursor.* + 32 > bytes.len) return error.Truncated;
+    var digest: [32]u8 = undefined;
+    @memcpy(&digest, bytes[cursor.* .. cursor.* + 32]);
+    cursor.* += 32;
+    return digest;
+}
+
+fn readDigestList(allocator: Allocator, bytes: []const u8, cursor: *usize) SealedComponent.ReadError![][32]u8 {
+    if (cursor.* + 4 > bytes.len) return error.Truncated;
+    var count_buf: [4]u8 = undefined;
+    @memcpy(&count_buf, bytes[cursor.* .. cursor.* + 4]);
+    const count = std.mem.readInt(u32, &count_buf, .little);
+    cursor.* += 4;
+    const list = try allocator.alloc([32]u8, count);
+    errdefer allocator.free(list);
+    for (list) |*digest| digest.* = try readDigest(bytes, cursor);
+    return list;
+}
+
+/// A self-contained digest of a sealed representation representative, used by the
+/// round-trip test so it needs no program name store: an iterator digests its
+/// recorded tier/kind/depth and declared type name; a leaf digests its atom.
+fn componentTestShapeDigest(shape: closure.SlotShape) [32]u8 {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    switch (shape) {
+        .iterator => |iter| {
+            hasher.update("iterator");
+            hasher.update(&.{@intFromEnum(iter.descriptor.def.iterator_representation)});
+            hasher.update(&.{@intFromEnum(iter.descriptor.def.iterator_kind)});
+            hasher.update(&.{iter.descriptor.def.iterator_depth});
+            const type_name: u32 = @intFromEnum(iter.descriptor.def.type_name);
+            hasher.update(std.mem.asBytes(&type_name));
+        },
+        .evidence => |ev| {
+            hasher.update("evidence");
+            hasher.update(&.{ev.score});
+        },
+        .wrapper => hasher.update("wrapper"),
+        .leaf => |atom| {
+            hasher.update("leaf");
+            hasher.update(std.mem.asBytes(&atom));
+        },
+    }
+    return hasher.finalResult();
+}
+
+test "sealed component round-trips through the relocatable format and replays outputs" {
+    const allocator = std.testing.allocator;
+
+    // Build an iterator-typed (representation-bearing) component through the section
+    // 10.3 closure engine, so the sealed representation-input digest is a genuine
+    // iterator seal rather than an arbitrary constant.
+    var engine = closure.Engine.init(allocator);
+    defer engine.deinit();
+    const token: closure.LogicalToken = @enumFromInt(101);
+    const item = try engine.createSlot(token, @enumFromInt(1), .{ .leaf = 42 });
+    const backing = try engine.createSlot(token, @enumFromInt(2), .{ .leaf = 0 });
+    const iterator = try engine.createSlot(token, @enumFromInt(3), .{ .iterator = .{
+        .descriptor = .{
+            .kind = .@"opaque",
+            .def = .{
+                .module = @enumFromInt(1),
+                .type_name = @enumFromInt(2),
+                .source_decl = 7,
+                .generated = .{ .bytes = [_]u8{0x9A} ** 32 },
+                .iterator_representation = .minted,
+                .iterator_kind = .list,
+                .iterator_depth = 1,
+            },
+            .builtin_owner = .iter,
+            .arg_count = 1,
+            .backing_use = .inspectable,
+        },
+        .item = item,
+        .backing = backing,
+    } });
+    const sealed_digest = componentTestShapeDigest(engine.shapeOf(engine.find(iterator)));
+
+    var binding_digests = try allocator.alloc([32]u8, 2);
+    binding_digests[0] = [_]u8{0xB0} ** 32;
+    binding_digests[1] = [_]u8{0xB1} ** 32;
+    var sealed_input_digests = try allocator.alloc([32]u8, 1);
+    sealed_input_digests[0] = sealed_digest;
+    var output_representation_digests = try allocator.alloc([32]u8, 1);
+    // The body reproduces the iterator representation as its output.
+    output_representation_digests[0] = sealed_digest;
+
+    var component = SealedComponent{
+        .logical_identity_digest = [_]u8{0xA1} ** 32,
+        .binding_digests = binding_digests,
+        .sealed_input_digests = sealed_input_digests,
+        .output_solved_logical_digest = [_]u8{0xC3} ** 32,
+        .output_representation_digests = output_representation_digests,
+    };
+    defer component.deinit(allocator);
+
+    const bytes = try component.serialize(allocator);
+    defer allocator.free(bytes);
+
+    // Reload in a fresh instance: no shared slot or draft state crosses the boundary.
+    var reloaded = try SealedComponent.deserialize(allocator, bytes);
+    defer reloaded.deinit(allocator);
+
+    try std.testing.expectEqualSlices(u8, &component.logical_identity_digest, &reloaded.logical_identity_digest);
+    try std.testing.expectEqualSlices(u8, &component.output_solved_logical_digest, &reloaded.output_solved_logical_digest);
+    try std.testing.expectEqual(component.binding_digests.len, reloaded.binding_digests.len);
+    for (component.binding_digests, reloaded.binding_digests) |original, loaded| {
+        try std.testing.expectEqualSlices(u8, &original, &loaded);
+    }
+    try std.testing.expectEqual(component.sealed_input_digests.len, reloaded.sealed_input_digests.len);
+    for (component.sealed_input_digests, reloaded.sealed_input_digests) |original, loaded| {
+        try std.testing.expectEqualSlices(u8, &original, &loaded);
+    }
+    try std.testing.expectEqual(component.output_representation_digests.len, reloaded.output_representation_digests.len);
+
+    // Replay the outputs into FRESH slot ids in a fresh engine; the replayed slots
+    // are new ids yet reproduce the stored output representation digests.
+    var fresh = closure.Engine.init(allocator);
+    defer fresh.deinit();
+    for (reloaded.output_representation_digests, component.output_representation_digests) |loaded, original| {
+        const replay = try fresh.createSlot(@enumFromInt(202), @enumFromInt(9), .{ .leaf = firstBytesToU64(&loaded) });
+        try std.testing.expectEqual(firstBytesToU64(&loaded), fresh.shapeOf(replay).leaf);
+        try std.testing.expectEqualSlices(u8, &original, &loaded);
+    }
+}
+
+test "sealed component reload rejects a truncated stream" {
+    const allocator = std.testing.allocator;
+    var empty_inputs = [_][32]u8{};
+    var component = SealedComponent{
+        .logical_identity_digest = [_]u8{0x11} ** 32,
+        .binding_digests = &empty_inputs,
+        .sealed_input_digests = &empty_inputs,
+        .output_solved_logical_digest = [_]u8{0x22} ** 32,
+        .output_representation_digests = &empty_inputs,
+    };
+    const bytes = try component.serialize(allocator);
+    defer allocator.free(bytes);
+    try std.testing.expectError(error.Truncated, SealedComponent.deserialize(allocator, bytes[0 .. bytes.len - 1]));
 }
 
 test "shadow does not run without the enabling env var" {

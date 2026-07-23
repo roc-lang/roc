@@ -31,6 +31,7 @@ const check = @import("check");
 const collections = @import("collections");
 
 const MonoType = @import("../monotype/type.zig");
+const policy = @import("../representation_policy.zig");
 
 const GuardedList = collections.GuardedList;
 
@@ -76,6 +77,21 @@ pub const BoundType = struct {
 pub const TypeHandle = union(enum) {
     /// An immutable interned skeleton id.
     interned: LogicalTypeIdentity,
+};
+
+/// One representation-input position discovered while erasing a request type for
+/// sealing (reunify.md section 11.1, Slice 6). It pairs the position's
+/// representation-erased logical identity — the LogicalSpecIdentity's binding half,
+/// shared by every representation variant of one logical type — with the declared
+/// representation descriptor (iterator tier/kind/depth or generated owner) that a
+/// FinalSpecId must additionally digest. `item_logical` is the public item's
+/// erased identity for an iterator (declared argument index 0), or the position's
+/// own identity when it has no argument.
+pub const RepresentationInput = struct {
+    logical: LogicalTypeIdentity,
+    is_iterator: bool,
+    descriptor: policy.NamedDescriptor,
+    item_logical: LogicalTypeIdentity,
 };
 
 /// A scheme reference qualified by its owning module's content identity, so a
@@ -235,6 +251,67 @@ pub const LogicalStore = struct {
     /// The 32-byte content digest of a skeleton, for bounded mismatch detail.
     pub fn digestBytes(self: *LogicalStore, id: LogicalTypeIdentity) [32]u8 {
         return self.store.typeDigest(&self.shadow_names, id).bytes;
+    }
+
+    /// Whether a skeleton is the uninhabited leaf (an empty tag union): the exact
+    /// form an `uninhabited` residual disposition materializes to (reunify.md 7.4).
+    pub fn isUninhabitedLeaf(self: *LogicalStore, id: LogicalTypeIdentity) bool {
+        return switch (self.store.get(id)) {
+            .tag_union => |span| GuardedList.borrowLen(self.store.tagSpan(span)) == 0,
+            else => false,
+        };
+    }
+
+    /// Where two function skeletons diverge, located by argument position
+    /// (reunify.md 7.4/11.4). Both skeletons are already alias-erased shadow ids,
+    /// so exact id equality is logical equality. A divergent argument position
+    /// whose request side is the uninhabited leaf is the materialization of an
+    /// `uninhabited` residual disposition; the census uses this to prove the
+    /// divergent position is one the disposition pass now covers.
+    pub const FunctionDivergence = struct {
+        /// Both request and solved reduced to a function skeleton.
+        both_functions: bool = false,
+        /// The two function skeletons have the same argument count.
+        same_arity: bool = false,
+        /// Argument positions whose request and solved skeletons differ.
+        divergent_arg_positions: u32 = 0,
+        /// Of those, positions whose request side is the uninhabited leaf.
+        request_uninhabited_arg_positions: u32 = 0,
+        /// The return positions differ.
+        ret_diverges: bool = false,
+    };
+
+    pub fn classifyFunctionDivergence(
+        self: *LogicalStore,
+        request: LogicalTypeIdentity,
+        solved: LogicalTypeIdentity,
+    ) FunctionDivergence {
+        const request_fn = switch (self.store.get(request)) {
+            .func => |f| f,
+            else => return .{},
+        };
+        const solved_fn = switch (self.store.get(solved)) {
+            .func => |f| f,
+            else => return .{ .both_functions = false },
+        };
+        var result = FunctionDivergence{ .both_functions = true };
+        const request_args = self.store.span(request_fn.args);
+        const solved_args = self.store.span(solved_fn.args);
+        const request_len = GuardedList.borrowLen(request_args);
+        const solved_len = GuardedList.borrowLen(solved_args);
+        result.ret_diverges = request_fn.ret != solved_fn.ret;
+        if (request_len != solved_len) return result;
+        result.same_arity = true;
+        for (0..request_len) |i| {
+            const request_arg = GuardedList.at(request_args, i);
+            const solved_arg = GuardedList.at(solved_args, i);
+            if (request_arg == solved_arg) continue;
+            result.divergent_arg_positions += 1;
+            if (self.isUninhabitedLeaf(request_arg)) {
+                result.request_uninhabited_arg_positions += 1;
+            }
+        }
+        return result;
     }
 
     /// A bounded S-expression of a shadow skeleton id, for mismatch diagnosis
@@ -626,6 +703,35 @@ pub const LogicalStore = struct {
             .source_names = source_names,
             .active = std.AutoHashMap(MonoType.TypeId, void).init(self.allocator),
             .skip_reason = skip_reason,
+        };
+        defer walk.active.deinit();
+        return try walk.node(mono_ty);
+    }
+
+    /// The representation-erased logical identity of a program Monotype id, plus its
+    /// representation-input positions appended to `rep_inputs` (reunify.md section
+    /// 11.1, Slice 6). Unlike the plain logical walk, a representation-bearing named
+    /// node is erased to its plain skeleton and recorded rather than skipped, so a
+    /// request that carries iterator or generated representation still yields the
+    /// logical binding half a FinalSpecId digests together with the sealed
+    /// representation inputs. Other skip reasons (recursive cycle, open row, zero
+    /// sized) still leave the reducible subset.
+    pub fn walkRequestSealing(
+        self: *LogicalStore,
+        store: *const MonoType.Store,
+        source_names: *const names.NameStore,
+        mono_ty: MonoType.TypeId,
+        rep_inputs: *std.ArrayList(RepresentationInput),
+        skip_reason: *SkipReason,
+    ) WalkError!LogicalTypeIdentity {
+        var walk = MonoWalk{
+            .owner = self,
+            .store = store,
+            .source_names = source_names,
+            .active = std.AutoHashMap(MonoType.TypeId, void).init(self.allocator),
+            .skip_reason = skip_reason,
+            .erase_representation = true,
+            .rep_inputs = rep_inputs,
         };
         defer walk.active.deinit();
         return try walk.node(mono_ty);
@@ -1043,6 +1149,14 @@ const MonoWalk = struct {
     source_names: *const names.NameStore,
     active: std.AutoHashMap(MonoType.TypeId, void),
     skip_reason: *SkipReason,
+    /// When true a representation-bearing named node is erased to its plain named
+    /// skeleton and its descriptor is recorded, instead of leaving the closed
+    /// subset (reunify.md section 11.1, Slice 6 sealing). The default is the Slice 5
+    /// behavior: skip representation-bearing content.
+    erase_representation: bool = false,
+    /// The representation-input positions discovered under `erase_representation`,
+    /// or null when the caller does not collect them.
+    rep_inputs: ?*std.ArrayList(RepresentationInput) = null,
 
     fn skip(self: *MonoWalk, reason: SkipReason) WalkError {
         self.skip_reason.* = reason;
@@ -1137,7 +1251,8 @@ const MonoWalk = struct {
             return try self.node(backing.ty);
         }
 
-        if (n.def.iterator_representation != .none or n.def.generated != null) {
+        const representation_bearing = n.def.iterator_representation != .none or n.def.generated != null;
+        if (representation_bearing and !self.erase_representation) {
             return self.skip(.representation_bearing);
         }
 
@@ -1149,7 +1264,10 @@ const MonoWalk = struct {
         }
 
         const def_module_hash = self.source_names.moduleIdentityBytes(n.def.module).*;
-        return try self.owner.namedSkeleton(
+        // The erased skeleton drops iterator tier/kind/depth and the generated owner
+        // (section 8.2), so every representation variant of one nominal shares this
+        // identity. The backing is representation and is never part of the skeleton.
+        const skeleton = try self.owner.namedSkeleton(
             def_module_hash,
             n.named_type.module.bytes,
             self.source_names.typeNameText(n.def.type_name),
@@ -1157,6 +1275,25 @@ const MonoWalk = struct {
             n.kind,
             args.items,
         );
+
+        if (representation_bearing) {
+            if (self.rep_inputs) |inputs| {
+                try inputs.append(self.owner.allocator, .{
+                    .logical = skeleton,
+                    .is_iterator = n.def.iterator_representation != .none,
+                    .descriptor = .{
+                        .kind = n.kind,
+                        .def = n.def,
+                        .builtin_owner = n.builtin_owner,
+                        .arg_count = args.items.len,
+                        .backing_use = if (n.backing) |backing| backing.use else null,
+                    },
+                    .item_logical = if (args.items.len > 0) args.items[0] else skeleton,
+                });
+            }
+        }
+
+        return skeleton;
     }
 };
 
@@ -1294,13 +1431,13 @@ const TestFixture = struct {
         self.source_names.deinit();
     }
 
-    fn add(self: *TestFixture, payload: checked.StoredCheckedTypePayload) !checked.CheckedTypeId {
+    fn add(self: *TestFixture, payload: checked.StoredCheckedTypePayload) Allocator.Error!checked.CheckedTypeId {
         const id: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.payloads.items.len)));
         try self.payloads.append(self.allocator, payload);
         return id;
     }
 
-    fn addPrimitiveNominal(self: *TestFixture, builtin_nominal: checked.CheckedBuiltinNominal, name_text: []const u8) !checked.CheckedTypeId {
+    fn addPrimitiveNominal(self: *TestFixture, builtin_nominal: checked.CheckedBuiltinNominal, name_text: []const u8) Allocator.Error!checked.CheckedTypeId {
         const name = try self.source_names.internTypeName(name_text);
         const module = try self.source_names.internModuleIdentity(&self.module_hash);
         return try self.add(.{ .nominal = .{
@@ -1312,7 +1449,7 @@ const TestFixture = struct {
         } });
     }
 
-    fn addUserNominal(self: *TestFixture, name_text: []const u8, args: []const checked.CheckedTypeId) !checked.CheckedTypeId {
+    fn addUserNominal(self: *TestFixture, name_text: []const u8, args: []const checked.CheckedTypeId) Allocator.Error!checked.CheckedTypeId {
         const name = try self.source_names.internTypeName(name_text);
         const module = try self.source_names.internModuleIdentity(&self.module_hash);
         const start: u32 = @intCast(self.type_id_pool.items.len);
@@ -1330,7 +1467,7 @@ const TestFixture = struct {
     /// A nominal imported from another module: it carries the DEFINING module's
     /// identity, exactly as real checked data records an imported type, so its
     /// erased skeleton converges with the defining module's own occurrence.
-    fn addImportedNominal(self: *TestFixture, name_text: []const u8, args: []const checked.CheckedTypeId, defining_hash: [32]u8) !checked.CheckedTypeId {
+    fn addImportedNominal(self: *TestFixture, name_text: []const u8, args: []const checked.CheckedTypeId, defining_hash: [32]u8) Allocator.Error!checked.CheckedTypeId {
         const name = try self.source_names.internTypeName(name_text);
         const module = try self.source_names.internModuleIdentity(&defining_hash);
         const start: u32 = @intCast(self.type_id_pool.items.len);

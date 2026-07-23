@@ -251,8 +251,12 @@ my @categories = (
               counts => { $RPOL => 7, $LS => 1 } },
             { label => 'applyIteratorJoin', re => qr/\bapplyIteratorJoin\b/,
               counts => { $SOLVE => 2 } },
+            # $RSHAD gained one `relate(` in Slice 6: the FinalSpecId sealing census
+            # (reunify.md 11.1/11.2) seals each spec record's declared representation
+            # inputs by relating same-logical positions through the section 10.3
+            # closure engine, so the shadow drives real `relate` workload.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 17 } },
+              counts => { $RCLO => 17, $RSHAD => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],
@@ -276,6 +280,13 @@ my @categories = (
             # site (`logicalOf`), alongside the concrete-root comparison's call.
             { label => 'monoLogicalIdentity', re => qr/\bmonoLogicalIdentity\b/,
               counts => { $RSLOG => 2, $RSHAD => 2 } },
+            # New in Slice 6: the representation-erasing sealing walk. It is defined
+            # once in $RSLOG and called twice in the sealing census ($RSHAD) — once
+            # for each spec record's requested type and once for its solved type —
+            # to erase representation to the logical binding while collecting the
+            # representation-input positions a FinalSpecId digests.
+            { label => 'walkRequestSealing', re => qr/\bwalkRequestSealing\b/,
+              counts => { $RSLOG => 1, $RSHAD => 2 } },
             { label => 'instantiateScheme', re => qr/\binstantiateScheme\b/,
               counts => { $RSLOG => 7, $RSHAD => 1 } },
             { label => 'alphaEqual', re => qr/\balphaEqual\b/,

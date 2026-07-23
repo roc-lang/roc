@@ -252,6 +252,98 @@ pub fn checkedTypePayloadContainsIdentityVariables(
     };
 }
 
+/// Visit every child of a checked-type payload exactly once, returning whether any
+/// child's subtree contained an identity variable. Unlike
+/// `checkedTypePayloadContainsIdentityVariables`, a variable-bearing child never
+/// ends the walk early: every argument, field, tag payload, and function-return
+/// position is visited, so a collecting visitor reaches every reachable residual
+/// rather than only those up to the first variable-bearing child. The two helpers
+/// share one per-payload child enumeration so a new payload shape is handled the
+/// same way by both.
+pub fn checkedTypePayloadVisitAllChildren(
+    comptime pending_policy: PendingPolicy,
+    traversal: anytype,
+    pool_owner: anytype,
+    root: anytype,
+    payload: anytype,
+    context: anytype,
+) Allocator.Error!bool {
+    return switch (payload) {
+        .pending => switch (pending_policy) {
+            .forbid => true,
+            .tolerate => context.pendingContainsIdentityVariables(root),
+        },
+        .err => false,
+        .flex,
+        .rigid,
+        => true,
+        .empty_record,
+        .empty_tag_union,
+        => false,
+        .alias => |alias| blk: {
+            var found = try traversal.visit(alias.backing);
+            for (alias.args) |arg| {
+                const child = try traversal.visit(arg);
+                found = found or child;
+            }
+            break :blk found;
+        },
+        .record => |record| blk: {
+            var found = false;
+            for (record.fields) |field| {
+                const child = try traversal.visit(field.ty);
+                found = found or child;
+            }
+            const ext = try traversal.visit(record.ext);
+            break :blk found or ext;
+        },
+        .record_unbound => |fields| blk: {
+            var found = false;
+            for (fields) |field| {
+                const child = try traversal.visit(field.ty);
+                found = found or child;
+            }
+            break :blk found;
+        },
+        .tuple => |items| blk: {
+            var found = false;
+            for (items) |item| {
+                const child = try traversal.visit(item);
+                found = found or child;
+            }
+            break :blk found;
+        },
+        .nominal => |nominal| blk: {
+            var found = false;
+            for (nominal.args) |arg| {
+                const child = try traversal.visit(arg);
+                found = found or child;
+            }
+            break :blk found;
+        },
+        .function => |function| blk: {
+            var found = false;
+            for (function.args) |arg| {
+                const child = try traversal.visit(arg);
+                found = found or child;
+            }
+            const ret = try traversal.visit(function.ret);
+            break :blk found or ret;
+        },
+        .tag_union => |tag_union| blk: {
+            var found = false;
+            for (tag_union.tags) |tag| {
+                for (tag.argsSlice(pool_owner)) |arg| {
+                    const child = try traversal.visit(arg);
+                    found = found or child;
+                }
+            }
+            const ext = try traversal.visit(tag_union.ext);
+            break :blk found or ext;
+        },
+    };
+}
+
 const TestEdge = struct {
     key: u8,
     result: bool = false,

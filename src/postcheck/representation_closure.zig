@@ -478,7 +478,6 @@ fn tierFor(rule: RepresentationRule) policy.IteratorTierRelation {
 const testing = std.testing;
 
 const MonoType = @import("monotype/type.zig");
-const check = @import("check");
 
 const IterOptions = struct {
     representation: MonoType.IteratorRepresentation,

@@ -7324,9 +7324,13 @@ fn publishSchemeOwnerIndex(allocator: Allocator, store: *CheckedTypeStore) Alloc
 /// variable-shaped but not plain-unconstrained, so it is counted `undisposed` and
 /// left out of the disposition table (a constrained flex is disposed through
 /// dispatch evidence; a stray non-binder rigid is an anomaly). Defaulted variables
-/// and scheme binders are already disposed and skipped. The traversal memo visits
-/// each reachable node once, so each residual is collected and each undisposed
-/// counted once per body.
+/// and scheme binders are already disposed and skipped. The traversal visits every
+/// child of each composite (through `checkedTypePayloadVisitAllChildren`, never
+/// stopping at the first variable-bearing child), so a residual in any function
+/// argument position — and transitively in a nested function type's argument or
+/// return position — is collected exactly like a root or return residual (reunify.md
+/// 7.4). The memo visits each reachable node once, so each residual is collected and
+/// each undisposed counted once per body.
 const ResidualDispositionScan = struct {
     store: *const CheckedTypeStore,
     binders: *const std.AutoHashMap(CheckedTypeId, void),
@@ -7357,7 +7361,7 @@ const ResidualDispositionScan = struct {
                 }
                 return true;
             },
-            else => return try checked_traverse.checkedTypePayloadContainsIdentityVariables(
+            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
                 .forbid,
                 traversal,
                 self.store,
@@ -7453,9 +7457,14 @@ fn collectContextualTargets(
 
 /// Publish an explicit residual-variable disposition for every reachable
 /// plain-unconstrained residual of every published body (reunify.md 7.4, Slice 2
-/// phase one). This covers the population that materializes as an empty tag union
-/// during lowering — residuals live not only in a scheme's type but in the body
-/// expression types reachable while lowering it — so both are walked: first every
+/// phase one). Coverage is the whole reachable body, every function argument and
+/// return position and their nested function types included, not only the scheme
+/// root and top-level return: an argument-position residual gets an `uninhabited`
+/// disposition when nothing constrains it, matching today's empty-tag-union
+/// materialization, which this phase does not change. This covers the population
+/// that materializes as an empty tag union during lowering — residuals live not only
+/// in a scheme's type but in the body expression types reachable while lowering it —
+/// so both are walked: first every
 /// scheme's own root, keyed by that scheme's owner node (a residual in a scheme's
 /// type gets that scheme's precise body context, and a scheme's concrete use sites
 /// can pin a `contextual` target there), then every remaining published root for
@@ -25305,7 +25314,13 @@ pub const CheckedModuleArtifact = struct {
     // evidence-vector reference (`evidence_start`/`evidence_len`) into the plan
     // table's `evidence_refs`, so a site's binding carries its resolved dispatch
     // evidence without a registry query.
-    const serialized_layout_version: u32 = 32;
+    // v33 (reunify.md 7.4, Slice 2 phase one): the residual-disposition pass now
+    // records a disposition for every function argument and nested-function
+    // position, not only the scheme root and top-level return, so the
+    // `residual_dispositions` table gains argument-position entries. The struct
+    // shape is unchanged; the bump forces re-bake of the baked builtin artifact
+    // whose disposition content the layout fingerprint alone cannot observe.
+    const serialized_layout_version: u32 = 33;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30276,8 +30291,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x00, 0x5F, 0xA3, 0x80, 0xC0, 0x95, 0x6A, 0x3D, 0x77, 0x5C, 0xCA, 0x9F, 0xB7, 0x4F, 0xA5, 0x99,
-        0xFB, 0x05, 0x77, 0x5D, 0x99, 0x2A, 0xF5, 0x6D, 0xE6, 0x42, 0xAF, 0x21, 0xD2, 0xF5, 0xDB, 0xF4,
+        0x74, 0x7B, 0xBB, 0xBB, 0x1E, 0x83, 0x52, 0xAF, 0x21, 0xDB, 0x9D, 0xAD, 0xD8, 0x73, 0x64, 0xDC,
+        0xBF, 0x15, 0x60, 0x7E, 0xD1, 0xC1, 0xE8, 0xFB, 0xA3, 0x81, 0x17, 0x6F, 0xED, 0xCE, 0xC9, 0x8B,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

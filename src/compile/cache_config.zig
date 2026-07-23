@@ -60,7 +60,8 @@ pub const Constants = struct {
     /// 35: procedure bindings carry their source scheme's dense id for postcheck scheme resolution.
     /// 36: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
     /// 37: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
-    pub const CACHE_VERSION = 37;
+    /// 38: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
+    pub const CACHE_VERSION = 38;
 };
 
 /// Configuration for the Roc cache system.
