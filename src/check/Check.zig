@@ -4052,7 +4052,7 @@ fn recordSharedSchemeUse(
     // referenced definition owns no local snapshot (a cross-module target).
     _ = try self.cir.recordSchemeUseSite(node_idx, slot, slot_data, scheme_owner_node, scheme_root, &.{}, ModuleEnv.scheme_use_site_local_module);
     if (reunify_census.active()) {
-        reunify_census.recordSchemeUseSiteShared(@intFromEnum(slot));
+        reunify_census.recordSchemeUseSiteShared();
     }
 }
 

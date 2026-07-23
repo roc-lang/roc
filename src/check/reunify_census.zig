@@ -283,10 +283,9 @@ pub fn recordSchemeUseSite(slot_kind: u32, unreached: u32) void {
 }
 
 /// Record one dense shared in-group instantiation site (reunify.md 7.2, Slice 2b),
-/// recorded before its scheme generalized. `slot_kind` is a `SchemeUseRecord.Slot`.
-pub fn recordSchemeUseSiteShared(slot_kind: u32) void {
+/// recorded before its scheme generalized.
+pub fn recordSchemeUseSiteShared() void {
     if (comptime !enabled) return;
-    _ = slot_kind;
     _ = site_recorded_shared.fetchAdd(1, .monotonic);
 }
 
