@@ -132,6 +132,10 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         return self.fixed_buffer.end_index;
     }
 
+    fn getAvailableSize(self: *const @This()) usize {
+        return self.buffer.len - self.fixed_buffer.end_index;
+    }
+
     fn updateHeader(_: *@This()) void {}
 } else @import("ipc").SharedMemoryAllocator;
 
@@ -325,10 +329,10 @@ else if (builtin.os.tag == .windows)
 else
     2 * 1024 * 1024 * 1024 * 1024;
 
-// Floor for the retry loop. Eval tests need very little arena, so 256 MB is
-// plenty; any 64-bit Linux kernel can fit this even with reduced VA bits. The
-// allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for targets whose
-// preferred size is smaller.
+// Floor for the retry loop. Eval tests place only finalized LIR into this
+// image, so 256 MB is plenty; any 64-bit Linux kernel can fit this even with
+// reduced VA bits. The allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE`
+// for targets whose preferred size is smaller.
 const EVAL_SHARED_MEMORY_MIN_SIZE: usize = 256 * 1024 * 1024;
 
 fn configuredSharedMemorySize() usize {
@@ -1612,8 +1616,8 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        shm_allocator,
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
         .{
             .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
@@ -1628,14 +1632,16 @@ fn lowerCheckedRootWithViews(
             .debug_materialized_out = options.debug_materialized_out,
         },
     );
+    defer lowered.deinit();
 
-    try LirImage.fillHeaderInSharedMemory(
-        image_header,
+    const copied = try LirImage.copyProgramIntoBuffer(
+        shm_allocator,
         shm.base_ptr,
-        shm.getUsedSize(),
+        shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         &.{},
     );
+    try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
 
     const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize(), lowered.target_usize);

@@ -4188,6 +4188,15 @@ need and must not add their own side stores for the same data. `LirImage`
 contains only the ARC-inserted LIR fields: `store`, `layouts`, `root_procs`,
 platform entrypoints, and target usize.
 
+For shared-memory `LirImage` IPC, the mapping allocator is output-only.
+Compiler scratch, Monotype graphs, and every pre-ARC IR use ordinary
+reclaimable compiler storage. The IPC path copies the exact ARC-inserted store,
+layout, root, and entrypoint arrays into the mapping; it does not rerun lowering
+or derive any missing data while copying. An in-process embedder may instead
+own compilation and the final image in one caller-provided arena, then install
+offsets with `fillHeaderInBuffer`; that arena owns the whole compilation
+lifetime and is not the shared-memory IPC transport.
+
 ### Layout Selection
 
 Layout selection is the first stage that chooses runtime encodings:
