@@ -2601,12 +2601,41 @@ const Builder = struct {
             .source_names = checked.importedNames(self.root_view),
         }};
 
+        // Every checked module view available to lowering, so an imported-scheme
+        // site resolves its defining module's frozen types (reunify.md 7.1,
+        // Slice 6). The root, imports, and relation (platform) modules together
+        // cover every module the scheme ids can name.
+        var all_modules = std.ArrayList(reunify_shadow.ShadowModule).empty;
+        defer all_modules.deinit(self.allocator);
+        try appendShadowModule(self.allocator, &all_modules, moduleView(self.root_view));
+        for (self.modules.imports) |imported| {
+            try appendShadowModule(self.allocator, &all_modules, moduleView(imported));
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            try appendShadowModule(self.allocator, &all_modules, moduleView(relation));
+        }
+
         reunify_shadow.run(self.allocator, .{
             .program_store = &self.program.types,
             .program_names = &self.program.names,
             .concrete_modules = modules.items,
             .concrete_roots = roots.items,
             .scheme_sources = &scheme_sources,
+            .modules_by_hash = all_modules.items,
+        });
+    }
+
+    /// Append one module's shadow view, keyed by content hash, skipping a hash
+    /// already present (the same module can appear as both an import and a
+    /// relation).
+    fn appendShadowModule(allocator: Allocator, out: *std.ArrayList(reunify_shadow.ShadowModule), mv: ModuleView) Allocator.Error!void {
+        for (out.items) |existing| {
+            if (moduleBytesEqual(existing.key_bytes, mv.key.bytes)) return;
+        }
+        try out.append(allocator, .{
+            .key_bytes = mv.key.bytes,
+            .view = mv.types,
+            .source_names = mv.names,
         });
     }
 

@@ -49,6 +49,11 @@ pub const LogicalTypeIdentity = MonoType.TypeId;
 const erased_occurrence_index: u32 = 0;
 const erased_occurrence: checked.CheckedTypeId = @enumFromInt(erased_occurrence_index);
 
+/// The sentinel module content identity every minted skolem declares itself
+/// under (reunify.md 7.3). No real source module hashes to all-`0xFE`, so a
+/// skolem skeleton can never collide with a real nominal's declaration identity.
+const skolem_module_hash: [32]u8 = [_]u8{0xFE} ** 32;
+
 /// A binder's value in a `BindingEnvironment` (reunify.md section 7.3). The
 /// logical half keys substitution and instantiation memos; the representation
 /// half feeds drafts. For the closed subset a value carries no open
@@ -118,6 +123,32 @@ pub const SkipReason = enum {
     binder_not_found,
 };
 
+/// How a translation walk treats a residual variable that carries neither a
+/// recorded disposition nor a numeric/row default (reunify.md 7.3, 7.4). The
+/// closed-subset roots of Slice 5 hold no such variable, so both policies agree
+/// there; the difference matters only for the Slice 6 scheme-edge walk, whose
+/// actuals and instantiated roots reference enclosing-scheme binders.
+pub const FreeVarPolicy = enum {
+    /// The checked default: an undisposed residual materializes as the
+    /// uninhabited leaf (empty tag union), matching production materialization.
+    default_empty,
+    /// A free variable is a binder of an enclosing scheme (reunify.md 7.3):
+    /// translate it to a distinct abstract logical identity ("skolem") keyed by
+    /// its checked id, so the enclosing binder appears identically on both sides
+    /// of the scheme-edge comparison (the parametric verification of 7.6). The
+    /// same checked id yields the same skolem within one shadow run; distinct
+    /// ids yield distinct skolems, so the comparison stays meaningful.
+    skolemize,
+};
+
+/// The identity of one enclosing-scheme binder for skolem minting: the owning
+/// module's content identity plus the binder's checked id. Two sites in one
+/// module that reference the same enclosing binder share one skolem.
+const SkolemIdent = struct {
+    module: [32]u8,
+    type_id: u32,
+};
+
 /// A walk left the closed subset (with `reason` recorded on the walker), or the
 /// shadow store ran out of memory. Never a control-flow signal into production.
 pub const WalkError = error{Skip} || Allocator.Error;
@@ -148,6 +179,14 @@ pub const LogicalStore = struct {
     /// id; its key adds finalized representation-input digests, which do not
     /// exist yet.
     sealed_representation_memo: std.AutoHashMap(InstantiationDigest, LogicalTypeIdentity),
+    /// One distinct abstract logical id per enclosing-scheme binder reached under
+    /// `FreeVarPolicy.skolemize` (reunify.md 7.3). Keyed by `(module, checked id)`
+    /// so the same enclosing binder appears identically on both sides of a
+    /// scheme-edge comparison.
+    skolem_ids: std.AutoHashMap(SkolemIdent, LogicalTypeIdentity),
+    /// Monotonic discriminator that makes each minted skolem's synthetic name
+    /// distinct, so no two enclosing binders intern to one skeleton.
+    skolem_counter: u32,
 
     pub fn init(allocator: Allocator) LogicalStore {
         var store = MonoType.Store.init(allocator);
@@ -158,19 +197,218 @@ pub const LogicalStore = struct {
             .store = store,
             .instantiation_memo = std.AutoHashMap(InstantiationDigest, LogicalTypeIdentity).init(allocator),
             .sealed_representation_memo = std.AutoHashMap(InstantiationDigest, LogicalTypeIdentity).init(allocator),
+            .skolem_ids = std.AutoHashMap(SkolemIdent, LogicalTypeIdentity).init(allocator),
+            .skolem_counter = 0,
         };
     }
 
     pub fn deinit(self: *LogicalStore) void {
+        self.skolem_ids.deinit();
         self.sealed_representation_memo.deinit();
         self.instantiation_memo.deinit();
         self.store.deinit();
         self.shadow_names.deinit();
     }
 
+    /// A distinct abstract logical id standing for one enclosing-scheme binder
+    /// (reunify.md 7.3). Cached per `(module, checked id)`; minted as a named
+    /// skeleton under a sentinel module identity with a monotonic name, so it
+    /// never collides with a real source type or with another binder.
+    fn skolem(self: *LogicalStore, module_bytes: [32]u8, checked_ty: checked.CheckedTypeId) WalkError!LogicalTypeIdentity {
+        const key = SkolemIdent{ .module = module_bytes, .type_id = @intFromEnum(checked_ty) };
+        if (self.skolem_ids.get(key)) |cached| return cached;
+        var name_buf: [24]u8 = undefined;
+        const name_text = std.fmt.bufPrint(&name_buf, "{d}", .{self.skolem_counter}) catch unreachable;
+        self.skolem_counter += 1;
+        const id = try self.namedSkeleton(
+            skolem_module_hash,
+            skolem_module_hash,
+            name_text,
+            null,
+            .@"opaque",
+            &.{},
+        );
+        try self.skolem_ids.put(key, id);
+        return id;
+    }
+
     /// The 32-byte content digest of a skeleton, for bounded mismatch detail.
     pub fn digestBytes(self: *LogicalStore, id: LogicalTypeIdentity) [32]u8 {
         return self.store.typeDigest(&self.shadow_names, id).bytes;
+    }
+
+    /// A bounded S-expression of a shadow skeleton id, for mismatch diagnosis
+    /// only. Depth- and breadth-limited so an unexpected cycle or a wide row
+    /// cannot make the census unbounded. Skolems print as `?<name>`.
+    pub fn describe(self: *LogicalStore, allocator: Allocator, id: LogicalTypeIdentity) Allocator.Error![]u8 {
+        var out = std.ArrayList(u8).empty;
+        errdefer out.deinit(allocator);
+        try self.describeInto(allocator, &out, id, 6);
+        return try out.toOwnedSlice(allocator);
+    }
+
+    fn describeInto(self: *LogicalStore, allocator: Allocator, out: *std.ArrayList(u8), id: LogicalTypeIdentity, depth: u8) Allocator.Error!void {
+        if (depth == 0) {
+            try out.appendSlice(allocator, "...");
+            return;
+        }
+        switch (self.store.get(id)) {
+            .primitive => |value| try out.appendSlice(allocator, @tagName(value)),
+            .zst => try out.appendSlice(allocator, "zst"),
+            .erased => try out.appendSlice(allocator, "erased"),
+            .list => |elem| {
+                try out.appendSlice(allocator, "(list ");
+                try self.describeInto(allocator, out, elem, depth - 1);
+                try out.append(allocator, ')');
+            },
+            .box => |elem| {
+                try out.appendSlice(allocator, "(box ");
+                try self.describeInto(allocator, out, elem, depth - 1);
+                try out.append(allocator, ')');
+            },
+            .tuple => |span| {
+                try out.appendSlice(allocator, "(tuple");
+                const items = self.store.span(span);
+                for (0..@min(GuardedList.borrowLen(items), 12)) |i| {
+                    try out.append(allocator, ' ');
+                    try self.describeInto(allocator, out, GuardedList.at(items, i), depth - 1);
+                }
+                try out.append(allocator, ')');
+            },
+            .record => |span| {
+                try out.appendSlice(allocator, "(record");
+                const fields = self.store.fieldSpan(span);
+                for (0..@min(GuardedList.borrowLen(fields), 16)) |i| {
+                    const field = GuardedList.at(fields, i);
+                    try out.append(allocator, ' ');
+                    try out.appendSlice(allocator, self.shadow_names.recordFieldLabelText(field.name));
+                    try out.append(allocator, ':');
+                    try self.describeInto(allocator, out, field.ty, depth - 1);
+                }
+                try out.append(allocator, ')');
+            },
+            .tag_union => |span| {
+                try out.appendSlice(allocator, "(tags");
+                const tags = self.store.tagSpan(span);
+                for (0..@min(GuardedList.borrowLen(tags), 16)) |i| {
+                    const tag = GuardedList.at(tags, i);
+                    try out.append(allocator, ' ');
+                    try out.appendSlice(allocator, self.shadow_names.tagLabelText(tag.name));
+                    const payloads = self.store.span(tag.payloads);
+                    for (0..@min(GuardedList.borrowLen(payloads), 8)) |j| {
+                        try out.append(allocator, '/');
+                        try self.describeInto(allocator, out, GuardedList.at(payloads, j), depth - 1);
+                    }
+                }
+                try out.append(allocator, ')');
+            },
+            .func => |fn_ty| {
+                try out.appendSlice(allocator, "(fn");
+                const args = self.store.span(fn_ty.args);
+                for (0..@min(GuardedList.borrowLen(args), 12)) |i| {
+                    try out.append(allocator, ' ');
+                    try self.describeInto(allocator, out, GuardedList.at(args, i), depth - 1);
+                }
+                try out.appendSlice(allocator, " -> ");
+                try self.describeInto(allocator, out, fn_ty.ret, depth - 1);
+                try out.append(allocator, ')');
+            },
+            .named => |n| {
+                const is_skolem = std.meta.eql(self.shadow_names.moduleIdentityBytes(n.def.module).*, skolem_module_hash);
+                try out.append(allocator, if (is_skolem) '?' else '#');
+                try out.appendSlice(allocator, self.shadow_names.typeNameText(n.def.type_name));
+                if (!is_skolem) {
+                    const args = self.store.span(n.args);
+                    for (0..@min(GuardedList.borrowLen(args), 12)) |i| {
+                        try out.append(allocator, ' ');
+                        try self.describeInto(allocator, out, GuardedList.at(args, i), depth - 1);
+                    }
+                }
+            },
+        }
+    }
+
+    /// Whether a shadow id is a minted skolem (an abstract enclosing-scheme
+    /// binder), rather than a real source type.
+    fn isSkolem(self: *LogicalStore, id: LogicalTypeIdentity) bool {
+        return switch (self.store.get(id)) {
+            .named => |n| std.meta.eql(self.shadow_names.moduleIdentityBytes(n.def.module).*, skolem_module_hash),
+            else => false,
+        };
+    }
+
+    fn collectSkolems(self: *LogicalStore, id: LogicalTypeIdentity, set: *std.AutoHashMap(LogicalTypeIdentity, void), seen: *std.AutoHashMap(LogicalTypeIdentity, void)) Allocator.Error!void {
+        if (seen.contains(id)) return;
+        try seen.put(id, {});
+        switch (self.store.get(id)) {
+            .primitive, .zst, .erased => {},
+            .list, .box => |elem| try self.collectSkolems(elem, set, seen),
+            .tuple => |span| {
+                const items = self.store.span(span);
+                for (0..GuardedList.borrowLen(items)) |i| try self.collectSkolems(GuardedList.at(items, i), set, seen);
+            },
+            .record => |span| {
+                const fields = self.store.fieldSpan(span);
+                for (0..GuardedList.borrowLen(fields)) |i| try self.collectSkolems(GuardedList.at(fields, i).ty, set, seen);
+            },
+            .tag_union => |span| {
+                const tags = self.store.tagSpan(span);
+                for (0..GuardedList.borrowLen(tags)) |i| {
+                    const payloads = self.store.span(GuardedList.at(tags, i).payloads);
+                    for (0..GuardedList.borrowLen(payloads)) |j| try self.collectSkolems(GuardedList.at(payloads, j), set, seen);
+                }
+            },
+            .func => |fn_ty| {
+                const args = self.store.span(fn_ty.args);
+                for (0..GuardedList.borrowLen(args)) |i| try self.collectSkolems(GuardedList.at(args, i), set, seen);
+                try self.collectSkolems(fn_ty.ret, set, seen);
+            },
+            .named => |n| {
+                if (self.isSkolem(id)) {
+                    try set.put(id, {});
+                    return;
+                }
+                const args = self.store.span(n.args);
+                for (0..GuardedList.borrowLen(args)) |i| try self.collectSkolems(GuardedList.at(args, i), set, seen);
+            },
+        }
+    }
+
+    /// Whether two shadow skeletons are equal up to a consistent renaming of the
+    /// skolems that stand for independent copies of an enclosing binder — but
+    /// with a skolem that occurs in BOTH skeletons pinned to itself. A binders=0
+    /// nested scheme's root and the site's instantiated root use disjoint
+    /// fresh copies of the enclosing binder, so they are alpha-equal here; a real
+    /// binder transposition, where the SAME enclosing skolem appears on both
+    /// sides, is not (the pin forces identity and the swap conflicts). Exact id
+    /// equality is the fast path; this runs only when that fails.
+    pub fn alphaEqual(self: *LogicalStore, left: LogicalTypeIdentity, right: LogicalTypeIdentity) Allocator.Error!bool {
+        var left_skolems = std.AutoHashMap(LogicalTypeIdentity, void).init(self.allocator);
+        defer left_skolems.deinit();
+        var right_skolems = std.AutoHashMap(LogicalTypeIdentity, void).init(self.allocator);
+        defer right_skolems.deinit();
+        {
+            var seen = std.AutoHashMap(LogicalTypeIdentity, void).init(self.allocator);
+            defer seen.deinit();
+            try self.collectSkolems(left, &left_skolems, &seen);
+        }
+        {
+            var seen = std.AutoHashMap(LogicalTypeIdentity, void).init(self.allocator);
+            defer seen.deinit();
+            try self.collectSkolems(right, &right_skolems, &seen);
+        }
+        var forward = std.AutoHashMap(LogicalTypeIdentity, LogicalTypeIdentity).init(self.allocator);
+        defer forward.deinit();
+        var backward = std.AutoHashMap(LogicalTypeIdentity, LogicalTypeIdentity).init(self.allocator);
+        defer backward.deinit();
+        var pairs = AlphaPairs{
+            .owner = self,
+            .left_skolems = &left_skolems,
+            .right_skolems = &right_skolems,
+            .forward = &forward,
+            .backward = &backward,
+        };
+        return try pairs.eq(left, right);
     }
 
     // --- Skeleton constructors (each interns into the shadow store) ---
@@ -261,12 +499,40 @@ pub const LogicalStore = struct {
         checked_ty: checked.CheckedTypeId,
         skip_reason: *SkipReason,
     ) WalkError!LogicalTypeIdentity {
+        return try self.checkedLogicalIdentityUnder(
+            view,
+            source_names,
+            checked_ty,
+            .default_empty,
+            skolem_module_hash,
+            skip_reason,
+        );
+    }
+
+    /// The logical identity of a frozen checked root under an explicit free-var
+    /// policy (reunify.md 7.3, 7.4). With `.skolemize` the root's free variables
+    /// are enclosing-scheme binders and translate to abstract skolems keyed under
+    /// `skolem_module`; with `.default_empty` an undisposed residual materializes
+    /// as the uninhabited leaf. There is no active binder environment: a scheme's
+    /// own binders are substituted through `instantiateScheme`, while an
+    /// enclosing binder reaches the skolem path here.
+    pub fn checkedLogicalIdentityUnder(
+        self: *LogicalStore,
+        view: checked.CheckedTypeStoreView,
+        source_names: *const names.NameStore,
+        checked_ty: checked.CheckedTypeId,
+        free_var_policy: FreeVarPolicy,
+        skolem_module: [32]u8,
+        skip_reason: *SkipReason,
+    ) WalkError!LogicalTypeIdentity {
         var walk = CheckedWalk{
             .owner = self,
             .view = view,
             .source_names = source_names,
             .binder_env = null,
             .scheme_owner_node = checked.checked_residual_disposition_module_body_owner,
+            .free_var_policy = free_var_policy,
+            .skolem_module = skolem_module,
             .active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator),
             .skip_reason = skip_reason,
         };
@@ -288,6 +554,7 @@ pub const LogicalStore = struct {
         binders: []const checked.CheckedTypeId,
         binding: []const BoundType,
         captured: []const BoundType,
+        free_var_policy: FreeVarPolicy,
         skip_reason: *SkipReason,
     ) WalkError!LogicalTypeIdentity {
         const key = instantiationDigest(scheme_ident, binding, captured);
@@ -306,6 +573,12 @@ pub const LogicalStore = struct {
             .source_names = source_names,
             .binder_env = &env,
             .scheme_owner_node = scheme_owner_node,
+            .free_var_policy = free_var_policy,
+            // A free variable reached inside a callee scheme's root that is not
+            // one of the callee's own binders is a captured enclosing binder
+            // (reunify.md 7.3); it skolemizes under the scheme's own module, the
+            // same key the caller-side actual and instantiated-root walks use.
+            .skolem_module = scheme_ident.module_bytes,
             .active = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator),
             .skip_reason = skip_reason,
         };
@@ -445,6 +718,8 @@ const CheckedWalk = struct {
     source_names: *const names.NameStore,
     binder_env: ?*const BindingEnvironment,
     scheme_owner_node: u32,
+    free_var_policy: FreeVarPolicy,
+    skolem_module: [32]u8,
     active: std.AutoHashMap(checked.CheckedTypeId, void),
     skip_reason: *SkipReason,
 
@@ -453,13 +728,22 @@ const CheckedWalk = struct {
         return error.Skip;
     }
 
-    fn node(self: *CheckedWalk, checked_ty: checked.CheckedTypeId) WalkError!LogicalTypeIdentity {
-        // A binder owned by the active scheme substitutes its bound logical id
-        // (reunify.md section 9.2). Checked before the cycle guard so a binder
-        // never registers as a cyclic node.
-        if (self.binder_env) |env| {
-            if (env.binderIndex(checked_ty)) |index| return env.bound[index].logical;
+    /// The bound logical id of a binder visible in the active environment or any
+    /// lexically enclosing one (reunify.md 7.3 links environments through
+    /// `parent`), or null when the checked type is not a bound binder.
+    fn envBinderLogical(self: *CheckedWalk, checked_ty: checked.CheckedTypeId) ?LogicalTypeIdentity {
+        var env = self.binder_env;
+        while (env) |e| : (env = e.parent) {
+            if (e.binderIndex(checked_ty)) |index| return e.bound[index].logical;
         }
+        return null;
+    }
+
+    fn node(self: *CheckedWalk, checked_ty: checked.CheckedTypeId) WalkError!LogicalTypeIdentity {
+        // A binder owned by the active scheme (or a lexically enclosing one)
+        // substitutes its bound logical id (reunify.md section 9.2). Checked
+        // before the cycle guard so a binder never registers as a cyclic node.
+        if (self.envBinderLogical(checked_ty)) |bound| return bound;
 
         if (self.active.contains(checked_ty)) return self.skip(.recursive_cycle);
         try self.active.put(checked_ty, {});
@@ -515,7 +799,15 @@ const CheckedWalk = struct {
                 .empty_tag_union => try self.owner.emptyTagUnion(),
             };
         }
-        return try self.owner.emptyTagUnion();
+        // An undisposed, undefaulted residual reached under `.skolemize` is an
+        // enclosing-scheme binder (reunify.md 7.3): a distinct abstract id keyed
+        // by its checked identity, appearing the same on both sides of the
+        // scheme-edge comparison. Under `.default_empty` it materializes as the
+        // uninhabited leaf, matching the checked default.
+        return switch (self.free_var_policy) {
+            .skolemize => try self.owner.skolem(self.skolem_module, checked_ty),
+            .default_empty => try self.owner.emptyTagUnion(),
+        };
     }
 
     fn function(self: *CheckedWalk, fn_ty: checked.CheckedFunctionType) WalkError!LogicalTypeIdentity {
@@ -553,6 +845,13 @@ const CheckedWalk = struct {
             while (true) {
                 if (seen.contains(current)) break;
                 try seen.put(current, {});
+                // A record extension that is a scheme binder substitutes its
+                // bound actual, whose fields splice into this row (reunify.md
+                // 9.2). The interned actual is closed, so the row closes here.
+                if (self.envBinderLogical(current)) |bound| {
+                    try self.spliceInternedFields(&fields, bound);
+                    break;
+                }
                 switch (self.view.payload(current)) {
                     .alias => |alias| current = alias.backing,
                     .empty_record => break,
@@ -598,6 +897,13 @@ const CheckedWalk = struct {
         while (true) {
             if (seen.contains(current)) break;
             try seen.put(current, {});
+            // A tag-union extension that is a scheme binder substitutes its bound
+            // actual, whose tags splice into this row (reunify.md 9.2). The
+            // interned actual is closed, so the row closes here.
+            if (self.envBinderLogical(current)) |bound| {
+                try self.spliceInternedTags(&tags, bound);
+                break;
+            }
             switch (self.view.payload(current)) {
                 .alias => |alias| current = alias.backing,
                 .empty_tag_union => break,
@@ -614,6 +920,48 @@ const CheckedWalk = struct {
         }
 
         return try self.owner.tagUnion(tags.items);
+    }
+
+    /// Splice the tags of an already-interned actual (the value bound to a
+    /// row-extension binder) into `out`. The actual is closed, so an interned
+    /// tag-union node ends the row; any other head (a skolem standing for a still
+    /// open enclosing row) leaves the row genuinely open, outside the subset.
+    fn spliceInternedTags(self: *CheckedWalk, out: *std.ArrayList(MonoType.Store.TagInput), id: LogicalTypeIdentity) WalkError!void {
+        switch (self.owner.store.get(id)) {
+            .tag_union => |span| {
+                const tag_span = self.owner.store.tagSpan(span);
+                for (0..GuardedList.borrowLen(tag_span)) |i| {
+                    const tag = GuardedList.at(tag_span, i);
+                    const payload_span = self.owner.store.span(tag.payloads);
+                    var payloads = std.ArrayList(LogicalTypeIdentity).empty;
+                    errdefer payloads.deinit(self.owner.allocator);
+                    for (0..GuardedList.borrowLen(payload_span)) |j| {
+                        try payloads.append(self.owner.allocator, GuardedList.at(payload_span, j));
+                    }
+                    try out.append(self.owner.allocator, .{
+                        .name = tag.name,
+                        .checked_name = tag.checked_name,
+                        .payloads = try payloads.toOwnedSlice(self.owner.allocator),
+                    });
+                }
+            },
+            else => return self.skip(.open_row),
+        }
+    }
+
+    /// Splice the fields of an already-interned actual (the value bound to a
+    /// record-extension binder) into `out`. As with tags, only an interned
+    /// record node closes the row.
+    fn spliceInternedFields(self: *CheckedWalk, out: *std.ArrayList(MonoType.Field), id: LogicalTypeIdentity) WalkError!void {
+        switch (self.owner.store.get(id)) {
+            .record => |span| {
+                const field_span = self.owner.store.fieldSpan(span);
+                for (0..GuardedList.borrowLen(field_span)) |i| {
+                    try out.append(self.owner.allocator, GuardedList.at(field_span, i));
+                }
+            },
+            else => return self.skip(.open_row),
+        }
     }
 
     fn appendTags(self: *CheckedWalk, out: *std.ArrayList(MonoType.Store.TagInput), tags: []const checked.CheckedTag) WalkError!void {
@@ -812,6 +1160,101 @@ const MonoWalk = struct {
     }
 };
 
+/// Simultaneous structural comparison of two shadow skeletons up to a consistent
+/// renaming of unshared skolems (reunify.md 7.6 compares complete roots; a
+/// binders=0 nested scheme's two roots are alpha-equal). A skolem present in both
+/// skeletons is pinned to itself, so a real binder transposition is rejected.
+const AlphaPairs = struct {
+    owner: *LogicalStore,
+    left_skolems: *std.AutoHashMap(LogicalTypeIdentity, void),
+    right_skolems: *std.AutoHashMap(LogicalTypeIdentity, void),
+    forward: *std.AutoHashMap(LogicalTypeIdentity, LogicalTypeIdentity),
+    backward: *std.AutoHashMap(LogicalTypeIdentity, LogicalTypeIdentity),
+
+    fn pairSkolems(self: *AlphaPairs, l: LogicalTypeIdentity, r: LogicalTypeIdentity) Allocator.Error!bool {
+        if (l != r) {
+            // A skolem occurring in the OTHER skeleton is shared and pinned to
+            // itself, so it cannot rename to a different skolem.
+            if (self.right_skolems.contains(l)) return false;
+            if (self.left_skolems.contains(r)) return false;
+        }
+        if (self.forward.get(l)) |m| return m == r;
+        if (self.backward.get(r)) |m| return m == l;
+        try self.forward.put(l, r);
+        try self.backward.put(r, l);
+        return true;
+    }
+
+    fn eqSpan(self: *AlphaPairs, l: MonoType.Span, r: MonoType.Span) Allocator.Error!bool {
+        const ls = self.owner.store.span(l);
+        const rs = self.owner.store.span(r);
+        if (GuardedList.borrowLen(ls) != GuardedList.borrowLen(rs)) return false;
+        for (0..GuardedList.borrowLen(ls)) |i| {
+            if (!try self.eq(GuardedList.at(ls, i), GuardedList.at(rs, i))) return false;
+        }
+        return true;
+    }
+
+    fn eq(self: *AlphaPairs, l: LogicalTypeIdentity, r: LogicalTypeIdentity) Allocator.Error!bool {
+        if (l == r and !self.owner.isSkolem(l)) return true;
+
+        const l_sk = self.owner.isSkolem(l);
+        const r_sk = self.owner.isSkolem(r);
+        if (l_sk or r_sk) {
+            if (l_sk != r_sk) return false;
+            return try self.pairSkolems(l, r);
+        }
+
+        const lc = self.owner.store.get(l);
+        const rc = self.owner.store.get(r);
+        if (std.meta.activeTag(lc) != std.meta.activeTag(rc)) return false;
+        switch (lc) {
+            .primitive => |v| return v == rc.primitive,
+            .zst => return true,
+            .erased => |d| return std.meta.eql(d.bytes, rc.erased.bytes),
+            .list => |e| return try self.eq(e, rc.list),
+            .box => |e| return try self.eq(e, rc.box),
+            .tuple => |s| return try self.eqSpan(s, rc.tuple),
+            .func => |lf| {
+                if (!try self.eqSpan(lf.args, rc.func.args)) return false;
+                return try self.eq(lf.ret, rc.func.ret);
+            },
+            .record => |s| {
+                const lf = self.owner.store.fieldSpan(s);
+                const rf = self.owner.store.fieldSpan(rc.record);
+                if (GuardedList.borrowLen(lf) != GuardedList.borrowLen(rf)) return false;
+                for (0..GuardedList.borrowLen(lf)) |i| {
+                    const a = GuardedList.at(lf, i);
+                    const b = GuardedList.at(rf, i);
+                    if (a.name != b.name) return false;
+                    if (!try self.eq(a.ty, b.ty)) return false;
+                }
+                return true;
+            },
+            .tag_union => |s| {
+                const lt = self.owner.store.tagSpan(s);
+                const rt = self.owner.store.tagSpan(rc.tag_union);
+                if (GuardedList.borrowLen(lt) != GuardedList.borrowLen(rt)) return false;
+                for (0..GuardedList.borrowLen(lt)) |i| {
+                    const a = GuardedList.at(lt, i);
+                    const b = GuardedList.at(rt, i);
+                    if (a.name != b.name) return false;
+                    if (!try self.eqSpan(a.payloads, b.payloads)) return false;
+                }
+                return true;
+            },
+            .named => |ln| {
+                const rn = rc.named;
+                if (ln.kind != rn.kind) return false;
+                if (ln.def.module != rn.def.module) return false;
+                if (ln.def.type_name != rn.def.type_name) return false;
+                if (ln.def.source_decl != rn.def.source_decl) return false;
+                return try self.eqSpan(ln.args, rn.args);
+            },
+        }
+    }
+};
+
 // --- Tests ---
 
 const testing = std.testing;
@@ -878,6 +1321,24 @@ const TestFixture = struct {
             .name = name,
             .origin_module = module,
             .owner_module = .{ .bytes = self.module_hash },
+            .is_opaque = false,
+            .representation = .opaque_without_backing,
+            .args = .{ .start = start, .len = @intCast(args.len) },
+        } });
+    }
+
+    /// A nominal imported from another module: it carries the DEFINING module's
+    /// identity, exactly as real checked data records an imported type, so its
+    /// erased skeleton converges with the defining module's own occurrence.
+    fn addImportedNominal(self: *TestFixture, name_text: []const u8, args: []const checked.CheckedTypeId, defining_hash: [32]u8) !checked.CheckedTypeId {
+        const name = try self.source_names.internTypeName(name_text);
+        const module = try self.source_names.internModuleIdentity(&defining_hash);
+        const start: u32 = @intCast(self.type_id_pool.items.len);
+        try self.type_id_pool.appendSlice(self.allocator, args);
+        return try self.add(.{ .nominal = .{
+            .name = name,
+            .origin_module = module,
+            .owner_module = .{ .bytes = defining_hash },
             .is_opaque = false,
             .representation = .opaque_without_backing,
             .args = .{ .start = start, .len = @intCast(args.len) },
@@ -992,6 +1453,7 @@ test "instantiating a scheme root matches translating the instantiated root" {
         &binders,
         &binding,
         &.{},
+        .default_empty,
         &reason,
     );
     const direct = try logical.checkedLogicalIdentity(fixture.view(), &fixture.source_names, instantiated_root, &reason);
@@ -1015,9 +1477,9 @@ test "instantiation memo returns the same id for the same binding" {
     const binders = [_]checked.CheckedTypeId{binder};
     const ident = SchemeIdent{ .module_bytes = fixture.module_hash, .scheme = 0 };
 
-    const first = try logical.instantiateScheme(ident, fixture.view(), &fixture.source_names, checked.checked_residual_disposition_module_body_owner, scheme_root, &binders, &binding, &.{}, &reason);
+    const first = try logical.instantiateScheme(ident, fixture.view(), &fixture.source_names, checked.checked_residual_disposition_module_body_owner, scheme_root, &binders, &binding, &.{}, .default_empty, &reason);
     const memo_count = logical.instantiation_memo.count();
-    const second = try logical.instantiateScheme(ident, fixture.view(), &fixture.source_names, checked.checked_residual_disposition_module_body_owner, scheme_root, &binders, &binding, &.{}, &reason);
+    const second = try logical.instantiateScheme(ident, fixture.view(), &fixture.source_names, checked.checked_residual_disposition_module_body_owner, scheme_root, &binders, &binding, &.{}, .default_empty, &reason);
 
     try testing.expectEqual(first, second);
     try testing.expectEqual(@as(u32, 1), memo_count);
@@ -1053,6 +1515,173 @@ test "unconstrained residual variables reach the empty tag union leaf" {
     const from_flex = try logical.checkedLogicalIdentity(fixture.view(), &fixture.source_names, flex, &reason);
     const from_empty = try logical.checkedLogicalIdentity(fixture.view(), &fixture.source_names, empty, &reason);
     try testing.expectEqual(from_empty, from_flex);
+}
+
+test "a scheme instantiated with enclosing binders skolemizes consistently" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    // Callee scheme: Pair a b, with binders a, b, root = Pair a b.
+    const a = try fixture.add(.{ .rigid = .{} });
+    const b = try fixture.add(.{ .rigid = .{} });
+    const scheme_root = try fixture.addUserNominal("Pair", &.{ a, b });
+
+    // The enclosing (caller) scheme's binders X and Y, referenced by the site's
+    // actuals. They are ordinary rigid variables with no default and no
+    // disposition — the shape of a captured enclosing binder.
+    const x = try fixture.add(.{ .rigid = .{} });
+    const y = try fixture.add(.{ .rigid = .{} });
+    const instantiated_root = try fixture.addUserNominal("Pair", &.{ x, y });
+    const reversed_root = try fixture.addUserNominal("Pair", &.{ y, x });
+
+    var logical = LogicalStore.init(testing.allocator);
+    defer logical.deinit();
+
+    var reason: SkipReason = undefined;
+    const bx = try logical.checkedLogicalIdentityUnder(fixture.view(), &fixture.source_names, x, .skolemize, fixture.module_hash, &reason);
+    const by = try logical.checkedLogicalIdentityUnder(fixture.view(), &fixture.source_names, y, .skolemize, fixture.module_hash, &reason);
+    try testing.expect(bx != by);
+
+    const binding = [_]BoundType{ BoundType.closed(bx), BoundType.closed(by) };
+    const binders = [_]checked.CheckedTypeId{ a, b };
+    const instantiated = try logical.instantiateScheme(
+        .{ .module_bytes = fixture.module_hash, .scheme = 0 },
+        fixture.view(),
+        &fixture.source_names,
+        checked.checked_residual_disposition_module_body_owner,
+        scheme_root,
+        &binders,
+        &binding,
+        &.{},
+        .skolemize,
+        &reason,
+    );
+    const direct = try logical.checkedLogicalIdentityUnder(fixture.view(), &fixture.source_names, instantiated_root, .skolemize, fixture.module_hash, &reason);
+    const reversed = try logical.checkedLogicalIdentityUnder(fixture.view(), &fixture.source_names, reversed_root, .skolemize, fixture.module_hash, &reason);
+
+    // The binder order is preserved: instantiation matches the instantiated root
+    // and is distinct from the transposed root.
+    try testing.expectEqual(direct, instantiated);
+    try testing.expect(reversed != instantiated);
+}
+
+test "alpha-equality renames independent skolems but pins shared ones" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    var logical = LogicalStore.init(testing.allocator);
+    defer logical.deinit();
+
+    // Two independent enclosing binders X, Y on the "left"; a third and fourth
+    // P, Q on the "right", built as skolems under different checked ids so their
+    // skolem ids differ.
+    const sx = try logical.skolem(fixture.module_hash, @enumFromInt(100));
+    const sy = try logical.skolem(fixture.module_hash, @enumFromInt(101));
+    const sp = try logical.skolem(fixture.module_hash, @enumFromInt(200));
+    const sq = try logical.skolem(fixture.module_hash, @enumFromInt(201));
+
+    // Iter X, Iter X -> Iter X  vs  Iter P, Iter P -> Iter P : alpha-equal.
+    const left_same = try logical.func(&.{ try logical.list(sx), try logical.list(sx) }, try logical.list(sx));
+    const right_same = try logical.func(&.{ try logical.list(sp), try logical.list(sp) }, try logical.list(sp));
+    try testing.expect(left_same != right_same);
+    try testing.expect(try logical.alphaEqual(left_same, right_same));
+
+    // Pair X Y  vs  Pair Y X where X,Y are the SAME skolems on both sides: a
+    // transposition of shared binders is NOT alpha-equal.
+    const pair_xy = try logical.tuple(&.{ sx, sy });
+    const pair_yx = try logical.tuple(&.{ sy, sx });
+    try testing.expect(!try logical.alphaEqual(pair_xy, pair_yx));
+
+    // Pair X Y  vs  Pair P Q with disjoint skolems: a consistent renaming, so
+    // alpha-equal.
+    const pair_pq = try logical.tuple(&.{ sp, sq });
+    try testing.expect(try logical.alphaEqual(pair_xy, pair_pq));
+
+    // Pair X X  vs  Pair P Q: not a bijection (X must map to both P and Q).
+    const pair_xx = try logical.tuple(&.{ sx, sx });
+    try testing.expect(!try logical.alphaEqual(pair_xx, pair_pq));
+}
+
+test "the same enclosing binder yields one skolem; the default policy does not" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const x = try fixture.add(.{ .rigid = .{} });
+
+    var logical = LogicalStore.init(testing.allocator);
+    defer logical.deinit();
+
+    var reason: SkipReason = undefined;
+    const first = try logical.checkedLogicalIdentityUnder(fixture.view(), &fixture.source_names, x, .skolemize, fixture.module_hash, &reason);
+    const second = try logical.checkedLogicalIdentityUnder(fixture.view(), &fixture.source_names, x, .skolemize, fixture.module_hash, &reason);
+    try testing.expectEqual(first, second);
+
+    // The default policy leaves a bare residual at the uninhabited leaf, distinct
+    // from any skolem.
+    const empty = try fixture.add(.empty_tag_union);
+    const defaulted = try logical.checkedLogicalIdentity(fixture.view(), &fixture.source_names, x, &reason);
+    const empty_id = try logical.checkedLogicalIdentity(fixture.view(), &fixture.source_names, empty, &reason);
+    try testing.expectEqual(empty_id, defaulted);
+    try testing.expect(defaulted != first);
+}
+
+test "an imported scheme instantiates across two module views" {
+    // The defining module owns the scheme root and binders; the consuming module
+    // owns the actuals and the instantiated root (reunify.md 7.1, Slice 6). The
+    // two id spaces meet on the shadow's text-neutral interner.
+    var defining = TestFixture.init(testing.allocator);
+    defining.module_hash = [_]u8{0xAA} ** 32;
+    defer defining.deinit();
+    var consuming = TestFixture.init(testing.allocator);
+    consuming.module_hash = [_]u8{0xBB} ** 32;
+    defer consuming.deinit();
+
+    // Defining module: scheme Wrapper a, binder a, root = Wrapper a (Wrapper owned
+    // by the defining module).
+    const binder = try defining.add(.{ .rigid = .{} });
+    const scheme_root = try defining.addUserNominal("Wrapper", &.{binder});
+
+    // Consuming module: the actual U64 and the instantiated root Wrapper U64,
+    // where Wrapper carries the DEFINING module's identity (an imported nominal).
+    const u64_ty = try consuming.addPrimitiveNominal(.u64, "U64");
+    const instantiated_root = try consuming.addImportedNominal("Wrapper", &.{u64_ty}, defining.module_hash);
+
+    var logical = LogicalStore.init(testing.allocator);
+    defer logical.deinit();
+
+    var reason: SkipReason = undefined;
+    const actual_logical = try logical.checkedLogicalIdentityUnder(
+        consuming.view(),
+        &consuming.source_names,
+        u64_ty,
+        .skolemize,
+        consuming.module_hash,
+        &reason,
+    );
+    const binding = [_]BoundType{BoundType.closed(actual_logical)};
+    const binders = [_]checked.CheckedTypeId{binder};
+
+    const instantiated = try logical.instantiateScheme(
+        .{ .module_bytes = defining.module_hash, .scheme = 0 },
+        defining.view(),
+        &defining.source_names,
+        checked.checked_residual_disposition_module_body_owner,
+        scheme_root,
+        &binders,
+        &binding,
+        &.{},
+        .skolemize,
+        &reason,
+    );
+    const direct = try logical.checkedLogicalIdentityUnder(
+        consuming.view(),
+        &consuming.source_names,
+        instantiated_root,
+        .skolemize,
+        consuming.module_hash,
+        &reason,
+    );
+    try testing.expectEqual(direct, instantiated);
 }
 
 test "declarations are referenced" {
