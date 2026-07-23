@@ -29612,7 +29612,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         const site = loaded.instantiation_sites.items[0];
         try std.testing.expectEqual(@as(u32, 321), site.use_node);
         try std.testing.expectEqual(@as(u32, 654), site.scheme_owner_node);
-        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), site.schemeId());
+        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), site.schemeId());
         try std.testing.expectEqual(c, site.instantiated_root);
         try std.testing.expectEqualSlices(u8, &([_]u8{0x3A} ** 32), &(site.importedDefiningModule() orelse unreachable));
         const actuals = site.actuals(&loaded);
@@ -29630,7 +29630,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     {
         const nested_captured = loaded.schemes.items[1].capturedBinders(&loaded);
         try std.testing.expectEqual(@as(usize, 2), nested_captured.len);
-        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), nested_captured[0].outerScheme());
+        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), nested_captured[0].outerScheme());
         try std.testing.expectEqual(@as(u32, 1), nested_captured[0].binder_index);
         try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), nested_captured[1].outerScheme());
     }
@@ -29638,7 +29638,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // Scheme owner index and residual dispositions survive the round-trip.
     try std.testing.expectEqual(@as(usize, 1), loaded.scheme_ids_by_owner.items.len);
-    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), loaded.schemeIdForOwnerNode(987));
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), loaded.schemeIdForOwnerNode(987));
     try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), loaded.schemeIdForOwnerNode(111));
     try std.testing.expectEqual(@as(usize, 2), loaded.residual_dispositions.items.len);
     {
@@ -29651,7 +29651,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqual(b, contextual.typeId());
         try std.testing.expectEqual(@as(?CheckedTypeId, c), contextual.contextualTarget());
     }
-    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), loaded.view().schemeIdForOwnerNode(987));
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), loaded.view().schemeIdForOwnerNode(987));
 
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, loaded.nominal_declarations.items[0].formalArgs(&loaded));
     try std.testing.expectEqual(c, loaded.nominal_declarations.items[0].backing);

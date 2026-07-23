@@ -2431,6 +2431,22 @@ fn testSym(n: u32) Common.Symbol {
     return @enumFromInt(n);
 }
 
+fn testFieldName(n: u32) names.RecordFieldNameId {
+    return @enumFromInt(n);
+}
+
+fn testLocal(n: u32) Lifted.LocalId {
+    return @enumFromInt(n);
+}
+
+fn testModuleIdentity(n: u32) names.ModuleIdentityId {
+    return @enumFromInt(n);
+}
+
+fn testTypeName(n: u32) names.TypeNameId {
+    return @enumFromInt(n);
+}
+
 fn addSingletonSet(store: *Type.Store, lambda: Common.Symbol) Allocator.Error!Type.TypeVarId {
     const members = try store.addMembers(&.{.{ .lambda = lambda, .captures = Type.Span.empty() }});
     return store.add(.{ .lambda_set = members });
@@ -2454,8 +2470,8 @@ test "occurrence cloning gives structurally identical function-typed fields dist
     const arg_span = try mono.addSpan(&.{elem});
     const fn_ty = try mono.add(.{ .func = .{ .args = arg_span, .ret = elem } });
     const fields = try mono.addFields(&.{
-        .{ .name = @enumFromInt(0), .ty = fn_ty },
-        .{ .name = @enumFromInt(1), .ty = fn_ty },
+        .{ .name = testFieldName(0), .ty = fn_ty },
+        .{ .name = testFieldName(1), .ty = fn_ty },
     });
     const record = try mono.add(.{ .record = fields });
 
@@ -2522,7 +2538,7 @@ test "occurrence cloning ties a genuine recursive back-reference and nothing els
         }
     }.fill);
     const fields = try mono.addFields(&.{
-        .{ .name = @enumFromInt(0), .ty = rec },
+        .{ .name = testFieldName(0), .ty = rec },
         .{ .name = @enumFromInt(1), .ty = rec },
     });
     const record = try mono.add(.{ .record = fields });
@@ -2565,10 +2581,10 @@ test "mergeLambdaSets unions members by lambda symbol and unifies shared capture
     const cap_b = try store.add(.unbound);
     const capture_id: check.CheckedModule.CaptureId = @enumFromInt(9);
     const captures_left = try store.addCaptures(&.{
-        .{ .local = @enumFromInt(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = cap_a },
+        .{ .local = testLocal(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = cap_a },
     });
     const captures_right = try store.addCaptures(&.{
-        .{ .local = @enumFromInt(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = cap_b },
+        .{ .local = testLocal(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = cap_b },
     });
     const left = try store.addMembers(&.{.{ .lambda = testSym(1), .captures = captures_left }});
     const right = try store.addMembers(&.{
@@ -2599,7 +2615,7 @@ test "unifyCaptures unifies capture types under matching identity" {
     const right_ty = try store.add(.zst);
     const capture_id: check.CheckedModule.CaptureId = @enumFromInt(4);
     const left = try store.addCaptures(&.{
-        .{ .local = @enumFromInt(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = left_ty },
+        .{ .local = testLocal(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = left_ty },
     });
     const right = try store.addCaptures(&.{
         .{ .local = @enumFromInt(1), .symbol = testSym(3), .binder = null, .capture_id = capture_id, .ty = right_ty },
@@ -2681,8 +2697,8 @@ test "the erasure pass keeps a minted iterator step closure a lambda set while e
     const step_ret = try store.add(.zst);
     const step_fn = try store.add(.{ .func = .{ .args = Type.Span.empty(), .callable = step_set, .ret = step_ret } });
     const iter_def = MonoType.TypeDef{
-        .module = @enumFromInt(0),
-        .type_name = @enumFromInt(0),
+        .module = testModuleIdentity(0),
+        .type_name = testTypeName(0),
         .iterator_representation = .minted,
         .iterator_kind = .map,
         .iterator_depth = 1,
