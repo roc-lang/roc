@@ -1673,8 +1673,7 @@ const Lowerer = struct {
         };
     }
 
-    fn constFuncTypeForCallable(self: *Lowerer, ty: Type.TypeId, variants_span: Type.Span) Common.LowerError!const_store.ConstType {
-        _ = variants_span;
+    fn constFuncTypeForCallable(self: *Lowerer, ty: Type.TypeId, _: Type.Span) Common.LowerError!const_store.ConstType {
         return try self.constFuncTypeForCallableSource(ty);
     }
 
