@@ -665,4 +665,45 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "{}" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        // A stored const keeps the exact generated iterator witness. Using the
+        // binding must consume that witness without merging it into the public
+        // Iter interface.
+        .name = "issue 10067: stored iterator witness survives lookup",
+        .source_kind = .module,
+        .source =
+        \\xs = [1.I64].iter()
+        \\
+        \\main : List(I64)
+        \\main = xs.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        .name = "issue 10067: stored iterator witness survives record field access",
+        .source_kind = .module,
+        .source =
+        \\holder : { it : Iter(I64) }
+        \\holder = { it: [1.I64].iter() }
+        \\
+        \\main : List(I64)
+        \\main = holder.it.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10067
+        .name = "issue 10067: stored iterator witness survives tuple item access",
+        .source_kind = .module,
+        .source =
+        \\pair : (Iter(I64), I64)
+        \\pair = ([1.I64].iter(), 0.I64)
+        \\
+        \\main : List(I64)
+        \\main = pair.0.collect()
+        ,
+        .expected = .{ .inspect_str = "[1]" },
+    },
 };

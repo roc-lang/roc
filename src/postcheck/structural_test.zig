@@ -389,9 +389,12 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     try expectContains(entry_wrapper, ".ret = produced_ret_cell");
 }
 
-test "Monotype active view materialization rejects unresolved rows" {
+test "Monotype active snapshots reject unresolved rows and cannot be refilled" {
     const solve_source = @embedFile("monotype/solve.zig");
-    try expectContains(solve_source, "active Monotype view requested for unresolved instantiation node");
+    try expectContains(solve_source, "immutable Monotype snapshot requested for an unresolved instantiation graph node");
+    try expectContains(solve_source, "GraphTypeFinals.initActiveSnapshot(self)");
+    try expectNotContains(solve_source, "replaceGraphView");
+    try expectNotContains(solve_source, "fn fillMono(");
 }
 
 test "Monotype draft local identity stays graph-native" {
@@ -488,7 +491,7 @@ test "Monotype const type lookup remains graph-native" {
     try expectContains(lower_source, "return try self.constUseTypeNode(checked_ty, const_use)");
 }
 
-test "Monotype does not attach durable request types as mutable graph views" {
+test "Monotype does not attach durable request types as active snapshots" {
     const lower_source = @embedFile("monotype/lower.zig");
     const solve_source = @embedFile("monotype/solve.zig");
     try expectNotContains(lower_source, ".addMonoView(");
@@ -647,7 +650,6 @@ test "Monotype match lowering relates patterns before specialization and project
     );
     try expectContains(match_source, "const scrutinee_cell = DraftTypeCell.fromGraphNode(scrutinee_node)");
     try expectContains(match_source, "try relateRequestComponent(");
-    try expectContains(match_source, "try self.graph.drainDirty()");
     try expectContains(match_source, "entry.ctx.runtime_demand_guard_frames = try entry.ctx.withMatchBranchRuntimeDemandGuardFrame");
     try expectContains(match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode");
     try expectContains(match_source, "try entry.ctx.lowerMatchBranchBody");
@@ -656,13 +658,11 @@ test "Monotype match lowering relates patterns before specialization and project
     try expectNotContains(match_source, "lowerPatternAtType(entry.pattern.pattern");
 
     const relate = std.mem.find(u8, match_source, "try relateRequestComponent(").?;
-    const drain = std.mem.find(u8, match_source, "try self.graph.drainDirty()").?;
     const guards = std.mem.find(u8, match_source, "entry.ctx.runtime_demand_guard_frames =").?;
     const rebind_pattern = std.mem.find(u8, match_source, "try entry.ctx.rebindPreRegisteredPatternBindersAtNode").?;
     const lower_pattern = std.mem.find(u8, match_source, "try entry.ctx.lowerPatternAtNode").?;
     const lower_body = std.mem.find(u8, match_source, "try entry.ctx.lowerMatchBranchBody").?;
-    try std.testing.expect(relate < drain);
-    try std.testing.expect(drain < guards);
+    try std.testing.expect(relate < guards);
     try std.testing.expect(guards < rebind_pattern);
     try std.testing.expect(rebind_pattern < lower_body);
     try std.testing.expect(lower_body < lower_pattern);
@@ -884,7 +884,6 @@ test "Monotype iterator One bodies preserve explicit reachability guard frames" 
         "fn uninhabitedIteratorOneBranch(",
     );
     try expectContains(iterator, "self.constrainCheckedInterfaceToCell(self.view.bodies.pattern(for_.pattern).ty, item_cell)");
-    try expectContains(iterator, "try self.graph.drainDirty()");
     try expectContains(iterator, "self.withIteratorOneRuntimeDemandGuardFrame(for_.pattern, step)");
     try expectContains(iterator, "defer self.runtime_demand_guard_frames = previous_runtime_demand_guard_frames");
     const relate = std.mem.find(u8, iterator, "self.constrainCheckedInterfaceToCell").?;

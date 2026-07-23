@@ -3524,6 +3524,38 @@ fn deepStaticChainSource(comptime map_count: usize) []const u8 {
     }
 }
 
+fn wideBalancedConcatSource(comptime leaf_count: usize) []const u8 {
+    comptime {
+        if (leaf_count == 0 or !std.math.isPowerOfTwo(leaf_count)) {
+            @compileError("balanced iterator concat source requires a nonzero power-of-two leaf count");
+        }
+        var source: []const u8 =
+            \\main : U64 -> U64
+            \\main = |n| {
+        ;
+        for (0..leaf_count) |index| {
+            source = source ++ std.fmt.comptimePrint("    i{d} = Iter.single(n + {d})\n", .{ index, index });
+        }
+
+        var layer_start: usize = 0;
+        var layer_count = leaf_count;
+        var next_id = leaf_count;
+        while (layer_count > 1) {
+            for (0..layer_count / 2) |pair| {
+                source = source ++ std.fmt.comptimePrint(
+                    "    i{d} = Iter.concat(i{d}, i{d})\n",
+                    .{ next_id + pair, layer_start + pair * 2, layer_start + pair * 2 + 1 },
+                );
+            }
+            layer_start = next_id;
+            layer_count /= 2;
+            next_id += layer_count;
+        }
+        source = source ++ std.fmt.comptimePrint("    Iter.fold(i{d}, 0.U64, |acc, x| acc + x)\n}}\n", .{layer_start});
+        return source;
+    }
+}
+
 test "iter alloc static: deep static chain under the depth cap stays flat" {
     const allocator = std.testing.allocator;
     const source = comptime deepStaticChainSource(10);
@@ -3542,6 +3574,14 @@ test "iter alloc static: static chain past the depth cap uses forced dynamic rep
     try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
     try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
     try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 2);
+}
+
+test "iter alloc static: wide balanced concat graph retains bounded representation" {
+    const allocator = std.testing.allocator;
+    const source = comptime wideBalancedConcatSource(64);
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &ordinary.lowered);
 }
 
 // The base `[list].iter().fold` must lower with no boxed iterator state and no

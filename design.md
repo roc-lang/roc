@@ -2138,8 +2138,7 @@ before any durable Monotype type is sealed. Together they compute:
 - source depth 1;
 - adapter depth as one plus the maximum minted depth reachable by value through
   its components;
-- a hard minted depth limit of 16;
-- a structural-walk budget of 64.
+- a hard minted depth limit of 16.
 
 A public `Iter` expected type constrains the checked result type; it does not
 veto producer-owned representation evidence. A source or adapter whose inputs
@@ -2156,9 +2155,10 @@ depth, and named backings are not traversed.
 If the next chain would exceed the limit, Monotype interns one
 `forced_dynamic` iterator type per item-type digest. Its public-shaped backing
 is recursively rewritten to its own type, giving recursive construction a
-finite type fixed point. The bounded walk reports the cap when its own budget is
-exhausted, so exhaustion selects the explicit dynamic tier rather than allowing
-the minted type universe to grow without bound.
+finite type fixed point. An exact memoized walk over the finite instantiation
+graph computes the maximum stored iterator depth; a value cycle selects the
+explicit forced-dynamic fixed point. Graph size alone never changes the
+representation decision.
 
 Recursive specialization contributes an explicit second proof of the dynamic
 tier. Each in-progress specialization snapshots every permanent member of each
@@ -2914,6 +2914,15 @@ final Monotype body is emitted.
 During active Monotype specialization, unresolved checked variables and row
 extensions remain instantiation graph nodes. They are not represented by
 durable Monotype `TypeId`s.
+
+Type-shaped inspection during relation production is allowed only for a fully
+resolved graph node. It materializes an immutable active snapshot: later graph
+relations invalidate the snapshot cache and a subsequent inspection allocates
+a fresh snapshot rather than refilling an observed `TypeId`. The draft retains
+the graph node, not the snapshot id, and final sealing allocates fresh durable
+ids. Consequently neither an unresolved variable nor an open row can ever be
+observed as `tag_union []`, and no `TypeId` can change from that shape to a
+different type after a consumer has seen it.
 
 The only time an unresolved checked variable with an empty-tag-union row
 default may become durable `tag_union []` is final graph sealing, after every

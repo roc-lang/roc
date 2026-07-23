@@ -1070,7 +1070,7 @@ pub const ProgramView = struct {
     }
 
     /// Verify that a completed program view refers only to durable type-store
-    /// ids. Active graph views are rejected by graph-scoped sealing while the
+    /// ids. Active snapshots are rejected by graph-scoped sealing while the
     /// graph maps still exist; completed views must additionally be frozen and
     /// contain only in-bounds final type ids.
     pub fn verifyCompletedTypeIds(self: ProgramView) ?CompletedTypeIdVerifyError {

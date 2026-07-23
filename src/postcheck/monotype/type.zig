@@ -402,13 +402,6 @@ pub const Store = struct {
         return reserved;
     }
 
-    /// Update an active instantiation graph's mutable Monotype view. This is a
-    /// graph-compatibility API only; completed program views must seal graph
-    /// nodes into fresh immutable ids before constructing `Ast.ProgramView`.
-    pub fn replaceGraphView(self: *Store, ty: TypeId, content: Content) void {
-        self.fillReservedSlot(ty, content);
-    }
-
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
         return try self.add(.zst);
     }

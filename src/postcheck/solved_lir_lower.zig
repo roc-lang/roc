@@ -265,11 +265,6 @@ const FnEntry = struct {
     proc: ?LIR.LirProcSpecId,
 };
 
-const ConstFnTypeInfo = struct {
-    args: const_store.ConstRange,
-    ret: const_store.ConstTypeId,
-};
-
 const RootEntry = struct {
     fn_id: Type.FnId,
     request: check.CheckedModule.RootRequest,
@@ -1672,7 +1667,7 @@ const Lowerer = struct {
                 } };
             },
             .callable => |variants| return try self.constFuncTypeForCallable(ty, variants),
-            .erased_fn => |erased| return try self.constFuncTypeForErased(erased.members),
+            .erased_fn => |erased| return try self.constFuncTypeForErased(ty, erased.members),
             .capture_record => Common.invariant("capture record reached ConstStore type output as a captured value"),
             .erased_capture_ptr => Common.invariant("erased capture pointer reached ConstStore type output as a captured value"),
         };
@@ -1709,33 +1704,14 @@ const Lowerer = struct {
         } };
     }
 
-    fn constFuncTypeForErased(self: *Lowerer, variants_span: Type.Span) Common.LowerError!const_store.ConstType {
+    fn constFuncTypeForErased(
+        self: *Lowerer,
+        ty: Type.TypeId,
+        variants_span: Type.Span,
+    ) Common.LowerError!const_store.ConstType {
         const variants = self.types.fnVariantSpan(variants_span);
         if (variants.len == 0) Common.invariant("erased function capture type had no function variants");
-        const function = try self.constFuncTypeForErasedVariants(variants);
-        return .{ .func = .{ .args = function.args, .ret = function.ret } };
-    }
-
-    fn constFuncTypeForErasedVariants(
-        self: *Lowerer,
-        variants: anytype,
-    ) Common.LowerError!ConstFnTypeInfo {
-        const first_variant = GuardedList.at(variants, 0);
-        const first_template = self.fnTemplateForFn(first_variant.target);
-        const first_digest = self.solved.lifted.types.typeDigest(&self.solved.lifted.names, first_template.mono_fn_ty);
-        for (1..variants.len) |index| {
-            const variant = GuardedList.at(variants, index);
-            const template = self.fnTemplateForFn(variant.target);
-            const digest = self.solved.lifted.types.typeDigest(&self.solved.lifted.names, template.mono_fn_ty);
-            if (!std.mem.eql(u8, first_digest.bytes[0..], digest.bytes[0..])) {
-                Common.invariant("erased callable variants had different monomorphic function types");
-            }
-        }
-        const fn_ty = try self.constTypeOfMonoType(first_template.mono_fn_ty);
-        return switch (self.result.const_types.get(fn_ty)) {
-            .func => |function| .{ .args = function.args, .ret = function.ret },
-            else => Common.invariant("callable capture source type was not a function"),
-        };
+        return try self.constFuncTypeForCallableSource(ty);
     }
 
     fn constTypeOfMonoType(self: *Lowerer, ty: MonoType.TypeId) Common.LowerError!const_store.ConstTypeId {
