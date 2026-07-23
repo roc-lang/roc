@@ -4622,6 +4622,88 @@ test "opaque interface relation preserves forced-dynamic iterator identity" {
     try std.testing.expectEqual(Type.IteratorRepresentation.forced_dynamic, graph.content(private).named.def.iterator_representation);
 }
 
+test "generated iterator depth visits wide graphs without a size cutoff" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x64} ** 32));
+    const type_name = try name_store.internTypeName("Iter");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = testCheckedTypeId(5) };
+    const public_backing = try graph.newNode(.empty_record);
+    const public_source: InstIteratorPublicSource = .{
+        .named_type = named_type,
+        .def = .{ .module = module_identity, .type_name = type_name },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .backing = .{ .node = public_backing, .use = .runtime_layout_only },
+        .declared_order = &.{},
+    };
+    const item = try graph.newNode(.{ .primitive = .u64 });
+    const source = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_kind = .single,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{item}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = .{
+            .callable_evidence = null,
+            .public_source = public_source,
+        },
+    } });
+
+    // Put the only iterator-bearing child after the former 64-node walk
+    // budget. Graph width must not change the adapter's representation.
+    const wide_children = try graph.arena().alloc(NodeId, 65);
+    for (wide_children[0..64]) |*child| {
+        child.* = try graph.newNode(.{ .primitive = .u64 });
+    }
+    wide_children[64] = source;
+    const wide_component = try graph.newNode(.{ .tuple = wide_children });
+    const adapter = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = .{
+            .module = module_identity,
+            .type_name = type_name,
+            .iterator_kind = .concat,
+        },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try graph.arena().dupe(NodeId, &.{ item, wide_component }),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+        .generated_iterator = .{
+            .callable_evidence = null,
+            .public_source = public_source,
+        },
+    } });
+
+    try graph.finalizeGeneratedIteratorRepresentations();
+
+    const finalized = graph.content(adapter).named.def;
+    try std.testing.expectEqual(Type.IteratorRepresentation.minted, finalized.iterator_representation);
+    try std.testing.expectEqual(@as(u8, 2), finalized.iterator_depth);
+}
+
 test "opaque interface relation preserves nested generated-private backing" {
     const gpa = std.testing.allocator;
 
