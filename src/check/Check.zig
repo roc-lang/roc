@@ -13,6 +13,7 @@ const exact_numeral = types_mod.numeral;
 const can = @import("can");
 
 const canonical_type_keys = @import("canonical_type_keys.zig");
+const reunify_census = @import("reunify_census.zig");
 const copy_import = @import("copy_import.zig");
 const requirement_solution = @import("requirement_solution.zig");
 const unifier = @import("unify.zig");
@@ -451,6 +452,19 @@ scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty
 /// Scratch buffer for one captured scheme snapshot's ordered binders, flushed
 /// into `cir.scheme_snapshots` (reunify.md 7.1, Slice 2).
 scratch_snapshot_binders: std.ArrayListUnmanaged(ModuleEnv.SchemeSnapshotBinder) = .empty,
+/// Scratch buffer for one dense instantiation site's positional actuals, flushed
+/// into `cir.scheme_use_site_actuals` (reunify.md 7.2, Slice 2).
+scratch_site_actuals: std.ArrayListUnmanaged(ModuleEnv.SchemeUseSiteActual) = .empty,
+/// Index from a captured scheme's resolved root var to its `scheme_snapshots`
+/// record index, so a use site can find the owning scheme's binder order while
+/// its `var_map` is still live (reunify.md 7.2, Slice 2). Populated as snapshots
+/// are captured and truncated in lockstep with the snapshot table on `Probe`
+/// rollback via `snapshot_root_vars`.
+snapshot_record_by_root: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// The resolved root var of each `scheme_snapshots` record, aligned 1:1 with it,
+/// so `Probe` rollback can drop the corresponding `snapshot_record_by_root`
+/// entries for records the savepoint discarded (reunify.md 7.2, Slice 2).
+snapshot_root_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`) — open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -1617,6 +1631,9 @@ pub fn deinit(self: *Self) void {
     self.ambiguity_verdicts.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
     self.scratch_snapshot_binders.deinit(self.gpa);
+    self.scratch_site_actuals.deinit(self.gpa);
+    self.snapshot_record_by_root.deinit(self.gpa);
+    self.snapshot_root_vars.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
@@ -3696,7 +3713,19 @@ fn captureSchemeSnapshot(self: *Self, owner_node_idx: u32, root: Var) std.mem.Al
         });
     }
 
+    const record_idx: u32 = @intCast(self.cir.scheme_snapshots.items.items.len);
     try self.cir.recordSchemeSnapshot(owner_node_idx, digest.bytes, self.scratch_snapshot_binders.items);
+
+    // Index this scheme's resolved root so an ordinary use site (reunify.md 7.2,
+    // Slice 2) can find the owning snapshot's binder order while its `var_map` is
+    // still live. `snapshot_root_vars` mirrors the snapshot table 1:1 and stores
+    // the RESOLVED root so `Probe` rollback can drop the entries a speculative
+    // capture added without resolving a var the savepoint already discarded.
+    // Keep-first on a root collision matches publication's snapshot selection.
+    const resolved_root = self.types.resolveVar(root).var_;
+    try self.snapshot_root_vars.append(self.gpa, resolved_root);
+    const entry = try self.snapshot_record_by_root.getOrPut(self.gpa, resolved_root);
+    if (!entry.found_existing) entry.value_ptr.* = record_idx;
 }
 
 /// Instantiate a variable, substituting any encountered rigids with
@@ -3946,6 +3975,23 @@ fn instantiateVarHelp(
         self.scratch_evidence_pairs.clearRetainingCapacity();
     }
 
+    // Record the dense, positional actual vector for this instantiation edge
+    // (reunify.md 7.2, Slice 2). This is additive to the constrained-pair record
+    // above — it covers every binder in the owning scheme's snapshot order, not
+    // only the constrained ones, and fires even when the scheme has no
+    // constraints. Gated to the ordinary value-instantiation entry point
+    // (`instantiateVar`, the only caller using `.fresh_flex`): orphan copies,
+    // annotation-subsumption, and platform-requirement instantiations are not
+    // scheme-use edges and must not record sites. The record is verified, not
+    // authoritative — nothing lowers from it yet.
+    if (instantiator.rigid_behavior == .fresh_flex) {
+        try self.recordDenseInstantiationSite(
+            var_to_instantiate,
+            instantiated_var,
+            nested_function_use,
+        );
+    }
+
     // Add the var to the right rank
     try env.var_pool.addVarToRank(instantiated_var, instantiator.current_rank);
 
@@ -3962,8 +4008,93 @@ fn recordSharedSchemeUse(
     slot: ModuleEnv.SchemeUseRecord.Slot,
     slot_data: u32,
     scheme_root: Var,
+    scheme_owner_node: u32,
 ) std.mem.Allocator.Error!void {
     try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_root, &.{});
+
+    // Dense in-group site (reunify.md 7.2, Slice 2). An in-group monomorphic
+    // reference is recorded before its scheme generalizes, so it has no binders
+    // yet and no `var_map`: leave the actual vector empty and name the referenced
+    // definition's snapshot key. Publication resolves that snapshot's binders to
+    // the identity mapping (binder i ↦ binder i), the substitution a shared use
+    // expresses. `scheme_owner_node` is `scheme_use_site_owner_none` when the
+    // referenced definition owns no local snapshot (a cross-module target).
+    _ = try self.cir.recordSchemeUseSite(node_idx, slot, slot_data, scheme_owner_node, scheme_root, &.{});
+    if (reunify_census.active()) {
+        reunify_census.recordSchemeUseSiteShared(@intFromEnum(slot));
+    }
+}
+
+/// Record the dense, positional actual vector for one ordinary scheme
+/// instantiation edge (reunify.md 7.2, Slice 2). The edge is attributed to the
+/// owning definition's scheme snapshot by the instantiated root's resolved var;
+/// the actual for binder `i` is the fresh var it was copied to (from the still
+/// live `var_map`), or `scheme_use_site_unreached` when the copy did not reach it
+/// (the use instantiated a sub-root that omits that binder). The context mirrors
+/// the constrained-pair dispatch so both records key one edge identically.
+fn recordDenseInstantiationSite(
+    self: *Self,
+    var_to_instantiate: Var,
+    instantiated_var: Var,
+    nested_function_use: ?CIR.Expr.Idx,
+) std.mem.Allocator.Error!void {
+    const use_node: u32, const slot: ModuleEnv.SchemeUseRecord.Slot, const slot_data: u32 = ctx: {
+        if (nested_function_use) |source_expr| {
+            break :ctx .{ @intFromEnum(source_expr), .nested_function_use, 0 };
+        }
+        if (self.evidence_target_site) |target| {
+            break :ctx .{ target.node_idx, .dispatch_target, @intFromEnum(target.constraint_fn_var) };
+        }
+        if (self.instantiation_source_expr) |source_expr| {
+            switch (self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag) {
+                .expr_var,
+                .expr_external_lookup,
+                .expr_required_lookup,
+                .expr_field_access,
+                => break :ctx .{ @intFromEnum(source_expr), .value_use, 0 },
+                else => return,
+            }
+        }
+        return;
+    };
+
+    const resolved_root = self.types.resolveVar(var_to_instantiate).var_;
+    const record_idx = self.snapshot_record_by_root.get(resolved_root) orelse {
+        // Instantiation of a definition with no local snapshot — an imported,
+        // external, required, or synthetic scheme, which a later sub-slice
+        // handles. Measured, not failed.
+        if (reunify_census.active()) {
+            reunify_census.recordSchemeUseSiteWithoutSnapshot(@intFromEnum(slot));
+        }
+        return;
+    };
+
+    const record = self.cir.scheme_snapshots.items.items[record_idx];
+    const binders = self.cir.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
+
+    self.scratch_site_actuals.clearRetainingCapacity();
+    var unreached: u32 = 0;
+    for (binders) |binder| {
+        if (self.var_map.get(@enumFromInt(binder.original))) |fresh_var| {
+            try self.scratch_site_actuals.append(self.gpa, .{ .fresh_var = @intFromEnum(fresh_var) });
+        } else {
+            unreached += 1;
+            try self.scratch_site_actuals.append(self.gpa, .{ .fresh_var = ModuleEnv.scheme_use_site_unreached });
+        }
+    }
+
+    _ = try self.cir.recordSchemeUseSite(
+        use_node,
+        slot,
+        slot_data,
+        record.owner_node,
+        instantiated_var,
+        self.scratch_site_actuals.items,
+    );
+
+    if (reunify_census.active()) {
+        reunify_census.recordSchemeUseSite(@intFromEnum(slot), unreached);
+    }
 }
 
 // regions //
@@ -12396,6 +12527,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                     .shared_value_use,
                                     0,
                                     ModuleEnv.varFrom(processing_def.def_idx),
+                                    @intFromEnum(referenced_def.expr),
                                 );
                             }
                             break :blk;
@@ -12439,6 +12571,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                             .shared_value_use,
                             0,
                             ModuleEnv.varFrom(processing_def.def_idx),
+                            @intFromEnum(referenced_def.expr),
                         );
                         break :blk;
                     },
@@ -12478,6 +12611,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .shared_value_use,
                     0,
                     pat_var,
+                    @intFromEnum(lookup.pattern_idx),
                 );
                 break :blk;
             }
@@ -12521,6 +12655,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         .shared_value_use,
                         0,
                         ModuleEnv.varFrom(processing_def.def_idx),
+                        @intFromEnum(self.cir.store.getDef(processing_def.def_idx).expr),
                     );
                 }
             }
@@ -17106,6 +17241,8 @@ const Probe = struct {
     scheme_use_pairs_len: usize,
     scheme_snapshots_len: usize,
     scheme_snapshot_binders_len: usize,
+    scheme_use_sites_len: usize,
+    scheme_use_site_actuals_len: usize,
 
     fn rollback(self: *Probe) void {
         self.check.types.rollbackToSavepoint(&self.savepoint);
@@ -17123,9 +17260,22 @@ const Probe = struct {
         self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
         // Scheme snapshots captured during the probe reference orphan-copy vars
-        // the savepoint rollback just discarded.
+        // the savepoint rollback just discarded. Drop the resolved-root index
+        // entries those records seeded before truncating the mirror list. Only
+        // remove an entry still pointing at a discarded record — a keep-first
+        // entry seeded by an earlier surviving capture stays.
+        for (self.check.snapshot_root_vars.items[self.scheme_snapshots_len..]) |resolved_root| {
+            if (self.check.snapshot_record_by_root.get(resolved_root)) |idx| {
+                if (idx >= self.scheme_snapshots_len) _ = self.check.snapshot_record_by_root.remove(resolved_root);
+            }
+        }
+        self.check.snapshot_root_vars.shrinkRetainingCapacity(self.scheme_snapshots_len);
         self.check.cir.scheme_snapshots.items.shrinkRetainingCapacity(self.scheme_snapshots_len);
         self.check.cir.scheme_snapshot_binders.items.shrinkRetainingCapacity(self.scheme_snapshot_binders_len);
+        // Dense instantiation sites recorded during the probe likewise reference
+        // fresh vars the savepoint rollback just discarded.
+        self.check.cir.scheme_use_sites.items.shrinkRetainingCapacity(self.scheme_use_sites_len);
+        self.check.cir.scheme_use_site_actuals.items.shrinkRetainingCapacity(self.scheme_use_site_actuals_len);
     }
 
     /// Close the probe scope KEEPING everything it did: the type-store
@@ -17147,6 +17297,8 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
     const scheme_snapshots_len = self.cir.scheme_snapshots.items.items.len;
     const scheme_snapshot_binders_len = self.cir.scheme_snapshot_binders.items.items.len;
+    const scheme_use_sites_len = self.cir.scheme_use_sites.items.items.len;
+    const scheme_use_site_actuals_len = self.cir.scheme_use_site_actuals.items.items.len;
     return .{
         .check = self,
         .regions_len = regions_len,
@@ -17158,6 +17310,8 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .scheme_use_pairs_len = scheme_use_pairs_len,
         .scheme_snapshots_len = scheme_snapshots_len,
         .scheme_snapshot_binders_len = scheme_snapshot_binders_len,
+        .scheme_use_sites_len = scheme_use_sites_len,
+        .scheme_use_site_actuals_len = scheme_use_site_actuals_len,
         .savepoint = try self.types.createSavepoint(),
     };
 }
@@ -19193,6 +19347,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .dispatch_target,
                             @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
                             expr_var_for_method,
+                            @intFromEnum(def.expr),
                         );
                         break :blk expr_var_for_method;
                     } else if (method_is_this_module) blk: {
@@ -19205,6 +19360,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .dispatch_target,
                             @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
                             local_method_type_var,
+                            @intFromEnum(def.expr),
                         );
                         break :blk local_method_type_var;
                     } else blk: {
@@ -19524,6 +19680,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .dispatch_target,
                             @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
                             expr_var_for_method,
+                            @intFromEnum(def.expr),
                         );
                         break :blk expr_var_for_method;
                     } else if (method_is_this_module) blk: {
@@ -19536,6 +19693,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                             .dispatch_target,
                             @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
                             local_method_type_var,
+                            @intFromEnum(def.expr),
                         );
                         break :blk local_method_type_var;
                     } else blk: {

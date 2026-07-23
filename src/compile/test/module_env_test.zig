@@ -47,6 +47,19 @@ test "ModuleEnv.Serialized roundtrip" {
     );
     try std.testing.expectEqual(@as(usize, 1), original.scheme_snapshots.items.items.len);
 
+    // A dense positional scheme-use site (reunify.md 7.2, Slice 2) must also
+    // round-trip: its edge identity, instantiated root, and positional actuals
+    // (including the unreached sentinel) all survive the module cache.
+    _ = try original.recordSchemeUseSite(
+        555,
+        .value_use,
+        0,
+        1234,
+        @enumFromInt(88),
+        &.{ .{ .fresh_var = 21 }, .{ .fresh_var = ModuleEnv.scheme_use_site_unreached } },
+    );
+    try std.testing.expectEqual(@as(usize, 1), original.scheme_use_sites.items.items.len);
+
     var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
@@ -112,6 +125,19 @@ test "ModuleEnv.Serialized roundtrip" {
         const binders = env.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
         try std.testing.expectEqual(@as(u32, 7), binders[0].original);
         try std.testing.expectEqual(@as(u32, 9), binders[1].original);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), env.scheme_use_sites.items.items.len);
+    {
+        const record = env.scheme_use_sites.items.items[0];
+        try std.testing.expectEqual(@as(u32, 555), record.use_node);
+        try std.testing.expectEqual(@as(u32, @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.value_use)), record.slot_kind);
+        try std.testing.expectEqual(@as(u32, 1234), record.scheme_owner_node);
+        try std.testing.expectEqual(@as(u32, 88), record.instantiated_root);
+        try std.testing.expectEqual(@as(u32, 2), record.actuals_len);
+        const actuals = env.scheme_use_site_actuals.items.items[record.actuals_start .. record.actuals_start + record.actuals_len];
+        try std.testing.expectEqual(@as(u32, 21), actuals[0].fresh_var);
+        try std.testing.expectEqual(ModuleEnv.scheme_use_site_unreached, actuals[1].fresh_var);
     }
 
     // Verify original data before serialization was correct

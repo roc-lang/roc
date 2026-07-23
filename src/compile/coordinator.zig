@@ -2867,6 +2867,12 @@ pub const Coordinator = struct {
         const env_len = env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
+        // reunify Slice 2 cost checkpoint (reunify.md 7.2/15.3): accumulate this
+        // module's serialized env and artifact byte totals when the census is on.
+        if (check.ReunifyCensus.active()) {
+            check.ReunifyCensus.addArtifactBytes(@intCast(env_len), @intCast(artifact_len));
+        }
+
         const entry = manager.allocator.alloc(u8, checked_module_cache_header_len + env_len + artifact_len) catch {
             manager.recordStoreFailure();
             return;

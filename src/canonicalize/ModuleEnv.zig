@@ -702,6 +702,59 @@ pub const SchemeSnapshotBinder = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A `SchemeUseSiteActual.fresh_var` value meaning "scheme binder at this
+/// position was not reached while copying this instantiation's root" — the use
+/// instantiated a sub-root that does not contain the binder, so the map holds no
+/// fresh copy for it. Distinct from every real `Var`.
+pub const scheme_use_site_unreached: u32 = std.math.maxInt(u32);
+
+/// A `SchemeUseSiteRecord.scheme_owner_node` value meaning "no owning snapshot is
+/// attributed yet". Every ordinary (value/nested/dispatch) site names its owning
+/// snapshot; a shared in-group site is recorded before its scheme generalizes, so
+/// it carries this marker and is resolved to the owner at publication.
+pub const scheme_use_site_owner_none: u32 = std.math.maxInt(u32);
+
+/// One dense, positional scheme-instantiation site recorded by checking
+/// (reunify.md 7.2, Slice 2). Where `SchemeUseRecord` pairs only the CONSTRAINED
+/// scheme vars in nondeterministic map order, this records the COMPLETE actual
+/// vector positionally: for the owning definition's scheme binder `i` (in the
+/// snapshot's canonical binder order), `scheme_use_site_actuals[actuals_start +
+/// i]` is the fresh var that binder was copied to at this edge, or
+/// `scheme_use_site_unreached` when the copy did not reach it. The stable edge
+/// identity is the tuple `(use_node, slot_kind, slot_data, scheme_owner_node)`;
+/// `instantiated_root` is the fresh root minted at this edge. Publication resolves
+/// the fresh vars once checking settles; the record is verified, not authoritative.
+pub const SchemeUseSiteRecord = extern struct {
+    /// The CIR node of the USE (referencing expression or dispatch site).
+    use_node: u32,
+    /// `SchemeUseRecord.Slot` — the same discriminator the constrained-pair
+    /// records use, so both keep one edge's records aligned.
+    slot_kind: u32,
+    /// For `dispatch_target` slots, the raw constraint fn `Var` whose discharge
+    /// instantiated this scheme; 0 otherwise. Part of the edge identity.
+    slot_data: u32,
+    /// The owning definition's scheme snapshot key (its `SchemeSnapshotRecord`
+    /// `owner_node`), or `scheme_use_site_owner_none` for an as-yet-unresolved
+    /// shared in-group site.
+    scheme_owner_node: u32,
+    /// The instantiated root's fresh `Var` at this edge (the scheme root itself
+    /// for a shared in-group site, which does not mint a copy).
+    instantiated_root: u32,
+    /// Range into `scheme_use_site_actuals`.
+    actuals_start: u32,
+    actuals_len: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One positional actual of a `SchemeUseSiteRecord`: the fresh `Var` created for
+/// the owning scheme's binder at this position, or `scheme_use_site_unreached`.
+pub const SchemeUseSiteActual = extern struct {
+    fresh_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -862,6 +915,11 @@ scheme_use_pairs: SchemeUsePair.SafeList,
 scheme_snapshots: SchemeSnapshotRecord.SafeList,
 /// Flat pool of ordered binders backing `scheme_snapshots`.
 scheme_snapshot_binders: SchemeSnapshotBinder.SafeList,
+/// Dense, positional scheme-instantiation sites recorded by checking
+/// (reunify.md 7.2, Slice 2); consumed at checked-module publication.
+scheme_use_sites: SchemeUseSiteRecord.SafeList,
+/// Flat pool of positional actuals backing `scheme_use_sites`.
+scheme_use_site_actuals: SchemeUseSiteActual.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1053,6 +1111,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .scheme_snapshots = try SchemeSnapshotRecord.SafeList.initCapacity(gpa, 8),
         .scheme_snapshot_binders = try SchemeSnapshotBinder.SafeList.initCapacity(gpa, 8),
+        .scheme_use_sites = try SchemeUseSiteRecord.SafeList.initCapacity(gpa, 8),
+        .scheme_use_site_actuals = try SchemeUseSiteActual.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -1080,6 +1140,8 @@ pub fn deinit(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.scheme_snapshots.deinit(self.gpa);
     self.scheme_snapshot_binders.deinit(self.gpa);
+    self.scheme_use_sites.deinit(self.gpa);
+    self.scheme_use_site_actuals.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1123,6 +1185,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.scheme_snapshots.deinit(self.gpa);
     self.scheme_snapshot_binders.deinit(self.gpa);
+    self.scheme_use_sites.deinit(self.gpa);
+    self.scheme_use_site_actuals.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -3328,6 +3392,8 @@ pub const Serialized = extern struct {
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     scheme_snapshots: SchemeSnapshotRecord.SafeList.Serialized,
     scheme_snapshot_binders: SchemeSnapshotBinder.SafeList.Serialized,
+    scheme_use_sites: SchemeUseSiteRecord.SafeList.Serialized,
+    scheme_use_site_actuals: SchemeUseSiteActual.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3429,6 +3495,8 @@ pub const Serialized = extern struct {
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.scheme_snapshots.serialize(&env.scheme_snapshots, allocator, writer);
         try self.scheme_snapshot_binders.serialize(&env.scheme_snapshot_binders, allocator, writer);
+        try self.scheme_use_sites.serialize(&env.scheme_use_sites, allocator, writer);
+        try self.scheme_use_site_actuals.serialize(&env.scheme_use_site_actuals, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3490,6 +3558,8 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .scheme_snapshots = self.scheme_snapshots.deserializeInto(base_addr),
             .scheme_snapshot_binders = self.scheme_snapshot_binders.deserializeInto(base_addr),
+            .scheme_use_sites = self.scheme_use_sites.deserializeInto(base_addr),
+            .scheme_use_site_actuals = self.scheme_use_site_actuals.deserializeInto(base_addr),
         };
 
         return env;
@@ -3551,6 +3621,8 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .scheme_snapshots = self.scheme_snapshots.deserializeInto(base_addr),
             .scheme_snapshot_binders = self.scheme_snapshot_binders.deserializeInto(base_addr),
+            .scheme_use_sites = self.scheme_use_sites.deserializeInto(base_addr),
+            .scheme_use_site_actuals = self.scheme_use_site_actuals.deserializeInto(base_addr),
         };
     }
 
@@ -3614,6 +3686,8 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .scheme_snapshots = try self.scheme_snapshots.deserializeWithCopy(base_addr, gpa),
             .scheme_snapshot_binders = try self.scheme_snapshot_binders.deserializeWithCopy(base_addr, gpa),
+            .scheme_use_sites = try self.scheme_use_sites.deserializeWithCopy(base_addr, gpa),
+            .scheme_use_site_actuals = try self.scheme_use_site_actuals.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3854,6 +3928,37 @@ pub fn recordSchemeSnapshot(
         .binders_len = @intCast(binders.len),
         .digest = digest,
     });
+}
+
+/// Record one dense, positional scheme-instantiation site (reunify.md 7.2, Slice
+/// 2). `actuals` is the complete positional actual vector in the owning scheme's
+/// binder order; each entry is the fresh var the binder was copied to, or
+/// `scheme_use_site_unreached`. Returns the new record's index so a later
+/// generalization boundary can resolve a shared in-group site in place.
+pub fn recordSchemeUseSite(
+    self: *Self,
+    use_node: u32,
+    slot: SchemeUseRecord.Slot,
+    slot_data: u32,
+    scheme_owner_node: u32,
+    instantiated_root: TypeVar,
+    actuals: []const SchemeUseSiteActual,
+) std.mem.Allocator.Error!u32 {
+    const actuals_start: u32 = @intCast(self.scheme_use_site_actuals.items.items.len);
+    for (actuals) |actual| {
+        _ = try self.scheme_use_site_actuals.append(self.gpa, actual);
+    }
+    const record_idx: u32 = @intCast(self.scheme_use_sites.items.items.len);
+    _ = try self.scheme_use_sites.append(self.gpa, .{
+        .use_node = use_node,
+        .slot_kind = @intFromEnum(slot),
+        .slot_data = slot_data,
+        .scheme_owner_node = scheme_owner_node,
+        .instantiated_root = @intFromEnum(instantiated_root),
+        .actuals_start = actuals_start,
+        .actuals_len = @intCast(actuals.len),
+    });
+    return record_idx;
 }
 
 /// Return the checked `from_quote` function for a string literal node.

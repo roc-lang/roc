@@ -54,7 +54,8 @@ pub const Constants = struct {
     /// 28: String interpolation constraint metadata moved into the type store.
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
     /// 31: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
-    pub const CACHE_VERSION = 31;
+    /// 32: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
+    pub const CACHE_VERSION = 32;
 };
 
 /// Configuration for the Roc cache system.

@@ -2423,6 +2423,55 @@ pub const CheckedTypeScheme = struct {
     }
 };
 
+/// A `CheckedInstantiationSite.scheme` value meaning the site's owning scheme was
+/// not resolved to a published `CheckedTypeSchemeId` — its snapshot owner node has
+/// no published scheme (e.g. an annotation-owned in-group snapshot, or a shared
+/// edge whose target owns no local scheme). Distinct from every real id.
+pub const instantiation_site_scheme_none: u32 = std.math.maxInt(u32);
+
+/// A `CheckedInstantiationSite` actual value meaning the scheme binder at this
+/// position was not reached while copying the instantiation's root (the checking
+/// sentinel `ModuleEnv.scheme_use_site_unreached`, translated). Distinct from
+/// every real `CheckedTypeId`.
+pub const checked_instantiation_actual_unreached: u32 = std.math.maxInt(u32);
+
+/// Public `CheckedInstantiationSite` declaration (reunify.md 7.2, Slice 2).
+///
+/// One dense scheme-instantiation edge published from the checker's positional
+/// use-site records. The stable edge identity is
+/// `(use_node, slot_kind, slot_data, scheme_owner_node)`; `actuals[i]` is the
+/// checked type the owning scheme's binder `i` took at this edge (or
+/// `checked_instantiation_actual_unreached`). The data is verified against the
+/// existing evidence records, not yet authoritative — nothing lowers from it.
+pub const CheckedInstantiationSite = struct {
+    /// The CIR node of the use (referencing expression or dispatch site).
+    use_node: u32,
+    /// `ModuleEnv.SchemeUseRecord.Slot`.
+    slot_kind: u32,
+    /// For `dispatch_target` slots, the raw constraint fn var; 0 otherwise.
+    slot_data: u32,
+    /// The owning definition's scheme snapshot key (its CIR owner node).
+    scheme_owner_node: u32,
+    /// The owning `CheckedTypeSchemeId` as `u32`, or `instantiation_site_scheme_none`.
+    scheme: u32 = instantiation_site_scheme_none,
+    /// The instantiated root's checked type at this edge.
+    instantiated_root: CheckedTypeId,
+    /// Range into `CheckedTypeStore.instantiation_site_actuals` (POD).
+    actuals_start: u32 = 0,
+    actuals_len: u32 = 0,
+
+    /// The owning published scheme id, or null when unresolved.
+    pub fn schemeId(self: CheckedInstantiationSite) ?CheckedTypeSchemeId {
+        if (self.scheme == instantiation_site_scheme_none) return null;
+        return @enumFromInt(self.scheme);
+    }
+
+    /// The site's positional actuals within its store's `instantiation_site_actuals`.
+    pub fn actuals(self: CheckedInstantiationSite, pool_owner: anytype) []const CheckedTypeId {
+        return pool_owner.instantiationSiteActuals()[self.actuals_start .. self.actuals_start + self.actuals_len];
+    }
+};
+
 /// Public `CheckedStaticDispatchConstraint` declaration.
 pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
@@ -3412,6 +3461,10 @@ pub const CheckedTypeStore = struct {
     constraint_pool: std.ArrayList(CheckedStaticDispatchConstraint) = .empty,
     /// Flat pool of (range-form) tags backing tag_union payloads.
     tag_pool: std.ArrayList(CheckedTag) = .empty,
+    /// Published dense scheme-instantiation sites (reunify.md 7.2, Slice 2).
+    instantiation_sites: std.ArrayList(CheckedInstantiationSite) = .empty,
+    /// Flat pool of positional actuals backing `instantiation_sites`.
+    instantiation_site_actuals: std.ArrayList(CheckedTypeId) = .empty,
     /// Interner backing variable names.
     var_names: canonical.NameInterner = .{},
     /// True for a store reconstructed from a serialized buffer (pools point into
@@ -3445,6 +3498,16 @@ pub const CheckedTypeStore = struct {
     /// The shared flat pool of (range-form) tags.
     pub fn tagPool(self: *const CheckedTypeStore) []const CheckedTag {
         return self.tag_pool.items;
+    }
+
+    /// The published dense scheme-instantiation sites.
+    pub fn instantiationSites(self: *const CheckedTypeStore) []const CheckedInstantiationSite {
+        return self.instantiation_sites.items;
+    }
+
+    /// The shared flat pool of instantiation-site positional actuals.
+    pub fn instantiationSiteActuals(self: *const CheckedTypeStore) []const CheckedTypeId {
+        return self.instantiation_site_actuals.items;
     }
 
     /// Text of a stored variable name id, or null for the absent sentinel.
@@ -3489,6 +3552,12 @@ pub const CheckedTypeStore = struct {
         // (see the `argsSlice`/`payload`/`formalArgs` aliasing-invariant docs).
         std.debug.assert(!self.serialized);
         return artifact_serialize.appendSpan(CheckedTypeRange, CheckedTypeId, &self.type_id_pool, allocator, ids);
+    }
+
+    /// Append `ids` to `instantiation_site_actuals`, returning their range.
+    fn appendInstantiationSiteActuals(self: *CheckedTypeStore, allocator: Allocator, ids: []const CheckedTypeId) Allocator.Error!CheckedTypeRange {
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedTypeId, &self.instantiation_site_actuals, allocator, ids);
     }
 
     /// Append `fields` to `record_field_pool`, returning their range.
@@ -3655,6 +3724,11 @@ pub const CheckedTypeStore = struct {
             const entry = try snapshot_index.getOrPut(record.owner_node);
             if (!entry.found_existing) entry.value_ptr.* = @intCast(i);
         }
+        // Scheme-owner CIR node -> published `CheckedTypeSchemeId`, filled as each
+        // definition's scheme is published, so a dense instantiation site
+        // (reunify.md 7.2, Slice 2) can name its owning published scheme.
+        var scheme_id_by_owner = std.AutoHashMap(u32, CheckedTypeSchemeId).init(allocator);
+        defer scheme_id_by_owner.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
@@ -3738,6 +3812,7 @@ pub const CheckedTypeStore = struct {
                     .gv_len = snapshot.gv_len,
                     .snapshot_root = snapshot.snapshot_root,
                 });
+                try scheme_id_by_owner.put(owner_node, scheme_id);
             }
 
             const aliases = module_env.for_clause_aliases.sliceRange(required_type.type_aliases);
@@ -3778,6 +3853,7 @@ pub const CheckedTypeStore = struct {
                     .gv_len = snapshot.gv_len,
                     .snapshot_root = snapshot.snapshot_root,
                 });
+                try scheme_id_by_owner.put(owner_node, scheme_id);
             }
         }
 
@@ -3791,6 +3867,13 @@ pub const CheckedTypeStore = struct {
 
         const source_type_roots = try sourceTypeRootsFromIndex(allocator, &active);
         errdefer allocator.free(source_type_roots);
+
+        // Publish the dense scheme-instantiation sites (reunify.md 7.2, Slice 2)
+        // last: translating a site's actual and instantiated-root vars appends to
+        // the store's roots without joining `source_type_roots`, which is already
+        // fixed above — the derived site payloads are additive published data, not
+        // source-of-truth roots for lowering.
+        try publishInstantiationSites(allocator, module, names, import_views, &store, &active, &scheme_id_by_owner);
 
         return .{
             .store = store,
@@ -4119,6 +4202,8 @@ pub const CheckedTypeStore = struct {
             self.nominal_record_field_pool.deinit(allocator);
             self.constraint_pool.deinit(allocator);
             self.tag_pool.deinit(allocator);
+            self.instantiation_sites.deinit(allocator);
+            self.instantiation_site_actuals.deinit(allocator);
             self.var_names.deinit(allocator);
         }
         self.* = .{};
@@ -4137,13 +4222,15 @@ pub const CheckedTypeStore = struct {
         nominal_record_field_pool: SerializedSlice(CheckedNominalRecordField) = .{},
         constraint_pool: SerializedSlice(CheckedStaticDispatchConstraint) = .{},
         tag_pool: SerializedSlice(CheckedTag) = .{},
+        instantiation_sites: SerializedSlice(CheckedInstantiationSite) = .{},
+        instantiation_site_actuals: SerializedSlice(CheckedTypeId) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 12 = 9 `SerializedSlice` fields + 3 for the nested `var_names`
+            // 14 = 11 `SerializedSlice` fields + 3 for the nested `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -6406,6 +6493,152 @@ fn publishSchemeSnapshot(
         .gv_start = gv_range.start,
         .gv_len = gv_range.len,
     };
+}
+
+/// The stable identity of one dense scheme-instantiation edge (reunify.md 7.2):
+/// the CIR use node, the slot discriminator, the slot data (a dispatch
+/// constraint's fn var, else 0), and the owning scheme's snapshot node. Two
+/// records sharing this tuple are re-checks of one edge and must resolve equal.
+const InstantiationEdgeKey = struct {
+    use_node: u32,
+    slot_kind: u32,
+    slot_data: u32,
+    scheme_owner_node: u32,
+};
+
+/// Publish the checker's dense positional scheme-instantiation sites into the
+/// checked store (reunify.md 7.2, Slice 2). Each record's stable edge is deduped
+/// keep-first (matching the constrained-pair records); ordinary sites translate
+/// their recorded fresh-var actuals directly, and shared in-group sites (recorded
+/// before their scheme generalized, so with no actuals) take the identity
+/// mapping — the owning scheme's own generalized vars. The data is verified, not
+/// authoritative: the opt-in Debug census reports duplicate equivalence and how
+/// many shared edges resolved to a dense vector versus remained bare markers.
+fn publishInstantiationSites(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+    scheme_id_by_owner: *const std.AutoHashMap(u32, CheckedTypeSchemeId),
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+    const census_on = reunify_census.active();
+
+    const sites_before = store.instantiation_sites.items.len;
+    const actuals_before = store.instantiation_site_actuals.items.len;
+    defer if (census_on) reunify_census.addPublishedSites(
+        @intCast(store.instantiation_sites.items.len - sites_before),
+        @intCast(store.instantiation_site_actuals.items.len - actuals_before),
+    );
+
+    var seen = std.AutoHashMap(InstantiationEdgeKey, u32).init(allocator);
+    defer seen.deinit();
+
+    for (module_env.scheme_use_sites.items.items, 0..) |record, record_idx| {
+        const edge = InstantiationEdgeKey{
+            .use_node = record.use_node,
+            .slot_kind = record.slot_kind,
+            .slot_data = record.slot_data,
+            .scheme_owner_node = record.scheme_owner_node,
+        };
+        const seen_entry = try seen.getOrPut(edge);
+        if (seen_entry.found_existing) {
+            if (census_on) censusInstantiationSiteDuplicate(module, seen_entry.value_ptr.*, @intCast(record_idx));
+            continue;
+        }
+        seen_entry.value_ptr.* = @intCast(record_idx);
+
+        const scheme_id = scheme_id_by_owner.get(record.scheme_owner_node);
+        const is_shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
+
+        const instantiated_root = try appendCheckedTypeRoot(
+            allocator,
+            module,
+            names,
+            imports,
+            store,
+            active,
+            @enumFromInt(record.instantiated_root),
+        );
+
+        var actuals_range = CheckedTypeRange{};
+        if (record.actuals_len > 0) {
+            const recorded = module_env.scheme_use_site_actuals.items.items[record.actuals_start .. record.actuals_start + record.actuals_len];
+            const ids = try allocator.alloc(CheckedTypeId, recorded.len);
+            defer allocator.free(ids);
+            for (recorded, 0..) |actual, i| {
+                if (actual.fresh_var == ModuleEnv.scheme_use_site_unreached) {
+                    ids[i] = @enumFromInt(checked_instantiation_actual_unreached);
+                } else {
+                    ids[i] = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(actual.fresh_var));
+                }
+            }
+            actuals_range = try store.appendInstantiationSiteActuals(allocator, ids);
+        } else if (scheme_id) |sid| {
+            // Identity mapping (reunify.md 7.2): the scheme's own generalized
+            // vars, copied out of `type_id_pool` before any further append can
+            // relocate that pool.
+            const scheme = store.schemes.items[@intFromEnum(sid)];
+            if (scheme.gv_len > 0) {
+                const ids = try allocator.alloc(CheckedTypeId, scheme.gv_len);
+                defer allocator.free(ids);
+                for (0..scheme.gv_len) |i| ids[i] = store.type_id_pool.items[scheme.gv_start + i];
+                actuals_range = try store.appendInstantiationSiteActuals(allocator, ids);
+            }
+        }
+
+        if (census_on and is_shared) {
+            reunify_census.recordSharedEdgeResolution(scheme_id != null);
+        }
+
+        try store.instantiation_sites.append(allocator, .{
+            .use_node = record.use_node,
+            .slot_kind = record.slot_kind,
+            .slot_data = record.slot_data,
+            .scheme_owner_node = record.scheme_owner_node,
+            .scheme = if (scheme_id) |sid| @intFromEnum(sid) else instantiation_site_scheme_none,
+            .instantiated_root = instantiated_root,
+            .actuals_start = actuals_range.start,
+            .actuals_len = actuals_range.len,
+        });
+    }
+}
+
+/// reunify Slice 2 census (reunify.md 7.2): compare two dense instantiation-site
+/// records for one edge position-wise by resolved actual digests and report
+/// whether they are equivalent. Deterministic projection makes a divergence a
+/// checking/publication bug; measurement never alters which record is kept. Any
+/// out-of-memory while digesting simply skips the measurement.
+fn censusInstantiationSiteDuplicate(module: TypedCIR.Module, kept_idx: u32, duplicate_idx: u32) void {
+    const equivalent = instantiationSiteRecordsEquivalent(module, kept_idx, duplicate_idx) catch return;
+    const module_env = module.moduleEnvConst();
+    const duplicate = module_env.scheme_use_sites.items.items[duplicate_idx];
+    reunify_census.recordSchemeUseSiteDuplicate(equivalent, module_env.module_name, duplicate.use_node);
+}
+
+fn instantiationSiteRecordsEquivalent(module: TypedCIR.Module, a_idx: u32, b_idx: u32) Allocator.Error!bool {
+    const module_env = module.moduleEnvConst();
+    const type_store = module.typeStoreConst();
+    const a = module_env.scheme_use_sites.items.items[a_idx];
+    const b = module_env.scheme_use_sites.items.items[b_idx];
+    if (a.actuals_len != b.actuals_len) return false;
+    const a_actuals = module_env.scheme_use_site_actuals.items.items[a.actuals_start .. a.actuals_start + a.actuals_len];
+    const b_actuals = module_env.scheme_use_site_actuals.items.items[b.actuals_start .. b.actuals_start + b.actuals_len];
+    var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer scratch.deinit();
+    const gpa = scratch.allocator();
+    for (a_actuals, b_actuals) |a_actual, b_actual| {
+        const a_unreached = a_actual.fresh_var == ModuleEnv.scheme_use_site_unreached;
+        const b_unreached = b_actual.fresh_var == ModuleEnv.scheme_use_site_unreached;
+        if (a_unreached != b_unreached) return false;
+        if (a_unreached) continue;
+        const a_key = try canonical_type_keys.fromVar(gpa, type_store, module_env, @enumFromInt(a_actual.fresh_var));
+        const b_key = try canonical_type_keys.fromVar(gpa, type_store, module_env, @enumFromInt(b_actual.fresh_var));
+        if (std.mem.order(u8, &a_key.bytes, &b_key.bytes) != .eq) return false;
+    }
+    return true;
 }
 
 fn appendCheckedTypeRoot(
@@ -23247,10 +23480,10 @@ pub const CheckedModuleArtifact = struct {
             // The TRUE total relocation fixup count: 1 (`direct_import_artifact_keys`)
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
-            // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
-            // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
-            // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 196);
+            // `proc_bases`; `checked_types` includes its `var_names` interner = 3 and
+            // its instantiation-site pools). POD inline `key`/`module_identity`
+            // contribute 0. Fixed at compile time, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 198);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -23398,7 +23631,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 26;
+    const serialized_layout_version: u32 = 27;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -27846,6 +28079,20 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .gv_len = gv.len,
     });
 
+    // A dense instantiation site (reunify.md 7.2, Slice 2) whose positional
+    // actuals [b, <unreached>] include the unreached sentinel.
+    const site_actuals = try store.appendInstantiationSiteActuals(gpa, &.{ b, @enumFromInt(checked_instantiation_actual_unreached) });
+    try store.instantiation_sites.append(gpa, .{
+        .use_node = 321,
+        .slot_kind = @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.value_use),
+        .slot_data = 0,
+        .scheme_owner_node = 654,
+        .scheme = 0,
+        .instantiated_root = c,
+        .actuals_start = site_actuals.start,
+        .actuals_len = site_actuals.len,
+    });
+
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
     // declared record sequence [{field}, {_ : a}].
     const fa = try store.appendTypeIds(gpa, &.{c});
@@ -27907,6 +28154,21 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqual(@as(canonical.ModuleIdentityId, @enumFromInt(15)), nominal.origin_module);
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, nominal.args);
     try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, nominal.padding_field_types);
+
+    // Dense instantiation site: edge fields, scheme id, instantiated root, and
+    // positional actuals (with the unreached sentinel) all survive.
+    try std.testing.expectEqual(@as(usize, 1), loaded.instantiation_sites.items.len);
+    {
+        const site = loaded.instantiation_sites.items[0];
+        try std.testing.expectEqual(@as(u32, 321), site.use_node);
+        try std.testing.expectEqual(@as(u32, 654), site.scheme_owner_node);
+        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), site.schemeId());
+        try std.testing.expectEqual(c, site.instantiated_root);
+        const actuals = site.actuals(&loaded);
+        try std.testing.expectEqual(@as(usize, 2), actuals.len);
+        try std.testing.expectEqual(b, actuals[0]);
+        try std.testing.expectEqual(@as(u32, checked_instantiation_actual_unreached), @intFromEnum(actuals[1]));
+    }
 
     // Scheme generalized vars + decl formal args.
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));
@@ -28204,8 +28466,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x72, 0xD9, 0x9B, 0x30, 0x2D, 0x8B, 0xB7, 0x12, 0x3E, 0x55, 0x7B, 0x12, 0xBF, 0x0B, 0x09, 0x0B,
-        0x9B, 0x75, 0x80, 0xDC, 0xF6, 0xA3, 0x67, 0x5C, 0x6E, 0xF9, 0x51, 0xD8, 0x4D, 0xA6, 0x46, 0x1E,
+        0xE4, 0x27, 0x99, 0x49, 0x66, 0x22, 0x58, 0x6B, 0xE0, 0x77, 0xB5, 0x7A, 0x8E, 0x00, 0xAB, 0x03,
+        0x61, 0x7E, 0xA2, 0x7F, 0x80, 0x52, 0x4E, 0x99, 0x28, 0xB0, 0x92, 0x17, 0x84, 0x88, 0x3F, 0x6D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

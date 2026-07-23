@@ -90,6 +90,28 @@ var err_reachable_in_lowerable_module = std.atomic.Value(u64).init(0);
 var scheme_snapshot_matches_final = std.atomic.Value(u64).init(0);
 var scheme_snapshot_diverged_from_final = std.atomic.Value(u64).init(0);
 
+// Slice 2b dense use-site measurement (reunify.md 7.2). Recorded sites by slot
+// kind, unreached binders, sites whose scheme owns no local snapshot, publication
+// duplicate equivalence, shared-edge dense-vs-marker resolution, and the artifact
+// byte cost checkpoint.
+var site_recorded_value_use = std.atomic.Value(u64).init(0);
+var site_recorded_nested = std.atomic.Value(u64).init(0);
+var site_recorded_dispatch = std.atomic.Value(u64).init(0);
+var site_recorded_shared = std.atomic.Value(u64).init(0);
+var site_binder_unreached = std.atomic.Value(u64).init(0);
+var site_without_snapshot_value_use = std.atomic.Value(u64).init(0);
+var site_without_snapshot_nested = std.atomic.Value(u64).init(0);
+var site_without_snapshot_dispatch = std.atomic.Value(u64).init(0);
+var site_duplicate_equivalent = std.atomic.Value(u64).init(0);
+var site_duplicate_divergent = std.atomic.Value(u64).init(0);
+var shared_edges_dense = std.atomic.Value(u64).init(0);
+var shared_edges_marker = std.atomic.Value(u64).init(0);
+var published_sites_total = std.atomic.Value(u64).init(0);
+var published_site_actuals_total = std.atomic.Value(u64).init(0);
+var census_env_bytes = std.atomic.Value(u64).init(0);
+var census_artifact_bytes = std.atomic.Value(u64).init(0);
+var census_module_count = std.atomic.Value(u64).init(0);
+
 var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var divergent_id_count: usize = 0;
 var err_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
@@ -194,6 +216,93 @@ pub fn recordSchemeSnapshot(matches: bool, module_name: []const u8, node_idx: u3
     }
 }
 
+/// Record one dense ordinary instantiation site (reunify.md 7.2, Slice 2b) whose
+/// owning scheme had a local snapshot: bump the per-slot recorded counter and add
+/// this site's unreached-binder count. `slot_kind` is a `SchemeUseRecord.Slot`.
+pub fn recordSchemeUseSite(slot_kind: u32, unreached: u32) void {
+    if (comptime !enabled) return;
+    switch (slot_kind) {
+        0 => _ = site_recorded_value_use.fetchAdd(1, .monotonic),
+        1 => _ = site_recorded_nested.fetchAdd(1, .monotonic),
+        2 => _ = site_recorded_dispatch.fetchAdd(1, .monotonic),
+        else => {},
+    }
+    if (unreached > 0) _ = site_binder_unreached.fetchAdd(unreached, .monotonic);
+}
+
+/// Record one dense shared in-group instantiation site (reunify.md 7.2, Slice 2b),
+/// recorded before its scheme generalized. `slot_kind` is a `SchemeUseRecord.Slot`.
+pub fn recordSchemeUseSiteShared(slot_kind: u32) void {
+    if (comptime !enabled) return;
+    _ = slot_kind;
+    _ = site_recorded_shared.fetchAdd(1, .monotonic);
+}
+
+/// Record one ordinary instantiation site whose scheme owns no local snapshot —
+/// an imported, external, required, or synthetic scheme a later sub-slice handles
+/// (reunify.md 7.2, Slice 2b). Measured, not failed. `slot_kind` is a
+/// `SchemeUseRecord.Slot`.
+pub fn recordSchemeUseSiteWithoutSnapshot(slot_kind: u32) void {
+    if (comptime !enabled) return;
+    switch (slot_kind) {
+        0 => _ = site_without_snapshot_value_use.fetchAdd(1, .monotonic),
+        1 => _ = site_without_snapshot_nested.fetchAdd(1, .monotonic),
+        2 => _ = site_without_snapshot_dispatch.fetchAdd(1, .monotonic),
+        else => {},
+    }
+}
+
+/// Record whether a shared in-group edge resolved to a dense identity actual
+/// vector at publication (`dense` true) or remained a bare marker because its
+/// owning definition had no local snapshot (reunify.md 7.2, Slice 2b).
+pub fn recordSharedEdgeResolution(dense: bool) void {
+    if (comptime !enabled) return;
+    if (dense) {
+        _ = shared_edges_dense.fetchAdd(1, .monotonic);
+    } else {
+        _ = shared_edges_marker.fetchAdd(1, .monotonic);
+    }
+}
+
+/// Record one duplicate dense-site write for the same edge at publication
+/// (reunify.md 7.2, Slice 2b). `equivalent` is whether the two records' positional
+/// actuals resolve to equal content. With deterministic projection these must be
+/// equivalent; a divergence is a checking/publication bug, retained (bounded) for
+/// location through the shared divergent-id buffer.
+pub fn recordSchemeUseSiteDuplicate(equivalent: bool, module_name: []const u8, node_idx: u32) void {
+    if (comptime !enabled) return;
+    if (equivalent) {
+        _ = site_duplicate_equivalent.fetchAdd(1, .monotonic);
+        return;
+    }
+    _ = site_duplicate_divergent.fetchAdd(1, .monotonic);
+    lockBuffer();
+    defer unlockBuffer();
+    if (divergent_id_count < max_identifications) {
+        divergent_ids[divergent_id_count] = makeIdentification(module_name, node_idx, true);
+        divergent_id_count += 1;
+    }
+}
+
+/// Add one module's serialized env and artifact byte totals to the cost
+/// checkpoint accumulators (reunify.md 7.2/15.3, Slice 2b). Called per module when
+/// the census is active, so the final dump block holds corpus totals.
+pub fn addArtifactBytes(env_bytes: u64, artifact_bytes: u64) void {
+    if (comptime !enabled) return;
+    _ = census_env_bytes.fetchAdd(env_bytes, .monotonic);
+    _ = census_artifact_bytes.fetchAdd(artifact_bytes, .monotonic);
+    _ = census_module_count.fetchAdd(1, .monotonic);
+}
+
+/// Add one published module's dense instantiation-site table sizes to the corpus
+/// totals (reunify.md 7.2/15.3, Slice 2b) — the new tables' element counts, from
+/// which the byte cost is the count times the POD element size.
+pub fn addPublishedSites(sites: u64, actuals: u64) void {
+    if (comptime !enabled) return;
+    _ = published_sites_total.fetchAdd(sites, .monotonic);
+    _ = published_site_actuals_total.fetchAdd(actuals, .monotonic);
+}
+
 /// Record one lowerable module whose published checked types reach an `.err`
 /// payload (reunify.md 5.4/7.5). The identity is retained (bounded) for later
 /// location.
@@ -251,6 +360,23 @@ pub fn dumpAppend() void {
     sink.print("err_reachable_in_lowerable_module={d}\n", .{err_reachable_in_lowerable_module.load(.monotonic)});
     sink.print("scheme_snapshot_matches_final={d}\n", .{scheme_snapshot_matches_final.load(.monotonic)});
     sink.print("scheme_snapshot_diverged_from_final={d}\n", .{scheme_snapshot_diverged_from_final.load(.monotonic)});
+    sink.print("site_recorded_value_use={d}\n", .{site_recorded_value_use.load(.monotonic)});
+    sink.print("site_recorded_nested={d}\n", .{site_recorded_nested.load(.monotonic)});
+    sink.print("site_recorded_dispatch={d}\n", .{site_recorded_dispatch.load(.monotonic)});
+    sink.print("site_recorded_shared={d}\n", .{site_recorded_shared.load(.monotonic)});
+    sink.print("site_binder_unreached={d}\n", .{site_binder_unreached.load(.monotonic)});
+    sink.print("site_without_snapshot_value_use={d}\n", .{site_without_snapshot_value_use.load(.monotonic)});
+    sink.print("site_without_snapshot_nested={d}\n", .{site_without_snapshot_nested.load(.monotonic)});
+    sink.print("site_without_snapshot_dispatch={d}\n", .{site_without_snapshot_dispatch.load(.monotonic)});
+    sink.print("site_duplicate_equivalent={d}\n", .{site_duplicate_equivalent.load(.monotonic)});
+    sink.print("site_duplicate_divergent={d}\n", .{site_duplicate_divergent.load(.monotonic)});
+    sink.print("shared_edges_dense={d}\n", .{shared_edges_dense.load(.monotonic)});
+    sink.print("shared_edges_marker={d}\n", .{shared_edges_marker.load(.monotonic)});
+    sink.print("published_sites_total={d}\n", .{published_sites_total.load(.monotonic)});
+    sink.print("published_site_actuals_total={d}\n", .{published_site_actuals_total.load(.monotonic)});
+    sink.print("census_module_count={d}\n", .{census_module_count.load(.monotonic)});
+    sink.print("census_env_bytes={d}\n", .{census_env_bytes.load(.monotonic)});
+    sink.print("census_artifact_bytes={d}\n", .{census_artifact_bytes.load(.monotonic)});
     for (divergent_ids[0..divergent_id_count], 0..) |id, i| {
         sink.print("divergent_scheme_use_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
     }
