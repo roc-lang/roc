@@ -7132,15 +7132,9 @@ test "checker marks exhaustiveness-defaulted empty payload provenance" {
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
-    const idents = test_env.module_env.getIdentStoreConst();
     const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
-    const x_var = for (defs) |def_idx| {
-        const def = test_env.module_env.store.getDef(def_idx);
-        const pattern = test_env.module_env.store.getPattern(def.pattern);
-        if (pattern == .assign and std.mem.eql(u8, idents.getText(pattern.assign.ident), "x")) {
-            break ModuleEnv.varFrom(def_idx);
-        }
-    } else return error.TestUnexpectedResult;
+    if (defs.len == 0) return error.TestUnexpectedResult;
+    const x_var = ModuleEnv.varFrom(defs[0]);
 
     const nominal = switch (test_env.module_env.types.resolveVar(x_var).desc.content) {
         .structure => |structure| switch (structure) {

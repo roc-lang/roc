@@ -114,7 +114,7 @@ NO CHANGE
 				(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))
 	(d-let
 		(p-assign (ident "made"))
-		(e-call (constraint-fn-var 227)
+		(e-call (constraint-fn-var 230)
 			(e-lookup-local
 				(p-assign (ident "identity")))
 			(e-empty_list))

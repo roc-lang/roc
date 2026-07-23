@@ -84,11 +84,11 @@ main = (alias2(1), alias2("a"))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 205)
+				(e-call (constraint-fn-var 208)
 					(e-lookup-local
 						(p-assign (ident "alias2")))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 216)
+				(e-call (constraint-fn-var 219)
 					(e-lookup-local
 						(p-assign (ident "alias2")))
 					(e-string

@@ -190,7 +190,7 @@ main = |_| {
 			(p-assign (ident "frac"))))
 	(d-let
 		(p-assign (ident "int_add"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 249)
+		(e-dispatch-call (method "plus") (constraint-fn-var 252)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -198,7 +198,7 @@ main = |_| {
 				(e-num (value "10")))))
 	(d-let
 		(p-assign (ident "int_multiply"))
-		(e-dispatch-call (method "times") (constraint-fn-var 258)
+		(e-dispatch-call (method "times") (constraint-fn-var 261)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -206,7 +206,7 @@ main = |_| {
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "float_add"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 267)
+		(e-dispatch-call (method "plus") (constraint-fn-var 270)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -214,7 +214,7 @@ main = |_| {
 				(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14")))))
 	(d-let
 		(p-assign (ident "float_multiply"))
-		(e-dispatch-call (method "times") (constraint-fn-var 276)
+		(e-dispatch-call (method "times") (constraint-fn-var 279)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "num"))))
@@ -225,7 +225,7 @@ main = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 285)
+			(e-dispatch-call (method "times") (constraint-fn-var 288)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -233,13 +233,13 @@ main = |_| {
 					(e-num (value "2"))))))
 	(d-let
 		(p-assign (ident "int_doubled"))
-		(e-call (constraint-fn-var 300)
+		(e-call (constraint-fn-var 303)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "float_doubled"))
-		(e-call (constraint-fn-var 314)
+		(e-call (constraint-fn-var 317)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
@@ -249,7 +249,7 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-dispatch-call (method "plus") (constraint-fn-var 315)
+				(e-dispatch-call (method "plus") (constraint-fn-var 318)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "int_add"))))

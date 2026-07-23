@@ -1150,6 +1150,9 @@ pub const Evaluator = struct {
             .num_plus, .num_plus_checked => self.numArith(args, arg_types, result_ty, .add),
             .num_minus, .num_minus_checked => self.numArith(args, arg_types, result_ty, .sub),
             .num_times, .num_times_checked => self.numArith(args, arg_types, result_ty, .mul),
+            .num_plus_wrap => self.numWrappingArith(args, arg_types, result_ty, .plus),
+            .num_minus_wrap => self.numWrappingArith(args, arg_types, result_ty, .minus),
+            .num_times_wrap => self.numWrappingArith(args, arg_types, result_ty, .times),
             .num_div_by, .num_div_by_checked => self.numArith(args, arg_types, result_ty, .div),
             .num_div_trunc_by, .num_div_trunc_by_checked => self.numArith(args, arg_types, result_ty, .div_trunc),
             .num_rem_by, .num_rem_by_checked => self.numArith(args, arg_types, result_ty, .rem),
@@ -1356,6 +1359,27 @@ pub const Evaluator = struct {
     // numeric arithmetic
 
     const ArithOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
+    const WrappingArithOp = enum { plus, minus, times };
+
+    fn numWrappingArith(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, result_ty: Type.TypeId, op: WrappingArithOp) EvalError!Value {
+        const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("wrapping arithmetic operand without primitive type");
+        const result_prim = self.primitiveOf(result_ty) orelse prim;
+
+        return switch (prim) {
+            inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
+                const T = intType(p);
+                const a = readAs(T, args[0]);
+                const b = readAs(T, args[1]);
+                const result = switch (op) {
+                    .plus => a +% b,
+                    .minus => a -% b,
+                    .times => a *% b,
+                };
+                break :blk self.canonicalInt(result_prim, bitsOf(T, result));
+            },
+            else => self.unsupported_("wrapping arithmetic on non-integer type"),
+        };
+    }
 
     fn numArith(self: *Evaluator, args: []const Value, arg_types: []const Type.TypeId, result_ty: Type.TypeId, op: ArithOp) EvalError!Value {
         const prim = self.primitiveOf(arg_types[0]) orelse return self.unsupported_("arithmetic operand without primitive type");

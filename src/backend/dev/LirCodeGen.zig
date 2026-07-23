@@ -1426,6 +1426,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getLocalSpan(ll.args);
 
             switch (ll.op) {
+                .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
                 .list_len => {
                     // List is a (ptr, len, capacity) triple - length is at offset 8
                     std.debug.assert(args.len >= 1);

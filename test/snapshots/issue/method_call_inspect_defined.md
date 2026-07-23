@@ -63,7 +63,7 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
-	(e-dispatch-call (method "inspect") (constraint-fn-var 190)
+	(e-dispatch-call (method "inspect") (constraint-fn-var 193)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))

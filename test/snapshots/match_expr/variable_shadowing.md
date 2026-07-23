@@ -70,7 +70,7 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "y"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 195)
+					(e-dispatch-call (method "plus") (constraint-fn-var 198)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -85,7 +85,7 @@ match (value, other) {
 								(p-applied-tag)
 								(p-assign (ident "x"))))))
 				(value
-					(e-dispatch-call (method "times") (constraint-fn-var 205)
+					(e-dispatch-call (method "times") (constraint-fn-var 208)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

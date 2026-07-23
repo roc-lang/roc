@@ -42,7 +42,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "plus") (constraint-fn-var 186)
+(e-dispatch-call (method "plus") (constraint-fn-var 189)
 	(receiver
 		(e-field-access (field "age")
 			(receiver

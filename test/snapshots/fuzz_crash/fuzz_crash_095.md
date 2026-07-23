@@ -50,7 +50,7 @@ t = 0->(0)()
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-call (constraint-fn-var 192)
+		(e-call (constraint-fn-var 195)
 			(e-num (value "0"))
 			(e-num (value "0")))))
 ~~~

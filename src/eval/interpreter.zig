@@ -4751,6 +4751,7 @@ pub const Interpreter = struct {
             ll.ret_layout;
 
         return switch (ll.op) {
+            .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));

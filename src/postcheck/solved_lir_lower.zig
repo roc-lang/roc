@@ -3748,7 +3748,7 @@ const Lowerer = struct {
         const lowered = try self.lowerExprsToTemps(args);
         defer lowered.deinit(self.allocator);
         const lowered_op = if (lowered.ids.len > 0)
-            CheckedArithmetic.checkedOp(op, self.result.store.getLocal(lowered.ids[0]).layout_idx) orelse op
+            CheckedArithmetic.lowerOp(op, self.result.store.getLocal(lowered.ids[0]).layout_idx)
         else
             op;
         var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{

@@ -1950,6 +1950,16 @@ method body remains an ordinary method implementation. Inspection is the sole
 exception to this opt-in rule: every type is inspectable, opaque values use the
 opaque representation, and an exact `to_inspect` method may override it.
 
+Derived container encoders carry two explicit state types. The outer state is
+accepted and returned by `encode_tag`, `encode_record`, `encode_tuple`, and
+`encode_list`, and by each value-writer callback. The container callback and
+its field or element writer instead thread a format-owned cursor type, which
+may differ from the outer state. Checking validates that associated cursor type
+through the format method's complete callback protocol;
+Monotype consumes the same checked method shape when generating callbacks. It
+must never assume that the two state types are equal or reconstruct one from
+the other.
+
 Canonicalization records each recognized associated underscore opt-in as an
 `e_derived_method` CIR expression carrying its exact derived-method kind. An
 ordinary annotation without a body remains `e_anno_only`; in a platform package,

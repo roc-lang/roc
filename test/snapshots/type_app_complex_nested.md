@@ -294,7 +294,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 352)
+			(e-call (constraint-fn-var 355)
 				(e-lookup-local
 					(p-assign (ident "processComplex")))
 				(e-tag (name "Ok")

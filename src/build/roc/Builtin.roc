@@ -37,7 +37,8 @@ Builtin :: [].{
 		}
 
 		JsonState :: [Input(Str)]
-		JsonEncodeState :: { output : List(U8), container_commas : List(Bool) }
+		JsonEncodeState :: { output : List(U8) }
+		JsonContainerEncodeState :: { output : List(U8), needs_comma : Bool }
 
 		Json :: {}.{
 			parse_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str)])
@@ -146,16 +147,16 @@ Builtin :: [].{
 			encode_null = |_, state| JsonEncoding.encode_null(state)
 
 			## write_payloads supplies each tag payload in source order.
-			encode_tag : JsonEncoding, JsonEncodeState, Str, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tag : JsonEncoding, JsonEncodeState, Str, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tag = |_, state, tag, count, write_payloads| JsonEncoding.encode_tag(state, tag, count, write_payloads)
 
-			encode_record : JsonEncoding, JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_record : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_record = |_, state, count, write_fields| JsonEncoding.encode_record(state, count, write_fields)
 
-			encode_tuple : JsonEncoding, JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tuple : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tuple = |_, state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
 
-			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |_, state, count, write_elements| JsonEncoding.encode_list(state, count, write_elements)
 
 			to_str : a -> Str
@@ -165,7 +166,7 @@ Builtin :: [].{
 			to_str = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
-				Ok(encoded) = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64), container_commas: [] })
+				Ok(encoded) = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64) })
 
 				Str.from_utf8_lossy(encoded.output)
 			}
@@ -181,7 +182,7 @@ Builtin :: [].{
 			to_str_try = |value| {
 				Shape : a
 				encode_shape = Shape.encoder_for(JsonEncoding.Default)
-				encoded = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64), container_commas: [] })?
+				encoded = encode_shape(value, JsonEncodeState.{ output: u8_list_with_capacity(64) })?
 
 				Ok(Str.from_utf8_lossy(encoded.output))
 			}
@@ -523,91 +524,43 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, value),
-						container_commas: state.container_commas,
 					},
 				)
 
-			container_needs_comma : JsonEncodeState -> Bool
-			container_needs_comma = |state|
-				match List.last(state.container_commas) {
-					Ok(needs_comma) => needs_comma
-					Err(ListWasEmpty) => {
-						crash "json encoder container stack underflow"
-					}
-				}
-
-			mark_container_has_item : List(Bool) -> List(Bool)
-			mark_container_has_item = |container_commas|
-				List.drop_last(container_commas, 1).append(True)
-
-			write_record_start : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_record_start = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 123),
-						container_commas: state.container_commas.append(False),
-					},
-				)
-
-			write_record_field : JsonEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			write_record_field : JsonContainerEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
 			write_record_field = |state, field, write_value| {
-				with_comma = if Json.container_needs_comma(state) {
+				with_comma = if state.needs_comma {
 					u8_append(state.output, 44)
 				} else {
 					state.output
 				}
 				output = u8_append(Json.append_json_quoted_string(with_comma, field), 58)
 
-				write_value(
-					JsonEncodeState.{
-						output,
-						container_commas: Json.mark_container_has_item(state.container_commas),
+				encoded = write_value(JsonEncodeState.{ output })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
 					},
 				)
 			}
 
-			write_record_end : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_record_end = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 125),
-						container_commas: List.drop_last(state.container_commas, 1),
-					},
-				)
-
-			write_sequence_start : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_sequence_start = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 91),
-						container_commas: state.container_commas.append(False),
-					},
-				)
-
-			write_sequence_element : JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			write_sequence_element : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
 			write_sequence_element = |state, write_value| {
-				output = if Json.container_needs_comma(state) {
+				output = if state.needs_comma {
 					u8_append(state.output, 44)
 				} else {
 					state.output
 				}
 
-				write_value(
-					JsonEncodeState.{
-						output,
-						container_commas: Json.mark_container_has_item(state.container_commas),
+				encoded = write_value(JsonEncodeState.{ output })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
 					},
 				)
 			}
-
-			write_sequence_end : JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			write_sequence_end = |state|
-				Ok(
-					JsonEncodeState.{
-						output: u8_append(state.output, 93),
-						container_commas: List.drop_last(state.container_commas, 1),
-					},
-				)
 
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
@@ -1546,7 +1499,7 @@ Builtin :: [].{
 					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)
 				}
 
-			encode_tag : JsonEncodeState, Str, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tag : JsonEncodeState, Str, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tag = |state, tag, count, write_payloads|
 				if count == 0 {
 					JsonEncoding.encode_str(tag, state)
@@ -1560,7 +1513,14 @@ Builtin :: [].{
 								tag,
 								|payload_state|
 									if count == 1 {
-										write_payloads(payload_state, |item_state, write_value| write_value(item_state))
+										finished = write_payloads(
+											JsonContainerEncodeState.{ output: payload_state.output, needs_comma: False },
+											|item_state, write_value| {
+												encoded = write_value(JsonEncodeState.{ output: item_state.output })?
+												Ok(JsonContainerEncodeState.{ output: encoded.output, needs_comma: True })
+											},
+										)?
+										Ok(JsonEncodeState.{ output: finished.output })
 									} else {
 										JsonEncoding.encode_tuple(payload_state, count, write_payloads)
 									},
@@ -1568,21 +1528,21 @@ Builtin :: [].{
 					)
 				}
 
-			encode_record : JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_record : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, Str, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_record = |state, _, write_fields| {
-				started = Json.write_record_start(state)?
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 123), needs_comma: False }
 				finished = write_fields(started, Json.write_record_field)?
-				Json.write_record_end(finished)
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 125) })
 			}
 
-			encode_tuple : JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_tuple : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_tuple = |state, _, write_elements| {
-				started = Json.write_sequence_start(state)?
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 91), needs_comma: False }
 				finished = write_elements(started, Json.write_sequence_element)?
-				Json.write_sequence_end(finished)
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 93) })
 			}
 
-			encode_list : JsonEncodeState, U64, (JsonEncodeState, (JsonEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_list : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
 
 			encode_str : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
@@ -1590,7 +1550,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_quoted_string(state.output, value),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1599,7 +1558,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, if value "true" else "false"),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1626,7 +1584,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, json_u64_to_str(value)),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -1677,7 +1634,6 @@ Builtin :: [].{
 				Ok(
 					JsonEncodeState.{
 						output: Json.append_json_string_bytes(state.output, "null"),
-						container_commas: state.container_commas,
 					},
 				)
 
@@ -2779,7 +2735,7 @@ Builtin :: [].{
 		exclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
 			where [
 				num.is_lt : num, num -> Bool,
-				num.add_try : num, num -> Try(num, [Overflow]),
+				num.plus_try : num, num -> Try(num, [Overflow]),
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 			]
 		exclusive_range = |start, end, len_if_known|
@@ -2789,7 +2745,7 @@ Builtin :: [].{
 					if start < end {
 						One({
 							item: start,
-							rest: match start.add_try(1) {
+							rest: match start.plus_try(1) {
 								Ok(next) => if next < end {
 									Iter.exclusive_range(
 										next,
@@ -2818,7 +2774,7 @@ Builtin :: [].{
 		inclusive_range : num, num, [Known(U64), Unknown] -> Iter(num)
 			where [
 				num.is_lte : num, num -> Bool,
-				num.add_try : num, num -> Try(num, [Overflow]),
+				num.plus_try : num, num -> Try(num, [Overflow]),
 				num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 			]
 		inclusive_range = |start, end, len_if_known|
@@ -2828,7 +2784,7 @@ Builtin :: [].{
 					if start <= end {
 						One({
 							item: start,
-							rest: match start.add_try(1) {
+							rest: match start.plus_try(1) {
 								Ok(next) => if next <= end {
 									Iter.inclusive_range(
 										next,
@@ -4512,7 +4468,7 @@ Builtin :: [].{
 		encoder_for : encoding -> (List(item), state -> Try(state, err))
 			where [
 				item.encoder_for : encoding -> (item, state -> Try(state, err)),
-				encoding.encode_list : state, U64, (state, (state, (state -> Try(state, err)) -> Try(state, err)) -> Try(state, err)) -> Try(state, err),
+				encoding.encode_list : state, U64, (container_state, (container_state, (state -> Try(state, err)) -> Try(container_state, err)) -> Try(container_state, err)) -> Try(state, err),
 			]
 		encoder_for = |encoding| {
 			Encoding : encoding
@@ -5908,10 +5864,16 @@ Builtin :: [].{
 			## ```
 			plus : U8, U8 -> U8
 
-			## Add two [U8] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U8] values, wrapping on overflow.
+			## ```roc
+			## expect U8.plus_wrap(U8.highest, 1) == 0
+			## ```
+			plus_wrap : U8, U8 -> U8
+
+			## Add two [U8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U8].
-			add_try : U8, U8 -> Try(U8, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U8.highest, a, b)
+			plus_try : U8, U8 -> Try(U8, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U8.highest, a, b)
 
 			## Iterator over [U8] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -5958,10 +5920,16 @@ Builtin :: [].{
 			## ```
 			minus : U8, U8 -> U8
 
+			## Subtract the second [U8] from the first, wrapping on overflow.
+			## ```roc
+			## expect U8.minus_wrap(0, 1) == U8.highest
+			## ```
+			minus_wrap : U8, U8 -> U8
+
 			## Subtract the second [U8] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U8].
-			sub_try : U8, U8 -> Try(U8, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U8].
+			minus_try : U8, U8 -> Try(U8, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -5978,10 +5946,16 @@ Builtin :: [].{
 			## ```
 			times : U8, U8 -> U8
 
+			## Multiply two [U8] values, wrapping on overflow.
+			## ```roc
+			## expect U8.times_wrap(U8.highest, 2) == U8.highest - 1
+			## ```
+			times_wrap : U8, U8 -> U8
+
 			## Multiply two [U8] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U8].
-			mul_try : U8, U8 -> Try(U8, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U8.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U8].
+			times_try : U8, U8 -> Try(U8, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U8.highest, 0, a, b)
 
 			## Multiply two [U8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6237,7 +6211,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U8.add_try(start, 1) {
+								rest: match U8.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U8.to(next, end)
 									} else {
@@ -6273,7 +6247,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U8.add_try(start, 1) {
+								rest: match U8.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U8.until(next, end)
 									} else {
@@ -6580,10 +6554,16 @@ Builtin :: [].{
 			## ```
 			plus : I8, I8 -> I8
 
-			## Add two [I8] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I8] values, wrapping on overflow.
+			## ```roc
+			## expect I8.plus_wrap(I8.highest, 1) == I8.lowest
+			## ```
+			plus_wrap : I8, I8 -> I8
+
+			## Add two [I8] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I8].
-			add_try : I8, I8 -> Try(I8, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I8.lowest, I8.highest, 0, a, b)
+			plus_try : I8, I8 -> Try(I8, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Iterator over [I8] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -6634,10 +6614,16 @@ Builtin :: [].{
 			## ```
 			minus : I8, I8 -> I8
 
+			## Subtract the second [I8] from the first, wrapping on overflow.
+			## ```roc
+			## expect I8.minus_wrap(I8.lowest, 1) == I8.highest
+			## ```
+			minus_wrap : I8, I8 -> I8
+
 			## Subtract the second [I8] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I8].
-			sub_try : I8, I8 -> Try(I8, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I8.lowest, I8.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I8].
+			minus_try : I8, I8 -> Try(I8, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I8.lowest, I8.highest, 0, a, b)
 
 			## Subtract the second [I8] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6656,10 +6642,16 @@ Builtin :: [].{
 			## ```
 			times : I8, I8 -> I8
 
+			## Multiply two [I8] values, wrapping on overflow.
+			## ```roc
+			## expect I8.times_wrap(I8.lowest, -1) == I8.lowest
+			## ```
+			times_wrap : I8, I8 -> I8
+
 			## Multiply two [I8] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I8].
-			mul_try : I8, I8 -> Try(I8, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I8.lowest, I8.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I8].
+			times_try : I8, I8 -> Try(I8, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I8.lowest, I8.highest, 0, -1, a, b)
 
 			## Multiply two [I8] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -6928,7 +6920,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I8.add_try(start, 1) {
+								rest: match I8.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I8.to(next, end)
 									} else {
@@ -6964,7 +6956,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I8.add_try(start, 1) {
+								rest: match I8.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I8.until(next, end)
 									} else {
@@ -7324,10 +7316,16 @@ Builtin :: [].{
 			## ```
 			plus : U16, U16 -> U16
 
-			## Add two [U16] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U16] values, wrapping on overflow.
+			## ```roc
+			## expect U16.plus_wrap(U16.highest, 1) == 0
+			## ```
+			plus_wrap : U16, U16 -> U16
+
+			## Add two [U16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U16].
-			add_try : U16, U16 -> Try(U16, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U16.highest, a, b)
+			plus_try : U16, U16 -> Try(U16, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U16.highest, a, b)
 
 			## Iterator over [U16] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -7374,10 +7372,16 @@ Builtin :: [].{
 			## ```
 			minus : U16, U16 -> U16
 
+			## Subtract the second [U16] from the first, wrapping on overflow.
+			## ```roc
+			## expect U16.minus_wrap(0, 1) == U16.highest
+			## ```
+			minus_wrap : U16, U16 -> U16
+
 			## Subtract the second [U16] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U16].
-			sub_try : U16, U16 -> Try(U16, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U16].
+			minus_try : U16, U16 -> Try(U16, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7394,10 +7398,16 @@ Builtin :: [].{
 			## ```
 			times : U16, U16 -> U16
 
+			## Multiply two [U16] values, wrapping on overflow.
+			## ```roc
+			## expect U16.times_wrap(U16.highest, 2) == U16.highest - 1
+			## ```
+			times_wrap : U16, U16 -> U16
+
 			## Multiply two [U16] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U16].
-			mul_try : U16, U16 -> Try(U16, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U16.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U16].
+			times_try : U16, U16 -> Try(U16, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U16.highest, 0, a, b)
 
 			## Multiply two [U16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -7627,7 +7637,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U16.add_try(start, 1) {
+								rest: match U16.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U16.to(next, end)
 									} else {
@@ -7663,7 +7673,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U16.add_try(start, 1) {
+								rest: match U16.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U16.until(next, end)
 									} else {
@@ -8029,10 +8039,16 @@ Builtin :: [].{
 			## ```
 			plus : I16, I16 -> I16
 
-			## Add two [I16] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I16] values, wrapping on overflow.
+			## ```roc
+			## expect I16.plus_wrap(I16.highest, 1) == I16.lowest
+			## ```
+			plus_wrap : I16, I16 -> I16
+
+			## Add two [I16] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I16].
-			add_try : I16, I16 -> Try(I16, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I16.lowest, I16.highest, 0, a, b)
+			plus_try : I16, I16 -> Try(I16, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Iterator over [I16] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -8083,10 +8099,16 @@ Builtin :: [].{
 			## ```
 			minus : I16, I16 -> I16
 
+			## Subtract the second [I16] from the first, wrapping on overflow.
+			## ```roc
+			## expect I16.minus_wrap(I16.lowest, 1) == I16.highest
+			## ```
+			minus_wrap : I16, I16 -> I16
+
 			## Subtract the second [I16] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I16].
-			sub_try : I16, I16 -> Try(I16, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I16.lowest, I16.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I16].
+			minus_try : I16, I16 -> Try(I16, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I16.lowest, I16.highest, 0, a, b)
 
 			## Subtract the second [I16] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8105,10 +8127,16 @@ Builtin :: [].{
 			## ```
 			times : I16, I16 -> I16
 
+			## Multiply two [I16] values, wrapping on overflow.
+			## ```roc
+			## expect I16.times_wrap(I16.lowest, -1) == I16.lowest
+			## ```
+			times_wrap : I16, I16 -> I16
+
 			## Multiply two [I16] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I16].
-			mul_try : I16, I16 -> Try(I16, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I16.lowest, I16.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I16].
+			times_try : I16, I16 -> Try(I16, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I16.lowest, I16.highest, 0, -1, a, b)
 
 			## Multiply two [I16] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8377,7 +8405,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I16.add_try(start, 1) {
+								rest: match I16.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I16.to(next, end)
 									} else {
@@ -8413,7 +8441,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I16.add_try(start, 1) {
+								rest: match I16.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I16.until(next, end)
 									} else {
@@ -8788,10 +8816,16 @@ Builtin :: [].{
 			## ```
 			plus : U32, U32 -> U32
 
-			## Add two [U32] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U32] values, wrapping on overflow.
+			## ```roc
+			## expect U32.plus_wrap(U32.highest, 1) == 0
+			## ```
+			plus_wrap : U32, U32 -> U32
+
+			## Add two [U32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U32].
-			add_try : U32, U32 -> Try(U32, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U32.highest, a, b)
+			plus_try : U32, U32 -> Try(U32, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U32.highest, a, b)
 
 			## Iterator over [U32] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -8838,10 +8872,16 @@ Builtin :: [].{
 			## ```
 			minus : U32, U32 -> U32
 
+			## Subtract the second [U32] from the first, wrapping on overflow.
+			## ```roc
+			## expect U32.minus_wrap(0, 1) == U32.highest
+			## ```
+			minus_wrap : U32, U32 -> U32
+
 			## Subtract the second [U32] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U32].
-			sub_try : U32, U32 -> Try(U32, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U32].
+			minus_try : U32, U32 -> Try(U32, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -8858,10 +8898,16 @@ Builtin :: [].{
 			## ```
 			times : U32, U32 -> U32
 
+			## Multiply two [U32] values, wrapping on overflow.
+			## ```roc
+			## expect U32.times_wrap(U32.highest, 2) == U32.highest - 1
+			## ```
+			times_wrap : U32, U32 -> U32
+
 			## Multiply two [U32] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U32].
-			mul_try : U32, U32 -> Try(U32, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U32.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U32].
+			times_try : U32, U32 -> Try(U32, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U32.highest, 0, a, b)
 
 			## Multiply two [U32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9091,7 +9137,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U32.add_try(start, 1) {
+								rest: match U32.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U32.to(next, end)
 									} else {
@@ -9127,7 +9173,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U32.add_try(start, 1) {
+								rest: match U32.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U32.until(next, end)
 									} else {
@@ -9525,10 +9571,16 @@ Builtin :: [].{
 			## ```
 			plus : I32, I32 -> I32
 
-			## Add two [I32] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I32] values, wrapping on overflow.
+			## ```roc
+			## expect I32.plus_wrap(I32.highest, 1) == I32.lowest
+			## ```
+			plus_wrap : I32, I32 -> I32
+
+			## Add two [I32] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I32].
-			add_try : I32, I32 -> Try(I32, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I32.lowest, I32.highest, 0, a, b)
+			plus_try : I32, I32 -> Try(I32, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Iterator over [I32] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -9579,10 +9631,16 @@ Builtin :: [].{
 			## ```
 			minus : I32, I32 -> I32
 
+			## Subtract the second [I32] from the first, wrapping on overflow.
+			## ```roc
+			## expect I32.minus_wrap(I32.lowest, 1) == I32.highest
+			## ```
+			minus_wrap : I32, I32 -> I32
+
 			## Subtract the second [I32] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I32].
-			sub_try : I32, I32 -> Try(I32, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I32.lowest, I32.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I32].
+			minus_try : I32, I32 -> Try(I32, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I32.lowest, I32.highest, 0, a, b)
 
 			## Subtract the second [I32] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9601,10 +9659,16 @@ Builtin :: [].{
 			## ```
 			times : I32, I32 -> I32
 
+			## Multiply two [I32] values, wrapping on overflow.
+			## ```roc
+			## expect I32.times_wrap(I32.lowest, -1) == I32.lowest
+			## ```
+			times_wrap : I32, I32 -> I32
+
 			## Multiply two [I32] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I32].
-			mul_try : I32, I32 -> Try(I32, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I32.lowest, I32.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I32].
+			times_try : I32, I32 -> Try(I32, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I32.lowest, I32.highest, 0, -1, a, b)
 
 			## Multiply two [I32] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -9873,7 +9937,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I32.add_try(start, 1) {
+								rest: match I32.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I32.to(next, end)
 									} else {
@@ -9909,7 +9973,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I32.add_try(start, 1) {
+								rest: match I32.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I32.until(next, end)
 									} else {
@@ -10301,10 +10365,16 @@ Builtin :: [].{
 			## ```
 			plus : U64, U64 -> U64
 
-			## Add two [U64] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U64] values, wrapping on overflow.
+			## ```roc
+			## expect U64.plus_wrap(U64.highest, 1) == 0
+			## ```
+			plus_wrap : U64, U64 -> U64
+
+			## Add two [U64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U64].
-			add_try : U64, U64 -> Try(U64, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U64.highest, a, b)
+			plus_try : U64, U64 -> Try(U64, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U64.highest, a, b)
 
 			## Iterator over [U64] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -10325,7 +10395,7 @@ Builtin :: [].{
 			range_inclusive : U64, U64 -> Iter(U64)
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
-					match start.abs_diff(end).add_try(1) {
+					match start.abs_diff(end).plus_try(1) {
 						Ok(len) => Known(len)
 						Err(Overflow) => Unknown
 					}
@@ -10354,10 +10424,16 @@ Builtin :: [].{
 			## ```
 			minus : U64, U64 -> U64
 
+			## Subtract the second [U64] from the first, wrapping on overflow.
+			## ```roc
+			## expect U64.minus_wrap(0, 1) == U64.highest
+			## ```
+			minus_wrap : U64, U64 -> U64
+
 			## Subtract the second [U64] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U64].
-			sub_try : U64, U64 -> Try(U64, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U64].
+			minus_try : U64, U64 -> Try(U64, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10374,10 +10450,16 @@ Builtin :: [].{
 			## ```
 			times : U64, U64 -> U64
 
+			## Multiply two [U64] values, wrapping on overflow.
+			## ```roc
+			## expect U64.times_wrap(U64.highest, 2) == U64.highest - 1
+			## ```
+			times_wrap : U64, U64 -> U64
+
 			## Multiply two [U64] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U64].
-			mul_try : U64, U64 -> Try(U64, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U64.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U64].
+			times_try : U64, U64 -> Try(U64, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U64.highest, 0, a, b)
 
 			## Multiply two [U64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -10601,7 +10683,7 @@ Builtin :: [].{
 					if start > end {
 						Known(0)
 					} else {
-						match U64.add_try(end - start, 1) {
+						match U64.plus_try(end - start, 1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -10610,7 +10692,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U64.add_try(start, 1) {
+								rest: match U64.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U64.to(next, end)
 									} else {
@@ -10646,7 +10728,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U64.add_try(start, 1) {
+								rest: match U64.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U64.until(next, end)
 									} else {
@@ -11080,10 +11162,16 @@ Builtin :: [].{
 			## ```
 			plus : I64, I64 -> I64
 
-			## Add two [I64] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I64] values, wrapping on overflow.
+			## ```roc
+			## expect I64.plus_wrap(I64.highest, 1) == I64.lowest
+			## ```
+			plus_wrap : I64, I64 -> I64
+
+			## Add two [I64] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I64].
-			add_try : I64, I64 -> Try(I64, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I64.lowest, I64.highest, 0, a, b)
+			plus_try : I64, I64 -> Try(I64, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Iterator over [I64] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -11104,7 +11192,7 @@ Builtin :: [].{
 			range_inclusive : I64, I64 -> Iter(I64)
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
-					match start.abs_diff(end).add_try(1) {
+					match start.abs_diff(end).plus_try(1) {
 						Ok(len) => Known(len)
 						Err(Overflow) => Unknown
 					}
@@ -11137,10 +11225,16 @@ Builtin :: [].{
 			## ```
 			minus : I64, I64 -> I64
 
+			## Subtract the second [I64] from the first, wrapping on overflow.
+			## ```roc
+			## expect I64.minus_wrap(I64.lowest, 1) == I64.highest
+			## ```
+			minus_wrap : I64, I64 -> I64
+
 			## Subtract the second [I64] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I64].
-			sub_try : I64, I64 -> Try(I64, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I64.lowest, I64.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I64].
+			minus_try : I64, I64 -> Try(I64, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I64.lowest, I64.highest, 0, a, b)
 
 			## Subtract the second [I64] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11159,10 +11253,16 @@ Builtin :: [].{
 			## ```
 			times : I64, I64 -> I64
 
+			## Multiply two [I64] values, wrapping on overflow.
+			## ```roc
+			## expect I64.times_wrap(I64.lowest, -1) == I64.lowest
+			## ```
+			times_wrap : I64, I64 -> I64
+
 			## Multiply two [I64] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I64].
-			mul_try : I64, I64 -> Try(I64, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I64.lowest, I64.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I64].
+			times_try : I64, I64 -> Try(I64, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I64.lowest, I64.highest, 0, -1, a, b)
 
 			## Multiply two [I64] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11425,8 +11525,8 @@ Builtin :: [].{
 					if start > end {
 						Known(0)
 					} else {
-						match I64.sub_try(end, start) {
-							Ok(diff) => match I64.add_try(diff, 1) {
+						match I64.minus_try(end, start) {
+							Ok(diff) => match I64.plus_try(diff, 1) {
 								Ok(d1) => Known(I64.to_u64_wrap(d1))
 								Err(Overflow) => Unknown
 							}
@@ -11437,7 +11537,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I64.add_try(start, 1) {
+								rest: match I64.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I64.to(next, end)
 									} else {
@@ -11467,7 +11567,7 @@ Builtin :: [].{
 					if start >= end {
 						Known(0)
 					} else {
-						match I64.sub_try(end, start) {
+						match I64.minus_try(end, start) {
 							Ok(diff) => Known(I64.to_u64_wrap(diff))
 							Err(Overflow) => Unknown
 						}
@@ -11476,7 +11576,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I64.add_try(start, 1) {
+								rest: match I64.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I64.until(next, end)
 									} else {
@@ -11881,10 +11981,16 @@ Builtin :: [].{
 			## ```
 			plus : U128, U128 -> U128
 
-			## Add two [U128] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [U128] values, wrapping on overflow.
+			## ```roc
+			## expect U128.plus_wrap(U128.highest, 1) == 0
+			## ```
+			plus_wrap : U128, U128 -> U128
+
+			## Add two [U128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in a [U128].
-			add_try : U128, U128 -> Try(U128, [Overflow, ..])
-			add_try = |a, b| unsigned_add_try(U128.highest, a, b)
+			plus_try : U128, U128 -> Try(U128, [Overflow, ..])
+			plus_try = |a, b| unsigned_plus_try(U128.highest, a, b)
 
 			## Iterator over [U128] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -11909,7 +12015,7 @@ Builtin :: [].{
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
 					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.add_try(1) {
+						Ok(steps) => match steps.plus_try(1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -11940,10 +12046,16 @@ Builtin :: [].{
 			## ```
 			minus : U128, U128 -> U128
 
+			## Subtract the second [U128] from the first, wrapping on overflow.
+			## ```roc
+			## expect U128.minus_wrap(0, 1) == U128.highest
+			## ```
+			minus_wrap : U128, U128 -> U128
+
 			## Subtract the second [U128] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in a [U128].
-			sub_try : U128, U128 -> Try(U128, [Overflow, ..])
-			sub_try = |a, b| unsigned_sub_try(a, b)
+			## instead of crashing or wrapping if the result does not fit in a [U128].
+			minus_try : U128, U128 -> Try(U128, [Overflow, ..])
+			minus_try = |a, b| unsigned_minus_try(a, b)
 
 			## Subtract the second [U128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -11960,10 +12072,16 @@ Builtin :: [].{
 			## ```
 			times : U128, U128 -> U128
 
+			## Multiply two [U128] values, wrapping on overflow.
+			## ```roc
+			## expect U128.times_wrap(U128.highest, 2) == U128.highest - 1
+			## ```
+			times_wrap : U128, U128 -> U128
+
 			## Multiply two [U128] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in a [U128].
-			mul_try : U128, U128 -> Try(U128, [Overflow, ..])
-			mul_try = |a, b| unsigned_mul_try(U128.highest, 0, a, b)
+			## crashing or wrapping if the result does not fit in a [U128].
+			times_try : U128, U128 -> Try(U128, [Overflow, ..])
+			times_try = |a, b| unsigned_times_try(U128.highest, 0, a, b)
 
 			## Multiply two [U128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12188,7 +12306,7 @@ Builtin :: [].{
 						Known(0)
 					} else {
 						match U128.to_u64_try(end - start) {
-							Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
+							Ok(diff_u64) => match U64.plus_try(diff_u64, 1) {
 								Ok(len) => Known(len)
 								Err(Overflow) => Unknown
 							}
@@ -12199,7 +12317,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match U128.add_try(start, 1) {
+								rest: match U128.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										U128.to(next, end)
 									} else {
@@ -12238,7 +12356,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match U128.add_try(start, 1) {
+								rest: match U128.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										U128.until(next, end)
 									} else {
@@ -12704,10 +12822,16 @@ Builtin :: [].{
 			## ```
 			plus : I128, I128 -> I128
 
-			## Add two [I128] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [I128] values, wrapping on overflow.
+			## ```roc
+			## expect I128.plus_wrap(I128.highest, 1) == I128.lowest
+			## ```
+			plus_wrap : I128, I128 -> I128
+
+			## Add two [I128] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result does not fit in an [I128].
-			add_try : I128, I128 -> Try(I128, [Overflow, ..])
-			add_try = |a, b| signed_add_try(I128.lowest, I128.highest, 0, a, b)
+			plus_try : I128, I128 -> Try(I128, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Iterator over [I128] values from `start` up to but not including `end`.
 			## Returns an empty iterator if `start >= end`. This is what `start..<end`
@@ -12732,7 +12856,7 @@ Builtin :: [].{
 			range_inclusive = |start, end| {
 				len_if_known = if start <= end
 					match start.abs_diff(end).to_u64_try() {
-						Ok(steps) => match steps.add_try(1) {
+						Ok(steps) => match steps.plus_try(1) {
 							Ok(len) => Known(len)
 							Err(Overflow) => Unknown
 						}
@@ -12767,10 +12891,16 @@ Builtin :: [].{
 			## ```
 			minus : I128, I128 -> I128
 
+			## Subtract the second [I128] from the first, wrapping on overflow.
+			## ```roc
+			## expect I128.minus_wrap(I128.lowest, 1) == I128.highest
+			## ```
+			minus_wrap : I128, I128 -> I128
+
 			## Subtract the second [I128] from the first, returning `Err(Overflow)`
-			## instead of wrapping if the result does not fit in an [I128].
-			sub_try : I128, I128 -> Try(I128, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(I128.lowest, I128.highest, 0, a, b)
+			## instead of crashing or wrapping if the result does not fit in an [I128].
+			minus_try : I128, I128 -> Try(I128, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(I128.lowest, I128.highest, 0, a, b)
 
 			## Subtract the second [I128] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -12789,10 +12919,16 @@ Builtin :: [].{
 			## ```
 			times : I128, I128 -> I128
 
+			## Multiply two [I128] values, wrapping on overflow.
+			## ```roc
+			## expect I128.times_wrap(I128.lowest, -1) == I128.lowest
+			## ```
+			times_wrap : I128, I128 -> I128
+
 			## Multiply two [I128] values, returning `Err(Overflow)` instead of
-			## wrapping if the result does not fit in an [I128].
-			mul_try : I128, I128 -> Try(I128, [Overflow, ..])
-			mul_try = |a, b| signed_mul_try(I128.lowest, I128.highest, 0, -1, a, b)
+			## crashing or wrapping if the result does not fit in an [I128].
+			times_try : I128, I128 -> Try(I128, [Overflow, ..])
+			times_try = |a, b| signed_times_try(I128.lowest, I128.highest, 0, -1, a, b)
 
 			## Multiply two [I128] values, saturating at the nearest bound on overflow.
 			## ```roc
@@ -13056,9 +13192,9 @@ Builtin :: [].{
 					if start > end {
 						Known(0)
 					} else {
-						match I128.sub_try(end, start) {
+						match I128.minus_try(end, start) {
 							Ok(diff) => match I128.to_u64_try(diff) {
-								Ok(diff_u64) => match U64.add_try(diff_u64, 1) {
+								Ok(diff_u64) => match U64.plus_try(diff_u64, 1) {
 									Ok(len) => Known(len)
 									Err(Overflow) => Unknown
 								}
@@ -13071,7 +13207,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match I128.add_try(start, 1) {
+								rest: match I128.plus_try(start, 1) {
 									Ok(next) => if next <= end {
 										I128.to(next, end)
 									} else {
@@ -13101,7 +13237,7 @@ Builtin :: [].{
 					if start >= end {
 						Known(0)
 					} else {
-						match I128.sub_try(end, start) {
+						match I128.minus_try(end, start) {
 							Ok(diff) => match I128.to_u64_try(diff) {
 								Ok(len) => Known(len)
 								Err(OutOfRange) => Unknown
@@ -13113,7 +13249,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match I128.add_try(start, 1) {
+								rest: match I128.plus_try(start, 1) {
 									Ok(next) => if next < end {
 										I128.until(next, end)
 									} else {
@@ -13566,10 +13702,10 @@ Builtin :: [].{
 			## ```
 			plus : Dec, Dec -> Dec
 
-			## Add two [Dec] values, returning `Err(Overflow)` instead of wrapping
+			## Add two [Dec] values, returning `Err(Overflow)` instead of crashing or wrapping
 			## if the result is outside [Dec.lowest] through [Dec.highest].
-			add_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			add_try = |a, b| signed_add_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			plus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			plus_try = |a, b| signed_plus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Conservative placeholder: always returns `Unknown`. Counting the steps
 			## in a fractional `[start, end)` range advancing by `1` would require
@@ -13618,10 +13754,10 @@ Builtin :: [].{
 			minus : Dec, Dec -> Dec
 
 			## Subtract the second [Dec] from the first, returning
-			## `Err(Overflow)` instead of wrapping if the result is outside
+			## `Err(Overflow)` instead of crashing or wrapping if the result is outside
 			## [Dec.lowest] through [Dec.highest].
-			sub_try : Dec, Dec -> Try(Dec, [Overflow, ..])
-			sub_try = |a, b| signed_sub_try(Dec.lowest, Dec.highest, 0.0, a, b)
+			minus_try : Dec, Dec -> Try(Dec, [Overflow, ..])
+			minus_try = |a, b| signed_minus_try(Dec.lowest, Dec.highest, 0.0, a, b)
 
 			## Subtract the second [Dec] from the first, saturating at the nearest bound on overflow.
 			## ```roc
@@ -14279,7 +14415,7 @@ Builtin :: [].{
 						if start <= end {
 							One({
 								item: start,
-								rest: match Dec.add_try(start, 1.0) {
+								rest: match Dec.plus_try(start, 1.0) {
 									Ok(next) => if next <= end {
 										Dec.to(next, end)
 									} else {
@@ -14313,7 +14449,7 @@ Builtin :: [].{
 						if start < end {
 							One({
 								item: start,
-								rest: match Dec.add_try(start, 1.0) {
+								rest: match Dec.plus_try(start, 1.0) {
 									Ok(next) => if next < end {
 										Dec.until(next, end)
 									} else {
@@ -17195,27 +17331,27 @@ bytes_to_str = |bytes|
 		Err(_) => Err(OutOfRange)
 	}
 
-unsigned_add_try : item, item, item -> Try(item, [Overflow, ..])
+unsigned_plus_try : item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.minus : item, item -> item, item.plus : item, item -> item]
-unsigned_add_try = |highest, a, b|
+unsigned_plus_try = |highest, a, b|
 	if a > highest - b {
 		Err(Overflow)
 	} else {
 		Ok(a + b)
 	}
 
-unsigned_sub_try : item, item -> Try(item, [Overflow, ..])
+unsigned_minus_try : item, item -> Try(item, [Overflow, ..])
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
-unsigned_sub_try = |a, b|
+unsigned_minus_try = |a, b|
 	if a < b {
 		Err(Overflow)
 	} else {
 		Ok(a - b)
 	}
 
-unsigned_mul_try : item, item, item, item -> Try(item, [Overflow, ..])
+unsigned_times_try : item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
-unsigned_mul_try = |highest, zero, a, b|
+unsigned_times_try = |highest, zero, a, b|
 	if b == zero {
 		Ok(zero)
 	} else if a > highest / b {
@@ -17233,9 +17369,9 @@ unsigned_div_try = |zero, a, b|
 		Ok(a / b)
 	}
 
-signed_add_try : item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_plus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_add_try = |lowest, highest, zero, a, b|
+signed_plus_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a > highest - b {
 			Err(Overflow)
@@ -17252,9 +17388,9 @@ signed_add_try = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_sub_try : item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_minus_try : item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
-signed_sub_try = |lowest, highest, zero, a, b|
+signed_minus_try = |lowest, highest, zero, a, b|
 	if b > zero {
 		if a < lowest + b {
 			Err(Overflow)
@@ -17271,7 +17407,7 @@ signed_sub_try = |lowest, highest, zero, a, b|
 		Ok(a)
 	}
 
-signed_mul_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
+signed_times_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 	where [
 		item.is_gt : item, item -> Bool,
 		item.is_lt : item, item -> Bool,
@@ -17280,7 +17416,7 @@ signed_mul_try : item, item, item, item, item, item -> Try(item, [Overflow, ..])
 		item.times : item, item -> item,
 		item.div_trunc_by : item, item -> item,
 	]
-signed_mul_try = |lowest, highest, zero, neg_one, a, b|
+signed_times_try = |lowest, highest, zero, neg_one, a, b|
 	if a == zero {
 		Ok(zero)
 	} else if b == zero {
@@ -17362,7 +17498,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			unsigned_mul_try(highest, zero, acc, base)
+			unsigned_times_try(highest, zero, acc, base)
 		}
 
 		match next_acc {
@@ -17372,7 +17508,7 @@ unsigned_pow_try_step = |highest, zero, one, two, acc, base, exponent|
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match unsigned_mul_try(highest, zero, base, base) {
+					match unsigned_times_try(highest, zero, base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => unsigned_pow_try_step(highest, zero, one, two, updated_acc, updated_base, next_exponent)
 					}
@@ -17427,7 +17563,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 		next_acc = if exponent.rem_by(two) == zero {
 			Ok(acc)
 		} else {
-			match signed_mul_try(lowest, highest, zero, neg_one, acc, base) {
+			match signed_times_try(lowest, highest, zero, neg_one, acc, base) {
 				Ok(result) => Ok(result)
 				Err(Overflow) => Err(Overflow)
 			}
@@ -17441,7 +17577,7 @@ signed_pow_try_step = |lowest, highest, zero, one, two, neg_one, acc, base, expo
 				if next_exponent == zero {
 					Ok(updated_acc)
 				} else {
-					match signed_mul_try(lowest, highest, zero, neg_one, base, base) {
+					match signed_times_try(lowest, highest, zero, neg_one, base, base) {
 						Err(Overflow) => Err(Overflow)
 						Ok(updated_base) => signed_pow_try_step(lowest, highest, zero, one, two, neg_one, updated_acc, updated_base, next_exponent)
 					}
@@ -17487,7 +17623,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				Ok(quotient)
 			} else if a > zero {
 				if b > zero {
-					match signed_add_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(lowest, highest, zero, quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -17496,7 +17632,7 @@ signed_div_ceil_try = |lowest, highest, zero, one, neg_one, a, b|
 				}
 			} else if a < zero {
 				if b < zero {
-					match signed_add_try(lowest, highest, zero, quotient, one) {
+					match signed_plus_try(lowest, highest, zero, quotient, one) {
 						Ok(result) => Ok(result)
 						Err(Overflow) => Err(Overflow)
 					}
@@ -17527,7 +17663,7 @@ unsigned_minus_saturated = |zero, a, b|
 signed_minus_saturated : item, item, item, item, item -> item
 	where [item.is_gt : item, item -> Bool, item.is_lt : item, item -> Bool, item.plus : item, item -> item, item.minus : item, item -> item]
 signed_minus_saturated = |lowest, highest, zero, a, b|
-	match signed_sub_try(lowest, highest, zero, a, b) {
+	match signed_minus_try(lowest, highest, zero, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if b > zero {
@@ -17540,7 +17676,7 @@ signed_minus_saturated = |lowest, highest, zero, a, b|
 unsigned_times_saturated : item, item, item, item -> item
 	where [item.is_eq : item, item -> Bool, item.is_gt : item, item -> Bool, item.div_by : item, item -> item, item.times : item, item -> item]
 unsigned_times_saturated = |highest, zero, a, b|
-	match unsigned_mul_try(highest, zero, a, b) {
+	match unsigned_times_try(highest, zero, a, b) {
 		Ok(result) => result
 		Err(Overflow) => highest
 	}
@@ -17555,7 +17691,7 @@ signed_times_saturated : item, item, item, item, item, item -> item
 		item.div_trunc_by : item, item -> item,
 	]
 signed_times_saturated = |lowest, highest, zero, neg_one, a, b|
-	match signed_mul_try(lowest, highest, zero, neg_one, a, b) {
+	match signed_times_try(lowest, highest, zero, neg_one, a, b) {
 		Ok(result) => result
 		Err(Overflow) =>
 			if a < zero {
@@ -17621,7 +17757,7 @@ range_done = || iter_from_step(
 range_exclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
-		num.add_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_exclusive_with_len = |start, end, len_if_known|
@@ -17634,7 +17770,7 @@ range_exclusive_with_len = |start, end, len_if_known|
 range_inclusive_with_len : num, num, [Known(U64), Unknown] -> Iter(num)
 	where [
 		num.is_lte : num, num -> Bool,
-		num.add_try : num, num -> Try(num, [Overflow]),
+		num.plus_try : num, num -> Try(num, [Overflow]),
 		num.from_numeral : Builtin.Num.Numeral -> Try(num, [InvalidNumeral(Str)]),
 	]
 range_inclusive_with_len = |start, end, len_if_known|

@@ -88,7 +88,7 @@ NO CHANGE
 						(p-assign (ident "robot"))))
 				(fields
 					(field (name "y")
-						(e-dispatch-call (method "plus") (constraint-fn-var 262)
+						(e-dispatch-call (method "plus") (constraint-fn-var 265)
 							(receiver
 								(e-field-access (field "y")
 									(receiver
@@ -110,7 +110,7 @@ NO CHANGE
 	(s-expect
 		(e-structural-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 300)
+				(e-call (constraint-fn-var 303)
 					(e-lookup-local
 						(p-assign (ident "advance")))
 					(e-record

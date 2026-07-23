@@ -45,7 +45,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "concat") (constraint-fn-var 187)
+			(e-dispatch-call (method "concat") (constraint-fn-var 190)
 				(receiver
 					(e-string
 						(e-literal (string "a"))))

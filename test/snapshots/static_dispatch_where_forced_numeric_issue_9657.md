@@ -193,13 +193,13 @@ use_it = {
 									(ty-rigid-var (name "a")))
 								(s-let
 									(p-assign (ident "value"))
-									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 28) (constraint-fn-var 275)
+									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 28) (constraint-fn-var 278)
 										(args
 											(e-lookup-local
 												(p-assign (ident "input"))))))
 								(s-let
 									(p-assign (ident "output"))
-									(e-call (constraint-fn-var 281)
+									(e-call (constraint-fn-var 284)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
@@ -231,19 +231,19 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 299)
+				(e-call (constraint-fn-var 302)
 					(e-lookup-local
 						(p-assign (ident "make_map")))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 297)
+						(e-dispatch-call (method "plus") (constraint-fn-var 300)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 307)
+			(e-call (constraint-fn-var 310)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

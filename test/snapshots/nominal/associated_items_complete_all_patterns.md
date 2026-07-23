@@ -10167,7 +10167,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 685)
+		(e-dispatch-call (method "plus") (constraint-fn-var 688)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
@@ -10182,7 +10182,7 @@ L2 := [DS].{
 				(e-runtime-error (tag "expr_not_canonicalized")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 711)
+		(e-dispatch-call (method "plus") (constraint-fn-var 714)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))

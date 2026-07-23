@@ -276,9 +276,9 @@ pub const InstGraph = struct {
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     processed_relations: std.AutoHashMap(RelationStamp, void),
-    /// Immutable Type-shaped snapshots per node root. Old snapshots remain
-    /// associated with their graph node so a draft cell can recover the live
-    /// node, but their content is never rewritten.
+    /// Immutable Type-shaped snapshots per node root. Old snapshots retain a
+    /// direct association with their live graph node, but their content is
+    /// never rewritten.
     node_snapshots: std.AutoHashMap(NodeId, std.ArrayList(Type.TypeId)),
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
@@ -2182,7 +2182,7 @@ pub const InstGraph = struct {
         return true;
     }
 
-    /// Replace a root's semantic content and invalidate every cached snapshot.
+    /// Replace a root's type content and invalidate every cached snapshot.
     fn setContent(self: *InstGraph, root: NodeId, new_content: InstNode) Allocator.Error!void {
         if (!try self.replaceContentWithoutSnapshotInvalidation(root, new_content)) return;
         self.invalidateActiveSnapshots(root);

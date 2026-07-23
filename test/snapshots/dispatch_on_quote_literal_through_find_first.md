@@ -88,7 +88,7 @@ foo = |letter| {
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "find_first") (constraint-fn-var 241)
+								(e-dispatch-call (method "find_first") (constraint-fn-var 244)
 									(receiver
 										(e-list
 											(elems
@@ -103,9 +103,9 @@ foo = |letter| {
 											(e-lambda
 												(args
 													(p-assign (ident "letters")))
-												(e-dispatch-call (method "contains") (constraint-fn-var 239)
+												(e-dispatch-call (method "contains") (constraint-fn-var 242)
 													(receiver
-														(e-dispatch-call (method "to_utf8") (constraint-fn-var 237)
+														(e-dispatch-call (method "to_utf8") (constraint-fn-var 240)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "letters"))))

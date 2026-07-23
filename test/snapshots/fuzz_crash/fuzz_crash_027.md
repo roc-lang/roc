@@ -2024,7 +2024,7 @@ main! = |_| { # Yeah Ie
 				(s-return
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-call (constraint-fn-var 1364)
+					(e-call (constraint-fn-var 1367)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2047,7 +2047,7 @@ main! = |_| { # Yeah Ie
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1391) (dispatcher-var 315)
+						(e-interpolation (constraint-fn-var 1394) (dispatcher-var 315)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts

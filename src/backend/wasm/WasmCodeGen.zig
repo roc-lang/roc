@@ -10747,6 +10747,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
     const args = self.store.getLocalSpan(ll.args);
 
     switch (ll.op) {
+        .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
         // Numeric operations (arithmetic, comparisons, shifts)
         .num_plus,
         .num_plus_checked,
@@ -14469,7 +14470,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
     }
 }
 
-/// Generate numeric low-level operations (num_add, num_sub, etc.)
+/// Generate numeric low-level operations (num_plus, num_minus, etc.)
 /// Handles both scalar and composite (i128/Dec) types.
 fn emitNumericLowLevel(self: *Self, op: anytype, args: anytype, ret_layout: layout.Idx) Allocator.Error!void {
     const operand_layout = self.procLocalLayoutIdx(GuardedList.at(args, 0));

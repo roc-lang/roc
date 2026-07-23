@@ -1667,11 +1667,17 @@ pub const ReportBuilder = struct {
         const actual_tag = self.snapshots.tags.get(actual_content.structure.tag_union.tags.start);
         const actual_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(actual_tag));
 
-        // Create expected tag str
+        // The context describes the constructor syntax the user wrote, not the
+        // shape of the nominal's declared backing. In particular, tag syntax
+        // can mismatch a value-, record-, tuple-, or empty-tag-backed nominal.
         const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
-        std.debug.assert(expected_content == .structure);
-        std.debug.assert(expected_content.structure == .tag_union);
-        const expected_num_tags_str = expected_content.structure.tag_union.tags.len();
+        const expected_tag_union = switch (expected_content) {
+            .structure => |structure| switch (structure) {
+                .tag_union => |tag_union| tag_union,
+                else => null,
+            },
+            else => null,
+        };
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
             const region_info = self.module_env.calcRegionInfo(region.*);
@@ -1693,16 +1699,20 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
-        // Show the expected tags
-        if (expected_num_tags_str == 1) {
-            const expected_tag = self.snapshots.tags.get(expected_content.structure.tag_union.tags.start);
-            const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
+        // Show the expected tags when the nominal wraps a non-empty tag union.
+        // Otherwise, explain the backing shape mismatch directly.
+        if (expected_tag_union) |tag_union| {
+            if (tag_union.tags.len() == 1) {
+                const expected_tag = self.snapshots.tags.get(tag_union.tags.start);
+                const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
-            try report.document.addText("But the nominal type needs it to be:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(expected_tag_str);
-        } else {
+                try report.document.addText("But the nominal type needs it to be:");
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addCodeBlock(expected_tag_str);
+                return report;
+            }
+
             const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
@@ -1712,7 +1722,7 @@ pub const ReportBuilder = struct {
 
             // Check if there's a tag with the same name in the list of possible tags
 
-            var iter = expected_content.structure.tag_union.tags.iterIndices();
+            var iter = tag_union.tags.iterIndices();
             while (iter.next()) |tag_index| {
                 const cur_expected_tag = self.snapshots.tags.get(tag_index);
 
@@ -1729,7 +1739,15 @@ pub const ReportBuilder = struct {
                     break;
                 }
             }
+
+            return report;
         }
+
+        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        try report.document.addText("But the nominal type wraps:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_type);
 
         return report;
     }

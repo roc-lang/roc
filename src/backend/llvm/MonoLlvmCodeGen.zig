@@ -2871,6 +2871,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
+            .num_plus_wrap, .num_minus_wrap, .num_times_wrap => unreachable,
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;

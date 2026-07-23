@@ -706,4 +706,10 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "[1]" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10300
+        .name = "issue 10300: integer wrapping arithmetic is expressible",
+        .source = "(U8.plus_wrap(U8.highest, 1), U8.minus_wrap(0, 1), U8.times_wrap(128, 2))",
+        .expected = .{ .inspect_str = "(0, 255, 0)" },
+    },
 };

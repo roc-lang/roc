@@ -107,7 +107,7 @@ expect {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 248)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 251)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -137,7 +137,7 @@ expect {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 288)
+							(e-call (constraint-fn-var 291)
 								(e-lookup-local
 									(p-assign (ident "f")))
 								(e-num (value "3"))))

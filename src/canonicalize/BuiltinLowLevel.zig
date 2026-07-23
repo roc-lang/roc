@@ -487,10 +487,13 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.rem_by", .{num_type}, .num_rem_by);
     }
 
-    // Numeric modulo operation (integer types only)
+    // Integer-only numeric operations
     const integer_types = [_][]const u8{ "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128" };
     for (integer_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.mod_by", .{num_type}, .num_mod_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.plus_wrap", .{num_type}, .num_plus_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.minus_wrap", .{num_type}, .num_minus_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_times_wrap);
     }
 
     // Numeric negate operation (signed types only)

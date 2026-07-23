@@ -92,13 +92,13 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 206)
+				(e-call (constraint-fn-var 209)
 					(e-field-access (field "f")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r")))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 218)
+				(e-call (constraint-fn-var 221)
 					(e-field-access (field "f")
 						(receiver
 							(e-lookup-local

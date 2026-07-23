@@ -4294,40 +4294,70 @@ const core_tests = [_]TestCase{
         .source =
         \\{
         \\    (
-        \\        U8.add_try(250, 5),
-        \\        U8.add_try(250, 6),
-        \\        U8.sub_try(0, 1),
-        \\        U8.mul_try(16, 16),
+        \\        U8.plus_try(250, 5),
+        \\        U8.plus_try(250, 6),
+        \\        U8.minus_try(0, 1),
+        \\        U8.times_try(16, 16),
         \\        U8.div_try(1, 0),
-        \\        I8.add_try(126, 1),
-        \\        I8.add_try(127, 1),
-        \\        I8.add_try(I8.lowest, -1),
-        \\        I8.sub_try(I8.lowest, 1),
-        \\        I8.mul_try(63, 2),
-        \\        I8.mul_try(64, 2),
-        \\        I8.mul_try(I8.lowest, -1),
+        \\        I8.plus_try(126, 1),
+        \\        I8.plus_try(127, 1),
+        \\        I8.plus_try(I8.lowest, -1),
+        \\        I8.minus_try(I8.lowest, 1),
+        \\        I8.times_try(63, 2),
+        \\        I8.times_try(64, 2),
+        \\        I8.times_try(I8.lowest, -1),
         \\        I8.div_try(I8.lowest, -1),
         \\        I8.div_try(1, 0),
         \\        I8.div_try(-7, 2),
-        \\        I64.add_try(I64.highest, -1),
-        \\        I64.add_try(I64.highest, 1),
-        \\        U128.mul_try(U128.highest, 2),
+        \\        I64.plus_try(I64.highest, -1),
+        \\        I64.plus_try(I64.highest, 1),
+        \\        U128.times_try(U128.highest, 2),
         \\    )
         \\}
         ,
         .expected = .{ .inspect_str = "(Ok(255), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Ok(126), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(-3), Ok(9223372036854775806), Err(Overflow), Err(Overflow))" },
     },
     .{
+        .name = "inspect: integer wrapping arithmetic covers every width",
+        .source =
+        \\(
+        \\    U8.plus_wrap(U8.highest, 1) == 0 and U8.minus_wrap(0, 1) == U8.highest and U8.times_wrap(U8.highest, 2) == U8.highest - 1,
+        \\    I8.plus_wrap(I8.highest, 1) == I8.lowest and I8.minus_wrap(I8.lowest, 1) == I8.highest and I8.times_wrap(I8.lowest, -1) == I8.lowest,
+        \\    U16.plus_wrap(U16.highest, 1) == 0 and U16.minus_wrap(0, 1) == U16.highest and U16.times_wrap(U16.highest, 2) == U16.highest - 1,
+        \\    I16.plus_wrap(I16.highest, 1) == I16.lowest and I16.minus_wrap(I16.lowest, 1) == I16.highest and I16.times_wrap(I16.lowest, -1) == I16.lowest,
+        \\    U32.plus_wrap(U32.highest, 1) == 0 and U32.minus_wrap(0, 1) == U32.highest and U32.times_wrap(U32.highest, 2) == U32.highest - 1,
+        \\    I32.plus_wrap(I32.highest, 1) == I32.lowest and I32.minus_wrap(I32.lowest, 1) == I32.highest and I32.times_wrap(I32.lowest, -1) == I32.lowest,
+        \\    U64.plus_wrap(U64.highest, 1) == 0 and U64.minus_wrap(0, 1) == U64.highest and U64.times_wrap(U64.highest, 2) == U64.highest - 1,
+        \\    I64.plus_wrap(I64.highest, 1) == I64.lowest and I64.minus_wrap(I64.lowest, 1) == I64.highest and I64.times_wrap(I64.lowest, -1) == I64.lowest,
+        \\    U128.plus_wrap(U128.highest, 1) == 0 and U128.minus_wrap(0, 1) == U128.highest and U128.times_wrap(U128.highest, 2) == U128.highest - 1,
+        \\    I128.plus_wrap(I128.highest, 1) == I128.lowest and I128.minus_wrap(I128.lowest, 1) == I128.highest and I128.times_wrap(I128.lowest, -1) == I128.lowest,
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True)" },
+    },
+    .{
+        .name = "inspect: Dec try arithmetic returns overflow without crashing or wrapping",
+        .source =
+        \\(
+        \\    Dec.plus_try(Dec.highest, 1.0) == Err(Overflow),
+        \\    Dec.minus_try(Dec.lowest, 1.0) == Err(Overflow),
+        \\    Dec.plus_try(1.5, 2.5) == Ok(4.0),
+        \\    Dec.minus_try(5.0, 3.5) == Ok(1.5),
+        \\)
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True)" },
+    },
+    .{
         .name = "inspect: unsigned integer try arithmetic covers every width",
         .source =
         \\{
         \\    check_u8 =
-        \\        U8.add_try(U8.highest, 0) == Ok(U8.highest)
-        \\        and U8.add_try(U8.highest, 1) == Err(Overflow)
-        \\        and U8.sub_try(0, 0) == Ok(0)
-        \\        and U8.sub_try(0, 1) == Err(Overflow)
-        \\        and U8.mul_try(U8.highest, 1) == Ok(U8.highest)
-        \\        and U8.mul_try(U8.highest, 2) == Err(Overflow)
+        \\        U8.plus_try(U8.highest, 0) == Ok(U8.highest)
+        \\        and U8.plus_try(U8.highest, 1) == Err(Overflow)
+        \\        and U8.minus_try(0, 0) == Ok(0)
+        \\        and U8.minus_try(0, 1) == Err(Overflow)
+        \\        and U8.times_try(U8.highest, 1) == Ok(U8.highest)
+        \\        and U8.times_try(U8.highest, 2) == Err(Overflow)
         \\        and U8.div_try(U8.highest, 1) == Ok(U8.highest)
         \\        and U8.div_try(1, 0) == Err(DivByZero)
         \\        and U8.pow_try(2, 3) == Ok(8)
@@ -4335,12 +4365,12 @@ const core_tests = [_]TestCase{
         \\        and U8.div_ceil_try(7, 2) == Ok(4)
         \\        and U8.div_ceil_try(1, 0) == Err(DivByZero)
         \\    check_u16 =
-        \\        U16.add_try(U16.highest, 0) == Ok(U16.highest)
-        \\        and U16.add_try(U16.highest, 1) == Err(Overflow)
-        \\        and U16.sub_try(0, 0) == Ok(0)
-        \\        and U16.sub_try(0, 1) == Err(Overflow)
-        \\        and U16.mul_try(U16.highest, 1) == Ok(U16.highest)
-        \\        and U16.mul_try(U16.highest, 2) == Err(Overflow)
+        \\        U16.plus_try(U16.highest, 0) == Ok(U16.highest)
+        \\        and U16.plus_try(U16.highest, 1) == Err(Overflow)
+        \\        and U16.minus_try(0, 0) == Ok(0)
+        \\        and U16.minus_try(0, 1) == Err(Overflow)
+        \\        and U16.times_try(U16.highest, 1) == Ok(U16.highest)
+        \\        and U16.times_try(U16.highest, 2) == Err(Overflow)
         \\        and U16.div_try(U16.highest, 1) == Ok(U16.highest)
         \\        and U16.div_try(1, 0) == Err(DivByZero)
         \\        and U16.pow_try(2, 3) == Ok(8)
@@ -4348,12 +4378,12 @@ const core_tests = [_]TestCase{
         \\        and U16.div_ceil_try(7, 2) == Ok(4)
         \\        and U16.div_ceil_try(1, 0) == Err(DivByZero)
         \\    check_u32 =
-        \\        U32.add_try(U32.highest, 0) == Ok(U32.highest)
-        \\        and U32.add_try(U32.highest, 1) == Err(Overflow)
-        \\        and U32.sub_try(0, 0) == Ok(0)
-        \\        and U32.sub_try(0, 1) == Err(Overflow)
-        \\        and U32.mul_try(U32.highest, 1) == Ok(U32.highest)
-        \\        and U32.mul_try(U32.highest, 2) == Err(Overflow)
+        \\        U32.plus_try(U32.highest, 0) == Ok(U32.highest)
+        \\        and U32.plus_try(U32.highest, 1) == Err(Overflow)
+        \\        and U32.minus_try(0, 0) == Ok(0)
+        \\        and U32.minus_try(0, 1) == Err(Overflow)
+        \\        and U32.times_try(U32.highest, 1) == Ok(U32.highest)
+        \\        and U32.times_try(U32.highest, 2) == Err(Overflow)
         \\        and U32.div_try(U32.highest, 1) == Ok(U32.highest)
         \\        and U32.div_try(1, 0) == Err(DivByZero)
         \\        and U32.pow_try(2, 3) == Ok(8)
@@ -4361,12 +4391,12 @@ const core_tests = [_]TestCase{
         \\        and U32.div_ceil_try(7, 2) == Ok(4)
         \\        and U32.div_ceil_try(1, 0) == Err(DivByZero)
         \\    check_u64 =
-        \\        U64.add_try(U64.highest, 0) == Ok(U64.highest)
-        \\        and U64.add_try(U64.highest, 1) == Err(Overflow)
-        \\        and U64.sub_try(0, 0) == Ok(0)
-        \\        and U64.sub_try(0, 1) == Err(Overflow)
-        \\        and U64.mul_try(U64.highest, 1) == Ok(U64.highest)
-        \\        and U64.mul_try(U64.highest, 2) == Err(Overflow)
+        \\        U64.plus_try(U64.highest, 0) == Ok(U64.highest)
+        \\        and U64.plus_try(U64.highest, 1) == Err(Overflow)
+        \\        and U64.minus_try(0, 0) == Ok(0)
+        \\        and U64.minus_try(0, 1) == Err(Overflow)
+        \\        and U64.times_try(U64.highest, 1) == Ok(U64.highest)
+        \\        and U64.times_try(U64.highest, 2) == Err(Overflow)
         \\        and U64.div_try(U64.highest, 1) == Ok(U64.highest)
         \\        and U64.div_try(1, 0) == Err(DivByZero)
         \\        and U64.pow_try(2, 3) == Ok(8)
@@ -4374,12 +4404,12 @@ const core_tests = [_]TestCase{
         \\        and U64.div_ceil_try(7, 2) == Ok(4)
         \\        and U64.div_ceil_try(1, 0) == Err(DivByZero)
         \\    check_u128 =
-        \\        U128.add_try(U128.highest, 0) == Ok(U128.highest)
-        \\        and U128.add_try(U128.highest, 1) == Err(Overflow)
-        \\        and U128.sub_try(0, 0) == Ok(0)
-        \\        and U128.sub_try(0, 1) == Err(Overflow)
-        \\        and U128.mul_try(U128.highest, 1) == Ok(U128.highest)
-        \\        and U128.mul_try(U128.highest, 2) == Err(Overflow)
+        \\        U128.plus_try(U128.highest, 0) == Ok(U128.highest)
+        \\        and U128.plus_try(U128.highest, 1) == Err(Overflow)
+        \\        and U128.minus_try(0, 0) == Ok(0)
+        \\        and U128.minus_try(0, 1) == Err(Overflow)
+        \\        and U128.times_try(U128.highest, 1) == Ok(U128.highest)
+        \\        and U128.times_try(U128.highest, 2) == Err(Overflow)
         \\        and U128.div_try(U128.highest, 1) == Ok(U128.highest)
         \\        and U128.div_try(1, 0) == Err(DivByZero)
         \\        and U128.pow_try(2, 3) == Ok(8)
@@ -4396,13 +4426,13 @@ const core_tests = [_]TestCase{
         .source =
         \\{
         \\    i8 = (
-        \\        I8.add_try(I8.highest, -1),
-        \\        I8.add_try(I8.highest, 1),
-        \\        I8.sub_try(I8.lowest, -1),
-        \\        I8.sub_try(I8.lowest, 1),
-        \\        I8.mul_try(I8.highest, 1),
-        \\        I8.mul_try(I8.highest, 2),
-        \\        I8.mul_try(I8.lowest, -1),
+        \\        I8.plus_try(I8.highest, -1),
+        \\        I8.plus_try(I8.highest, 1),
+        \\        I8.minus_try(I8.lowest, -1),
+        \\        I8.minus_try(I8.lowest, 1),
+        \\        I8.times_try(I8.highest, 1),
+        \\        I8.times_try(I8.highest, 2),
+        \\        I8.times_try(I8.lowest, -1),
         \\        I8.div_try(I8.lowest, -1),
         \\        I8.div_try(1, 0),
         \\        I8.pow_try(2, 3),
@@ -4414,13 +4444,13 @@ const core_tests = [_]TestCase{
         \\        I8.div_ceil_try(I8.lowest, -1),
         \\    )
         \\    i16 = (
-        \\        I16.add_try(I16.highest, -1),
-        \\        I16.add_try(I16.highest, 1),
-        \\        I16.sub_try(I16.lowest, -1),
-        \\        I16.sub_try(I16.lowest, 1),
-        \\        I16.mul_try(I16.highest, 1),
-        \\        I16.mul_try(I16.highest, 2),
-        \\        I16.mul_try(I16.lowest, -1),
+        \\        I16.plus_try(I16.highest, -1),
+        \\        I16.plus_try(I16.highest, 1),
+        \\        I16.minus_try(I16.lowest, -1),
+        \\        I16.minus_try(I16.lowest, 1),
+        \\        I16.times_try(I16.highest, 1),
+        \\        I16.times_try(I16.highest, 2),
+        \\        I16.times_try(I16.lowest, -1),
         \\        I16.div_try(I16.lowest, -1),
         \\        I16.div_try(1, 0),
         \\        I16.pow_try(2, 3),
@@ -4432,13 +4462,13 @@ const core_tests = [_]TestCase{
         \\        I16.div_ceil_try(I16.lowest, -1),
         \\    )
         \\    i32 = (
-        \\        I32.add_try(I32.highest, -1),
-        \\        I32.add_try(I32.highest, 1),
-        \\        I32.sub_try(I32.lowest, -1),
-        \\        I32.sub_try(I32.lowest, 1),
-        \\        I32.mul_try(I32.highest, 1),
-        \\        I32.mul_try(I32.highest, 2),
-        \\        I32.mul_try(I32.lowest, -1),
+        \\        I32.plus_try(I32.highest, -1),
+        \\        I32.plus_try(I32.highest, 1),
+        \\        I32.minus_try(I32.lowest, -1),
+        \\        I32.minus_try(I32.lowest, 1),
+        \\        I32.times_try(I32.highest, 1),
+        \\        I32.times_try(I32.highest, 2),
+        \\        I32.times_try(I32.lowest, -1),
         \\        I32.div_try(I32.lowest, -1),
         \\        I32.div_try(1, 0),
         \\        I32.pow_try(2, 3),
@@ -4450,13 +4480,13 @@ const core_tests = [_]TestCase{
         \\        I32.div_ceil_try(I32.lowest, -1),
         \\    )
         \\    i64 = (
-        \\        I64.add_try(I64.highest, -1),
-        \\        I64.add_try(I64.highest, 1),
-        \\        I64.sub_try(I64.lowest, -1),
-        \\        I64.sub_try(I64.lowest, 1),
-        \\        I64.mul_try(I64.highest, 1),
-        \\        I64.mul_try(I64.highest, 2),
-        \\        I64.mul_try(I64.lowest, -1),
+        \\        I64.plus_try(I64.highest, -1),
+        \\        I64.plus_try(I64.highest, 1),
+        \\        I64.minus_try(I64.lowest, -1),
+        \\        I64.minus_try(I64.lowest, 1),
+        \\        I64.times_try(I64.highest, 1),
+        \\        I64.times_try(I64.highest, 2),
+        \\        I64.times_try(I64.lowest, -1),
         \\        I64.div_try(I64.lowest, -1),
         \\        I64.div_try(1, 0),
         \\        I64.pow_try(2, 3),
@@ -4468,13 +4498,13 @@ const core_tests = [_]TestCase{
         \\        I64.div_ceil_try(I64.lowest, -1),
         \\    )
         \\    i128 = (
-        \\        I128.add_try(I128.highest, -1),
-        \\        I128.add_try(I128.highest, 1),
-        \\        I128.sub_try(I128.lowest, -1),
-        \\        I128.sub_try(I128.lowest, 1),
-        \\        I128.mul_try(I128.highest, 1),
-        \\        I128.mul_try(I128.highest, 2),
-        \\        I128.mul_try(I128.lowest, -1),
+        \\        I128.plus_try(I128.highest, -1),
+        \\        I128.plus_try(I128.highest, 1),
+        \\        I128.minus_try(I128.lowest, -1),
+        \\        I128.minus_try(I128.lowest, 1),
+        \\        I128.times_try(I128.highest, 1),
+        \\        I128.times_try(I128.highest, 2),
+        \\        I128.times_try(I128.lowest, -1),
         \\        I128.div_try(I128.lowest, -1),
         \\        I128.div_try(1, 0),
         \\        I128.pow_try(2, 3),
@@ -4528,8 +4558,8 @@ const core_tests = [_]TestCase{
         \\    }
         \\
         \\    (
-        \\        label(U8.add_try(1, 2)),
-        \\        label(U8.add_try(U8.highest, 1)),
+        \\        label(U8.plus_try(1, 2)),
+        \\        label(U8.plus_try(U8.highest, 1)),
         \\        label(I8.div_try(1, 0)),
         \\        label(I8.pow_try(2, -1)),
         \\        label(Dec.sqrt_try(-1.0)),
@@ -4543,7 +4573,7 @@ const core_tests = [_]TestCase{
         .source =
         \\{
         \\    result : Try(I8, [Overflow])
-        \\    result = I8.mul_try(1, 2)
+        \\    result = I8.times_try(1, 2)
         \\
         \\    widened : Try(I8, [Overflow, Underflow])
         \\    widened =

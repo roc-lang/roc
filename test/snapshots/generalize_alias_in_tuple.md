@@ -118,16 +118,16 @@ main = {
 					(p-assign (ident "t"))))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 211)
+					(e-call (constraint-fn-var 214)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-num (value "1")))
-					(e-call (constraint-fn-var 220)
+					(e-call (constraint-fn-var 223)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-string
 							(e-literal (string "x"))))
-					(e-call (constraint-fn-var 228)
+					(e-call (constraint-fn-var 231)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))

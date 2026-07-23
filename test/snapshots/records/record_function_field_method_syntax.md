@@ -71,7 +71,7 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-dispatch-call (method "f") (constraint-fn-var 193)
+		(e-dispatch-call (method "f") (constraint-fn-var 196)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "r"))))
