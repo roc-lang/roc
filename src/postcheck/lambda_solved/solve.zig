@@ -70,6 +70,7 @@ const check = @import("check");
 const Common = @import("../common.zig");
 const MonoType = @import("../monotype/type.zig");
 const census = @import("../monotype/census.zig");
+const representation_policy = @import("../representation_policy.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
@@ -1753,14 +1754,13 @@ const Solver = struct {
                     if (isScoreSelectedEvidenceOwner(left_named.builtin_owner) or
                         isScoreSelectedEvidenceOwner(right_named.builtin_owner))
                     {
-                        const evidence_scores = [2]u8{ self.generatedOpaqueEvidenceScore(right_named), self.generatedOpaqueEvidenceScore(left_named) };
-                        if (census.enabled and evidence_scores[0] == evidence_scores[1]) {
+                        const scores = [2]u8{ self.generatedOpaqueEvidenceScore(left_named), self.generatedOpaqueEvidenceScore(right_named) };
+                        if (census.enabled and scores[0] == scores[1]) {
                             census.bump("lambda_generated_backing_equal_score");
                         }
-                        if (evidence_scores[0] > evidence_scores[1]) {
-                            self.program.types.set(a, .{ .link = b });
-                        } else {
-                            self.program.types.set(b, .{ .link = a });
+                        switch (representation_policy.chooseGeneratedEvidenceBacking(scores[0], scores[1])) {
+                            .right => self.program.types.set(a, .{ .link = b }),
+                            .left => self.program.types.set(b, .{ .link = a }),
                         }
                     } else {
                         if (left_named.backing) |left_backing| {
@@ -1800,6 +1800,18 @@ const Solver = struct {
         return true;
     }
 
+    /// Immutable descriptor for the shared representation policy, read from a
+    /// Lambda Solved named type var. The policy never touches this store.
+    fn iteratorDescriptor(named: anytype) representation_policy.NamedDescriptor {
+        return .{
+            .kind = named.kind,
+            .def = named.def,
+            .builtin_owner = named.builtin_owner,
+            .arg_count = named.args.count(),
+            .backing_use = if (named.backing) |backing| backing.use else null,
+        };
+    }
+
     fn unifyForcedDynamicIterator(
         self: *Solver,
         left_ty: Type.TypeVarId,
@@ -1807,19 +1819,24 @@ const Solver = struct {
         left: anytype,
         right: anytype,
     ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .forced_dynamic) return false;
+        const join = representation_policy.iteratorJoin(iteratorDescriptor(left), iteratorDescriptor(right));
+        if (join.relation != .forced_dynamic) return false;
 
-        const left_dynamic = left.def.iterator_representation == .forced_dynamic;
         if (left.args.count() == 0 or right.args.count() == 0) {
             Common.invariant("forced-dynamic iterator reached Lambda Solved without a public item argument");
         }
 
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        try self.unifyIteratorBackings(left, right);
-        if (left_dynamic) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
+        if (join.relate_item) {
+            try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        }
+        // Lambda Solved is the stage that joins the step callable flow, so the
+        // callable-flow backing case relates the paired backings here.
+        if (join.relate_backing == .step_callable_flow) {
+            try self.unifyIteratorBackings(left, right);
+        }
+        switch (join.representative) {
+            .left => self.program.types.set(right_ty, .{ .link = left_ty }),
+            .right => self.program.types.set(left_ty, .{ .link = right_ty }),
         }
         return true;
     }
@@ -1831,28 +1848,32 @@ const Solver = struct {
         left: anytype,
         right: anytype,
     ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .minted_join) return false;
+        const join = representation_policy.iteratorJoin(iteratorDescriptor(left), iteratorDescriptor(right));
+        if (join.relation != .minted_join) return false;
 
         if (left.args.count() == 0 or right.args.count() == 0) {
             Common.invariant("generated iterator join reached Lambda Solved without a public item argument");
         }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-
-        if (left.backing) |left_backing| {
-            const right_backing = right.backing orelse
-                Common.invariant("generated iterator join found backing on only one side");
-            if (left_backing.use != right_backing.use) {
-                Common.invariant("generated iterator join found different backing uses");
-            }
-            try self.unify(left_backing.ty, right_backing.ty);
-        } else if (right.backing != null) {
-            Common.invariant("generated iterator join found backing on only one side");
+        if (join.relate_item) {
+            try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
         }
 
-        if (isIteratorLikeOwner(left.builtin_owner)) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
+        if (join.relate_backing == .relate_pair) {
+            if (left.backing) |left_backing| {
+                const right_backing = right.backing orelse
+                    Common.invariant("generated iterator join found backing on only one side");
+                if (left_backing.use != right_backing.use) {
+                    Common.invariant("generated iterator join found different backing uses");
+                }
+                try self.unify(left_backing.ty, right_backing.ty);
+            } else if (right.backing != null) {
+                Common.invariant("generated iterator join found backing on only one side");
+            }
+        }
+
+        switch (join.representative) {
+            .left => self.program.types.set(right_ty, .{ .link = left_ty }),
+            .right => self.program.types.set(left_ty, .{ .link = right_ty }),
         }
         return true;
     }
@@ -1864,17 +1885,20 @@ const Solver = struct {
         left: anytype,
         right: anytype,
     ) Allocator.Error!bool {
-        if (MonoType.iteratorRelation(left, right) != .public_minted) return false;
+        const join = representation_policy.iteratorJoin(iteratorDescriptor(left), iteratorDescriptor(right));
+        if (join.relation != .public_minted) return false;
 
         if (left.args.count() == 0 or right.args.count() == 0) {
             Common.invariant("generated iterator evidence reached Lambda Solved without a public item argument");
         }
-        try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        if (join.relate_item) {
+            try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        }
+        // Public-and-minted keeps the two backings separate.
 
-        if (left.def.iterator_representation == .minted) {
-            self.program.types.set(right_ty, .{ .link = left_ty });
-        } else {
-            self.program.types.set(left_ty, .{ .link = right_ty });
+        switch (join.representative) {
+            .left => self.program.types.set(right_ty, .{ .link = left_ty }),
+            .right => self.program.types.set(left_ty, .{ .link = right_ty }),
         }
         return true;
     }
@@ -2327,10 +2351,10 @@ fn isGeneratedOpaqueEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
 /// (`FieldNames`/`FieldName`/`ParseTagUnionSpec`). Iterators also carry a
 /// generated backing but are excluded here: their same-identity instances share
 /// one backing structure whose step callable members must merge, so they take
-/// ordinary backing unification instead of score selection.
+/// ordinary backing unification instead of score selection. The classification
+/// is single-sourced in the shared representation policy.
 fn isScoreSelectedEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    const resolved = owner orelse return false;
-    return isGeneratedOpaqueEvidenceOwner(resolved) and !static_dispatch.isIteratorOwner(resolved);
+    return representation_policy.evidenceOwnerUsesScoreSelection(owner);
 }
 
 fn iteratorLikeOwnerFromPair(

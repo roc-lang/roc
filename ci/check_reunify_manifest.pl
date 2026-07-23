@@ -37,6 +37,8 @@ my $LS    = 'src/postcheck/lambda_solved/solve.zig';
 my $LSTY  = 'src/postcheck/lambda_solved/type.zig';
 my $SLL   = 'src/postcheck/solved_lir_lower.zig';
 my $LMLOW = 'src/postcheck/lambda_mono/lower.zig';
+my $RPOL  = 'src/postcheck/representation_policy.zig';
+my $RCLO  = 'src/postcheck/representation_closure.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -224,6 +226,33 @@ my @categories = (
               counts => { $LS => 7 } },
             { label => 'forall', re => qr/\bforall\b/,
               counts => { $LS => 7, $LSTY => 1, $SLL => 1, $LMLOW => 1 } },
+        ],
+    },
+    {
+        # The shared representation-relation policy (reunify.md section 10) and
+        # the representation slot closure engine. Every call into the policy and
+        # every `relate` in the closure engine cites a declared rule; these pins
+        # start section 14's "every call cites a declared rule" mechanically
+        # tracked. The policy entry points are pure functions over immutable
+        # descriptors; the closure `relate` sites are the engine's own recursion
+        # plus its direct tests (the engine is not yet wired into production).
+        name    => 'representation-policy',
+        exempt  => [],
+        patterns => [
+            { label => 'iteratorTierRelation', re => qr/\biteratorTierRelation\b/,
+              counts => { $RPOL => 4, $RCLO => 1 } },
+            { label => 'iteratorJoin', re => qr/\biteratorJoin\b/,
+              counts => { $RPOL => 7, $RCLO => 2, $SOLVE => 1, $LS => 3 } },
+            { label => 'chooseGeneratedEvidenceBacking', re => qr/\bchooseGeneratedEvidenceBacking\b/,
+              counts => { $RPOL => 4, $RCLO => 2, $LS => 1 } },
+            { label => 'evidenceOwnerUsesScoreSelection', re => qr/\bevidenceOwnerUsesScoreSelection\b/,
+              counts => { $RPOL => 7, $LS => 1 } },
+            { label => 'applyIteratorJoin', re => qr/\bapplyIteratorJoin\b/,
+              counts => { $SOLVE => 2 } },
+            { label => 'relate(', re => qr/\brelate\(/,
+              counts => { $RCLO => 17 } },
+            { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
+              counts => { $RCLO => 4 } },
         ],
     },
 );

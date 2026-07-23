@@ -34,6 +34,11 @@ pub const LambdaMono = struct {
     pub const Specialize = @import("lambda_mono/specialize.zig");
     pub const Eval = @import("lambda_mono/eval.zig");
 };
+/// Pure representation-relation policy shared by Monotype and Lambda Solved.
+pub const RepresentationPolicy = @import("representation_policy.zig");
+/// Monotype's representation slot equality-closure engine (not yet wired into
+/// production lowering).
+pub const RepresentationClosure = @import("representation_closure.zig");
 /// Decision-tree match compiler shared by both LIR lowerers.
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
@@ -61,6 +66,8 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("lambda_mono/lower.zig"));
     std.testing.refAllDecls(@import("lambda_mono/specialize.zig"));
     std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
+    std.testing.refAllDecls(@import("representation_policy.zig"));
+    std.testing.refAllDecls(@import("representation_closure.zig"));
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));

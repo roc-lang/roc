@@ -2139,6 +2139,108 @@ tag-union values; erased callables become packed erased-callable values and
 indirect calls. It does not apply iterator depth policy or repair callable
 variant sets.
 
+#### Representation Relation Rules And Call Sites
+
+The representation relation is a small, closed set of rules over immutable
+descriptors. The shared decision for each rule lives in one place
+(`src/postcheck/representation_policy.zig`); the two stages that need it read the
+decision through their own adapters and apply it with their own storage. The
+Monotype instantiation graph reads it inside its named-type unification arm
+(`applyIteratorJoin` in `monotype/solve.zig`); Lambda Solved reads it inside its
+special named-type relations (`unifyPublicGeneratedIterator`,
+`unifyForcedDynamicIterator`, `unifyGeneratedIteratorJoin`, and the
+generated-evidence backing selection in `lambda_solved/solve.zig`). Monotype's
+representation slot closure engine (`representation_closure.zig`) drives the same
+rules to a fixpoint over its own slots; it is built and directly tested but not
+yet wired into production lowering. Neither stage shares slot storage, and the
+policy imports neither store: it reads only copied-out descriptor fields.
+
+Each rule declares its algebraic laws, and the closure engine's property tests
+enforce them. "Order-independent partition" means the resulting equivalence
+classes do not depend on operand or worklist order, even when a directional rule
+picks a representative by role rather than by order.
+
+- **Public-and-minted** (`iterator_public_minted`). A public iterator meets its
+  minted representation. Directional by role: the minted side is the
+  representative in both operand orders. The item type is related; the two
+  backings are left separate because the representative already carries the
+  minted backing. Order-independent partition, idempotent, associative. Call
+  sites: Monotype's `applyIteratorJoin` public-minted arm; Lambda Solved's
+  `unifyPublicGeneratedIterator`.
+
+- **Forced-dynamic** (`iterator_forced_dynamic`). A forced-dynamic iterator
+  meets a public or minted one with the same source declaration and item type.
+  Directional by role: the forced-dynamic side is the representative in both
+  orders. The item type is related. The backing holds a step callable whose flow
+  is Lambda Solved's alone: Lambda Solved relates the two backings so the step
+  lambda sets merge, while Monotype leaves them separate because their
+  representations differ — an inline step versus a dynamic boxed step. This is
+  the same split that keeps callable flow out of Monotype everywhere else.
+  Order-independent partition, idempotent, associative. Call sites: Monotype's
+  `applyIteratorJoin` forced-dynamic arm; Lambda Solved's
+  `unifyForcedDynamicIterator`.
+
+- **Minted join** (`iterator_minted_join`). Two distinct minted owners of one
+  iterator declaration join under the iterator owner, relating both the item
+  type and the paired backings; relating the backings closes recursive `rest`
+  references before the pair is drained (the issue-10170 shape). Directional by
+  role: the iterator-owner side is the representative, preferring the left
+  operand when both sides are iterator owners. Idempotent and associative; the
+  resulting partition is order-independent even though the representative prefers
+  the left operand. Call sites: Monotype's `applyIteratorJoin` minted-join arm;
+  Lambda Solved's `unifyGeneratedIteratorJoin`.
+
+- **Generated-evidence backing selection** (`generated_evidence_selection`). Two
+  same-identity generated evidence owners (`FieldNames`, `FieldName`,
+  `ParseTagUnionSpec`, and kin) select one backing by declared score: the higher
+  score is the representative, and the backings are not related. Equal scores
+  keep the left operand — a declared deterministic tie rule, since the reunify
+  Slice 0 measurement found zero equal-score ties, so there is no current
+  behavior to preserve. Iterators are excluded because their backings carry step
+  callable information that must join. Idempotent and associative; the resulting
+  partition is order-independent. Call site: the generated-evidence backing
+  block in Lambda Solved's named-type relation.
+
+- **Component equality** (`component_equality`). A shared child component — an
+  item type or a paired backing — reduces to representation equality. When both
+  children are iterators it re-enters the matching iterator rule; otherwise it
+  relates them as equal representations. Commutative, associative, idempotent.
+  This rule exists only inside the closure engine, as the reduction target for
+  the child relations the iterator rules schedule.
+
+Nominal-backing relation is deliberately not one of these rules. A nominal is not
+logically equal to its backing, so it cannot be a peer join (every peer join
+requires equal logical tokens). It is a distinct operation
+(`relateNominalBacking`) allowed only at one of four sanctioned edges —
+construction, destruction, inspection, or runtime-layout authority
+(`NominalBackingEdge`). The nominal keeps its own logical identity and owns a
+separately typed backing slot; the backing is never the value position itself.
+The generic try-the-backing-on-head-mismatch path in Monotype instantiation is
+not one of these edges and is scheduled for deletion; it is never extracted into
+the shared policy.
+
+The closure engine runs the relation to a fixpoint with a proved termination
+measure. Every slot ranges over a finite representation domain built from the
+producer atoms discovered in its component; a join moves only upward in that
+domain and never manufactures a new atom. A join's derived identity is
+`(rule, logical token, sorted producer-atom set)`, inserted into a memo before
+the join descends into its backing relations, so recursive backings close and
+revisiting a join cannot mint a second identity. An active-pair map closes
+cycles, and the progress measure is the finite tuple of distinct union-find
+roots, unseen derived identities, and in-flight relation edges: every step
+either strictly reduces the number of roots or consumes an edge without adding
+work, so the relation always reaches a fixpoint. Self-recursive and mutually
+recursive minted backings — including the issue-10170 shape — are direct
+termination fixtures.
+
+The relation is intentionally narrow. Its API cannot create a logical unknown,
+bind a scheme variable, add or remove a field or tag, open or close a row,
+default a literal, resolve dispatch, or change nominal identity, and it refuses
+two operands whose logical tokens differ. Open-row merging,
+empty-tag-union-as-unresolved-slot, back-constraint propagation, and defaulting
+are logical or checked responsibilities settled before a representation slot
+exists; they are not representation rules.
+
 #### SpecConstr And Loop Scalarization
 
 Monotype Lifted SpecConstr is a general call-pattern specialization pass. It

@@ -18,6 +18,7 @@ const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const census = @import("census.zig");
+const representation_policy = @import("../representation_policy.zig");
 
 /// Debug-only: the census records extension nodes minted by the import path
 /// so a later row merge that distributes a remainder into one can be counted.
@@ -766,74 +767,13 @@ pub const InstGraph = struct {
                         try self.unifyThroughBacking(right, right_content, left, pending);
                         return;
                     }
-                    switch (Type.iteratorRelation(left_named, right_named)) {
-                        .ordinary => {},
-                        .public_minted => {
-                            census.bump("iter_public_minted");
-                            if (left_named.args.len == 0 or right_named.args.len == 0) {
-                                Common.invariant("minted/public iterator pair reached Monotype instantiation without a public item argument");
-                            }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                            });
-                            if (left_named.def.iterator_representation == .minted) {
-                                try self.union_(left, right);
-                            } else {
-                                try self.union_(right, left);
-                            }
-                            return;
-                        },
-                        .forced_dynamic => {
-                            census.bump("iter_forced_dynamic");
-                            if (left_named.args.len == 0 or right_named.args.len == 0) {
-                                Common.invariant("forced-dynamic iterator reached Monotype instantiation without a public item argument");
-                            }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                            });
-                            if (left_named.def.iterator_representation == .forced_dynamic) {
-                                try self.union_(left, right);
-                            } else {
-                                try self.union_(right, left);
-                            }
-                            return;
-                        },
-                        .minted_join => {
-                            census.bump("iter_minted_join");
-                            if (left_named.args.len == 0 or right_named.args.len == 0) {
-                                Common.invariant("minted iterator join reached Monotype instantiation without a public item argument");
-                            }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                            });
-                            if (left_named.backing) |left_backing| {
-                                const right_backing = right_named.backing orelse
-                                    Common.invariant("minted iterator join found backing on only one side");
-                                if (left_backing.use != right_backing.use) {
-                                    Common.invariant("minted iterator join found different backing uses");
-                                }
-                                try pending.append(self.allocator, .{
-                                    .left = left_backing.node,
-                                    .right = right_backing.node,
-                                });
-                            } else if (right_named.backing != null) {
-                                Common.invariant("minted iterator join found backing on only one side");
-                            }
-
-                            // Close recursive `rest` references before the
-                            // backing pair is drained. Otherwise each nominal
-                            // unwrap creates another fresh structural node.
-                            if (left_named.builtin_owner) |left_owner| {
-                                if (!static_dispatch.isIteratorOwner(left_owner)) unreachable;
-                                try self.union_(left, right);
-                            } else {
-                                try self.union_(right, left);
-                            }
-                            return;
-                        },
+                    const iterator_join = representation_policy.iteratorJoin(
+                        iteratorDescriptor(left_named),
+                        iteratorDescriptor(right_named),
+                    );
+                    if (iterator_join.relation != .ordinary) {
+                        try self.applyIteratorJoin(left, right, left_named, right_named, iterator_join, pending);
+                        return;
                     }
                     if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
@@ -874,12 +814,92 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Immutable descriptor for the shared representation policy, read from a
+    /// graph named node. The policy never touches the graph; the adapter copies
+    /// the representation-relevant fields out.
+    fn iteratorDescriptor(named: InstNamed) representation_policy.NamedDescriptor {
+        return .{
+            .kind = named.kind,
+            .def = named.def,
+            .builtin_owner = named.builtin_owner,
+            .arg_count = named.args.len,
+            .backing_use = if (named.backing) |backing| backing.use else null,
+        };
+    }
+
+    /// Apply an iterator tier join the shared policy classified. The graph owns
+    /// the storage: it relates the item argument and, when the policy asks,
+    /// the paired backings, then unions the loser into the representative.
+    fn applyIteratorJoin(
+        self: *InstGraph,
+        left: NodeId,
+        right: NodeId,
+        left_named: InstNamed,
+        right_named: InstNamed,
+        join: representation_policy.IteratorJoin,
+        pending: *std.ArrayList(NodePair),
+    ) Allocator.Error!void {
+        switch (join.relation) {
+            .public_minted => census.bump("iter_public_minted"),
+            .forced_dynamic => census.bump("iter_forced_dynamic"),
+            .minted_join => census.bump("iter_minted_join"),
+            .ordinary => unreachable,
+        }
+        if (left_named.args.len == 0 or right_named.args.len == 0) {
+            Common.invariant("iterator representation join reached Monotype instantiation without a public item argument");
+        }
+        if (join.relate_item) {
+            try pending.append(self.allocator, .{
+                .left = left_named.args[0],
+                .right = right_named.args[0],
+            });
+        }
+        switch (join.relate_backing) {
+            // A forced-dynamic step callable and its public/minted counterpart
+            // are different representations (an inline step versus a dynamic
+            // boxed step), so Monotype leaves the backings separate; their step
+            // lambda sets join only in Lambda Solved. Public-and-minted keeps
+            // the minted backing on the representative.
+            .leave_separate, .step_callable_flow => {},
+            // The minted join relates the paired backings, which also closes
+            // recursive `rest` references before the pair is drained; otherwise
+            // each nominal unwrap creates another fresh structural node.
+            .relate_pair => {
+                if (left_named.backing) |left_backing| {
+                    const right_backing = right_named.backing orelse
+                        Common.invariant("minted iterator join found backing on only one side");
+                    if (left_backing.use != right_backing.use) {
+                        Common.invariant("minted iterator join found different backing uses");
+                    }
+                    try pending.append(self.allocator, .{
+                        .left = left_backing.node,
+                        .right = right_backing.node,
+                    });
+                } else if (right_named.backing != null) {
+                    Common.invariant("minted iterator join found backing on only one side");
+                }
+            },
+        }
+        switch (join.representative) {
+            .left => try self.union_(left, right),
+            .right => try self.union_(right, left),
+        }
+    }
+
     /// A named type met a structurally different type. Aliases are transparent
     /// downstream, so an alias relates through its backing without merging
     /// roots. A nominal becomes the single node both sides resolve to: the
     /// other side's structure moves to a fresh node that unifies with the
     /// nominal's backing, so every Monotype view of either side carries the
     /// named wrapper, exactly as later stages expect.
+    ///
+    /// The nominal-meets-structural head-mismatch case here is the generic
+    /// try-the-backing-on-head-mismatch path. It is intrinsic to the logical
+    /// instantiation graph and is scheduled for deletion in Slice 7; it is
+    /// deliberately not extracted into the shared representation policy, where
+    /// nominal-backing relation is a distinct API gated on
+    /// construction/destruction/inspection/layout edges (reunify.md section
+    /// 10.5, Slice 0 report section 1.2).
     fn unifyThroughBacking(
         self: *InstGraph,
         named_node: NodeId,
