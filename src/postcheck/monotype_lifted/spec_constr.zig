@@ -10332,6 +10332,7 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches

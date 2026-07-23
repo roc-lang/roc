@@ -2961,6 +2961,14 @@ constructible monomorphic value. If a checked generic value remains
 unconstrained and no runtime value can exist at its final type, lowering it
 under a runtime-value demand is a compiler invariant violation.
 
+Runtime-reachability guards captured while lowering a branch can exempt a
+demand whose value is proven unreachable, but they are not part of
+specialization identity. A request beneath one guard context may reuse a
+specialization created beneath another; each such reuse is recorded, and final
+sealing re-verifies every runtime-value demand of the reused body under the
+reusing context. The exemption diagnostic therefore stays exact per requesting
+context without duplicating bodies per guard context.
+
 An inspect-only demand may render results determined by type or callable
 identity without lowering a runtime value into Monotype IR. For example,
 inspecting a standalone function value may produce `<function>` without

@@ -1015,6 +1015,75 @@ pub const InstGraph = struct {
         Common.invariant("named Monotype backing cycle reached final demand validation");
     }
 
+    /// Whether an inhabitance proof over this node could still hold under any
+    /// future relations — the monotone counterpart of
+    /// `finalizesAsUninhabited`. A class that carries a numeric default
+    /// finalizes numeric and inhabited-only content (primitives, lists,
+    /// functions, empty records) is permanent, so `false` here is stable for
+    /// the rest of this graph's lifetime. Anything still unresolved (or a
+    /// named type whose backing has not been recorded) answers `true`
+    /// conservatively.
+    pub fn mayFinalizeAsUninhabited(self: *InstGraph, raw_node: NodeId) Allocator.Error!bool {
+        var visiting = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer visiting.deinit();
+        return try self.mayFinalizeAsUninhabitedInner(self.find(raw_node), &visiting);
+    }
+
+    fn mayFinalizeAsUninhabitedInner(
+        self: *InstGraph,
+        raw_node: NodeId,
+        visiting: *std.AutoHashMap(NodeId, void),
+    ) Allocator.Error!bool {
+        const node = self.find(raw_node);
+        const entry = try visiting.getOrPut(node);
+        if (entry.found_existing) return false;
+        defer _ = visiting.remove(node);
+
+        return switch (self.nodes.items[@intFromEnum(node)]) {
+            .redirect => unreachable,
+            .empty_tag_union => true,
+            .unresolved => |variable| variable.numeric_default_phase == null,
+            .named => |named| if (named.backing) |backing|
+                try self.mayFinalizeAsUninhabitedInner(backing.node, visiting)
+            else
+                true,
+            .box => |payload| try self.mayFinalizeAsUninhabitedInner(payload, visiting),
+            .tuple => |items| blk: {
+                for (items) |item| {
+                    if (try self.mayFinalizeAsUninhabitedInner(item, visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |record| blk: {
+                for (record.fields) |field| {
+                    if (try self.mayFinalizeAsUninhabitedInner(field.ty, visiting)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tag_union| blk: {
+                if (!try self.mayFinalizeAsUninhabitedInner(tag_union.ext, visiting)) break :blk false;
+                for (tag_union.tags) |tag| {
+                    var tag_may_be_uninhabited = false;
+                    for (tag.payloads) |payload| {
+                        if (try self.mayFinalizeAsUninhabitedInner(payload, visiting)) {
+                            tag_may_be_uninhabited = true;
+                            break;
+                        }
+                    }
+                    if (!tag_may_be_uninhabited) break :blk false;
+                }
+                break :blk true;
+            },
+            .primitive,
+            .list,
+            .func,
+            .empty_record,
+            .erased,
+            .zst,
+            => false,
+        };
+    }
+
     /// Whether frozen graph structure proves that no runtime value can inhabit
     /// this node after unresolved checked variables apply their recorded final
     /// defaults. This is used only for explicit reachability guards captured

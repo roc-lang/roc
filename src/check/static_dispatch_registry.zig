@@ -321,20 +321,25 @@ pub const MethodRegistry = struct {
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
             else if (local_templates.entryForDef(def_idx)) |template_entry| blk: {
-                const template = template_entry.template;
-                const export_name = try names.internExportIdent(idents, method_ident);
-                const proc_base = try names.internProcBase(.{
-                    .module_name = module_name,
-                    .export_name = export_name,
-                    .kind = .checked_source,
-                    .ordinal = @intFromEnum(def_idx),
-                    .source_def_idx = @intFromEnum(def_idx),
-                });
-                break :blk .{ .procedure = .{
-                    .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
-                    .template = template,
-                    .iterator_procedure = iteratorProcedureForDef(module, def_idx),
-                } };
+                switch (template_entry.kind) {
+                    .structural => |kind| break :blk .{ .structural = kind },
+                    .callable => {
+                        const template = template_entry.template;
+                        const export_name = try names.internExportIdent(idents, method_ident);
+                        const proc_base = try names.internProcBase(.{
+                            .module_name = module_name,
+                            .export_name = export_name,
+                            .kind = .checked_source,
+                            .ordinal = @intFromEnum(def_idx),
+                            .source_def_idx = @intFromEnum(def_idx),
+                        });
+                        break :blk .{ .procedure = .{
+                            .proc = .{ .artifact = template.artifact, .proc_base = proc_base },
+                            .template = template,
+                            .iterator_procedure = iteratorProcedureForDef(module, def_idx),
+                        } };
+                    },
+                }
             } else if (localProcedureTargetForMethodBinding(module, checked_bodies, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
             else if (referencedProcedureTargetForMethodBinding(module, local_templates, checked_bodies, entry.value)) |referenced| blk: {
@@ -1403,17 +1408,17 @@ pub const StaticDispatchPlanTable = struct {
         const module_env = module.moduleEnvConst();
         for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+            const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
                 continue;
             switch (checked_bodies.expr(checked_expr).data) {
                 .numeral => {},
+                .runtime_error => continue,
                 else => {
                     if (@import("builtin").mode == .Debug) {
                         std.debug.panic(
-                            "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression",
-                            .{numeral_plan.node_idx},
+                            "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
+                            .{ numeral_plan.node_idx, @tagName(std.meta.activeTag(checked_bodies.expr(checked_expr).data)) },
                         );
                     }
                     unreachable;
@@ -1469,19 +1474,19 @@ pub const StaticDispatchPlanTable = struct {
 
         for (module_env.quote_dispatch_plans.items.items) |quote_plan| {
             const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+            const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
             const literal = switch (checked_bodies.expr(checked_expr).data) {
                 .str_from_quote => |quote| quote.literal,
                 // Builtin Str literals keep the direct string encoding.
                 .str, .str_segment => continue,
+                .runtime_error => continue,
                 else => {
                     if (@import("builtin").mode == .Debug) {
                         std.debug.panic(
-                            "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression",
-                            .{quote_plan.node_idx},
+                            "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
+                            .{ quote_plan.node_idx, @tagName(std.meta.activeTag(checked_bodies.expr(checked_expr).data)) },
                         );
                     }
                     unreachable;

@@ -6337,10 +6337,23 @@ fn appendStaticDispatchTypeRoots(
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.step_topology.skip_payload_var));
     }
 
+    for (module.moduleEnvConst().numeral_dispatch_plans.items.items) |plan| {
+        // The static dispatch registry consumes these typed plan tables
+        // directly, including generated checked expressions without source-node
+        // entries, so publish every recorded plan root directly.
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.target_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.fn_var));
+    }
+
+    for (module.moduleEnvConst().quote_dispatch_plans.items.items) |plan| {
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.target_var));
+        _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.fn_var));
+    }
+
     for (module.moduleEnvConst().store.literalDispatchPlans()) |plan| {
-        const is_expr = source_nodes.hasExpr(@enumFromInt(plan.node_idx));
-        const is_pattern = source_nodes.hasPattern(@enumFromInt(plan.node_idx));
-        if (!is_expr and !is_pattern) continue;
+        // Checked bodies can synthesize literal conversion expressions after
+        // checked type publication has completed. The literal dispatch plan is
+        // the producer-owned edge, so publish every recorded plan root directly.
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.target_var));
         _ = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, @enumFromInt(plan.fn_var));
     }
@@ -9674,6 +9687,11 @@ pub const CheckedBodyStore = struct {
     pub fn exprIdForSource(self: *const CheckedBodyStore, source_expr: CIR.Expr.Idx) ?CheckedExprId {
         std.debug.assert(!self.serialized);
         return self.source_node_map.expr(source_expr);
+    }
+
+    pub fn exprIdAtRawNode(self: *const CheckedBodyStore, raw_node: u32) ?CheckedExprId {
+        std.debug.assert(!self.serialized);
+        return self.source_node_map.exprAtRawNode(raw_node);
     }
 
     pub fn patternIdForSource(self: *const CheckedBodyStore, pattern_idx: CIR.Pattern.Idx) ?CheckedPatternId {
@@ -19510,8 +19528,7 @@ pub const CompileTimeRootTable = struct {
 
         for (module_env.store.literalDispatchPlans()) |numeral_plan| {
             if (numeral_plan.dispatchKind() != .numeral) continue;
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+            const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
                 continue;
             switch (checked_bodies.expr(checked_expr).data) {
@@ -19527,6 +19544,7 @@ pub const CompileTimeRootTable = struct {
                 .function => |function| function.ret,
                 else => checkedArtifactInvariant("from_numeral dispatch plan type was not a function", .{}),
             };
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(numeral_plan.node_idx);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .numeral_conversion,
@@ -19540,8 +19558,7 @@ pub const CompileTimeRootTable = struct {
 
         for (module_env.store.literalDispatchPlans()) |quote_plan| {
             if (quote_plan.dispatchKind() != .quote) continue;
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
-            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse
+            const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
                 continue;
             switch (checked_bodies.expr(checked_expr).data) {
@@ -19553,6 +19570,7 @@ pub const CompileTimeRootTable = struct {
                 .function => |function| function.ret,
                 else => checkedArtifactInvariant("from_quote dispatch plan type was not a function", .{}),
             };
+            const expr_idx: CIR.Expr.Idx = @enumFromInt(quote_plan.node_idx);
             try appendCompileTimeRoot(&roots, allocator, .{
                 .module_idx = module.moduleIndex(),
                 .kind = .quote_conversion,

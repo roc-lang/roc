@@ -346,6 +346,7 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         .empty,
         .empty,
         .empty,
+        .empty,
         Mono.Ast.ProcDebugNameMap.init(allocator),
         .empty,
         .empty,

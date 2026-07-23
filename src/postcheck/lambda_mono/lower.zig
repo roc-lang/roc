@@ -27,11 +27,17 @@ pub const SpecializationCaptureAbi = enum {
     erased,
 };
 
+pub const SpecializationCaptureSource = enum {
+    solved,
+    own,
+};
+
 /// Exact producer data used to compare Lambda Mono specialization identities.
 pub const SpecializationIdentity = struct {
     source: Lifted.FnId,
     solved_fn_ty: SolvedType.TypeVarId,
     abi: SpecializationCaptureAbi,
+    captures_source: SpecializationCaptureSource,
     captures_start: u32,
     captures_len: u32,
 };
@@ -145,23 +151,38 @@ const CaptureBinding = struct {
 };
 
 const CaptureAbi = SpecializationCaptureAbi;
+const CaptureSpanSource = SpecializationCaptureSource;
 
 const CaptureSpanId = struct {
+    source: CaptureSpanSource,
     start: u32,
     len: u32,
 
-    fn from(span: SolvedType.Span) CaptureSpanId {
-        return .{ .start = span.start, .len = span.len };
+    fn fromSolved(span: SolvedType.Span) CaptureSpanId {
+        return .{ .source = .solved, .start = span.start, .len = span.len };
+    }
+
+    fn fromOwn(start: u32, len: u32) CaptureSpanId {
+        return .{ .source = .own, .start = start, .len = len };
     }
 };
 
+fn specializationIdentityCaptureStart(span: CaptureSpanId) u32 {
+    return switch (span.source) {
+        .solved => span.start,
+        .own => 0,
+    };
+}
+
 const CaptureTypeId = struct {
+    source: CaptureSpanSource,
     start: u32,
     len: u32,
     solved_fn_ty: SolvedType.TypeVarId,
 
-    fn from(span: SolvedType.Span, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeId {
+    fn from(span: CaptureSpanId, solved_fn_ty: SolvedType.TypeVarId) CaptureTypeId {
         return .{
+            .source = span.source,
             .start = span.start,
             .len = span.len,
             .solved_fn_ty = solved_fn_ty,
@@ -183,6 +204,7 @@ const FnSpecContext = struct {
         std.hash.autoHash(&hasher, @intFromEnum(spec.source));
         std.hash.autoHash(&hasher, @intFromEnum(spec.solved_fn_ty));
         std.hash.autoHash(&hasher, spec.abi);
+        std.hash.autoHash(&hasher, spec.captures.source);
         std.hash.autoHash(&hasher, spec.captures.start);
         std.hash.autoHash(&hasher, spec.captures.len);
         if (spec.capture_ty) |capture_ty| {
@@ -197,6 +219,7 @@ const FnSpecContext = struct {
         return lhs.source == rhs.source and
             lhs.solved_fn_ty == rhs.solved_fn_ty and
             lhs.abi == rhs.abi and
+            lhs.captures.source == rhs.captures.source and
             lhs.captures.start == rhs.captures.start and
             lhs.captures.len == rhs.captures.len and
             lhs.capture_ty == rhs.capture_ty;
@@ -208,6 +231,7 @@ const CaptureTypeMap = std.HashMap(CaptureTypeId, Type.TypeId, CaptureSpanContex
 const CaptureSpanContext = struct {
     pub fn hash(_: CaptureSpanContext, span: CaptureTypeId) u64 {
         var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, span.source);
         std.hash.autoHash(&hasher, span.start);
         std.hash.autoHash(&hasher, span.len);
         std.hash.autoHash(&hasher, @intFromEnum(span.solved_fn_ty));
@@ -215,7 +239,8 @@ const CaptureSpanContext = struct {
     }
 
     pub fn eql(_: CaptureSpanContext, lhs: CaptureTypeId, rhs: CaptureTypeId) bool {
-        return lhs.start == rhs.start and
+        return lhs.source == rhs.source and
+            lhs.start == rhs.start and
             lhs.len == rhs.len and
             lhs.solved_fn_ty == rhs.solved_fn_ty;
     }
@@ -237,6 +262,8 @@ const Lowerer = struct {
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
+    own_captures: std.ArrayList(SolvedType.Capture),
+    own_capture_spans: []?CaptureSpanId,
     symbols: Common.SymbolGen,
     erased_capture_ptr_ty: ?Type.TypeId = null,
     unit_ty: ?Type.TypeId = null,
@@ -278,6 +305,10 @@ const Lowerer = struct {
         errdefer allocator.free(comptime_site_map);
         @memset(comptime_site_map, null);
 
+        const own_capture_spans = try allocator.alloc(?CaptureSpanId, solved.lifted.fns.len);
+        errdefer allocator.free(own_capture_spans);
+        @memset(own_capture_spans, null);
+
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -294,6 +325,8 @@ const Lowerer = struct {
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
+            .own_captures = .empty,
+            .own_capture_spans = own_capture_spans,
             .symbols = .{ .next = solved.lifted.next_symbol },
             .inline_expects = options.inline_expects,
             .debug_specialization_identities = options.debug_specialization_identities,
@@ -303,6 +336,8 @@ const Lowerer = struct {
     fn deinit(self: *Lowerer) void {
         self.captures.deinit();
         self.capture_types.deinit();
+        self.allocator.free(self.own_capture_spans);
+        self.own_captures.deinit(self.allocator);
         self.source_symbols.deinit();
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
@@ -446,29 +481,12 @@ const Lowerer = struct {
     }
 
     fn ensureOwnFnSpec(self: *Lowerer, fn_id: Lifted.FnId, abi: CaptureAbi) Allocator.Error!Ast.FnId {
-        const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
         const solved_fn_ty = self.solved.types.root(self.solved.fn_tys[@intFromEnum(fn_id)]);
-        const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
-            .func => |func| func,
+        switch (self.solved.types.rootContent(solved_fn_ty)) {
+            .func => {},
             else => Common.invariant("Lambda Mono function table contains a non-function type"),
-        };
-
-        const callable = self.solved.types.rootContent(func.callable);
-        const members = switch (callable) {
-            .lambda_set => |members| members,
-            .erased => |erased| erased.members,
-            else => Common.invariant("function callable slot was unresolved before Lambda Mono"),
-        };
-
-        for (self.solved.types.memberSpan(members)) |member| {
-            if (member.lambda != fn_symbol) continue;
-            return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, member.captures);
         }
-
-        if (std.meta.activeTag(callable) == .erased) {
-            return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, .empty());
-        }
-        Common.invariant("function callable slot did not contain its own lambda member");
+        return try self.ensureFnSpec(fn_id, solved_fn_ty, abi, try self.ownCaptureSpanForFn(fn_id));
     }
 
     fn ensureFnSpec(
@@ -476,15 +494,15 @@ const Lowerer = struct {
         source: Lifted.FnId,
         solved_fn_ty: SolvedType.TypeVarId,
         abi: CaptureAbi,
-        captures: SolvedType.Span,
+        captures: CaptureSpanId,
     ) Allocator.Error!Ast.FnId {
-        const capture_items = self.solved.types.captureSpan(captures);
+        const capture_items = self.captureSpan(captures);
         const root_fn_ty = self.solved.types.root(solved_fn_ty);
         const spec = FnSpec{
             .source = source,
             .solved_fn_ty = root_fn_ty,
             .abi = abi,
-            .captures = CaptureSpanId.from(captures),
+            .captures = captures,
             .capture_ty = if (capture_items.len == 0) null else try self.captureRecordType(captures, root_fn_ty),
         };
 
@@ -502,7 +520,8 @@ const Lowerer = struct {
                 .source = spec.source,
                 .solved_fn_ty = spec.solved_fn_ty,
                 .abi = spec.abi,
-                .captures_start = spec.captures.start,
+                .captures_source = spec.captures.source,
+                .captures_start = specializationIdentityCaptureStart(spec.captures),
                 .captures_len = spec.captures.len,
             });
         }
@@ -531,8 +550,49 @@ const Lowerer = struct {
             Common.invariant("Lambda Mono callable member referenced a missing lifted function symbol");
     }
 
+    fn captureSpan(self: *const Lowerer, span: CaptureSpanId) []const SolvedType.Capture {
+        return switch (span.source) {
+            .solved => self.solved.types.captureSpan(.{ .start = span.start, .len = span.len }),
+            .own => self.own_captures.items[span.start..][0..span.len],
+        };
+    }
+
+    fn ownCaptureSpanForFn(self: *Lowerer, fn_id: Lifted.FnId) Allocator.Error!CaptureSpanId {
+        const raw_fn = @intFromEnum(fn_id);
+        if (raw_fn >= self.own_capture_spans.len) Common.invariant("own capture span requested for a missing lifted function");
+        if (self.own_capture_spans[raw_fn]) |existing| return existing;
+
+        const fn_ = self.solved.lifted.fns[raw_fn];
+        const capture_locals = self.solved.lifted.typedLocalSpan(fn_.captures);
+        if (capture_locals.len == 0) {
+            const empty = CaptureSpanId.fromOwn(0, 0);
+            self.own_capture_spans[raw_fn] = empty;
+            return empty;
+        }
+
+        const start: u32 = @intCast(self.own_captures.items.len);
+        errdefer self.own_captures.shrinkRetainingCapacity(@intCast(start));
+
+        try self.own_captures.ensureUnusedCapacity(self.allocator, capture_locals.len);
+        for (capture_locals) |capture| {
+            const local = self.solved.lifted.locals[@intFromEnum(capture.local)];
+            self.own_captures.appendAssumeCapacity(.{
+                .local = capture.local,
+                .symbol = local.symbol,
+                .binder = local.binder,
+                .capture_id = local.capture_id,
+                .checked_capture_id = local.checked_capture_id,
+                .ty = self.solved.local_tys[@intFromEnum(capture.local)],
+            });
+        }
+
+        const span = CaptureSpanId.fromOwn(start, @intCast(capture_locals.len));
+        self.own_capture_spans[raw_fn] = span;
+        return span;
+    }
+
     fn bindCaptureRecord(self: *Lowerer, captures_id: CaptureSpanId, capture_ty: Type.TypeId, capture_expr: Ast.ExprId) Allocator.Error!void {
-        const captures = self.solved.types.captureSpan(.{ .start = captures_id.start, .len = captures_id.len });
+        const captures = self.captureSpan(captures_id);
         const fields = switch (self.program.types.get(capture_ty)) {
             .capture_record => |fields| self.program.types.captureFieldSpan(fields),
             else => Common.invariant("function capture argument was not a capture record"),
@@ -553,21 +613,8 @@ const Lowerer = struct {
         }
     }
 
-    fn capturesForFn(self: *Lowerer, fn_id: Lifted.FnId) SolvedType.Span {
-        const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
-        const func = switch (self.solved.types.rootContent(self.solved.fn_tys[@intFromEnum(fn_id)])) {
-            .func => |func| func,
-            else => Common.invariant("Lambda Mono function table contains a non-function type"),
-        };
-        const callable = switch (self.solved.types.rootContent(func.callable)) {
-            .lambda_set => |members| members,
-            .erased => |erased| erased.members,
-            else => Common.invariant("callable value did not have a resolved callable slot"),
-        };
-        for (self.solved.types.memberSpan(callable)) |member| {
-            if (member.lambda == fn_symbol) return member.captures;
-        }
-        return .empty();
+    fn capturesForFn(self: *Lowerer, fn_id: Lifted.FnId) Allocator.Error!CaptureSpanId {
+        return try self.ownCaptureSpanForFn(fn_id);
     }
 
     fn erasedCapturePtrType(self: *Lowerer) Allocator.Error!Type.TypeId {
@@ -814,7 +861,7 @@ const Lowerer = struct {
         };
     }
 
-    fn memberCapturesForExpr(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) SolvedType.Span {
+    fn memberCapturesForExpr(self: *Lowerer, expr_id: Lifted.ExprId, fn_id: Lifted.FnId) CaptureSpanId {
         const fn_symbol = self.solved.lifted.fns[@intFromEnum(fn_id)].symbol;
         const expr_ty = self.solved.expr_tys[@intFromEnum(expr_id)];
         const callable = switch (self.solved.types.rootContent(expr_ty)) {
@@ -828,7 +875,7 @@ const Lowerer = struct {
             else => Common.invariant("function reference callable slot was unresolved before Lambda Mono"),
         };
         for (self.solved.types.memberSpan(members)) |member| {
-            if (member.lambda == fn_symbol) return member.captures;
+            if (member.lambda == fn_symbol) return CaptureSpanId.fromSolved(member.captures);
         }
         Common.invariant("function reference callable slot did not contain referenced function");
     }
@@ -842,10 +889,11 @@ const Lowerer = struct {
         const args = try self.lowerExprSlice(self.solved.lifted.exprSpan(args_span));
         defer self.allocator.free(args);
 
-        const captures = self.capturesForFn(fn_id);
-        if (captures.len != 0) {
+        const captures = try self.capturesForFn(fn_id);
+        const capture_items = self.captureSpan(captures);
+        if (capture_items.len != 0) {
             const capture_operands = self.solved.lifted.captureOperandSpan(capture_operands_span);
-            if (capture_operands.len != captures.len) Common.invariant("direct call capture operand count differed from callee capture count");
+            if (capture_operands.len != capture_items.len) Common.invariant("direct call capture operand count differed from callee capture count");
             const target_fn = try self.ensureOwnFnSpec(fn_id, .finite);
             const capture_ty = self.fn_specs.items[@intFromEnum(target_fn)].capture_ty orelse
                 Common.invariant("capturing direct call target had no capture record type");
@@ -936,11 +984,11 @@ const Lowerer = struct {
 
     fn buildCaptureRecordFromExprs(
         self: *Lowerer,
-        capture_span: SolvedType.Span,
+        capture_span: CaptureSpanId,
         capture_operands: anytype,
         capture_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const captures = self.solved.types.captureSpan(capture_span);
+        const captures = self.captureSpan(capture_span);
         const fields = switch (self.program.types.get(capture_ty)) {
             .capture_record => |field_span| try GuardedList.dupe(
                 self.allocator,
@@ -1221,7 +1269,7 @@ const Lowerer = struct {
                 source,
                 root_fn_ty,
                 abi,
-                member.captures,
+                CaptureSpanId.fromSolved(member.captures),
             );
             variants[i] = .{
                 .id = undefined, // assigned by addFnVariants before the variant is stored
@@ -1243,7 +1291,7 @@ const Lowerer = struct {
                 source,
                 self.solved.types.root(self.solved.fn_tys[@intFromEnum(source)]),
                 abi,
-                member.captures,
+                CaptureSpanId.fromSolved(member.captures),
             );
             variants[i] = .{
                 .id = undefined, // assigned by addFnVariants before the variant is stored
@@ -1257,13 +1305,13 @@ const Lowerer = struct {
 
     fn captureRecordType(
         self: *Lowerer,
-        captures: SolvedType.Span,
+        captures: CaptureSpanId,
         solved_fn_ty: SolvedType.TypeVarId,
     ) Allocator.Error!Type.TypeId {
         const id = CaptureTypeId.from(captures, self.solved.types.root(solved_fn_ty));
         if (self.capture_types.get(id)) |existing| return existing;
 
-        const capture_items = self.solved.types.captureSpan(captures);
+        const capture_items = self.captureSpan(captures);
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {

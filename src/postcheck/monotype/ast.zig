@@ -1202,8 +1202,9 @@ pub const ProgramBuilder = struct {
     stmt_ids: ProgramList(StmtId, "stmt_ids"),
     field_exprs: ProgramList(FieldExpr, "field_exprs"),
     fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
-    /// Backing pool for lifted `Span(CaptureOperand)` capture operand spans.
-    /// Empty in the pre-lift Monotype program (populated by closure lifting).
+    /// Backing pool for `Span(CaptureOperand)` direct-call operands. Pre-lift
+    /// Monotype stores producer-authored local-proc operands here; closure
+    /// lifting appends finalized operands for every lifted call/reference.
     capture_operands: ProgramList(CaptureOperand, "capture_operands"),
     record_destructs: ProgramList(RecordDestruct, "record_destructs"),
     str_pattern_steps: ProgramList(StrPatternStep, "str_pattern_steps"),

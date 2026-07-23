@@ -37,6 +37,7 @@ pub fn run(
     var stmt_ids = owned.stmt_ids.takeArrayList();
     var field_exprs = owned.field_exprs.takeArrayList();
     var fn_def_captures = owned.fn_def_captures.takeArrayList();
+    var capture_operands = owned.capture_operands.takeArrayList();
     var record_destructs = owned.record_destructs.takeArrayList();
     var str_pattern_steps = owned.str_pattern_steps.takeArrayList();
     var branches = owned.branches.takeArrayList();
@@ -71,6 +72,7 @@ pub fn run(
         stmt_ids,
         field_exprs,
         fn_def_captures,
+        capture_operands,
         record_destructs,
         str_pattern_steps,
         branches,
@@ -102,6 +104,7 @@ pub fn run(
     stmt_ids = undefined;
     field_exprs = undefined;
     fn_def_captures = undefined;
+    capture_operands = undefined;
     record_destructs = undefined;
     str_pattern_steps = undefined;
     branches = undefined;
@@ -1862,8 +1865,8 @@ const CaptureDependencyGraph = struct {
         const runtime_id = slotCaptureId(self.program, capture);
         if (findSupply(edge.exact_supplies.items, runtime_id)) |supply| return supply;
         const declared_id = switch (edge.site) {
-            .pre_lift => self.program.getLocal(capture.local).checked_capture_id orelse runtime_id,
-            .fn_ref, .call_proc => runtime_id,
+            .pre_lift, .call_proc => self.program.getLocal(capture.local).checked_capture_id orelse runtime_id,
+            .fn_ref => runtime_id,
         };
         return findSupply(edge.declared_supplies.items, declared_id);
     }
@@ -2135,7 +2138,9 @@ const CaptureGraphBuilder = struct {
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(operand.value, child);
             const supply = CaptureSupply{ .id = operand.id, .value = operand.value, .node = child };
-            try declared.append(self.graph.allocator, supply);
+            if (!hasSupplyId(declared.items, operand.id)) {
+                try declared.append(self.graph.allocator, supply);
+            }
             switch (self.graph.program.getExpr(operand.value).data) {
                 .local => |local| if (self.graph.program.getLocal(local).capture_id) |id| {
                     if (!hasSupplyId(exact.items, id)) {
@@ -2162,7 +2167,9 @@ const CaptureGraphBuilder = struct {
             const declared_id = capture_local.checked_capture_id orelse runtime_id;
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(capture.value, child);
-            try declared.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
+            if (!hasSupplyId(declared.items, declared_id)) {
+                try declared.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
+            }
             switch (self.graph.program.getExpr(capture.value).data) {
                 .local => |local| if (self.graph.program.getLocal(local).capture_id) |value_id| {
                     if (!hasSupplyId(exact.items, value_id)) {
@@ -2418,6 +2425,7 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches
@@ -2493,6 +2501,7 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches
@@ -2565,6 +2574,7 @@ test "capture finalization supplies the caller's active binder local" {
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches

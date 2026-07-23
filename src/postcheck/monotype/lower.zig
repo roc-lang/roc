@@ -2202,73 +2202,94 @@ const Builder = struct {
         // relation-production phase. Even a currently resolved request can
         // still be joined by later body/evidence relations, so it must not be
         // promoted to a durable TypeId before the single final seal.
-        var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
-        defer seen_specs.deinit();
         var selection = DraftOpenCandidateSelection{};
-        var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
-        while (interface.next()) |interface_node| {
-            var aliases = source_ctx.graph.classMemberIterator(interface_node);
-            while (aliases.next()) |member| {
-                const lookup_address = DraftTemplateLookupAddress{
-                    .family = family,
-                    .evidence_digest = evidence_digest.bytes,
-                    .request_kind = 1,
-                    .request_fn_key = draftOpenRequestKey(member),
-                };
-                if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidates| {
-                    for (candidates.items) |raw_spec| {
-                        const seen = try seen_specs.getOrPut(raw_spec);
-                        if (seen.found_existing) continue;
-                        const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                        if (spec.request_fn_ty != null) continue;
-                        if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                        if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                        const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
-                        const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
-                            source_ctx.draft.current_owner,
-                            spec.fn_id,
-                        );
-                        if (!draftOpenCandidateQualifies(
-                            spec.state,
-                            exact_interface,
-                            active_recursive_edge,
-                            spec.runtime_demand_guard_frames,
-                            try source_ctx.runtimeDemandGuardFrameAddresses(),
-                        )) continue;
-                        if (!selection.add(raw_spec, exact_interface)) {
-                            Common.invariant("draft template request matched more than one partial active recursive specialization");
+        const resolved_request_ty: ?Type.TypeId = if (try source_ctx.graph.typeIsResolved(request_fn_node))
+            try source_ctx.activeTypeFromNode(request_fn_node)
+        else
+            null;
+        // Resolved requests key directly on their structural type digest, so a
+        // repeat of an already-answered resolved request skips both scans
+        // below.
+        const resolved_lookup_address: ?DraftTemplateLookupAddress = if (resolved_request_ty) |request_fn_ty| .{
+            .family = family,
+            .evidence_digest = evidence_digest.bytes,
+            .request_kind = 0,
+            .request_fn_key = self.specializationTypeDigest(request_fn_ty).bytes,
+        } else null;
+        if (resolved_lookup_address) |address| {
+            if (source_ctx.draft.template_spec_lookup.get(address)) |candidates| {
+                for (candidates.items) |raw_spec| {
+                    const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                    if (spec.request_fn_ty != null) continue;
+                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, resolved_request_ty.?)) continue;
+                    if (!selection.add(raw_spec, true)) unreachable;
+                }
+            }
+        }
+        if (selection.selected() == null) {
+            var seen_specs = std.AutoHashMap(u32, void).init(self.allocator);
+            defer seen_specs.deinit();
+            var interface = try source_ctx.graph.functionInterfaceIterator(request_fn_node);
+            while (interface.next()) |interface_node| {
+                var aliases = source_ctx.graph.classMemberIterator(interface_node);
+                while (aliases.next()) |member| {
+                    const lookup_address = DraftTemplateLookupAddress{
+                        .family = family,
+                        .evidence_digest = evidence_digest.bytes,
+                        .request_kind = 1,
+                        .request_fn_key = draftOpenRequestKey(member),
+                    };
+                    if (source_ctx.draft.template_spec_lookup.get(lookup_address)) |candidates| {
+                        for (candidates.items) |raw_spec| {
+                            const seen = try seen_specs.getOrPut(raw_spec);
+                            if (seen.found_existing) continue;
+                            const spec = &source_ctx.draft.template_specs.items[raw_spec];
+                            if (spec.request_fn_ty != null) continue;
+                            if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                            if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                            const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
+                            const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
+                                source_ctx.draft.current_owner,
+                                spec.fn_id,
+                            );
+                            if (!draftOpenCandidateQualifies(
+                                spec.state,
+                                exact_interface,
+                                active_recursive_edge,
+                            )) continue;
+                            if (!selection.add(raw_spec, exact_interface)) {
+                                Common.invariant("draft template request matched more than one partial active recursive specialization");
+                            }
                         }
                     }
                 }
             }
-        }
-        // Independently instantiated recursive calls do not necessarily share
-        // graph cells with the specialization currently being lowered. Once
-        // both requests are fully resolved, exact structural type equality is
-        // the durable proof that they are the same specialization request.
-        // Unresolved requests continue to use graph-interface identity only.
-        if (try source_ctx.graph.typeIsResolved(request_fn_node)) {
-            const request_fn_ty = try source_ctx.activeTypeFromNode(request_fn_node);
-            for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
-                const raw_spec: u32 = @intCast(raw_spec_usize);
-                if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
-                // The checked source root selects the template body, but it is
-                // not part of a resolved specialization's identity. Recursive
-                // calls can reach the same template through a different checked
-                // root; exact interface, evidence, and lexical context prove
-                // that they refer to the same active specialization.
-                if (spec.request_fn_ty != null) continue;
-                if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
-                if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                if (!resolvedDraftCandidateQualifies(
-                    spec.state,
-                    spec.runtime_demand_guard_frames,
-                    try source_ctx.runtimeDemandGuardFrameAddresses(),
-                )) continue;
-                if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
-                const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
-                if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
-                if (!selection.add(raw_spec, true)) unreachable;
+            // Independently instantiated recursive calls do not necessarily share
+            // graph cells with the specialization currently being lowered. Once
+            // both requests are fully resolved, exact structural type equality is
+            // the durable proof that they are the same specialization request.
+            // Unresolved requests continue to use graph-interface identity only.
+            if (resolved_request_ty) |request_fn_ty| {
+                for (source_ctx.draft.template_specs.items, 0..) |*spec, raw_spec_usize| {
+                    const raw_spec: u32 = @intCast(raw_spec_usize);
+                    if (!names.procedureTemplateRefEql(spec.template_ref, template_ref)) continue;
+                    // The checked source root selects the template body, but it is
+                    // not part of a resolved specialization's identity. Recursive
+                    // calls can reach the same template through a different checked
+                    // root; exact interface, evidence, and lexical context prove
+                    // that they refer to the same active specialization.
+                    if (spec.request_fn_ty != null) continue;
+                    if (!specEvidenceVectorEql(spec.evidence, evidence)) continue;
+                    if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
+                    if (!try source_ctx.graph.typeIsResolved(spec.request_fn_node)) continue;
+                    const spec_fn_ty = try source_ctx.activeTypeFromNode(spec.request_fn_node);
+                    if (!try self.program.types.typeEql(&self.program.names, spec_fn_ty, request_fn_ty)) continue;
+                    if (!selection.add(raw_spec, true)) unreachable;
+                }
             }
         }
         if (selection.selected()) |raw_spec| {
@@ -2296,6 +2317,18 @@ const Builder = struct {
             }
             if (signature_relation == .exact_graph) {
                 source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation = .exact_graph;
+            }
+            if (!runtimeDemandGuardFrameSetsEql(
+                spec.runtime_demand_guard_frames,
+                try source_ctx.runtimeDemandGuardFrameAddresses(),
+            )) {
+                try source_ctx.draft.template_spec_reuses.append(self.allocator, .{
+                    .spec = raw_spec,
+                    .prefix_proof = try source_ctx.currentRuntimeImpossibilityProof(null),
+                });
+            }
+            if (resolved_lookup_address) |address| {
+                try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, raw_spec);
             }
             return .{ .local = .{ .draft = spec.fn_id } };
         }
@@ -2361,6 +2394,8 @@ const Builder = struct {
             .request_fn_ty = null,
             .evidence = evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
+            .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
+            .demand_frame_floor = @intCast(source_ctx.runtime_demand_guard_frames.len),
             .requires_local = local_context_dependent,
             .local_context_dependent = local_context_dependent,
             .lexical_owner = lexical_owner,
@@ -2386,6 +2421,9 @@ const Builder = struct {
             const lookup_entry = try source_ctx.draft.template_spec_lookup.getOrPut(lookup_address);
             if (!lookup_entry.found_existing) lookup_entry.value_ptr.* = .empty;
             try lookup_entry.value_ptr.append(self.allocator, @intCast(spec_index));
+        }
+        if (resolved_lookup_address) |address| {
+            try registerTemplateSpecLookup(source_ctx.draft, self.allocator, address, @intCast(spec_index));
         }
 
         const owner_scope = try source_ctx.draft.enterOwner(.{ .draft_fn = fn_id });
@@ -2464,6 +2502,8 @@ const Builder = struct {
                 .request_fn_ty = declared_fn_ty,
                 .evidence = &.{},
                 .runtime_demand_guard_frames = &.{},
+                .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
+                .demand_end = @intCast(source_ctx.draft.runtime_value_demands.items.len),
                 .symbol = abi_symbol,
                 .fn_id = abi_fn,
                 .def_id = abi_def,
@@ -2480,6 +2520,8 @@ const Builder = struct {
             });
             source_ctx.draft.fns.items[@intFromEnum(fn_id)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node);
             source_ctx.draft.template_specs.items[spec_index].state = .lowered;
+            source_ctx.draft.template_specs.items[spec_index].demand_end =
+                @intCast(source_ctx.draft.runtime_value_demands.items.len);
             return .{ .local = .{ .draft = fn_id } };
         }
         body_ctx.owner_context_fn_key = source_fn_key;
@@ -2531,6 +2573,8 @@ const Builder = struct {
         }
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].state = .lowered;
+        source_ctx.draft.template_specs.items[spec_index].demand_end =
+            @intCast(source_ctx.draft.runtime_value_demands.items.len);
         return .{ .local = .{ .draft = fn_id } };
     }
 
@@ -3773,8 +3817,6 @@ const Builder = struct {
                             spec.state,
                             exact_interface,
                             active_recursive_edge,
-                            spec.runtime_demand_guard_frames,
-                            try source_ctx.runtimeDemandGuardFrameAddresses(),
                         )) continue;
                         if (!selection.add(raw_spec, exact_interface)) {
                             Common.invariant("draft nested request matched more than one partial active recursive specialization");
@@ -3808,6 +3850,15 @@ const Builder = struct {
                     Common.invariant("recursive draft nested request changed its ordered capture entry cells");
                 }
             }
+            if (!runtimeDemandGuardFrameSetsEql(
+                spec.runtime_demand_guard_frames,
+                try source_ctx.runtimeDemandGuardFrameAddresses(),
+            )) {
+                try source_ctx.draft.nested_spec_reuses.append(self.allocator, .{
+                    .spec = raw_spec,
+                    .prefix_proof = try source_ctx.currentRuntimeImpossibilityProof(null),
+                });
+            }
             return .{ .draft = spec.fn_id };
         }
         self.count("nested_misses");
@@ -3835,6 +3886,8 @@ const Builder = struct {
             .request_fn_ty = null,
             .evidence = requested_evidence,
             .runtime_demand_guard_frames = try source_ctx.runtimeDemandGuardFrameAddresses(),
+            .demand_start = @intCast(source_ctx.draft.runtime_value_demands.items.len),
+            .demand_frame_floor = @intCast(source_ctx.runtime_demand_guard_frames.len),
             .capture_entry_guards = try source_ctx.graph.arena().dupe(NodeId, capture_entry_guards),
             .lexical_owner = source_ctx.draft.current_owner,
             .requires_local = evidenceChainRequiresLocalContext(requested_evidence),
@@ -3895,6 +3948,8 @@ const Builder = struct {
         });
         source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = nested_fn_template;
         source_ctx.draft.nested_specs.items[spec_index].state = .lowered;
+        source_ctx.draft.nested_specs.items[spec_index].demand_end =
+            @intCast(source_ctx.draft.runtime_value_demands.items.len);
         return .{ .draft = fn_id };
     }
 
@@ -4207,6 +4262,7 @@ const Builder = struct {
         var added_method_call = false;
         try ctx.prepareStructuralEqNode(
             boundary_index,
+            boundary.mode,
             boundary.operand_node,
             boundary.ret_ty,
             &seen,
@@ -4504,13 +4560,21 @@ const Builder = struct {
         ctx.frozen_equality_method_calls = &method_calls;
 
         const operand_ty = try sealer.sealNode(boundary.operand_node);
-        const lowered = try ctx.lowerStructuralEqFromOperands(
-            operand_ty,
-            boundary.lhs,
-            boundary.rhs,
-            boundary.negated,
-            boundary.ret_ty,
-        );
+        const lowered = switch (boundary.mode) {
+            .equality => |eq| try ctx.lowerStructuralEqFromOperands(
+                operand_ty,
+                boundary.lhs,
+                boundary.rhs,
+                eq.negated,
+                boundary.ret_ty,
+            ),
+            .hash => try ctx.lowerHashExpr(
+                operand_ty,
+                boundary.lhs,
+                boundary.rhs,
+                boundary.ret_ty,
+            ),
+        };
         const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
         const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
         if (!try self.program.types.typeEql(&self.program.names, boundary.ret_ty, lowered_ty)) {
@@ -4899,6 +4963,7 @@ const Builder = struct {
                 Common.invariant("runtime-value demand finalized as a closed empty tag-union type");
             }
         }
+        try verifySpecReuseDemands(body_draft, graph, &impossibility_evaluator);
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
@@ -7674,24 +7739,66 @@ fn draftOpenCandidateQualifies(
     state: DraftSpecState,
     exact_interface: bool,
     active_recursive_edge: bool,
-    candidate_frames: []const RuntimeDemandGuardFrameAddress,
-    request_frames: []const RuntimeDemandGuardFrameAddress,
 ) bool {
-    if (!runtimeDemandGuardFrameSetsEql(candidate_frames, request_frames)) return false;
     return exact_interface or (state == .lowering and active_recursive_edge);
 }
 
-/// An exact, fully resolved recursive request must return the definition that
-/// is currently being lowered even when the call appears beneath a different
-/// branch guard. A completed body may have used its guard topology to exempt
-/// impossible runtime demands, so completed specializations still require the
-/// same guard set.
-fn resolvedDraftCandidateQualifies(
-    state: DraftSpecState,
-    candidate_frames: []const RuntimeDemandGuardFrameAddress,
-    request_frames: []const RuntimeDemandGuardFrameAddress,
-) bool {
-    return state == .lowering or runtimeDemandGuardFrameSetsEql(candidate_frames, request_frames);
+fn registerTemplateSpecLookup(
+    draft: *BodyDraftStore,
+    allocator: Allocator,
+    address: DraftTemplateLookupAddress,
+    raw_spec: u32,
+) Allocator.Error!void {
+    const entry = try draft.template_spec_lookup.getOrPut(address);
+    if (!entry.found_existing) entry.value_ptr.* = .empty;
+    for (entry.value_ptr.items) |existing| if (existing == raw_spec) return;
+    try entry.value_ptr.append(allocator, raw_spec);
+}
+
+/// Re-verify a reused specialization's runtime-value demands under each
+/// reusing guard context. The creating context is checked demand-by-demand at
+/// seal; a reuse from a different context must independently exempt every
+/// demand that finalized as a closed empty tag union, with the reusing
+/// context's proof standing in for the creation context's inherited frames.
+fn verifySpecReuseDemands(
+    body_draft: *const BodyDraftStore,
+    graph: *InstGraph,
+    evaluator: *FrozenRuntimeImpossibilityProofEvaluator,
+) Allocator.Error!void {
+    for (body_draft.template_spec_reuses.items) |reuse| {
+        const spec = body_draft.template_specs.items[reuse.spec];
+        try verifyReusedDemandRange(body_draft, graph, evaluator, reuse, spec.demand_start, spec.demand_end, spec.demand_frame_floor);
+    }
+    for (body_draft.nested_spec_reuses.items) |reuse| {
+        const spec = body_draft.nested_specs.items[reuse.spec];
+        try verifyReusedDemandRange(body_draft, graph, evaluator, reuse, spec.demand_start, spec.demand_end, spec.demand_frame_floor);
+    }
+}
+
+fn verifyReusedDemandRange(
+    body_draft: *const BodyDraftStore,
+    graph: *InstGraph,
+    evaluator: *FrozenRuntimeImpossibilityProofEvaluator,
+    reuse: DraftSpecReuse,
+    start: u32,
+    end: u32,
+    frame_floor: u32,
+) Allocator.Error!void {
+    if (start > end or end > body_draft.runtime_value_demands.items.len) {
+        Common.invariant("reused specialization demand range was out of bounds");
+    }
+    demand_loop: for (body_draft.runtime_value_demands.items[start..end]) |demand| {
+        if (!graph.finalizesAsClosedEmptyTagUnion(demand.node)) continue;
+        if (try evaluator.holds(reuse.prefix_proof)) continue;
+        if (try evaluator.holds(demand.local_proof)) continue;
+        if (demand.frames.len < frame_floor) {
+            Common.invariant("reused specialization demand lost its inherited guard frame prefix");
+        }
+        for (demand.frames[frame_floor..]) |frame| {
+            if (try evaluator.holds(frame.proof)) continue :demand_loop;
+        }
+        Common.invariant("runtime-value demand finalized as a closed empty tag-union type under a reusing guard context");
+    }
 }
 
 /// Active graph relations can make independently created draft requests share
@@ -7786,6 +7893,14 @@ const DraftTemplateSpec = struct {
     request_fn_ty: ?Type.TypeId,
     evidence: []const SpecEvidence,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
+    /// Runtime-value demands recorded while this specialization's body (and
+    /// its inline-lowered dependencies) lowered, re-verified at seal for every
+    /// reusing guard context.
+    demand_start: u32 = 0,
+    demand_end: u32 = 0,
+    /// Guard frames inherited from the requesting context at body start; a
+    /// demand's frames below this floor belong to the reused-away context.
+    demand_frame_floor: u32 = 0,
     requires_local: bool = false,
     local_context_dependent: bool = false,
     lexical_owner: ?DraftOwner = null,
@@ -7836,6 +7951,11 @@ const DraftDeferredConstUse = struct {
     restored_source: ?DraftExprId = null,
 };
 
+/// One deferred structural derivation over an operand whose graph node may
+/// still carry live row defaults; the eq and hash flavors share this record
+/// and the prepare/emit pipeline. For equality, `lhs`/`rhs` are the two
+/// compared operands; for hash they are the hashed value and the running
+/// hasher (whose type is `ret_ty`).
 const DraftDeferredStructuralEq = struct {
     view: ModuleView,
     owner_template: names.ProcTemplate,
@@ -7845,11 +7965,16 @@ const DraftDeferredStructuralEq = struct {
     ret_ty: Type.TypeId,
     lhs: DraftExprId,
     rhs: DraftExprId,
-    negated: bool,
+    mode: DraftStructuralDerivationMode,
     evidence: EvidenceChain,
     current_fn_key: names.TypeDigest,
     lexical: DraftCodecLexicalContext,
     emission_plan_ready: bool = false,
+};
+
+const DraftStructuralDerivationMode = union(enum) {
+    equality: struct { negated: bool },
+    hash,
 };
 
 const DraftDeferredStructuralSerialization = struct {
@@ -7936,7 +8061,17 @@ const RuntimeImpossibilityProof = union(enum) {
 
 const DraftRuntimeValueDemand = struct {
     node: NodeId,
+    /// Exemption proof under the demand's creation context: the full guard
+    /// frame stack (inherited and body-internal) plus the local parts.
     impossibility_proof: ?RuntimeImpossibilityProofId,
+    /// The exact guard frame stack at record time. A specialization reused
+    /// from a different guard context re-verifies its demands at seal against
+    /// the reusing context, substituting that context for the slice below the
+    /// owning specialization's inherited-frame floor.
+    frames: []const RuntimeDemandGuardFrame,
+    /// Context-independent exemption parts: function entry guards and the
+    /// expression's own proof.
+    local_proof: ?RuntimeImpossibilityProofId,
 };
 
 const RuntimeDemandGuardFrameKind = enum {
@@ -8061,6 +8196,9 @@ const DraftNestedSpec = struct {
     request_fn_ty: ?Type.TypeId,
     evidence: EvidenceChain,
     runtime_demand_guard_frames: []const RuntimeDemandGuardFrameAddress,
+    demand_start: u32 = 0,
+    demand_end: u32 = 0,
+    demand_frame_floor: u32 = 0,
     capture_entry_guards: []const NodeId,
     capture_abi_digest: ?names.TypeDigest = null,
     lexical_owner: DraftOwner,
@@ -8068,6 +8206,15 @@ const DraftNestedSpec = struct {
     local_context_dependent: bool,
     symbol: Common.Symbol,
     fn_id: DraftFnId,
+};
+
+/// One reuse of a completed (or actively lowering) draft specialization from a
+/// guard context that differs from the one it was created under. At seal, the
+/// specialization's recorded demands are re-verified with `prefix_proof`
+/// standing in for the creation context's inherited guard frames.
+const DraftSpecReuse = struct {
+    spec: u32,
+    prefix_proof: ?RuntimeImpossibilityProofId,
 };
 
 const DraftRoot = struct {
@@ -8170,6 +8317,8 @@ const BodyDraftStore = struct {
     prepared_inspect_methods: std.ArrayList(DraftPreparedInspectMethod),
     structural_eq_method_calls: std.ArrayList(DraftStructuralEqMethodCall),
     runtime_value_demands: std.ArrayList(DraftRuntimeValueDemand),
+    template_spec_reuses: std.ArrayList(DraftSpecReuse),
+    nested_spec_reuses: std.ArrayList(DraftSpecReuse),
     impossibility_proofs: std.ArrayList(RuntimeImpossibilityProof),
     impossibility_proof_ids: std.ArrayList(RuntimeImpossibilityProofId),
     expr_impossibility_proofs: std.ArrayList(?RuntimeImpossibilityProofId),
@@ -8231,6 +8380,8 @@ const BodyDraftStore = struct {
             .prepared_inspect_methods = .empty,
             .structural_eq_method_calls = .empty,
             .runtime_value_demands = .empty,
+            .template_spec_reuses = .empty,
+            .nested_spec_reuses = .empty,
             .impossibility_proofs = .empty,
             .impossibility_proof_ids = .empty,
             .expr_impossibility_proofs = .empty,
@@ -8327,6 +8478,8 @@ const BodyDraftStore = struct {
         self.roots.deinit(self.allocator);
         self.proc_debug_names.deinit(self.allocator);
         self.runtime_value_demands.deinit(self.allocator);
+        self.template_spec_reuses.deinit(self.allocator);
+        self.nested_spec_reuses.deinit(self.allocator);
         self.structural_eq_method_calls.deinit(self.allocator);
         self.prepared_inspect_methods.deinit(self.allocator);
         self.deferred_inspects.deinit(self.allocator);
@@ -8934,7 +9087,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.exprs, index)) continue;
             program.exprs.appendAssumeCapacity(.{
                 .ty = try expr.ty.seal(graph, sealer),
-                .data = try self.sealCoreExprData(ids, graph, sealer, expr.data),
+                .data = try self.sealCoreExprData(program, ids, graph, sealer, expr.data),
             });
             program.expr_locs.appendAssumeCapacity(ids.sourceLoc(self.expr_locs.items[index]));
             program.expr_regions.appendAssumeCapacity(self.expr_regions.items[index]);
@@ -9110,8 +9263,44 @@ const BodyDraftStore = struct {
         };
     }
 
+    fn sealCallCaptureOperandSpan(
+        self: *const BodyDraftStore,
+        program: *Ast.Program,
+        ids: FinalIdOffsets,
+        span: DraftSpan(DraftExprId),
+    ) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
+        if (span.len == 0) return Ast.Span(Ast.CaptureOperand).empty();
+        if (span.start > self.expr_ids.items.len or span.len > self.expr_ids.items.len - span.start) {
+            Common.invariant("Monotype body draft call capture span was out of bounds");
+        }
+
+        const operands = try program.allocator.alloc(Ast.CaptureOperand, span.len);
+        defer program.allocator.free(operands);
+
+        for (self.expr_ids.items[span.start..][0..span.len], operands) |draft_value, *operand| {
+            const raw_expr = @intFromEnum(draft_value);
+            if (raw_expr >= self.exprs.items.len) {
+                Common.invariant("Monotype direct-call capture referenced an unknown expression");
+            }
+            const draft_local = switch (self.exprs.items[raw_expr].data) {
+                .local => |local| local,
+                else => Common.invariant("Monotype direct-call capture operand was not a local expression"),
+            };
+            const local = program.getLocal(ids.local(draft_local));
+            const id = local.checked_capture_id orelse local.capture_id orelse
+                Common.invariant("Monotype direct-call capture local had no capture identity");
+            operand.* = .{
+                .id = id,
+                .value = ids.expr(draft_value),
+            };
+        }
+
+        return try program.addCaptureOperandSpan(operands);
+    }
+
     fn sealCoreExprData(
         self: *const BodyDraftStore,
+        program: *Ast.Program,
         ids: FinalIdOffsets,
         graph: *InstGraph,
         sealer: *GraphTypeFinals,
@@ -9159,18 +9348,13 @@ const BodyDraftStore = struct {
                 .callee = ids.expr(call.callee),
                 .args = ids.exprSpan(call.args),
             } },
-            .call_proc => |call| blk: {
-                // Pre-lift direct calls never carry capture operands; closure
-                // lifting resolves them. Preserve that as an invariant.
-                std.debug.assert(call.captures.len == 0);
-                break :blk .{ .call_proc = .{
-                    .callee = ids.procCallee(call.callee),
-                    .args = ids.exprSpan(call.args),
-                    .iterator_procedure = call.iterator_procedure,
-                    .captures = Ast.Span(Ast.CaptureOperand).empty(),
-                    .is_cold = call.is_cold,
-                } };
-            },
+            .call_proc => |call| .{ .call_proc = .{
+                .callee = ids.procCallee(call.callee),
+                .args = ids.exprSpan(call.args),
+                .iterator_procedure = call.iterator_procedure,
+                .captures = try self.sealCallCaptureOperandSpan(program, ids, call.captures),
+                .is_cold = call.is_cold,
+            } },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = ids.exprSpan(call.args),
@@ -10154,6 +10338,15 @@ const BodyContext = struct {
     }
 
     fn nodeImpossibilityProof(self: *BodyContext, node: NodeId) Allocator.Error!RuntimeImpossibilityProofId {
+        return (try self.maybeNodeImpossibilityProof(node)) orelse try self.neverImpossibilityProof();
+    }
+
+    /// A `.node` proof leaf, or null when the node provably can never finalize
+    /// as uninhabited — such a proof could never hold, so omitting it keeps
+    /// proofs and demand-guard frames down to the guards that can actually
+    /// exempt something.
+    fn maybeNodeImpossibilityProof(self: *BodyContext, node: NodeId) Allocator.Error!?RuntimeImpossibilityProofId {
+        if (!try self.graph.mayFinalizeAsUninhabited(node)) return null;
         return try self.addImpossibilityProof(.{ .node = node });
     }
 
@@ -10197,10 +10390,17 @@ const BodyContext = struct {
         self: *BodyContext,
         nodes: []const NodeId,
     ) Allocator.Error!RuntimeImpossibilityProofId {
+        return (try self.maybeNodesImpossibilityProof(nodes)) orelse try self.neverImpossibilityProof();
+    }
+
+    fn maybeNodesImpossibilityProof(
+        self: *BodyContext,
+        nodes: []const NodeId,
+    ) Allocator.Error!?RuntimeImpossibilityProofId {
         const proofs = try self.allocator.alloc(?RuntimeImpossibilityProofId, nodes.len);
         defer self.allocator.free(proofs);
-        for (nodes, proofs) |node, *proof| proof.* = try self.nodeImpossibilityProof(node);
-        return (try self.anyImpossibilityProof(proofs)) orelse try self.neverImpossibilityProof();
+        for (nodes, proofs) |node, *proof| proof.* = try self.maybeNodeImpossibilityProof(node);
+        return try self.anyImpossibilityProof(proofs);
     }
 
     fn currentRuntimeImpossibilityProof(
@@ -10210,7 +10410,7 @@ const BodyContext = struct {
         var proofs = std.ArrayList(?RuntimeImpossibilityProofId).empty;
         defer proofs.deinit(self.allocator);
         if (self.function_entry_demand_guards.len != 0) {
-            try proofs.append(self.allocator, try self.nodesImpossibilityProof(self.function_entry_demand_guards));
+            try proofs.append(self.allocator, try self.maybeNodesImpossibilityProof(self.function_entry_demand_guards));
         }
         for (self.runtime_demand_guard_frames) |frame| try proofs.append(self.allocator, frame.proof);
         try proofs.append(self.allocator, expression_proof);
@@ -10987,6 +11187,7 @@ const BodyContext = struct {
         return try self.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(callee),
             .args = try self.addExprSpan(&args),
+            .captures = try self.methodTargetCaptureSpan(lookup),
         } } });
     }
 
@@ -13587,9 +13788,16 @@ const BodyContext = struct {
             .runtime_error, .crash, .ellipsis => return lowered,
             else => {},
         }
+        const expr_proof = self.exprImpossibilityProof(lowered);
+        const entry_guard_proof = if (self.function_entry_demand_guards.len != 0)
+            try self.maybeNodesImpossibilityProof(self.function_entry_demand_guards)
+        else
+            null;
         try self.draft.runtime_value_demands.append(self.allocator, .{
             .node = node,
-            .impossibility_proof = try self.currentRuntimeImpossibilityProof(self.exprImpossibilityProof(lowered)),
+            .impossibility_proof = try self.currentRuntimeImpossibilityProof(expr_proof),
+            .frames = self.runtime_demand_guard_frames,
+            .local_proof = try self.anyImpossibilityProof(&.{ entry_guard_proof, expr_proof }),
         });
         return lowered;
     }
@@ -13997,16 +14205,23 @@ const BodyContext = struct {
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
+                    const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                     return try self.addExprWithTypeCell(
                         DraftTypeCell.fromGraphNode(request_fn_node),
                         .{ .fn_def = .{ .fn_id = try self.lowerDraftLocalProcAtNode(
                             local,
                             self.view,
-                            try self.localProcContextId(self.view, local.binder, local.expr),
+                            context_id,
                             expr.ty,
                             self.view.types.rootKey(expr.ty),
                             request_fn_node,
                             try self.evidenceForUseSite(record.expr),
+                        ), .captures = try self.localProcFnDefCaptureSpan(
+                            context_id,
+                            self.view.key.bytes,
+                            local.binder,
+                            local.expr,
+                            null,
                         ) } },
                     );
                 },
@@ -17015,6 +17230,7 @@ const BodyContext = struct {
                 .data = .{ .call_proc = .{
                     .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty, .synthesize)),
                     .args = try self.addExprSpan(&parse_args),
+                    .captures = try self.methodTargetCaptureSpan(parse_lookup),
                 } },
             });
         }
@@ -17058,6 +17274,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, final_spec_expr, state_expr }),
+                .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
         });
     }
@@ -17194,6 +17411,7 @@ const BodyContext = struct {
                     try self.localExpr(fields_local, fields_ty),
                     try self.localExpr(cursor_local, state_ty),
                 }),
+                .captures = try self.methodTargetCaptureSpan(parse_lookup),
             } },
         });
 
@@ -17837,6 +18055,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, try self.localExpr(rest_local, state_ty) }),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
         const skipped_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -18935,6 +19154,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(parse_null_lookup, parse_null_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
+                .captures = try self.methodTargetCaptureSpan(parse_null_lookup),
             } },
         });
 
@@ -19037,6 +19257,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
         const source_result = try self.addExpr(.{
@@ -19963,6 +20184,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, field_expr }),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -20105,12 +20327,14 @@ const BodyContext = struct {
                 const args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
                 if (args.len != 1) Common.invariant("Str.inspect call did not have exactly one lowered argument");
                 const callee = try self.fnTemplateForDirectCallAtNode(target, source_fn_ty, source_fn_key, fn_node);
+                const captures = try self.directCallCaptureSpan(target);
                 return .{
                     .ret_ty = DraftTypeCell.fromGraphNode(fn_nodes.ret),
                     .data = .{ .call_proc = .{
                         .callee = .{ .func = callee },
                         .args = args,
                         .iterator_procedure = iterator_procedure,
+                        .captures = captures,
                     } },
                 };
             }
@@ -20121,12 +20345,14 @@ const BodyContext = struct {
                 Common.invariant("completed direct-call specialization changed argument arity");
             }
             const lowered_args = try self.lowerPreparedExprSpanAtNodes(call.args, fn_nodes.args);
+            const captures = try self.directCallCaptureSpan(target);
             return .{
                 .ret_ty = DraftTypeCell.fromGraphNode(callee_fn_nodes.ret),
                 .data = .{ .call_proc = .{
                     .callee = .{ .func = callee },
                     .args = lowered_args,
                     .iterator_procedure = iterator_procedure,
+                    .captures = captures,
                 } },
             };
         }
@@ -21189,6 +21415,16 @@ const BodyContext = struct {
         };
         const lexical_owner_scope = try self.draft.enterOwner(context.lexical_owner);
         defer lexical_owner_scope.leave();
+        // The declaration context's capture types are part of the
+        // specialization identity: two enclosing instantiations can request
+        // this local procedure at the same monomorphic function type while
+        // capturing at different types, and those must not share a body.
+        const capture_bindings = try self.localProcCaptureBindings(context);
+        defer self.allocator.free(capture_bindings);
+        const capture_entry_guards = try self.graph.arena().alloc(NodeId, capture_bindings.len);
+        for (capture_bindings, capture_entry_guards) |binding, *node| {
+            node.* = try binding.ty.toGraphNode(self.graph);
+        }
         return try self.builder.lowerDraftNestedFromContext(
             self,
             local.expr,
@@ -21196,10 +21432,153 @@ const BodyContext = struct {
             source_fn_ty,
             source_fn_key,
             request_fn_node,
-            &.{},
+            capture_entry_guards,
             requested_evidence,
             local.dispatch_scope,
         );
+    }
+
+    const LocalProcCaptureBinding = struct {
+        local: DraftLocalId,
+        ty: DraftTypeCell,
+    };
+
+    /// The lexical-context bindings a local procedure captures at its
+    /// declaration, deduplicated by CaptureId (first entry wins). Every
+    /// consumer of a declaration context — capture entry guards, fn-def
+    /// capture spans, and direct-call capture operands — derives from this one
+    /// walk so they agree on count and order. Caller owns the returned slice.
+    fn localProcCaptureBindings(
+        self: *BodyContext,
+        context: LocalProcContext,
+    ) Allocator.Error![]LocalProcCaptureBinding {
+        var seen = std.AutoHashMap(checked.CaptureId, void).init(self.allocator);
+        defer seen.deinit();
+        var bindings = std.ArrayList(LocalProcCaptureBinding).empty;
+        errdefer bindings.deinit(self.allocator);
+
+        for (context.entries) |entry| {
+            const local: DraftLocalId = @enumFromInt(entry.local);
+            const raw = @intFromEnum(local);
+            if (raw >= self.draft.locals.items.len) {
+                Common.invariant("local procedure context capture referenced an unknown local");
+            }
+            const local_data = self.draft.locals.items[raw];
+            const capture_id = local_data.capture_id orelse
+                Common.invariant("local procedure context capture local had no capture identity");
+            const seen_entry = try seen.getOrPut(capture_id);
+            if (seen_entry.found_existing) continue;
+            try bindings.append(self.allocator, .{ .local = local, .ty = local_data.ty });
+        }
+
+        return try bindings.toOwnedSlice(self.allocator);
+    }
+
+    fn localProcFnDefCaptureSpan(
+        self: *BodyContext,
+        context_id: DraftLocalProcContextId,
+        module: [32]u8,
+        binder: checked.PatternBinderId,
+        expr: checked.CheckedExprId,
+        context_anchor: ?checked.CheckedStatementId,
+    ) Allocator.Error!DraftSpan(DraftFnDefCapture) {
+        const context = self.validateLocalProcContext(
+            context_id,
+            module,
+            binder,
+            expr,
+            context_anchor,
+        );
+        if (context.entries.len == 0) return DraftSpan(DraftFnDefCapture).empty();
+
+        const bindings = try self.localProcCaptureBindings(context);
+        defer self.allocator.free(bindings);
+        var captures = std.ArrayList(DraftFnDefCapture).empty;
+        defer captures.deinit(self.allocator);
+        try captures.ensureTotalCapacityPrecise(self.allocator, bindings.len);
+
+        for (bindings) |binding| {
+            const value = try self.addExprWithTypeCell(
+                binding.ty,
+                .{ .local = binding.local },
+            );
+            captures.appendAssumeCapacity(.{ .local = binding.local, .value = value });
+        }
+
+        return try self.addFnDefCaptureSpan(captures.items);
+    }
+
+    fn localProcCaptureExprSpan(
+        self: *BodyContext,
+        context_id: DraftLocalProcContextId,
+        module: [32]u8,
+        binder: checked.PatternBinderId,
+        expr: checked.CheckedExprId,
+        context_anchor: ?checked.CheckedStatementId,
+    ) Allocator.Error!DraftSpan(DraftExprId) {
+        const context = self.validateLocalProcContext(
+            context_id,
+            module,
+            binder,
+            expr,
+            context_anchor,
+        );
+        if (context.entries.len == 0) return DraftSpan(DraftExprId).empty();
+
+        const bindings = try self.localProcCaptureBindings(context);
+        defer self.allocator.free(bindings);
+        var captures = std.ArrayList(DraftExprId).empty;
+        defer captures.deinit(self.allocator);
+        try captures.ensureTotalCapacityPrecise(self.allocator, bindings.len);
+
+        for (bindings) |binding| {
+            captures.appendAssumeCapacity(try self.addExprWithTypeCell(
+                binding.ty,
+                .{ .local = binding.local },
+            ));
+        }
+
+        return try self.addExprSpan(captures.items);
+    }
+
+    fn directCallCaptureSpan(self: *BodyContext, target: checked.ResolvedValueId) Allocator.Error!DraftSpan(DraftExprId) {
+        const raw = @intFromEnum(target);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked direct call target is outside resolved value table");
+        }
+        const record = self.view.resolved_refs.records[raw];
+        return switch (record.ref) {
+            .local_proc => |local| try self.localProcCaptureExprSpan(
+                try self.localProcContextId(self.view, local.binder, local.expr),
+                self.view.key.bytes,
+                local.binder,
+                local.expr,
+                null,
+            ),
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .platform_required_proc,
+            .promoted_top_level_proc,
+            => DraftSpan(DraftExprId).empty(),
+            else => Common.invariant("checked direct call target was not a procedure"),
+        };
+    }
+
+    fn methodTargetCaptureSpan(self: *BodyContext, lookup: MethodLookup) Allocator.Error!DraftSpan(DraftExprId) {
+        return switch (lookup.target.kind) {
+            .local_proc => |local| try self.localProcCaptureExprSpan(
+                lookup.local_proc_context orelse
+                    Common.invariant("local method target did not carry its declaration context"),
+                lookup.view.key.bytes,
+                local.binder,
+                local.expr,
+                local.context_anchor,
+            ),
+            .procedure,
+            .structural,
+            => DraftSpan(DraftExprId).empty(),
+        };
     }
 
     fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?CurrentLocal {
@@ -21361,16 +21740,23 @@ const BodyContext = struct {
             => Common.invariant("local lookup reached Monotype without a current local binding"),
             .local_proc => |local| blk: {
                 const request_fn_node = try self.activeNodeFromType(ty);
+                const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 break :blk try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(request_fn_node),
                     .{ .fn_def = .{ .fn_id = try self.lowerDraftLocalProcAtNode(
                         local,
                         self.view,
-                        try self.localProcContextId(self.view, local.binder, local.expr),
+                        context_id,
                         checked_ty,
                         self.view.types.rootKey(checked_ty),
                         request_fn_node,
                         try self.evidenceForUseSite(record.expr),
+                    ), .captures = try self.localProcFnDefCaptureSpan(
+                        context_id,
+                        self.view.key.bytes,
+                        local.binder,
+                        local.expr,
+                        null,
                     ) } },
                 );
             },
@@ -21449,10 +21835,11 @@ const BodyContext = struct {
             },
             .local_proc => |local| {
                 const checked_ty = self.view.bodies.expr(checked_expr).ty;
+                const context_id = try self.localProcContextId(self.view, local.binder, local.expr);
                 const fn_id = try self.lowerDraftLocalProcAtNode(
                     local,
                     self.view,
-                    try self.localProcContextId(self.view, local.binder, local.expr),
+                    context_id,
                     checked_ty,
                     self.view.types.rootKey(checked_ty),
                     expected_node,
@@ -21460,7 +21847,16 @@ const BodyContext = struct {
                 );
                 return try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(expected_node),
-                    .{ .fn_def = .{ .fn_id = fn_id } },
+                    .{ .fn_def = .{
+                        .fn_id = fn_id,
+                        .captures = try self.localProcFnDefCaptureSpan(
+                            context_id,
+                            self.view.key.bytes,
+                            local.binder,
+                            local.expr,
+                            null,
+                        ),
+                    } },
                 );
             },
             .top_level_proc,
@@ -25514,11 +25910,7 @@ const BodyContext = struct {
             .target => |lookup| lookup,
             .structural => |derivation| return switch (derivation) {
                 .equality => try self.lowerStructuralEqualityAtNode(plan, callable_node, self, pre_lowered.items),
-                .hash => blk: {
-                    const callable_mono_ty = try call_ctx.resolvedTypeViewForNode(callable_node);
-                    const plan_ret_ty = self.builder.functionShape(callable_mono_ty, "checked structural dispatch plan had a non-function type").ret;
-                    break :blk try self.lowerStructuralEquality(plan, callable_mono_ty, plan_ret_ty, self, pre_lowered.items);
-                },
+                .hash => try self.lowerStructuralHashAtNode(plan, callable_node, self, pre_lowered.items),
                 .parser, .encoder => try self.deferStructuralSerializationAtNode(
                     plan,
                     callable_node,
@@ -26041,6 +26433,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{list_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -26064,6 +26457,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{set_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -26087,6 +26481,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{capacity_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -26115,6 +26510,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -26138,6 +26534,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{dict_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -27631,6 +28028,7 @@ const BodyContext = struct {
             )),
             .args = args,
             .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
+            .captures = try self.methodTargetCaptureSpan(lookup),
         } };
     }
 
@@ -27709,6 +28107,59 @@ const BodyContext = struct {
             operands[0],
             operands[1],
             eq.negated,
+        );
+    }
+
+    /// The hash counterpart of `lowerStructuralEqualityAtNode`: the hashed
+    /// value's node may still carry live row defaults, so the derivation
+    /// defers to final graph sealing instead of forcing an eager resolved
+    /// view. The hasher operand and result share one concrete type.
+    fn lowerStructuralHashAtNode(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+        callable_node: NodeId,
+        arg_ctx: *BodyContext,
+        pre_lowered: []const PreLoweredOperand,
+    ) Allocator.Error!DraftExprId {
+        const hash = switch (plan.result_mode) {
+            .hash => |hash| hash,
+            else => Common.invariant("non-hash dispatch plan reached graph hash lowering"),
+        };
+        if (!hash.structural_allowed) {
+            Common.invariant("structural hash dispatch plan did not permit structural hashing");
+        }
+
+        const fn_nodes = try self.graph.functionNodes(callable_node);
+        if (fn_nodes.args.len != 2) {
+            Common.invariant("structural hash callable graph node must have two operands");
+        }
+        try self.graph.unify(fn_nodes.args[1], fn_nodes.ret);
+
+        const ret_ty = try self.resolvedTypeViewForNode(fn_nodes.ret);
+        const operands_span = try arg_ctx.lowerDispatchOperandsAtNodes(
+            plan.argsSlice(self.view.static_dispatch_plans),
+            fn_nodes.args,
+            pre_lowered,
+        );
+        const operands = arg_ctx.exprSpan(operands_span);
+        if (operands.len != 2) {
+            Common.invariant("structural hash dispatch did not lower two operands");
+        }
+
+        if (try self.graph.typeIsResolved(fn_nodes.args[0])) {
+            return try self.lowerHashExpr(
+                try self.activeTypeFromNode(fn_nodes.args[0]),
+                operands[0],
+                operands[1],
+                ret_ty,
+            );
+        }
+        return try self.deferStructuralDerivationOperandsAtNode(
+            ret_ty,
+            fn_nodes.args[0],
+            operands[0],
+            operands[1],
+            .hash,
         );
     }
 
@@ -28299,6 +28750,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(method.lookup, method.callable_ty, .synthesize)),
                 .args = try self.addExprSpan(args),
+                .captures = try self.methodTargetCaptureSpan(method.lookup),
             } },
         });
     }
@@ -29667,6 +30119,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
         return try self.addExpr(.{
@@ -29702,6 +30155,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(arg_exprs),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -29730,6 +30184,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(arg_exprs),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         });
     }
@@ -31206,6 +31661,7 @@ const BodyContext = struct {
             .data = .{ .call_proc = .{
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize)),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
+                .captures = try self.methodTargetCaptureSpan(lookup),
                 .is_cold = true,
             } },
         });
@@ -31296,12 +31752,12 @@ const BodyContext = struct {
         const operand_cell = DraftTypeCell.fromGraphNode(operand_node);
         const lhs = try self.lowerExprAtTypeCell(eq.lhs, operand_cell);
         const rhs = try self.lowerExprAtTypeCell(eq.rhs, operand_cell);
-        return try self.deferStructuralEqOperandsAtNode(
+        return try self.deferStructuralDerivationOperandsAtNode(
             ret_ty,
             operand_node,
             lhs,
             rhs,
-            eq.negated,
+            .{ .equality = .{ .negated = eq.negated } },
         );
     }
 
@@ -31312,6 +31768,23 @@ const BodyContext = struct {
         lhs: DraftExprId,
         rhs: DraftExprId,
         negated: bool,
+    ) Allocator.Error!DraftExprId {
+        return try self.deferStructuralDerivationOperandsAtNode(
+            ret_ty,
+            operand_node,
+            lhs,
+            rhs,
+            .{ .equality = .{ .negated = negated } },
+        );
+    }
+
+    fn deferStructuralDerivationOperandsAtNode(
+        self: *BodyContext,
+        ret_ty: Type.TypeId,
+        operand_node: NodeId,
+        lhs: DraftExprId,
+        rhs: DraftExprId,
+        mode: DraftStructuralDerivationMode,
     ) Allocator.Error!DraftExprId {
         const expr = try self.addExprWithTypeCell(.{ .sealed = ret_ty }, .pending_deferred);
         self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)] = try self.anyImpossibilityProof(&.{
@@ -31332,7 +31805,7 @@ const BodyContext = struct {
             .ret_ty = ret_ty,
             .lhs = lhs,
             .rhs = rhs,
-            .negated = negated,
+            .mode = mode,
             .evidence = self.evidence,
             .current_fn_key = self.current_fn_key,
             .lexical = lexical,
@@ -31388,11 +31861,19 @@ const BodyContext = struct {
         return .{ .deferred = operand_node };
     }
 
+    fn structuralDerivationMethodName(mode: DraftStructuralDerivationMode) []const u8 {
+        return switch (mode) {
+            .equality => "is_eq",
+            .hash => "to_hash",
+        };
+    }
+
     fn prepareStructuralEqNode(
         self: *BodyContext,
         boundary_index: usize,
+        mode: DraftStructuralDerivationMode,
         raw_node: NodeId,
-        bool_ty: Type.TypeId,
+        result_ty: Type.TypeId,
         seen: *std.AutoHashMap(NodeId, void),
         added_method_call: *bool,
     ) Allocator.Error!void {
@@ -31403,15 +31884,16 @@ const BodyContext = struct {
             .list => {
                 const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(
                     .{ .builtin = .list },
-                    "is_eq",
-                ) orelse Common.invariant("checked method registry is missing List equality target"));
+                    structuralDerivationMethodName(mode),
+                ) orelse Common.invariant("checked method registry is missing the List structural derivation target"));
                 if (lookup.target.kind == .structural) {
-                    Common.invariant("owned List equality resolved to a structural registry implementation");
+                    Common.invariant("owned List derivation resolved to a structural registry implementation");
                 }
                 try self.prepareStructuralEqMethodCall(
                     boundary_index,
+                    mode,
                     raw_node,
-                    bool_ty,
+                    result_ty,
                     lookup,
                     added_method_call,
                 );
@@ -31420,8 +31902,9 @@ const BodyContext = struct {
                 for (try self.graph.tupleItemNodes(raw_node)) |item| {
                     try self.prepareStructuralEqNode(
                         boundary_index,
+                        mode,
                         item,
-                        bool_ty,
+                        result_ty,
                         seen,
                         added_method_call,
                     );
@@ -31431,8 +31914,9 @@ const BodyContext = struct {
                 for ((try self.graph.recordNodes(raw_node)).fields) |field| {
                     try self.prepareStructuralEqNode(
                         boundary_index,
+                        mode,
                         field.ty,
-                        bool_ty,
+                        result_ty,
                         seen,
                         added_method_call,
                     );
@@ -31443,8 +31927,9 @@ const BodyContext = struct {
                     for (tag.payloads) |payload| {
                         try self.prepareStructuralEqNode(
                             boundary_index,
+                            mode,
                             payload,
-                            bool_ty,
+                            result_ty,
                             seen,
                             added_method_call,
                         );
@@ -31454,17 +31939,24 @@ const BodyContext = struct {
             .named => {
                 const named = self.graph.namedNodes(raw_node);
                 if (self.methodOwnerFromNode(raw_node)) |owner| {
-                    if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
+                    if (self.builder.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |raw_lookup| {
                         const lookup = try self.withLocalProcContext(raw_lookup);
                         switch (lookup.target.kind) {
-                            .structural => |kind| if (kind != .equality) {
-                                Common.invariant("named equality resolved to a different structural registry implementation");
+                            .structural => |kind| {
+                                const expected: static_dispatch.StructuralKind = switch (mode) {
+                                    .equality => .equality,
+                                    .hash => .hash,
+                                };
+                                if (kind != expected) {
+                                    Common.invariant("named structural derivation resolved to a different structural registry implementation");
+                                }
                             },
                             .procedure, .local_proc => {
                                 try self.prepareStructuralEqMethodCall(
                                     boundary_index,
+                                    mode,
                                     raw_node,
-                                    bool_ty,
+                                    result_ty,
                                     lookup,
                                     added_method_call,
                                 );
@@ -31476,8 +31968,9 @@ const BodyContext = struct {
                 if (named.backing) |backing| {
                     try self.prepareStructuralEqNode(
                         boundary_index,
+                        mode,
                         backing.node,
-                        bool_ty,
+                        result_ty,
                         seen,
                         added_method_call,
                     );
@@ -31499,8 +31992,9 @@ const BodyContext = struct {
     fn prepareStructuralEqMethodCall(
         self: *BodyContext,
         boundary_index: usize,
+        mode: DraftStructuralDerivationMode,
         node: NodeId,
-        bool_ty: Type.TypeId,
+        result_ty: Type.TypeId,
         lookup: MethodLookup,
         added_method_call: *bool,
     ) Allocator.Error!void {
@@ -31508,8 +32002,11 @@ const BodyContext = struct {
             if (planned.boundary != boundary_index) continue;
             if (self.graph.sameClass(planned.node, node)) return;
         }
-        const ret_node = try self.graph.importMono(bool_ty);
-        const callable_node = try self.graphFunctionNode(&.{ node, node }, ret_node);
+        const ret_node = try self.graph.importMono(result_ty);
+        const callable_node = switch (mode) {
+            .equality => try self.graphFunctionNode(&.{ node, node }, ret_node),
+            .hash => try self.graphFunctionNode(&.{ node, ret_node }, ret_node),
+        };
         const callee = try self.methodTargetCalleeAtNode(lookup, callable_node, .synthesize);
         try self.draft.structural_eq_method_calls.append(self.allocator, .{
             .boundary = @intCast(boundary_index),
@@ -31719,23 +32216,20 @@ const BodyContext = struct {
         operand: D.Operand,
         ctx: DerivationCtx,
     ) Allocator.Error!DraftExprId {
-        const callee = if (comptime D == EqDeriver) planned: {
+        const callee = planned: {
             if (self.frozen_equality_method_calls) |planned_calls| {
                 break :planned planned_calls.get(ty) orelse
-                    Common.invariant("frozen structural equality emission reached an unplanned component method");
+                    Common.invariant("frozen structural derivation emission reached an unplanned component method");
             }
             const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
             const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
             break :planned try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
-        } else ordinary: {
-            const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
-            const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
-            break :ordinary try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
         };
         const args = D.callArgs(operand);
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(callee),
             .args = try self.addExprSpan(&args),
+            .captures = try self.methodTargetCaptureSpan(lookup),
         } } });
     }
 
@@ -33409,11 +33903,15 @@ const BodyContext = struct {
         for (self.runtime_demand_guard_frames) |frame| {
             if (std.meta.eql(frame.address, address)) return self.runtime_demand_guard_frames;
         }
+        // A frame whose proof can never hold exempts nothing; pushing it would
+        // only fragment specialization identity across guard contexts.
+        const proof = (try self.maybeNodesImpossibilityProof(try self.runtimeDemandGuardsForPattern(pattern_id, node))) orelse
+            return self.runtime_demand_guard_frames;
         return try addRuntimeDemandGuardFrame(
             self.graph,
             self.runtime_demand_guard_frames,
             address,
-            try self.nodesImpossibilityProof(try self.runtimeDemandGuardsForPattern(pattern_id, node)),
+            proof,
         );
     }
 
@@ -33422,11 +33920,13 @@ const BodyContext = struct {
         guard: PatternSuccessGuard,
     ) Allocator.Error![]const RuntimeDemandGuardFrame {
         const address = self.runtimeDemandGuardFrameAddress(guard.root_pattern, .pattern_success);
+        const proof = (try self.maybeNodesImpossibilityProof(try self.runtimeDemandGuardsForPattern(guard.root_pattern, guard.root_node))) orelse
+            return self.runtime_demand_guard_frames;
         return try addRuntimeDemandGuardFrame(
             self.graph,
             self.runtime_demand_guard_frames,
             address,
-            try self.nodesImpossibilityProof(try self.runtimeDemandGuardsForPattern(guard.root_pattern, guard.root_node)),
+            proof,
         );
     }
 
@@ -33443,11 +33943,13 @@ const BodyContext = struct {
         const guards = try self.graph.arena().alloc(NodeId, item_guards.len + 1);
         guards[0] = step.one_payload_node;
         @memcpy(guards[1..], item_guards);
+        const proof = (try self.maybeNodesImpossibilityProof(guards)) orelse
+            return self.runtime_demand_guard_frames;
         return try addRuntimeDemandGuardFrame(
             self.graph,
             self.runtime_demand_guard_frames,
             address,
-            try self.nodesImpossibilityProof(guards),
+            proof,
         );
     }
 
@@ -35189,6 +35691,7 @@ const BodyContext = struct {
                 .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(lookup, callable_node, try self.evidenceForIteratorCall(plan))),
                 .args = try self.addExprSpan(args),
                 .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
+                .captures = try self.methodTargetCaptureSpan(lookup),
             } },
         );
     }
@@ -37149,6 +37652,7 @@ const BodyContext = struct {
                 return try self.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
                     .callee = draftProcCalleeForSlot(callee),
                     .args = try self.addExprSpan(&.{ scrutinee, expected }),
+                    .captures = try self.methodTargetCaptureSpan(lookup),
                 } } });
             }
         }
@@ -37301,8 +37805,8 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expectEqual(@as(usize, 2), frames.len);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, &.{shared_frame}, &.{shared_frame}));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, &.{shared_frame}, &.{shared_frame}));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false));
+    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true));
     try graph.unify(active_fn, recursive_fn);
     try std.testing.expect(graph.sameFunctionInterface(active_fn, recursive_fn));
     try std.testing.expect(graph.sameClass(active_arg, recursive_arg));
@@ -37313,18 +37817,13 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = shared_ret,
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, &.{shared_frame}, &.{shared_frame}));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 
-    // Even an exact function/evidence request must not reuse a specialization
-    // lowered under a different branch-reachability topology.
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, true, false, &.{shared_frame}, &.{}));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false, &.{shared_frame}, &.{shared_frame}));
-    // A fully resolved recursive edge must reuse its in-progress definition;
-    // otherwise ordinary recursion beneath a match branch specializes forever.
-    try std.testing.expect(resolvedDraftCandidateQualifies(.lowering, &.{shared_frame}, &.{}));
-    try std.testing.expect(!resolvedDraftCandidateQualifies(.lowered, &.{shared_frame}, &.{}));
-    try std.testing.expect(resolvedDraftCandidateQualifies(.lowered, &.{shared_frame}, &.{shared_frame}));
+    // An exact request reuses a completed specialization regardless of the
+    // requesting guard context; reuses under a different context are recorded
+    // and re-verified against the specialization's demands at seal.
+    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false));
 }
 
 test "open draft selection converges exact interfaces and rejects partial ambiguity" {
