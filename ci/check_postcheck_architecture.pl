@@ -336,6 +336,118 @@ sub check_active_body_draft_seal_access {
 
 check_active_body_draft_seal_access();
 
+# Slice 3 promoted the interner to the production Monotype construction
+# boundary: generated types and committed graph seals go through the
+# `Store.intern*` constructors so structurally equal types share one id. Raw
+# `.types.add*`/`reserveSlot`/`fillReservedSlot` on the store bypass dedup, so
+# they are banned in the post-check Monotype sources outside `type.zig` (which
+# owns the constructors). Two allowances remain, pinned by function name:
+#   - solve.zig's graph sealer materializes live nodes into the store through
+#     the reserve-fill (`addRecursive`) pattern and then deduplicates the
+#     filled node in place (`internFilledNode`), so its named seal functions
+#     may construct directly; the point-in-time seal path is the same code
+#     under a mode flag.
+#   - lower.zig's checked->mono, clone, const, generated-backing, and
+#     public-opaque materializers build recursive types through reserve-fill or
+#     return `Content`/spans for a reserve-fill parent, side effects keyed on
+#     the reserved id; their outputs flow through the graph and deduplicate at
+#     the seal boundary. These stay pinned by name so a new construction site
+#     outside them is a violation.
+# Test blocks are exempt (brace-tracked) so fixtures may build on a
+# non-interning test store.
+sub check_production_store_construction {
+    my %allow = (
+        'src/postcheck/monotype/solve.zig' => { map { $_ => 1 } qw(
+            sealNode sealStoreType sealNodeSpan sealTypeSpan sealRecordRow
+            sealTagRow sealDeclaredFieldSpan sealStoredFieldSpan
+            sealStoredTagSpan sealStoredDeclaredFieldSpan
+        ) },
+        'src/postcheck/monotype/lower.zig' => { map { $_ => 1 } qw(
+            lowerType lowerTypePayload lowerRecordFields lowerRecordRow
+            lowerTagUnionRow declaredOrderForNominal lowerConstTypeContent
+            lowerConstTypeInner cloneNamedTypeWithArgs clonePublicOpaqueUnificationType
+            cloneTypeReplacingGeneratedSelf cloneTypeSpanReplacingGeneratedSelf
+            cloneFieldSpanReplacingGeneratedSelf cloneTagSpanReplacingGeneratedSelf
+            cloneDeclaredFieldSpanReplacingGeneratedSelf generatedFieldNamesBackingType
+            generatedParseTagUnionSpecBackingType generatedFieldHandleBackingType
+            generatedIteratorStepResultType generatedIteratorContent
+            generatedIteratorStepFunctionType generatedIteratorType
+            forcedDynamicIteratorType stableGeneratedIteratorEvidenceType
+            publicOpaqueEvidenceNamedType publicOpaqueUnificationTypeSpan
+            publicOpaqueUnificationFieldSpan publicOpaqueUnificationTagSpan
+            publicOpaqueUnificationDeclaredFieldSpan publicIteratorUnificationType
+            errorRowWithMissingRequiredField structuralParserCallableTypeWithRequiredFieldError
+            tryTypeLike appendTags
+        ) },
+        'src/postcheck/monotype/specialize.zig' => {},
+        'src/postcheck/monotype/ast.zig' => {},
+        'src/postcheck/monotype/serialize.zig' => {},
+    );
+
+    my $raw = qr/\.types\.(?:add|addSpan|addFields|addTags|addRecordFields|addTagVariants|addRecursive|addDeclaredFields|reserveSlot|fillReservedSlot)\(/;
+
+    for my $rel (sort keys %allow) {
+        my $path = File::Spec->catfile($ROOT, $rel);
+        open my $fh, '<', $path or die "failed to read $rel: $!\n";
+        my $allow_fn = $allow{$rel};
+
+        my ($cur, $fn_started, $fn_depth) = (undef, 0, 0);
+        my ($in_test, $test_started, $test_depth) = (0, 0, 0);
+        my $line_no = 0;
+
+        while (my $line = <$fh>) {
+            ++$line_no;
+            chomp $line;
+
+            if (!$in_test && $line =~ /^\s*test\s+"/) {
+                $in_test = 1;
+                $test_started = 0;
+                $test_depth = 0;
+            }
+
+            if (!$in_test && !defined $cur && $line =~ /^\s+(?:pub\s+)?fn\s+([A-Za-z0-9_]+)\b/) {
+                $cur = $1;
+                $fn_started = 0;
+                $fn_depth = 0;
+            }
+
+            if ($line =~ $raw && !$in_test && !$allow_fn->{$cur // ''}) {
+                push @violations, "$rel:$line_no: production-store-raw-construction: $line";
+            }
+
+            my $delta = brace_delta($line);
+
+            if ($in_test) {
+                if (!$test_started && $line =~ /\{/) {
+                    $test_started = 1;
+                }
+                $test_depth += $delta if $test_started;
+                if ($test_started && $test_depth <= 0) {
+                    $in_test = 0;
+                    $test_started = 0;
+                    $test_depth = 0;
+                }
+            }
+
+            if (defined $cur) {
+                if (!$fn_started && $line =~ /\{/) {
+                    $fn_started = 1;
+                }
+                $fn_depth += $delta if $fn_started;
+                if ($fn_started && $fn_depth <= 0) {
+                    undef $cur;
+                    $fn_started = 0;
+                    $fn_depth = 0;
+                }
+            }
+        }
+
+        close $fh or die "failed to close $rel: $!\n";
+    }
+}
+
+check_production_store_construction();
+
 if (@violations) {
     print "Post-check architecture violations found:\n";
     print "$_\n" for @violations;

@@ -267,11 +267,10 @@ pub const Store = struct {
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     type_digest_generations: StoreList(u64, "type_digest_generations"),
     specialization_digest_generations: StoreList(u64, "specialization_digest_generations"),
-    /// Unique allocation epoch for each live TypeId. Store restoration can
-    /// recycle an id after discarding an interner candidate, so caches keyed
-    /// by TypeId validate this epoch as well as mutable-view generations.
-    type_epochs: StoreList(u64, "type_epochs"),
-    next_type_epoch: u64,
+    /// Bumped whenever a reserved slot is filled, so a per-id digest cached at
+    /// an earlier generation is recomputed. Live ids are immutable once visible,
+    /// so this only guards the recursive-group build window; over-invalidation
+    /// (recomputing an unaffected id's digest) is a perf cost, not correctness.
     digest_cache_generation: u64,
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
@@ -286,6 +285,14 @@ pub const Store = struct {
     /// both modes; only dedup is gated by this field. Defaults to null so a
     /// store cloned by field-wise copy starts as a plain (non-interning) store.
     intern_buckets: ?std.AutoHashMap(InternerLookupDigest, std.ArrayList(TypeId)) = null,
+    /// Ids that must never be returned as a dedup result. An id read by a live
+    /// instantiation-graph node is recorded here (by the graph, when it binds
+    /// the id to a node) so no later intern hands it back as a shared type: a
+    /// final type would then resolve through a live node, and one such id would
+    /// answer for two nodes. The dedup scan skips these ids, so an equal type
+    /// receives a fresh id and each live-node handle stays one id per read.
+    /// Empty on a field-wise clone.
+    dedup_excluded: std.AutoHashMap(TypeId, void),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
@@ -295,8 +302,6 @@ pub const Store = struct {
             .specialization_digests = .empty,
             .type_digest_generations = .empty,
             .specialization_digest_generations = .empty,
-            .type_epochs = .empty,
-            .next_type_epoch = 1,
             .digest_cache_generation = 1,
             .spans = .empty,
             .fields = .empty,
@@ -304,6 +309,7 @@ pub const Store = struct {
             .declared_fields = .empty,
             .frozen = false,
             .intern_buckets = null,
+            .dedup_excluded = std.AutoHashMap(TypeId, void).init(allocator),
         };
     }
 
@@ -321,7 +327,14 @@ pub const Store = struct {
         return self.intern_buckets != null;
     }
 
+    /// Record that `ty` must never be handed back as a shared dedup result, so
+    /// an id that reads a live instantiation-graph node keeps distinct identity.
+    pub fn excludeFromDedup(self: *Store, ty: TypeId) std.mem.Allocator.Error!void {
+        try self.dedup_excluded.put(ty, {});
+    }
+
     pub fn deinit(self: *Store) void {
+        self.dedup_excluded.deinit();
         if (self.intern_buckets) |*buckets| {
             var lists = buckets.valueIterator();
             while (lists.next()) |list| list.deinit(self.allocator);
@@ -333,7 +346,6 @@ pub const Store = struct {
         self.spans.deinit(self.allocator);
         self.specialization_digest_generations.deinit(self.allocator);
         self.type_digest_generations.deinit(self.allocator);
-        self.type_epochs.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
@@ -412,9 +424,6 @@ pub const Store = struct {
         errdefer _ = self.type_digest_generations.pop();
         try self.specialization_digest_generations.append(self.allocator, 0);
         errdefer _ = self.specialization_digest_generations.pop();
-        if (self.next_type_epoch == std.math.maxInt(u64)) Common.invariant("Monotype type epoch exhausted");
-        try self.type_epochs.append(self.allocator, self.next_type_epoch);
-        self.next_type_epoch += 1;
         return @enumFromInt(@as(u32, @intCast(index)));
     }
 
@@ -447,10 +456,6 @@ pub const Store = struct {
 
     pub fn get(self: *const Store, ty: TypeId) Content {
         return self.types.unsafeRawItemsForView()[@intFromEnum(ty)];
-    }
-
-    pub fn typeEpoch(self: *const Store, ty: TypeId) u64 {
-        return self.type_epochs.unsafeRawItemsForView()[@intFromEnum(ty)];
     }
 
     pub fn span(self: *const Store, span_: Span) StoreSpanBorrow(TypeId, "spans") {
@@ -936,9 +941,30 @@ pub const Store = struct {
         };
     }
 
+    /// Whether any direct child of `ty` is excluded from dedup. Because taint
+    /// propagates — a parent built over a tainted child is itself excluded —
+    /// checking direct children detects a type that transitively holds a
+    /// live-node view.
+    fn hasExcludedChild(self: *Store, ty: TypeId) bool {
+        if (self.dedup_excluded.count() == 0) return false;
+        var it = ChildIterator.init(self.view(), self.get(ty));
+        while (it.next()) |child| {
+            if (self.dedup_excluded.contains(child)) return true;
+        }
+        return false;
+    }
+
     fn internCandidate(self: *Store, name_store: *const names.NameStore, mark_: Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
         // Plain-add mode: the candidate is already installed; hand back its id.
         if (self.intern_buckets == null) return candidate;
+
+        // A candidate that holds a live-node view is transient: never register
+        // it as a shared type, and taint it so a parent built over it is also
+        // kept out of the dedup buckets.
+        if (self.hasExcludedChild(candidate)) {
+            try self.dedup_excluded.put(candidate, {});
+            return candidate;
+        }
 
         errdefer self.restore(mark_);
         const digest = self.typeDigestCached(name_store, candidate, null);
@@ -946,6 +972,7 @@ pub const Store = struct {
         const buckets = &self.intern_buckets.?;
         if (buckets.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
+                if (self.dedup_excluded.contains(existing)) continue;
                 if (try self.typeEql(name_store, existing, candidate)) {
                     self.restore(mark_);
                     census.bump("intern_hit");
@@ -965,13 +992,58 @@ pub const Store = struct {
         return candidate;
     }
 
+    /// Dedup an already-installed node in place: register it under its digest,
+    /// or return an existing structurally-equal id when one exists. Unlike
+    /// `internCandidate`, a deduped-away node is left as an unreferenced slot
+    /// rather than truncated. The graph sealer builds recursive knots by
+    /// reserving a slot before descending, so a descendant may already be
+    /// registered by the time an ancestor deduplicates; truncating the
+    /// ancestor's slot would then invalidate the descendant's registered id.
+    /// Leaving the slot in place keeps every registered id valid. Equality is
+    /// decided by `typeEql`, so a stale digest can only miss a match, never
+    /// merge two structurally distinct nodes.
+    ///
+    /// Ids in `dedup_excluded` are never returned as the shared result, so a
+    /// committed seal keeps live-node handles one id per read and never hands
+    /// back a final type that resolves through a live node. A no-op passthrough
+    /// when the store has no dedup buckets.
+    pub fn internFilledNode(
+        self: *Store,
+        name_store: *const names.NameStore,
+        candidate: TypeId,
+    ) std.mem.Allocator.Error!TypeId {
+        if (self.intern_buckets == null) return candidate;
+
+        // A node holding a live-node view is transient: taint it and leave it
+        // out of the buckets so no later type deduplicates onto it.
+        if (self.hasExcludedChild(candidate)) {
+            try self.dedup_excluded.put(candidate, {});
+            return candidate;
+        }
+
+        const digest = self.typeDigestCached(name_store, candidate, null);
+        const key = InternerLookupDigest.from(digest);
+        const gop = try self.intern_buckets.?.getOrPut(key);
+        if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TypeId).empty;
+        for (gop.value_ptr.items) |existing| {
+            if (existing == candidate) return candidate;
+            if (self.dedup_excluded.contains(existing)) continue;
+            if (try self.typeEql(name_store, existing, candidate)) {
+                census.bump("intern_hit");
+                return existing;
+            }
+        }
+        try gop.value_ptr.append(self.allocator, candidate);
+        census.bump("intern_miss");
+        return candidate;
+    }
+
     const Mark = struct {
         types_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
         type_digest_generations_len: usize,
         specialization_digest_generations_len: usize,
-        type_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
         tags_len: usize,
@@ -985,7 +1057,6 @@ pub const Store = struct {
             .specialization_digests_len = self.specialization_digests.len(),
             .type_digest_generations_len = self.type_digest_generations.len(),
             .specialization_digest_generations_len = self.specialization_digest_generations.len(),
-            .type_epochs_len = self.type_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
             .tags_len = self.tags.len(),
@@ -1000,7 +1071,6 @@ pub const Store = struct {
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.type_digest_generations.restoreLen(mark_.type_digest_generations_len);
         self.specialization_digest_generations.restoreLen(mark_.specialization_digest_generations_len);
-        self.type_epochs.restoreLen(mark_.type_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);
@@ -3402,22 +3472,6 @@ pub fn builtinOwnerForPrimitive(primitive: Primitive) static_dispatch.BuiltinOwn
 
 test "monotype type declarations are referenced" {
     std.testing.refAllDecls(@This());
-}
-
-test "monotype type epochs distinguish recycled ids" {
-    var store = Store.init(std.testing.allocator);
-    defer store.deinit();
-
-    _ = try store.add(.{ .primitive = .u64 });
-    const mark_ = store.mark();
-    const discarded = try store.add(.{ .primitive = .i64 });
-    const discarded_epoch = store.typeEpoch(discarded);
-
-    store.restore(mark_);
-    const replacement = try store.add(.{ .primitive = .str });
-
-    try std.testing.expectEqual(discarded, replacement);
-    try std.testing.expect(discarded_epoch != store.typeEpoch(replacement));
 }
 
 test "monotype type interner reuses child-first function nodes" {

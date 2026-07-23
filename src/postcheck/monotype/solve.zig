@@ -1406,29 +1406,41 @@ pub const InstGraph = struct {
     /// reconnects to it; an unlinked one copies in as closed structure, so a
     /// later attempt to widen it is a unification conflict rather than a silent
     /// mutation of another specialization's final type.
+    /// Import a finished Monotype into this graph as a fresh snapshot subgraph.
+    ///
+    /// The memo that ties the snapshot's shared and cyclic structure is scoped
+    /// to this one top-level import. Content dedup can give two unrelated
+    /// occurrences one id, and imported rows stay extensible, so a memo that
+    /// persisted across imports would hand both occurrences one node and let a
+    /// widening at one site flow into the other. A per-import memo keeps each
+    /// import's nodes independent while still tying repeated and recursive
+    /// structure within the one import.
     pub fn importMono(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
+        self.mono_nodes.clearRetainingCapacity();
+        return try self.importMonoInner(ty);
+    }
+
+    fn importMonoInner(self: *InstGraph, ty: Type.TypeId) Allocator.Error!NodeId {
         // A point-in-time id read out of this graph unifies with the live node
         // it captured, so a requester connects to that node's ongoing solution
         // instead of copying the frozen snapshot.
         if (self.view_nodes.get(ty)) |node| return self.find(node);
         if (self.mono_nodes.get(ty)) |existing| return existing;
         const node = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
-        // One-way memo: every import is a finished Monotype from outside this
-        // graph (ids materialized here hit the memo above), so it enters as a
-        // snapshot. Registering a view would let this specialization's
-        // evidence rewrite another specialization's final type, destabilizing
-        // every digest taken from it.
+        // Tie shared and cyclic structure inside this one import. Registering a
+        // view would let this specialization's evidence rewrite another
+        // specialization's final type, destabilizing every digest taken from it.
         try self.mono_nodes.put(ty, node);
 
         const types = self.types;
         const imported: InstNode = switch (types.get(ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
-            .list => |elem| .{ .list = try self.importMono(elem) },
-            .box => |elem| .{ .box = try self.importMono(elem) },
+            .list => |elem| .{ .list = try self.importMonoInner(elem) },
+            .box => |elem| .{ .box = try self.importMonoInner(elem) },
             .tuple => |items| .{ .tuple = try self.importMonoSlice(types.span(items)) },
             .func => |func| .{ .func = .{
                 .args = try self.importMonoSlice(types.span(func.args)),
-                .ret = try self.importMono(func.ret),
+                .ret = try self.importMonoInner(func.ret),
             } },
             .tag_union => |tags| blk: {
                 const span = types.tagSpan(tags);
@@ -1464,7 +1476,7 @@ pub const InstGraph = struct {
                     const field = GuardedList.at(span, index);
                     inst_fields[index] = .{
                         .name = field.name,
-                        .ty = try self.importMono(field.ty),
+                        .ty = try self.importMonoInner(field.ty),
                     };
                 }
                 break :blk .{ .record = .{
@@ -1479,7 +1491,7 @@ pub const InstGraph = struct {
                 .builtin_owner = named.builtin_owner,
                 .args = try self.importMonoSlice(types.span(named.args)),
                 .backing = if (named.backing) |backing| .{
-                    .node = try self.importMono(backing.ty),
+                    .node = try self.importMonoInner(backing.ty),
                     .use = backing.use,
                 } else null,
                 .declared_order = try self.importDeclaredFields(named.declared_order),
@@ -1514,7 +1526,7 @@ pub const InstGraph = struct {
         const out = try self.arena().alloc(NodeId, tys.len);
         for (0..tys.len) |index| {
             const ty = GuardedList.at(tys, index);
-            out[index] = try self.importMono(ty);
+            out[index] = try self.importMonoInner(ty);
         }
         return out;
     }
@@ -1527,7 +1539,7 @@ pub const InstGraph = struct {
             const field = GuardedList.at(fields, index);
             out[index] = switch (field) {
                 .named => |name| .{ .named = name },
-                .padding => |ty| .{ .padding = try self.importMono(ty) },
+                .padding => |ty| .{ .padding = try self.importMonoInner(ty) },
             };
         }
         return out;
@@ -1538,6 +1550,12 @@ pub const InstGraph = struct {
     /// node, so the requester observes the node's ongoing solution while the id
     /// itself is never mutated.
     pub fn registerNodeType(self: *InstGraph, ty: Type.TypeId, node: NodeId) Allocator.Error!void {
+        // This id now reads a live node: keep dedup from ever handing it back so
+        // a committed final type never resolves through the node and the read
+        // stays one id per node. A re-registration rebinds to the current node
+        // (an id whose node is re-derived within one specialization keeps its
+        // latest reader).
+        try self.types.excludeFromDedup(ty);
         try self.view_nodes.put(ty, self.find(node));
     }
 
@@ -1546,7 +1564,7 @@ pub const InstGraph = struct {
     /// point-in-time snapshot: its payload never changes, and its provenance is
     /// recorded so a later import or seal follows back to the live node.
     pub fn pointInTimeTypeForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
-        var sealer = GraphTypeFinals.init(self);
+        var sealer = GraphTypeFinals.initMode(self, .point_in_time);
         defer sealer.deinit();
         const ty = try sealer.sealNode(node);
         try sealer.recordPointInTimeProvenance();
@@ -1671,18 +1689,31 @@ pub const InstGraph = struct {
     }
 };
 
+/// Whether a seal commits its result as a shared, deduplicated id or reads it
+/// as a distinct point-in-time snapshot. A committed seal deduplicates every
+/// materialized node against the store's dedup buckets. A point-in-time seal
+/// keeps each materialized node's id distinct so `view_nodes` provenance stays
+/// one id per live-node read; those ids are recorded in `point_in_time_ids`.
+pub const SealMode = enum { committed, point_in_time };
+
 /// Shared finalization state for materializing graph nodes into immutable
 /// Monotype type ids.
 pub const GraphTypeFinals = struct {
     graph: *InstGraph,
     sealed: std.AutoHashMap(NodeId, Type.TypeId),
     sealed_types: std.AutoHashMap(Type.TypeId, Type.TypeId),
+    mode: SealMode,
 
     pub fn init(graph: *InstGraph) GraphTypeFinals {
+        return initMode(graph, .committed);
+    }
+
+    pub fn initMode(graph: *InstGraph, mode: SealMode) GraphTypeFinals {
         return .{
             .graph = graph,
             .sealed = std.AutoHashMap(NodeId, Type.TypeId).init(graph.allocator),
             .sealed_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(graph.allocator),
+            .mode = mode,
         };
     }
 
@@ -1700,6 +1731,10 @@ pub const GraphTypeFinals = struct {
         while (it.next()) |entry| {
             try self.graph.view_nodes.put(entry.value_ptr.*, entry.key_ptr.*);
             try self.graph.point_in_time_ids.put(entry.value_ptr.*, {});
+            // A point-in-time id reads a live node: exclude it from dedup so a
+            // durable type built with it as a child is tainted and never
+            // registered as a shared type others could dedup onto.
+            try self.graph.types.excludeFromDedup(entry.value_ptr.*);
         }
     }
 
@@ -1742,7 +1777,24 @@ pub const GraphTypeFinals = struct {
                 return try context.sealer.sealContent(context.node);
             }
         };
-        return try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
+        const built = try self.graph.types.addRecursive(Context{ .sealer = self, .node = node }, Context.fill);
+        return try self.commit(node, built);
+    }
+
+    /// Deduplicate a just-materialized node when committing, keeping distinct
+    /// ids for a point-in-time read. The seal cache is repointed at the shared
+    /// id so a later reference to the same node reuses it. Ids that read a live
+    /// node are excluded on the store so a committed final type never resolves
+    /// through one.
+    fn commit(self: *GraphTypeFinals, node: NodeId, built: Type.TypeId) Allocator.Error!Type.TypeId {
+        switch (self.mode) {
+            .point_in_time => return built,
+            .committed => {
+                const shared = try self.graph.types.internFilledNode(self.graph.name_store, built);
+                if (shared != built) try self.sealed.put(node, shared);
+                return shared;
+            },
+        }
     }
 
     fn sealContent(self: *GraphTypeFinals, node: NodeId) Allocator.Error!Type.Content {
@@ -1799,7 +1851,15 @@ pub const GraphTypeFinals = struct {
                 return try context.sealer.sealStoreContent(context.ty);
             }
         };
-        return try self.graph.types.addRecursive(Context{ .sealer = self, .ty = ty }, Context.fill);
+        const built = try self.graph.types.addRecursive(Context{ .sealer = self, .ty = ty }, Context.fill);
+        switch (self.mode) {
+            .point_in_time => return built,
+            .committed => {
+                const shared = try self.graph.types.internFilledNode(self.graph.name_store, built);
+                if (shared != built) try self.sealed_types.put(ty, shared);
+                return shared;
+            },
+        }
     }
 
     fn sealStoreContent(self: *GraphTypeFinals, ty: Type.TypeId) Allocator.Error!Type.Content {

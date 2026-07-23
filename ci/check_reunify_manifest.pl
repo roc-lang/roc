@@ -87,7 +87,9 @@ my @categories = (
         exempt  => [],
         patterns => [
             { label => 'importMono', re => qr/\bimportMono\b/,
-              counts => { $SOLVE => 9, $LOWER => 43 } },
+              counts => { $SOLVE => 2, $LOWER => 43 } },
+            { label => 'importMonoInner', re => qr/\bimportMonoInner\b/,
+              counts => { $SOLVE => 9 } },
             { label => 'pointInTimeTypeForNode', re => qr/\bpointInTimeTypeForNode\b/,
               counts => { $SOLVE => 7, $LOWER => 2 } },
             { label => 'registerNodeType', re => qr/\bregisterNodeType\b/,

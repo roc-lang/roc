@@ -85,10 +85,10 @@ pub const Options = struct {
 pub const SpecializationCounters = specialize.Counters;
 
 /// One memoized generated-evidence answer, valid only while the type store's
-/// digest generation and the TypeId's allocation epoch are unchanged.
+/// digest generation is unchanged. Ids are immutable once visible, so the
+/// generation alone keys the answer.
 const EvidenceCacheEntry = struct {
     generation: u64,
-    type_epoch: u64,
     has_evidence: bool,
 };
 
@@ -105,6 +105,15 @@ pub fn run(
 
     var program = Ast.Program.init(allocator);
     errdefer program.deinit();
+    // Content dedup on the one production store is built end to end — the
+    // intern constructors, committed graph seals, live-node dedup exclusion,
+    // and occurrence-independent imports — but activation stays off until
+    // occurrence-based lambda cloning lands (interning structurally equal
+    // function types otherwise merges callable slots) and until generated
+    // iterator materializers taint their view-bearing outputs. With this call
+    // absent the intern constructors plain-add, so behavior matches the
+    // pre-dedup store; enabling it flips dedup on for the whole store.
+    // program.types.enableInterning();
 
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
@@ -1282,11 +1291,7 @@ const Builder = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        const wrapper_args = try self.program.types.addSpan(&.{});
-        const wrapper_fn_ty = try self.program.types.add(.{ .func = .{
-            .args = wrapper_args,
-            .ret = mono_fn_ty,
-        } });
+        const wrapper_fn_ty = try self.program.types.internFunc(&self.program.names, &.{}, mono_fn_ty);
         const wrapper_template = self.fnDefForTemplate(
             view,
             wrapper.template,
@@ -2152,17 +2157,15 @@ const Builder = struct {
     }
 
     /// Whether a Monotype's structure reaches generated opaque evidence.
-    /// Answers memoize per type id at the store's current digest generation
-    /// and the id's allocation epoch. The generation bumps whenever any graph
-    /// view refills in place, and the epoch changes when a restored id is
-    /// reused, so no mutable or recycled type serves a stale answer. Repeated
-    /// walks between either change collapse into lookups.
+    /// Answers memoize per type id at the store's current digest generation.
+    /// The generation bumps whenever a reserved slot is filled, and a live id
+    /// is immutable once visible, so no stale answer is served. Repeated walks
+    /// between generation bumps collapse into lookups.
     fn monoTypeHasGeneratedOpaqueEvidence(self: *Builder, ty: Type.TypeId) Allocator.Error!bool {
         self.count("evidence_walks");
         const generation = self.program.types.digest_cache_generation;
-        const type_epoch = self.program.types.typeEpoch(ty);
         if (self.evidence_cache.get(ty)) |entry| {
-            if (entry.generation == generation and entry.type_epoch == type_epoch) {
+            if (entry.generation == generation) {
                 self.count("evidence_walk_memo_hits");
                 return entry.has_evidence;
             }
@@ -2171,7 +2174,6 @@ const Builder = struct {
         const has_evidence = try self.monoTypeHasGeneratedOpaqueEvidenceInner(ty, &self.evidence_walk_visited);
         try self.evidence_cache.put(ty, .{
             .generation = generation,
-            .type_epoch = type_epoch,
             .has_evidence = has_evidence,
         });
         return has_evidence;
@@ -4894,17 +4896,17 @@ const Builder = struct {
         return switch (primitive) {
             .u64 => blk: {
                 if (self.u64_ty) |ty| break :blk ty;
-                const ty = try self.program.types.add(.{ .primitive = .u64 });
+                const ty = try self.program.types.internPrimitive(&self.program.names, .u64);
                 self.u64_ty = ty;
                 break :blk ty;
             },
             .bool => blk: {
                 if (self.bool_ty) |ty| break :blk ty;
-                const ty = try self.program.types.add(.{ .primitive = .bool });
+                const ty = try self.program.types.internPrimitive(&self.program.names, .bool);
                 self.bool_ty = ty;
                 break :blk ty;
             },
-            else => try self.program.types.add(.{ .primitive = primitive }),
+            else => try self.program.types.internPrimitive(&self.program.names, primitive),
         };
     }
 
@@ -4912,10 +4914,7 @@ const Builder = struct {
         if (self.active_graph != null) {
             Common.invariant("active Monotype body lowering must build function types through BodyContext graph-node helpers");
         }
-        return try self.program.types.add(.{ .func = .{
-            .args = try self.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
+        return try self.program.types.internFunc(&self.program.names, arg_tys, ret_ty);
     }
 
     fn oneArgFnType(self: *Builder, arg_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -9881,11 +9880,7 @@ const BodyContext = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        const wrapper_args = try self.builder.program.types.addSpan(&.{});
-        const wrapper_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = wrapper_args,
-            .ret = mono_fn_ty,
-        } });
+        const wrapper_fn_ty = try self.builder.program.types.internFunc(&self.builder.program.names, &.{}, mono_fn_ty);
         const wrapper_template = self.builder.fnDefForTemplate(
             view,
             wrapper.template,
@@ -11184,10 +11179,7 @@ const BodyContext = struct {
         }
         if (public_ret != function.ret) changed = true;
         if (!changed) return fn_ty;
-        return try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(public_args),
-            .ret = public_ret,
-        } });
+        return try self.builder.program.types.internFunc(&self.builder.program.names, public_args, public_ret);
     }
 
     fn generatedIteratorDirectCallFunctionType(
@@ -11372,10 +11364,7 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const copied_args = try self.allocator.dupe(Type.TypeId, arg_tys);
         defer self.allocator.free(copied_args);
-        return try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(copied_args),
-            .ret = ret_ty,
-        } });
+        return try self.builder.program.types.internFunc(&self.builder.program.names, copied_args, ret_ty);
     }
 
     fn stableExpectedGeneratedIteratorProducerType(
@@ -11991,7 +11980,7 @@ const BodyContext = struct {
                     field.ty,
             };
         }
-        return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, fields) });
+        return try self.builder.program.types.internRecord(&self.builder.program.names, fields);
     }
 
     fn generatedIteratorStepFunctionType(
@@ -12066,7 +12055,7 @@ const BodyContext = struct {
                     field.ty,
             };
         }
-        return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, fields) });
+        return try self.builder.program.types.internRecord(&self.builder.program.names, fields);
     }
 
     fn lowerFieldNamesValueIter(
@@ -15578,7 +15567,7 @@ const BodyContext = struct {
             .{ .name = rest_name, .ty = rest_ty },
             .{ .name = value_name, .ty = value_ty },
         };
-        return try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
+        return try self.builder.program.types.internRecord(&self.builder.program.names, &fields);
     }
 
     fn parseResultOk(
@@ -15637,52 +15626,52 @@ const BodyContext = struct {
             .{ .name = field_name_name, .ty = field_handle_ty },
             .{ .name = rest_name, .ty = state_ty },
         };
-        const field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &field_fields) });
+        const field_payload_ty = try self.builder.program.types.internRecord(&self.builder.program.names, &field_fields);
 
         const try_field_fields = [_]Type.Field{
             .{ .name = name_name, .ty = str_ty },
             .{ .name = rest_name, .ty = state_ty },
         };
-        const try_field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &try_field_fields) });
+        const try_field_payload_ty = try self.builder.program.types.internRecord(&self.builder.program.names, &try_field_fields);
 
         const rest_fields = [_]Type.Field{
             .{ .name = rest_name, .ty = state_ty },
         };
-        const rest_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &rest_fields) });
+        const rest_payload_ty = try self.builder.program.types.internRecord(&self.builder.program.names, &rest_fields);
 
         const continue_name = try self.builder.program.names.internTagLabel("Continue");
         const done_name = try self.builder.program.names.internTagLabel("Done");
         const field_name = try self.builder.program.names.internTagLabel("Field");
         const try_field_name = try self.builder.program.names.internTagLabel("TryField");
         const try_field_caseless_name = try self.builder.program.names.internTagLabel("TryFieldCaseless");
-        const tags = [_]Type.Tag{
+        const tags = [_]Type.Store.TagInput{
             .{
                 .name = continue_name,
                 .checked_name = continue_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{rest_payload_ty}),
+                .payloads = &[_]Type.TypeId{rest_payload_ty},
             },
             .{
                 .name = done_name,
                 .checked_name = done_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{rest_payload_ty}),
+                .payloads = &[_]Type.TypeId{rest_payload_ty},
             },
             .{
                 .name = field_name,
                 .checked_name = field_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{field_payload_ty}),
+                .payloads = &[_]Type.TypeId{field_payload_ty},
             },
             .{
                 .name = try_field_name,
                 .checked_name = try_field_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{try_field_payload_ty}),
+                .payloads = &[_]Type.TypeId{try_field_payload_ty},
             },
             .{
                 .name = try_field_caseless_name,
                 .checked_name = try_field_caseless_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{try_field_payload_ty}),
+                .payloads = &[_]Type.TypeId{try_field_payload_ty},
             },
         };
-        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, &tags) });
+        return try self.builder.program.types.internTagUnion(&self.builder.program.names, &tags);
     }
 
     fn parseObjectEventType(
@@ -15697,29 +15686,28 @@ const BodyContext = struct {
             .{ .name = key_name, .ty = str_ty },
             .{ .name = rest_name, .ty = state_ty },
         };
-        const entry_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&entry_fields) });
+        const entry_payload_ty = try self.builder.program.types.internRecord(&self.builder.program.names, &entry_fields);
 
         const done_fields = [_]Type.Field{
             .{ .name = rest_name, .ty = state_ty },
         };
-        const done_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addFields(&done_fields) });
+        const done_payload_ty = try self.builder.program.types.internRecord(&self.builder.program.names, &done_fields);
 
         const done_name = try self.builder.program.names.internTagLabel("Done");
         const entry_name = try self.builder.program.names.internTagLabel("Entry");
-        var tags = [_]Type.Tag{
+        const tags = [_]Type.Store.TagInput{
             .{
                 .name = done_name,
                 .checked_name = done_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{done_payload_ty}),
+                .payloads = &[_]Type.TypeId{done_payload_ty},
             },
             .{
                 .name = entry_name,
                 .checked_name = entry_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{entry_payload_ty}),
+                .payloads = &[_]Type.TypeId{entry_payload_ty},
             },
         };
-        std.mem.sort(Type.Tag, tags[0..], &self.builder.program.names, solve.tagLessThan);
-        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(&tags) });
+        return try self.builder.program.types.internTagUnion(&self.builder.program.names, &tags);
     }
 
     fn parseArrayEventType(
@@ -15730,20 +15718,19 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const first_name = try self.builder.program.names.internTagLabel(first_tag_text);
         const second_name = try self.builder.program.names.internTagLabel(second_tag_text);
-        var tags = [_]Type.Tag{
+        const tags = [_]Type.Store.TagInput{
             .{
                 .name = first_name,
                 .checked_name = first_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
+                .payloads = &[_]Type.TypeId{state_ty},
             },
             .{
                 .name = second_name,
                 .checked_name = second_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
+                .payloads = &[_]Type.TypeId{state_ty},
             },
         };
-        std.mem.sort(Type.Tag, tags[0..], &self.builder.program.names, solve.tagLessThan);
-        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(&tags) });
+        return try self.builder.program.types.internTagUnion(&self.builder.program.names, &tags);
     }
 
     fn appendListElement(
@@ -16747,10 +16734,7 @@ const BodyContext = struct {
             // generated-evidence positions; the other parameters and the return
             // stay active so a callee that constructs its (iterator-shaped)
             // result can still extend the result type's callable slots.
-            const generated_fn_ty = try self.builder.program.types.add(.{ .func = .{
-                .args = try self.builder.program.types.addSpan(args),
-                .ret = generated_ret_override orelse try self.activeTypeFromNode(try self.instNode(function.ret)),
-            } });
+            const generated_fn_ty = try self.builder.program.types.internFunc(&self.builder.program.names, args, generated_ret_override orelse try self.activeTypeFromNode(try self.instNode(function.ret)));
             return generated_fn_ty;
         }
         return try self.activeTypeFromNode(fn_node);
@@ -16830,10 +16814,7 @@ const BodyContext = struct {
             // that constructs its result (a step closure flowing into a
             // returned iterator's backing) could never extend them, leaving a
             // zero-sized callable layout for a value that carries members.
-            return try self.builder.program.types.add(.{ .func = .{
-                .args = try self.builder.program.types.addSpan(args),
-                .ret = generated_ret_override orelse try self.activeTypeFromNode(try self.instNode(function.ret)),
-            } });
+            return try self.builder.program.types.internFunc(&self.builder.program.names, args, generated_ret_override orelse try self.activeTypeFromNode(try self.instNode(function.ret)));
         }
         return try self.activeTypeFromNode(fn_node);
     }
@@ -17598,11 +17579,7 @@ const BodyContext = struct {
         const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
-        const wrapper_args = try self.builder.program.types.addSpan(&.{});
-        const wrapper_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = wrapper_args,
-            .ret = ty,
-        } });
+        const wrapper_fn_ty = try self.builder.program.types.internFunc(&self.builder.program.names, &.{}, ty);
         const wrapper_template = self.builder.fnDefForTemplate(
             store_view,
             eval.entry_template,
@@ -19993,11 +19970,11 @@ const BodyContext = struct {
     }
 
     fn listType(self: *BodyContext, elem_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.builder.program.types.add(.{ .list = elem_ty });
+        return try self.builder.program.types.internList(&self.builder.program.names, elem_ty);
     }
 
     fn tupleType(self: *BodyContext, item_tys: []const Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(item_tys) });
+        return try self.builder.program.types.internTuple(&self.builder.program.names, item_tys);
     }
 
     fn lowerSetFromList(
@@ -21396,10 +21373,7 @@ const BodyContext = struct {
     }
 
     fn functionType(self: *BodyContext, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        return try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(arg_tys),
-            .ret = ret_ty,
-        } });
+        return try self.builder.program.types.internFunc(&self.builder.program.names, arg_tys, ret_ty);
     }
 
     fn encodeValueThunkType(self: *BodyContext, state_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
@@ -22662,10 +22636,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const runtime_fn_ty = try self.builder.program.types.add(.{ .func = .{
-            .args = try self.builder.program.types.addSpan(&.{ shape_ty, state_ty }),
-            .ret = ret_ty,
-        } });
+        const runtime_fn_ty = try self.builder.program.types.internFunc(&self.builder.program.names, &.{ shape_ty, state_ty }, ret_ty);
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{encoding_ty}, runtime_fn_ty);
         const encode_fn = self.builder.functionShape(callable_mono_ty, "custom encoder_for target was not a function");
         const encode_arg_tys = self.builder.program.types.span(encode_fn.args);
@@ -24761,7 +24732,7 @@ const BodyContext = struct {
             .{ .name = len_name, .ty = u64_ty },
             .{ .name = start_name, .ty = u64_ty },
         };
-        const ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &fields) });
+        const ty = try self.builder.program.types.internRecord(&self.builder.program.names, &fields);
         const exprs = [_]DraftFieldExpr{
             .{ .name = len_name, .value = len },
             .{ .name = start_name, .value = start },
@@ -25210,7 +25181,7 @@ const BodyContext = struct {
         defer self.allocator.free(tys);
         for (merge_binders, 0..) |merge, i| tys[i] = merge.ty;
         tys[merge_binders.len] = result_ty;
-        return try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(tys) });
+        return try self.builder.program.types.internTuple(&self.builder.program.names, tys);
     }
 
     fn stateOnlyType(
@@ -25223,7 +25194,7 @@ const BodyContext = struct {
         const tys = try self.allocator.alloc(Type.TypeId, merge_binders.len);
         defer self.allocator.free(tys);
         for (merge_binders, 0..) |merge, i| tys[i] = merge.ty;
-        return try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(tys) });
+        return try self.builder.program.types.internTuple(&self.builder.program.names, tys);
     }
 
     fn lowerIf(
@@ -26548,11 +26519,11 @@ const BodyContext = struct {
         const tys = try self.allocator.alloc(Type.TypeId, carries.len);
         defer self.allocator.free(tys);
         for (carries, 0..) |carry, i| tys[i] = carry.ty;
-        return try self.builder.program.types.add(.{ .tuple = try self.builder.program.types.addSpan(tys) });
+        return try self.builder.program.types.internTuple(&self.builder.program.names, tys);
     }
 
     fn unitType(self: *BodyContext) Allocator.Error!Type.TypeId {
-        return try self.builder.program.types.add(.{ .record = .empty() });
+        return try self.builder.program.types.internRecord(&self.builder.program.names, &.{});
     }
 
     fn prepareLoopCarries(self: *BodyContext, binders: []const checked.PatternBinderId) Allocator.Error![]LoopCarry {

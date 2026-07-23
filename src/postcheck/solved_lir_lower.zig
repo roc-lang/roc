@@ -8132,14 +8132,17 @@ fn cloneMonoTypeStore(allocator: std.mem.Allocator, source: *const MonoType.Stor
         .specialization_digests = @TypeOf(source.specialization_digests).fromArrayList(try cloneSlice(?check.CheckedNames.TypeDigest, allocator, source.specializationDigestsView())),
         .type_digest_generations = @TypeOf(source.type_digest_generations).fromArrayList(try cloneSlice(u64, allocator, source.type_digest_generations.unsafeRawItemsForView())),
         .specialization_digest_generations = @TypeOf(source.specialization_digest_generations).fromArrayList(try cloneSlice(u64, allocator, source.specialization_digest_generations.unsafeRawItemsForView())),
-        .type_epochs = @TypeOf(source.type_epochs).fromArrayList(try cloneSlice(u64, allocator, source.type_epochs.unsafeRawItemsForView())),
-        .next_type_epoch = source.next_type_epoch,
         .digest_cache_generation = source.digest_cache_generation,
         .spans = @TypeOf(source.spans).fromArrayList(try cloneSlice(MonoType.TypeId, allocator, view.spans)),
         .fields = @TypeOf(source.fields).fromArrayList(try cloneSlice(MonoType.Field, allocator, view.fields)),
         .tags = @TypeOf(source.tags).fromArrayList(try cloneSlice(MonoType.Tag, allocator, view.tags)),
         .declared_fields = @TypeOf(source.declared_fields).fromArrayList(try cloneSlice(MonoType.DeclaredField, allocator, view.declared_fields)),
         .frozen = source.isFrozen(),
+        // The clone is a completed-program snapshot that constructs no further
+        // types, so it drops dedup buckets and stays non-interning; its ids are
+        // copied verbatim, and the exclusion set is only meaningful while a
+        // store is still deduplicating.
+        .dedup_excluded = std.AutoHashMap(MonoType.TypeId, void).init(allocator),
     };
 }
 
