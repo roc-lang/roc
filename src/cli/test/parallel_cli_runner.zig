@@ -415,6 +415,7 @@ const CustomCase = enum {
     install_glue_roundtrip,
     glue_debug,
     glue_debug_dev,
+    glue_dev_without_temp_env,
     glue_dylib_cache_hit,
     glue_c_header,
     glue_c_header_compiles,
@@ -748,6 +749,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: roc test all_syntax_test.roc passes", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/echo/all_syntax_test.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: statically dispatched, propagated, open error union does not crash (regression test #9588)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/echo/issue_9588.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: forward helper reports nested binder shadowing without panic (issue 10327)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/echo/issue_10327.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "DUPLICATE DEFINITION" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "local lookup referenced an unbound pattern binder" }, .{ .stream = .stderr, .text = "panic" } } } } },
 };
 
 // Glue suite cases
@@ -755,6 +757,7 @@ const echo_cases = [_]CliCase{
 const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds", .body = .{ .custom = .glue_debug } },
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=dev", .body = .{ .custom = .glue_debug_dev } },
+    .{ .id = 0, .suite = .glue, .name = "glue command succeeds without temp environment variables", .skip = .{ .windows = "Windows requires TEMP or TMP" }, .body = .{ .custom = .glue_dev_without_temp_env } },
     .{ .id = 0, .suite = .glue, .name = "glue command reuses cached compiler-owned dylib", .body = .{ .custom = .glue_dylib_cache_hit } },
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
@@ -2257,6 +2260,7 @@ fn runCustomCase(
         .install_glue_roundtrip => customInstallGlueRoundtrip(io, allocator, &env, &timer, timeout_ms),
         .glue_debug => customGlueDebug(io, allocator, &env, &timer, timeout_ms),
         .glue_debug_dev => customGlueDebugDev(io, allocator, &env, &timer, timeout_ms),
+        .glue_dev_without_temp_env => customGlueDevWithoutTempEnv(io, allocator, &env, &timer, timeout_ms),
         .glue_dylib_cache_hit => customGlueDylibCacheHit(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
@@ -7463,6 +7467,30 @@ fn customGlueDebugDev(io: std.Io, allocator: Allocator, env: *const CaseEnv, tim
             .{ .stream = .stderr, .text = "PANIC" },
             .{ .stream = .stderr, .text = "unreachable" },
             .{ .stream = .stderr, .text = "name: \"\"" },
+        },
+    })) |failure| return failure;
+    return null;
+}
+
+fn customGlueDevWithoutTempEnv(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    var no_temp_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone environment for glue run: {}", .{err}),
+    };
+    defer no_temp_env.env_map.deinit();
+    _ = no_temp_env.env_map.swapRemove("TMPDIR");
+    _ = no_temp_env.env_map.swapRemove("TEMP");
+    _ = no_temp_env.env_map.swapRemove("TMP");
+
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-no-temp-env") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, &no_temp_env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--opt=dev", "src/glue/src/DebugGlue.roc", output_dir, "test/fx/platform/main.roc" },
+        .contains = &.{.{ .stream = .stderr, .text = "name: \"main!\"" }},
+        .not_contains = &.{
+            .{ .stream = .stderr, .text = "Compilation failed" },
+            .{ .stream = .stderr, .text = "PANIC" },
         },
     })) |failure| return failure;
     return null;

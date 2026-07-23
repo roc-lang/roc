@@ -2077,11 +2077,15 @@ const Formatter = struct {
 
                 try fmt.pushTokenText(t.tag_tok);
                 if (t.backing_value) {
-                    // Nominal-value destructure renders as `Type.(args)` (the `.`
-                    // distinguishes it from an ordinary applied-tag `Tag(args)`).
+                    // The `.` distinguishes nominal-value destructuring from an
+                    // ordinary applied-tag pattern.
                     try fmt.push('.');
                 }
-                if (t.backing_value or t.has_args) {
+                if (t.record_shorthand) {
+                    const args = fmt.ast.store.patternSlice(t.args);
+                    std.debug.assert(t.backing_value and args.len == 1);
+                    try fmt.formatPatternDiscard(args[0]);
+                } else if (t.backing_value or t.has_args) {
                     try fmt.formatCollection(region, fmt.ast.store.getCollectionLayout(pi), .round, AST.Pattern.Idx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
                 }
             },
@@ -4092,6 +4096,32 @@ test "issue 10046: empty nominal destructure lambda argument is idempotent" {
     const result = try moduleFmtsStable(std.testing.allocator, "g=|D.()|0", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("g = |D.()| 0\n", result);
+}
+
+test "nominal record destructure shorthand is preserved in every pattern position" {
+    const input =
+        \\sum_arg = |Point.{x,y}| x+y
+        \\sum_let = |point| {
+        \\Point.{x,y}=point
+        \\x+y
+        \\}
+        \\sum_match = |point| match point {
+        \\Point.{x,y} => x+y
+        \\}
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+
+    const expected =
+        "sum_arg = |Point.{ x, y }| x + y\n\n" ++
+        "sum_let = |point| {\n" ++
+        "\tPoint.{ x, y } = point\n" ++
+        "\tx + y\n" ++
+        "}\n\n" ++
+        "sum_match = |point| match point {\n" ++
+        "\tPoint.{ x, y } => x + y\n" ++
+        "}\n";
+    try std.testing.expectEqualStrings(expected, result);
 }
 
 test "issue 9940: comments in empty collections and blocks are preserved" {
