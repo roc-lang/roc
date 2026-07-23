@@ -656,6 +656,52 @@ pub const SchemeUsePair = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// One pristine scheme snapshot captured when a definition's generalization
+/// boundary completes (reunify.md 7.1, Slice 2). The final solver root a
+/// definition publishes is mutable — its free (escaped) variables can still be
+/// unified after generalization — so publication cannot treat it as the
+/// definition's pristine scheme. This record pins two things about the scheme
+/// exactly as it stood at the boundary, without allocating any solver variable
+/// (which would perturb variable-index allocation and so checked output): the
+/// scheme root's structural `digest` at that instant, and — in
+/// `scheme_snapshot_binders` — the identities of its generalized binders, taken
+/// before free-variable unification could add spurious generalized variables to
+/// the final root. Publication translates the binders and compares the digest
+/// against the final root; production monotype lowering still lowers from the
+/// final root, so the snapshot is verified against it, not yet authoritative.
+pub const SchemeSnapshotRecord = extern struct {
+    /// The CIR node that owns the scheme (a definition's expression, an
+    /// annotation, or a binding pattern). Publication looks a definition's
+    /// snapshot up by this node.
+    owner_node: u32,
+    /// Range into `scheme_snapshot_binders`.
+    binders_start: u32,
+    binders_len: u32,
+    /// The scheme root's canonical structural digest at the boundary
+    /// (`canonical_type_keys.fromVar` of the pristine root). Publication compares
+    /// it against the final root's digest to measure how often the mutable root
+    /// drifted from the pristine scheme.
+    digest: [32]u8,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// One binder of a `SchemeSnapshotRecord`, in canonical identity-slot
+/// first-encounter order (`identityVarsFromVar` order over the scheme root). The
+/// index of a binder within its record's range is its binder index. `original`
+/// is the definition's generalized variable at the boundary; it stays a
+/// generalized root through publication (generalized variables are copied, never
+/// unified, at use sites), so publication translates it in place within the
+/// scheme's final checked root. Capturing it here — rather than re-deriving the
+/// binder set from the final root — keeps a free variable that unified into an
+/// outer scheme's binder from being mistaken for one of this scheme's binders.
+pub const SchemeSnapshotBinder = extern struct {
+    /// The definition's generalized variable at the boundary (`Var`).
+    original: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// Resolved type target for an explicit numeric suffix such as `123.U64` or
 /// `123.Custom`. Canonicalization records this once from scope resolution;
 /// checking consumes it directly instead of looking up the suffix text again.
@@ -811,6 +857,11 @@ numeric_suffix_targets: NumericSuffixTarget.SafeList,
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Pristine scheme snapshots captured by checking at generalization boundaries
+/// (reunify.md 7.1, Slice 2); consumed at checked-module publication.
+scheme_snapshots: SchemeSnapshotRecord.SafeList,
+/// Flat pool of ordered binders backing `scheme_snapshots`.
+scheme_snapshot_binders: SchemeSnapshotBinder.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1000,6 +1051,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .scheme_snapshots = try SchemeSnapshotRecord.SafeList.initCapacity(gpa, 8),
+        .scheme_snapshot_binders = try SchemeSnapshotBinder.SafeList.initCapacity(gpa, 8),
     };
 }
 
@@ -1025,6 +1078,8 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.scheme_snapshots.deinit(self.gpa);
+    self.scheme_snapshot_binders.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1066,6 +1121,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.scheme_snapshots.deinit(self.gpa);
+    self.scheme_snapshot_binders.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -3269,6 +3326,8 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    scheme_snapshots: SchemeSnapshotRecord.SafeList.Serialized,
+    scheme_snapshot_binders: SchemeSnapshotBinder.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -3368,6 +3427,8 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.scheme_snapshots.serialize(&env.scheme_snapshots, allocator, writer);
+        try self.scheme_snapshot_binders.serialize(&env.scheme_snapshot_binders, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -3427,6 +3488,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .scheme_snapshots = self.scheme_snapshots.deserializeInto(base_addr),
+            .scheme_snapshot_binders = self.scheme_snapshot_binders.deserializeInto(base_addr),
         };
 
         return env;
@@ -3486,6 +3549,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .scheme_snapshots = self.scheme_snapshots.deserializeInto(base_addr),
+            .scheme_snapshot_binders = self.scheme_snapshot_binders.deserializeInto(base_addr),
         };
     }
 
@@ -3547,6 +3612,8 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .scheme_snapshots = try self.scheme_snapshots.deserializeWithCopy(base_addr, gpa),
+            .scheme_snapshot_binders = try self.scheme_snapshot_binders.deserializeWithCopy(base_addr, gpa),
         };
 
         return env;
@@ -3763,6 +3830,29 @@ pub fn recordSchemeUse(
         .scheme_root = @intFromEnum(scheme_root),
         .pairs_start = pairs_start,
         .pairs_len = @intCast(pairs.len),
+    });
+}
+
+/// Record a pristine scheme snapshot captured at a generalization boundary
+/// (reunify.md 7.1, Slice 2). `owner_node` is the CIR node that owns the scheme,
+/// `digest` is the pristine root's structural digest at the boundary, and
+/// `binders` are the scheme's generalized binders in canonical identity-slot
+/// order.
+pub fn recordSchemeSnapshot(
+    self: *Self,
+    owner_node: u32,
+    digest: [32]u8,
+    binders: []const SchemeSnapshotBinder,
+) std.mem.Allocator.Error!void {
+    const binders_start: u32 = @intCast(self.scheme_snapshot_binders.items.items.len);
+    for (binders) |binder| {
+        _ = try self.scheme_snapshot_binders.append(self.gpa, binder);
+    }
+    _ = try self.scheme_snapshots.append(self.gpa, .{
+        .owner_node = owner_node,
+        .binders_start = binders_start,
+        .binders_len = @intCast(binders.len),
+        .digest = digest,
     });
 }
 

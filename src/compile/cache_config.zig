@@ -53,7 +53,8 @@ pub const Constants = struct {
     /// 27: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
     /// 28: String interpolation constraint metadata moved into the type store.
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
-    pub const CACHE_VERSION = 30;
+    /// 31: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
+    pub const CACHE_VERSION = 31;
 };
 
 /// Configuration for the Roc cache system.

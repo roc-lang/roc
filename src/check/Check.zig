@@ -448,6 +448,9 @@ pending_nested_function_use: ?CIR.Expr.Idx = null,
 /// Scratch buffer for the (scheme var → fresh var) pairs of one constrained
 /// scheme instantiation, flushed into `cir.scheme_uses`.
 scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
+/// Scratch buffer for one captured scheme snapshot's ordered binders, flushed
+/// into `cir.scheme_snapshots` (reunify.md 7.1, Slice 2).
+scratch_snapshot_binders: std.ArrayListUnmanaged(ModuleEnv.SchemeSnapshotBinder) = .empty,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`) — open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -1613,6 +1616,7 @@ pub fn deinit(self: *Self) void {
     self.ambiguity_candidates.deinit(self.gpa);
     self.ambiguity_verdicts.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
+    self.scratch_snapshot_binders.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
@@ -3659,6 +3663,40 @@ fn instantiateVarOrphan(
         .rank_behavior = .ignore_rank,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
+}
+
+/// Capture a pristine scheme snapshot for a definition root whose generalization
+/// boundary just completed (reunify.md 7.1, Slice 2).
+///
+/// The final solver root a definition publishes is mutable: its escaped free
+/// variables can still be unified after this boundary, so it is not a faithful
+/// record of the scheme as it stood here. This freezes what publication needs to
+/// verify and populate that scheme WITHOUT minting any solver variable — minting
+/// one would shift subsequent variable indices and so change checked output. Two
+/// things are recorded: the pristine root's structural digest at this instant,
+/// and the scheme's ordered generalized binders. A binder is an identity
+/// variable reachable from `root` in canonical first-encounter order whose
+/// solver rank is `.generalized`; an escaped free variable's rank was lowered
+/// below the boundary, so the rank split selects exactly the binders. Capturing
+/// the binders here — rather than re-deriving them from the final root — keeps a
+/// free variable that later unifies into an outer scheme's binder from being
+/// mistaken for one of this scheme's binders.
+fn captureSchemeSnapshot(self: *Self, owner_node_idx: u32, root: Var) std.mem.Allocator.Error!void {
+    const digest = try canonical_type_keys.fromVar(self.gpa, self.types, self.cir, root);
+
+    const identity_vars = try canonical_type_keys.identityVarsFromVar(self.gpa, self.types, self.cir, root);
+    defer self.gpa.free(identity_vars);
+
+    self.scratch_snapshot_binders.clearRetainingCapacity();
+    for (identity_vars) |identity_var| {
+        const resolved = self.types.resolveVar(identity_var);
+        if (resolved.desc.rank != Rank.generalized) continue;
+        try self.scratch_snapshot_binders.append(self.gpa, .{
+            .original = @intFromEnum(resolved.var_),
+        });
+    }
+
+    try self.cir.recordSchemeSnapshot(owner_node_idx, digest.bytes, self.scratch_snapshot_binders.items);
 }
 
 /// Instantiate a variable, substituting any encountered rigids with
@@ -8930,6 +8968,10 @@ fn predeclareAnnotationScheme(self: *Self, annotation_idx: CIR.Annotation.Idx, e
         .use_last_var,
     );
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+    // Pristine snapshot of the annotation's standalone scheme (reunify.md 7.1,
+    // Slice 2), owned by the annotation node. `scheme_var` is already a disjoint
+    // orphan, so the snapshot freezes it before the frame closes.
+    try self.captureSchemeSnapshot(@intFromEnum(annotation_idx), scheme_var);
     env.var_pool.popRank();
 
     self.problems.truncate(problems_len);
@@ -9189,6 +9231,16 @@ fn checkGroup(self: *Self, group_index: u32, env: *Env) std.mem.Allocator.Error!
             }
         }
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        // Pristine snapshots of each member scheme generalized at this group
+        // boundary (reunify.md 7.1, Slice 2). A predeclared (annotated) member's
+        // RHS generalizes independently inside its own frame, so its snapshot is
+        // captured there; only the members that actually generalize here are
+        // snapshotted here, keyed by each member's own expression node.
+        for (scc.defs, 0..) |member_def_idx, i| {
+            if (self.predeclaredSchemeVar(member_def_idx) != null) continue;
+            const member_def = self.cir.store.getDef(member_def_idx);
+            try self.captureSchemeSnapshot(@intFromEnum(member_def.expr), member_roots[i]);
+        }
         try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
         env.var_pool.popRank();
     }
@@ -13524,6 +13576,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.defaultLiteralsAtGeneralizationBoundary(expr_var, env);
         }
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+        // Pristine snapshot of this scheme (reunify.md 7.1, Slice 2): a
+        // singleton def RHS or an inner lambda, keyed by its own expression
+        // node. The raw expression var carries the scheme root (it was unified
+        // with the annotation var above when an annotation is present).
+        try self.captureSchemeSnapshot(@intFromEnum(expr_idx), expr_var_raw);
         // The scheme's vars froze at generalized rank: judge this def's
         // dispatch-constrained receivers now, while the judgment is a
         // local question about one scheme (see
@@ -14538,6 +14595,9 @@ fn checkBlockStatements(self: *Self, statements: CIR.Statement.Span, env: *Env, 
                     // finished scheme below.
                     try self.defaultLiteralsAtGeneralizationBoundary(decl_pattern_var, env);
                     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
+                    // Pristine snapshot of this block-local function scheme
+                    // (reunify.md 7.1, Slice 2), keyed by its binding pattern.
+                    try self.captureSchemeSnapshot(@intFromEnum(decl_stmt.pattern), decl_pattern_var);
                     env.var_pool.popRank();
                 }
 
@@ -17044,6 +17104,8 @@ const Probe = struct {
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
+    scheme_snapshots_len: usize,
+    scheme_snapshot_binders_len: usize,
 
     fn rollback(self: *Probe) void {
         self.check.types.rollbackToSavepoint(&self.savepoint);
@@ -17060,6 +17122,10 @@ const Probe = struct {
         // vars the savepoint rollback just discarded.
         self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
+        // Scheme snapshots captured during the probe reference orphan-copy vars
+        // the savepoint rollback just discarded.
+        self.check.cir.scheme_snapshots.items.shrinkRetainingCapacity(self.scheme_snapshots_len);
+        self.check.cir.scheme_snapshot_binders.items.shrinkRetainingCapacity(self.scheme_snapshot_binders_len);
     }
 
     /// Close the probe scope KEEPING everything it did: the type-store
@@ -17079,6 +17145,8 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
+    const scheme_snapshots_len = self.cir.scheme_snapshots.items.items.len;
+    const scheme_snapshot_binders_len = self.cir.scheme_snapshot_binders.items.items.len;
     return .{
         .check = self,
         .regions_len = regions_len,
@@ -17088,6 +17156,8 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
+        .scheme_snapshots_len = scheme_snapshots_len,
+        .scheme_snapshot_binders_len = scheme_snapshot_binders_len,
         .savepoint = try self.types.createSavepoint(),
     };
 }

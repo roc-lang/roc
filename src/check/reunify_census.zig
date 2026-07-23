@@ -87,11 +87,15 @@ var scheme_use_duplicate_edges = std.atomic.Value(u64).init(0);
 var scheme_use_duplicates_equivalent = std.atomic.Value(u64).init(0);
 var scheme_use_duplicates_divergent = std.atomic.Value(u64).init(0);
 var err_reachable_in_lowerable_module = std.atomic.Value(u64).init(0);
+var scheme_snapshot_matches_final = std.atomic.Value(u64).init(0);
+var scheme_snapshot_diverged_from_final = std.atomic.Value(u64).init(0);
 
 var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var divergent_id_count: usize = 0;
 var err_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var err_id_count: usize = 0;
+var snapshot_divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
+var snapshot_divergent_id_count: usize = 0;
 
 /// Free-form detail lines for divergent scheme-use pairs, kept bounded so the
 /// dump can show exactly which recorded pairs disagreed.
@@ -169,6 +173,27 @@ pub fn recordSchemeUseDuplicate(equivalent: bool, module_name: []const u8, node_
     }
 }
 
+/// Record one published scheme whose captured pristine snapshot was compared
+/// against its final published root (reunify.md 7.1/7.5, Slice 2). `matches` is
+/// whether the snapshot and final roots have equal structural digests: they
+/// diverge exactly when an escaped free variable was unified after the
+/// generalization boundary. Measures risk-1 — how often publication's mutable
+/// root differs from the pristine scheme.
+pub fn recordSchemeSnapshot(matches: bool, module_name: []const u8, node_idx: u32) void {
+    if (comptime !enabled) return;
+    if (matches) {
+        _ = scheme_snapshot_matches_final.fetchAdd(1, .monotonic);
+        return;
+    }
+    _ = scheme_snapshot_diverged_from_final.fetchAdd(1, .monotonic);
+    lockBuffer();
+    defer unlockBuffer();
+    if (snapshot_divergent_id_count < max_identifications) {
+        snapshot_divergent_ids[snapshot_divergent_id_count] = makeIdentification(module_name, node_idx, true);
+        snapshot_divergent_id_count += 1;
+    }
+}
+
 /// Record one lowerable module whose published checked types reach an `.err`
 /// payload (reunify.md 5.4/7.5). The identity is retained (bounded) for later
 /// location.
@@ -224,8 +249,13 @@ pub fn dumpAppend() void {
     sink.print("scheme_use_duplicates_equivalent={d}\n", .{scheme_use_duplicates_equivalent.load(.monotonic)});
     sink.print("scheme_use_duplicates_divergent={d}\n", .{scheme_use_duplicates_divergent.load(.monotonic)});
     sink.print("err_reachable_in_lowerable_module={d}\n", .{err_reachable_in_lowerable_module.load(.monotonic)});
+    sink.print("scheme_snapshot_matches_final={d}\n", .{scheme_snapshot_matches_final.load(.monotonic)});
+    sink.print("scheme_snapshot_diverged_from_final={d}\n", .{scheme_snapshot_diverged_from_final.load(.monotonic)});
     for (divergent_ids[0..divergent_id_count], 0..) |id, i| {
         sink.print("divergent_scheme_use_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
+    }
+    for (snapshot_divergent_ids[0..snapshot_divergent_id_count], 0..) |id, i| {
+        sink.print("snapshot_diverged_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
     }
     for (err_ids[0..err_id_count], 0..) |id, i| {
         sink.print("err_reachable_{d}={s}\n", .{ i, id.moduleText() });
@@ -251,5 +281,8 @@ test "recording is a no-op outside Debug and bounded inside it" {
     recordSchemeUseDuplicate(true, "Main", 3);
     recordSchemeUseDuplicate(false, "Main", 7);
     recordErrReachableInLowerableModule("Main");
+    recordSchemeSnapshot(true, "Main", 3);
+    recordSchemeSnapshot(false, "Main", 9);
     try std.testing.expect(builtin.mode != .Debug or scheme_use_duplicate_edges.load(.monotonic) >= 2);
+    try std.testing.expect(builtin.mode != .Debug or scheme_snapshot_matches_final.load(.monotonic) >= 1);
 }

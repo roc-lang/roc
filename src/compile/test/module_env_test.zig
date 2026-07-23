@@ -38,6 +38,15 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqual(import_json, import_json_duplicate);
     try std.testing.expectEqual(@as(usize, 2), original.imports.imports.len());
 
+    // A pristine scheme snapshot (reunify.md 7.1, Slice 2) must round-trip
+    // through the module cache: its digest and ordered binders both survive.
+    try original.recordSchemeSnapshot(
+        1234,
+        [_]u8{0xAB} ** 32,
+        &.{ .{ .original = 7 }, .{ .original = 9 } },
+    );
+    try std.testing.expectEqual(@as(usize, 1), original.scheme_snapshots.items.items.len);
+
     var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
@@ -93,6 +102,17 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("json.Json", env.common.strings.get(env.imports.imports.items.items[0]));
     try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
+
+    try std.testing.expectEqual(@as(usize, 1), env.scheme_snapshots.items.items.len);
+    {
+        const record = env.scheme_snapshots.items.items[0];
+        try std.testing.expectEqual(@as(u32, 1234), record.owner_node);
+        try std.testing.expectEqual(@as(u32, 2), record.binders_len);
+        try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), &record.digest);
+        const binders = env.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
+        try std.testing.expectEqual(@as(u32, 7), binders[0].original);
+        try std.testing.expectEqual(@as(u32, 9), binders[1].original);
+    }
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule

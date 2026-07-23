@@ -2380,20 +2380,46 @@ pub const CheckedTypeRoot = struct {
 /// `(start, len)` range into one of `CheckedTypeStore`'s flat side pools.
 pub const CheckedTypeRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
+/// A `CheckedTypeScheme.snapshot_root` value meaning "no pristine root is
+/// published for this scheme": either no snapshot was captured (a
+/// monomorphic/required/synthetic scheme, or a definition that did not pass
+/// through a snapshot-recording boundary) or the captured snapshot diverged from
+/// the final root, and this sub-slice publishes no separate pristine root.
+/// Distinct from every real `CheckedTypeId`, which indexes the roots table and
+/// never reaches this value in practice.
+pub const scheme_snapshot_root_none: u32 = std.math.maxInt(u32);
+
 /// Public `CheckedTypeScheme` declaration.
 ///
 /// `gv_start`/`gv_len` are a range into `CheckedTypeStore.type_id_pool` (POD).
-/// Use `generalizedVars` to obtain the backing slice.
+/// Use `generalizedVars` to obtain the backing slice; they are the scheme's
+/// ordered generalized binders captured at the definition's generalization
+/// boundary (reunify.md 7.1, Slice 2), translated in place within `root`.
+///
+/// `root` stays the final published monotype root that production lowering
+/// consumes. `snapshot_root` records whether that final root is also the pristine
+/// scheme as it stood at the boundary: it is `root` when the boundary digest
+/// matched (so `root` doubles as the verified pristine root) and
+/// `scheme_snapshot_root_none` when the pristine scheme diverged from the final
+/// root or no snapshot was captured. The snapshot is verified against the final
+/// root, not yet authoritative.
 pub const CheckedTypeScheme = struct {
     id: CheckedTypeSchemeId,
     key: canonical.CanonicalTypeSchemeKey,
     root: CheckedTypeId,
     gv_start: u32 = 0,
     gv_len: u32 = 0,
+    snapshot_root: u32 = scheme_snapshot_root_none,
 
     /// The scheme's generalized vars within its store's `type_id_pool`.
     pub fn generalizedVars(self: CheckedTypeScheme, pool_owner: anytype) []const CheckedTypeId {
         return pool_owner.typeIdPool()[self.gv_start .. self.gv_start + self.gv_len];
+    }
+
+    /// The pristine snapshot root, or null when no snapshot was captured.
+    pub fn snapshotRoot(self: CheckedTypeScheme) ?CheckedTypeId {
+        if (self.snapshot_root == scheme_snapshot_root_none) return null;
+        return @enumFromInt(self.snapshot_root);
     }
 };
 
@@ -3619,6 +3645,16 @@ pub const CheckedTypeStore = struct {
         errdefer store.deinit(allocator);
         var active = std.AutoHashMap(Var, CheckedTypeId).init(allocator);
         defer active.deinit();
+        // Owner-node -> scheme-snapshot record index, built once so per-def
+        // publication is a hash lookup rather than a scan (reunify.md 7.1,
+        // Slice 2). Duplicate owners keep the first record, matching the
+        // capture order (a member's own boundary precedes its group's).
+        var snapshot_index = std.AutoHashMap(u32, u32).init(allocator);
+        defer snapshot_index.deinit();
+        for (module.moduleEnvConst().scheme_snapshots.items.items, 0..) |record, i| {
+            const entry = try snapshot_index.getOrPut(record.owner_node);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(i);
+        }
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, source_nodes);
         defer local_type_declarations.deinit();
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
@@ -3687,11 +3723,20 @@ pub const CheckedTypeStore = struct {
                 required_var,
             );
             if (findCheckedTypeScheme(store.schemes.items, scheme_key) == null) {
+                // A required value's scheme carries an (ordinarily empty) binder
+                // range under the same owner rule as every other scheme
+                // (reunify.md 7.1, Slice 2); the boundary snapshotter does not
+                // record required types, so this resolves to "no snapshot".
+                const owner_node = @intFromEnum(required_type.type_anno);
+                const snapshot = try publishSchemeSnapshot(allocator, module, names, import_views, &store, &active, &snapshot_index, owner_node, root);
                 const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
                 try store.schemes.append(allocator, .{
                     .id = scheme_id,
                     .key = scheme_key,
                     .root = root,
+                    .gv_start = snapshot.gv_start,
+                    .gv_len = snapshot.gv_len,
+                    .snapshot_root = snapshot.snapshot_root,
                 });
             }
 
@@ -3718,11 +3763,20 @@ pub const CheckedTypeStore = struct {
                 module.defType(def_idx),
             );
             if (findCheckedTypeScheme(store.schemes.items, scheme_key) == null) {
+                // A generalized top-level def's scheme was snapshotted at its
+                // generalization boundary, keyed by its expression node
+                // (reunify.md 7.1, Slice 2). Publish the pristine snapshot and
+                // its binder range alongside the final root.
+                const owner_node = @intFromEnum(module_env.store.getDef(def_idx).expr);
+                const snapshot = try publishSchemeSnapshot(allocator, module, names, import_views, &store, &active, &snapshot_index, owner_node, root);
                 const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
                 try store.schemes.append(allocator, .{
                     .id = scheme_id,
                     .key = scheme_key,
                     .root = root,
+                    .gv_start = snapshot.gv_start,
+                    .gv_len = snapshot.gv_len,
+                    .snapshot_root = snapshot.snapshot_root,
                 });
             }
         }
@@ -6282,6 +6336,76 @@ fn syntheticSchemeKeyForType(key: canonical.CanonicalTypeKey) canonical.Canonica
     hashByteSlice(&hasher, "checked_synthetic_type_scheme");
     hasher.update(&key.bytes);
     return .{ .bytes = hasher.finalResult() };
+}
+
+/// The published projection of one captured scheme snapshot (reunify.md 7.1,
+/// Slice 2): the snapshot root translated into this store and the range of the
+/// snapshot's ordered generalized binders in `type_id_pool`.
+const SchemeSnapshotPublication = struct {
+    snapshot_root: u32 = scheme_snapshot_root_none,
+    gv_start: u32 = 0,
+    gv_len: u32 = 0,
+};
+
+/// Publish the scheme snapshot owned by `owner_node` (reunify.md 7.1, Slice 2):
+/// translate its ordered generalized binders into `type_id_pool` and decide the
+/// scheme's `snapshot_root`. The binders are the definition's generalized
+/// variables captured at its boundary; each stays a generalized root through
+/// publication, so translating it lands on the id already embedded in the
+/// scheme's final root (`final_root`). The snapshot's boundary digest is compared
+/// against the final root's digest: when they match, the final root IS the
+/// pristine scheme, so it doubles as `snapshot_root`; when they diverge (a free
+/// variable was unified after the boundary) the final root is not pristine and
+/// `snapshot_root` is left as "none" — this sub-slice publishes no separate
+/// pristine structure, it only verifies and publishes what is sound. Returns the
+/// "no snapshot" projection when the definition recorded none (a monomorphic,
+/// required, or synthetic scheme). The opt-in Debug census counts match vs
+/// divergence to measure how often the mutable root drifted from the pristine
+/// scheme.
+fn publishSchemeSnapshot(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+    snapshot_index: *const std.AutoHashMap(u32, u32),
+    owner_node: u32,
+    final_root: CheckedTypeId,
+) Allocator.Error!SchemeSnapshotPublication {
+    const module_env = module.moduleEnvConst();
+    const record_idx = snapshot_index.get(owner_node) orelse return .{};
+    const record = module_env.scheme_snapshots.items.items[record_idx];
+
+    const binders = module_env.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
+    var gv_range = CheckedTypeRange{};
+    if (binders.len > 0) {
+        const ids = try allocator.alloc(CheckedTypeId, binders.len);
+        defer allocator.free(ids);
+        for (binders, 0..) |binder, i| {
+            ids[i] = try appendCheckedTypeRoot(
+                allocator,
+                module,
+                names,
+                imports,
+                store,
+                active,
+                @enumFromInt(binder.original),
+            );
+        }
+        gv_range = try store.appendTypeIds(allocator, ids);
+    }
+
+    const matches = std.meta.eql(record.digest, store.roots.items[@intFromEnum(final_root)].key.bytes);
+    if (reunify_census.active()) {
+        reunify_census.recordSchemeSnapshot(matches, module_env.module_name, owner_node);
+    }
+
+    return .{
+        .snapshot_root = if (matches) @intFromEnum(final_root) else scheme_snapshot_root_none,
+        .gv_start = gv_range.start,
+        .gv_len = gv_range.len,
+    };
 }
 
 fn appendCheckedTypeRoot(
@@ -23274,7 +23398,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 25;
+    const serialized_layout_version: u32 = 26;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28080,8 +28204,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x84, 0x42, 0x29, 0x9E, 0x9F, 0xCB, 0x4F, 0x12, 0x90, 0x16, 0xFF, 0xCD, 0xD2, 0x5B, 0xE9, 0x3D,
-        0xEC, 0x53, 0x60, 0x36, 0xD8, 0x87, 0xA6, 0xC8, 0xDA, 0x78, 0x1E, 0x70, 0x40, 0x96, 0x4F, 0x03,
+        0x72, 0xD9, 0x9B, 0x30, 0x2D, 0x8B, 0xB7, 0x12, 0x3E, 0x55, 0x7B, 0x12, 0xBF, 0x0B, 0x09, 0x0B,
+        0x9B, 0x75, 0x80, 0xDC, 0xF6, 0xA3, 0x67, 0x5C, 0x6E, 0xF9, 0x51, 0xD8, 0x4D, 0xA6, 0x46, 0x1E,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
