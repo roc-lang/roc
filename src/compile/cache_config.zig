@@ -58,7 +58,8 @@ pub const Constants = struct {
     /// 33: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
     /// 34: checked store carries a scheme owner index and residual-variable dispositions.
     /// 35: procedure bindings carry their source scheme's dense id for postcheck scheme resolution.
-    pub const CACHE_VERSION = 35;
+    /// 36: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
+    pub const CACHE_VERSION = 36;
 };
 
 /// Configuration for the Roc cache system.

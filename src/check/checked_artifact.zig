@@ -2576,6 +2576,44 @@ pub const SchemeOwnerScheme = extern struct {
     scheme: u32,
 };
 
+/// One consuming-side imported-scheme table entry (reunify.md 7.1, Slice 6). The
+/// defining side of an imported scheme is the prelude/builtin module whose types
+/// are embedded into consumers at check time; that module's own frozen types are
+/// not carried to Monotype lowering, so a downstream stage cannot instantiate an
+/// imported scheme from the defining artifact. At publication the consuming module
+/// still holds the defining module as a loaded import view (the same view its
+/// dense sites resolve their defining scheme id through), so it projects the
+/// DEFINING scheme's root and ordered binders into its OWN checked store here.
+///
+/// Keyed by `(defining_module_hash, source_owner_node)` — the same identity a
+/// `CheckedInstantiationSite` records for an imported edge — this names the
+/// projected local root and the range of projected local binders, in the defining
+/// scheme's canonical binder order, so a site's positional actuals align with them
+/// exactly as a local site's actuals align with its scheme's generalized vars.
+pub const CheckedImportedScheme = extern struct {
+    /// The 32-byte content identity of the DEFINING module.
+    defining_module_hash: [32]u8,
+    /// The defining scheme's snapshot owner node (matches an imported site's
+    /// `scheme_owner_node`).
+    source_owner_node: u32,
+    /// The projected scheme root in THIS (consuming) store, as `u32`.
+    local_root: u32,
+    /// Range into `CheckedTypeStore.imported_scheme_binders`.
+    binders_start: u32 = 0,
+    binders_len: u32 = 0,
+
+    /// The projected scheme root as a `CheckedTypeId`.
+    pub fn localRoot(self: CheckedImportedScheme) CheckedTypeId {
+        return @enumFromInt(self.local_root);
+    }
+
+    /// The projected local binders, in the defining scheme's canonical binder
+    /// order, within their store's `imported_scheme_binders` pool.
+    pub fn binders(self: CheckedImportedScheme, pool_owner: anytype) []const CheckedTypeId {
+        return pool_owner.importedSchemeBinders()[self.binders_start .. self.binders_start + self.binders_len];
+    }
+};
+
 /// Which explicit disposition a residual checked variable adopts in a given body
 /// context (reunify.md 7.4, Slice 2 phase one). A plain unconstrained residual
 /// today implicitly materializes as an empty tag union; this records the intended
@@ -3180,11 +3218,35 @@ pub const CheckedTypeStoreView = struct {
     tag_pool: []const CheckedTag = &.{},
     scheme_ids_by_owner: []const SchemeOwnerScheme = &.{},
     residual_dispositions: []const CheckedResidualDisposition = &.{},
+    imported_schemes: []const CheckedImportedScheme = &.{},
+    imported_scheme_binders: []const CheckedTypeId = &.{},
     var_names: *const canonical.NameInterner = &empty_view_var_names,
 
     /// The shared flat pool of `CheckedTypeId`s backing range fields.
     pub fn typeIdPool(self: CheckedTypeStoreView) []const CheckedTypeId {
         return self.type_id_pool;
+    }
+
+    /// The flat pool of projected imported-scheme binder ids (reunify.md 7.1,
+    /// Slice 6).
+    pub fn importedSchemeBinders(self: CheckedTypeStoreView) []const CheckedTypeId {
+        return self.imported_scheme_binders;
+    }
+
+    /// The consuming-side imported-scheme table of this view.
+    pub fn importedSchemes(self: CheckedTypeStoreView) []const CheckedImportedScheme {
+        return self.imported_schemes;
+    }
+
+    /// Look up a projected imported scheme by its defining module identity and
+    /// source owner node (reunify.md 7.1, Slice 6), or null when this store
+    /// projected none for that edge. A downstream stage resolves an imported
+    /// site's scheme root and binders entirely from this consuming store.
+    pub fn importedSchemeByOwner(self: CheckedTypeStoreView, defining_hash: [32]u8, owner_node: u32) ?CheckedImportedScheme {
+        for (self.imported_schemes) |entry| {
+            if (entry.source_owner_node == owner_node and std.meta.eql(entry.defining_module_hash, defining_hash)) return entry;
+        }
+        return null;
     }
 
     /// The `(scheme owner node -> scheme id)` index of this view.
@@ -3664,6 +3726,13 @@ pub const CheckedTypeStore = struct {
     /// Residual-variable dispositions scoped to a body context (reunify.md 7.4,
     /// Slice 2 phase one), keyed by `(scheme owner node, CheckedTypeId)`.
     residual_dispositions: std.ArrayList(CheckedResidualDisposition) = .empty,
+    /// Consuming-side imported-scheme table (reunify.md 7.1, Slice 6): the DEFINING
+    /// scheme's root and binders projected into THIS store, keyed by
+    /// `(defining_module_hash, source_owner_node)`.
+    imported_schemes: std.ArrayList(CheckedImportedScheme) = .empty,
+    /// Flat pool of projected local binder ids backing `imported_schemes`, in the
+    /// defining scheme's canonical binder order.
+    imported_scheme_binders: std.ArrayList(CheckedTypeId) = .empty,
     /// Interner backing variable names.
     var_names: canonical.NameInterner = .{},
     /// True for a store reconstructed from a serialized buffer (pools point into
@@ -3722,6 +3791,16 @@ pub const CheckedTypeStore = struct {
     /// The published residual-variable dispositions.
     pub fn residualDispositions(self: *const CheckedTypeStore) []const CheckedResidualDisposition {
         return self.residual_dispositions.items;
+    }
+
+    /// The consuming-side imported-scheme table (reunify.md 7.1, Slice 6).
+    pub fn importedSchemes(self: *const CheckedTypeStore) []const CheckedImportedScheme {
+        return self.imported_schemes.items;
+    }
+
+    /// The flat pool of projected imported-scheme binder ids.
+    pub fn importedSchemeBinders(self: *const CheckedTypeStore) []const CheckedTypeId {
+        return self.imported_scheme_binders.items;
     }
 
     /// Resolve a scheme owner node to its published scheme id, or null. Linear
@@ -3800,6 +3879,18 @@ pub const CheckedTypeStore = struct {
     fn appendResidualDisposition(self: *CheckedTypeStore, allocator: Allocator, disposition: CheckedResidualDisposition) Allocator.Error!void {
         std.debug.assert(!self.serialized);
         try self.residual_dispositions.append(allocator, disposition);
+    }
+
+    /// Append `ids` to `imported_scheme_binders`, returning their range.
+    fn appendImportedSchemeBinders(self: *CheckedTypeStore, allocator: Allocator, ids: []const CheckedTypeId) Allocator.Error!CheckedTypeRange {
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedTypeId, &self.imported_scheme_binders, allocator, ids);
+    }
+
+    /// Append one imported-scheme table entry (reunify.md 7.1, Slice 6).
+    fn appendImportedScheme(self: *CheckedTypeStore, allocator: Allocator, entry: CheckedImportedScheme) Allocator.Error!void {
+        std.debug.assert(!self.serialized);
+        try self.imported_schemes.append(allocator, entry);
     }
 
     /// Append `fields` to `record_field_pool`, returning their range.
@@ -4139,6 +4230,13 @@ pub const CheckedTypeStore = struct {
         // publishes — publication order (imports before dependents) guarantees it.
         try publishInstantiationSites(allocator, module, names, import_views, &store, &active, &scheme_id_by_owner);
 
+        // Project the DEFINING scheme root and binders of every imported-scheme
+        // edge into THIS store (reunify.md 7.1, Slice 6), so a downstream stage can
+        // instantiate an imported scheme entirely from the consuming artifact — the
+        // defining prelude module's types are embedded into consumers at check time
+        // and are not carried to lowering. Run after the sites so it can walk them.
+        try publishImportedSchemes(allocator, names, import_views, &store);
+
         // Serialize this module's `(owner node -> scheme id)` index so a later
         // CONSUMING module can name this module's schemes for its imported sites
         // (reunify.md 7.1, Slice 2). Built from the final published def-owned
@@ -4172,6 +4270,8 @@ pub const CheckedTypeStore = struct {
             .tag_pool = self.tag_pool.items,
             .scheme_ids_by_owner = self.scheme_ids_by_owner.items,
             .residual_dispositions = self.residual_dispositions.items,
+            .imported_schemes = self.imported_schemes.items,
+            .imported_scheme_binders = self.imported_scheme_binders.items,
             .var_names = &self.var_names,
         };
     }
@@ -4489,6 +4589,8 @@ pub const CheckedTypeStore = struct {
             self.captured_binders.deinit(allocator);
             self.scheme_ids_by_owner.deinit(allocator);
             self.residual_dispositions.deinit(allocator);
+            self.imported_schemes.deinit(allocator);
+            self.imported_scheme_binders.deinit(allocator);
             self.var_names.deinit(allocator);
         }
         self.* = .{};
@@ -4512,13 +4614,15 @@ pub const CheckedTypeStore = struct {
         captured_binders: SerializedSlice(CheckedCapturedBinder) = .{},
         scheme_ids_by_owner: SerializedSlice(SchemeOwnerScheme) = .{},
         residual_dispositions: SerializedSlice(CheckedResidualDisposition) = .{},
+        imported_schemes: SerializedSlice(CheckedImportedScheme) = .{},
+        imported_scheme_binders: SerializedSlice(CheckedTypeId) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 17 = 14 `SerializedSlice` fields + 3 for the nested `var_names`
+            // 19 = 16 `SerializedSlice` fields + 3 for the nested `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 19);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -7079,6 +7183,79 @@ fn importedViewByModuleHash(imports: CheckedImportViews, module_hash: [32]u8) ?I
 fn resolveImportedDefiningScheme(imports: CheckedImportViews, module_hash: [32]u8, owner_node: u32) ?CheckedTypeSchemeId {
     const view = importedViewByModuleHash(imports, module_hash) orelse return null;
     return view.checked_types.schemeIdForOwnerNode(owner_node);
+}
+
+/// The identity of one projected imported scheme (reunify.md 7.1, Slice 6): its
+/// defining module and the defining scheme's owner node. Every dense site
+/// instantiating that scheme shares this identity, so one projection serves all.
+const ImportedSchemeKey = struct {
+    defining_module_hash: [32]u8,
+    source_owner_node: u32,
+};
+
+/// Project the DEFINING scheme's root and ordered binders into THIS (consuming)
+/// store for every imported-scheme edge the dense sites reference (reunify.md 7.1,
+/// Slice 6). Run after `publishInstantiationSites`, it walks the published sites,
+/// dedups each distinct imported `(defining_module_hash, source_owner_node)` edge
+/// keep-first, resolves the defining scheme through the SAME loaded import view its
+/// site resolved its scheme id through, and projects that scheme's root plus its
+/// generalized-var binders into this store. The source instance is preserved so the
+/// binders stay distinct roots a consumer can substitute, and the projected binders
+/// are recorded in the defining scheme's canonical binder order, so a site's
+/// positional actuals align with them exactly as a local site's actuals align with
+/// its scheme's generalized vars. An edge whose defining view or scheme is not
+/// resolvable is skipped (it was already measured as scheme-unresolved at site
+/// publication); a duplicate edge reuses the first projection.
+fn publishImportedSchemes(
+    allocator: Allocator,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+) Allocator.Error!void {
+    var seen = std.AutoHashMap(ImportedSchemeKey, void).init(allocator);
+    defer seen.deinit();
+
+    // Projecting a scheme appends roots to the store but never appends
+    // instantiation sites, so the site count is stable across the loop and reading
+    // each site by index stays valid.
+    const site_count = store.instantiation_sites.items.len;
+    var site_index: usize = 0;
+    while (site_index < site_count) : (site_index += 1) {
+        const defining_hash = store.instantiation_sites.items[site_index].importedDefiningModule() orelse continue;
+        const source_owner_node = store.instantiation_sites.items[site_index].scheme_owner_node;
+
+        const seen_entry = try seen.getOrPut(.{
+            .defining_module_hash = defining_hash,
+            .source_owner_node = source_owner_node,
+        });
+        if (seen_entry.found_existing) continue;
+
+        const view = importedViewByModuleHash(imports, defining_hash) orelse continue;
+        const scheme_id = view.checked_types.schemeIdForOwnerNode(source_owner_node) orelse continue;
+        const scheme = view.checked_types.schemeById(scheme_id) orelse continue;
+
+        var projector = CheckedTypeStoreImportProjector.initPreservingSourceInstance(allocator, store, names, view);
+        defer projector.deinit();
+
+        const local_root = try projector.project(scheme.root);
+
+        const gv = scheme.generalizedVars(view.checked_types);
+        var binders_range = CheckedTypeRange{};
+        if (gv.len > 0) {
+            const ids = try allocator.alloc(CheckedTypeId, gv.len);
+            defer allocator.free(ids);
+            for (gv, 0..) |binder, i| ids[i] = try projector.project(binder);
+            binders_range = try store.appendImportedSchemeBinders(allocator, ids);
+        }
+
+        try store.appendImportedScheme(allocator, .{
+            .defining_module_hash = defining_hash,
+            .source_owner_node = source_owner_node,
+            .local_root = @intFromEnum(local_root),
+            .binders_start = binders_range.start,
+            .binders_len = binders_range.len,
+        });
+    }
 }
 
 /// Build this module's `(scheme owner node -> scheme id)` index (reunify.md 7.1,
@@ -24871,10 +25048,11 @@ pub const CheckedModuleArtifact = struct {
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3 and
-            // its instantiation-site, captured-binder, scheme-owner-index, and
-            // residual-disposition pools). POD inline `key`/`module_identity`
-            // contribute 0. Fixed at compile time, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 201);
+            // its instantiation-site, captured-binder, scheme-owner-index,
+            // residual-disposition, and imported-scheme pools). POD inline
+            // `key`/`module_identity` contribute 0. Fixed at compile time,
+            // independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 203);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -25025,7 +25203,10 @@ pub const CheckedModuleArtifact = struct {
     // v30 (reunify.md 7.1, Slice 2): `TopLevelProcedureBinding` and
     // `ImportedProcedureBindingView` each gained a `source_scheme_id` field so
     // postcheck resolves a binding's scheme by dense id instead of content key.
-    const serialized_layout_version: u32 = 30;
+    // v31 (reunify.md 7.1, Slice 6): `CheckedTypeStore` gained a consuming-side
+    // imported-scheme table (`imported_schemes` + `imported_scheme_binders`)
+    // projecting each imported scheme's defining root and binders into the consumer.
+    const serialized_layout_version: u32 = 31;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29543,6 +29724,18 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try store.appendResidualDisposition(gpa, .{ .scheme_owner_node = 987, .type_id = @intFromEnum(a), .kind = .uninhabited });
     try store.appendResidualDisposition(gpa, .{ .scheme_owner_node = 987, .type_id = @intFromEnum(b), .kind = .contextual, .target = @intFromEnum(c) });
 
+    // A consuming-side imported-scheme table entry (reunify.md 7.1, Slice 6):
+    // projected local root `a` with binders [a, b], keyed by defining module
+    // identity and source owner node, round-trips and resolves by owner.
+    const imported_binders = try store.appendImportedSchemeBinders(gpa, &.{ a, b });
+    try store.appendImportedScheme(gpa, .{
+        .defining_module_hash = [_]u8{0x5C} ** 32,
+        .source_owner_node = 654,
+        .local_root = @intFromEnum(a),
+        .binders_start = imported_binders.start,
+        .binders_len = imported_binders.len,
+    });
+
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
     // declared record sequence [{field}, {_ : a}].
     const fa = try store.appendTypeIds(gpa, &.{c});
@@ -29652,6 +29845,19 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqual(@as(?CheckedTypeId, c), contextual.contextualTarget());
     }
     try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), loaded.view().schemeIdForOwnerNode(987));
+
+    // The imported-scheme table survives the round-trip: the entry resolves by
+    // (defining module, source owner), its local root and ordered binders are
+    // intact, and a wrong owner or module misses.
+    try std.testing.expectEqual(@as(usize, 1), loaded.imported_schemes.items.len);
+    {
+        const entry = loaded.view().importedSchemeByOwner([_]u8{0x5C} ** 32, 654) orelse unreachable;
+        try std.testing.expectEqual(a, entry.localRoot());
+        try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, entry.binders(&loaded));
+        try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, entry.binders(loaded.view()));
+        try std.testing.expect(loaded.view().importedSchemeByOwner([_]u8{0x5C} ** 32, 111) == null);
+        try std.testing.expect(loaded.view().importedSchemeByOwner([_]u8{0x11} ** 32, 654) == null);
+    }
 
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, loaded.nominal_declarations.items[0].formalArgs(&loaded));
     try std.testing.expectEqual(c, loaded.nominal_declarations.items[0].backing);
@@ -29947,8 +30153,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x88, 0xF7, 0xEC, 0x14, 0x40, 0x5F, 0x9C, 0xA9, 0x24, 0x03, 0xBE, 0x25, 0x83, 0xDB, 0x0F, 0x6B,
-        0xCF, 0x43, 0xB6, 0xFD, 0x4C, 0x99, 0x10, 0x60, 0x05, 0x6E, 0x0B, 0x47, 0xDE, 0x77, 0x9B, 0x44,
+        0x44, 0x8A, 0x34, 0xC9, 0x2C, 0x33, 0x2B, 0x85, 0x62, 0x27, 0x69, 0x15, 0x1F, 0xF6, 0x4F, 0x5C,
+        0x60, 0x27, 0x75, 0x2B, 0x85, 0x87, 0x54, 0x3D, 0xCB, 0x6B, 0x31, 0x20, 0xBA, 0x80, 0x69, 0x66,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

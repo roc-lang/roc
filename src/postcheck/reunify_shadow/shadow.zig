@@ -80,21 +80,7 @@ pub const Inputs = struct {
     concrete_modules: []const ShadowModule,
     concrete_roots: []const ConcreteRoot,
     scheme_sources: []const SchemeSource,
-    /// Every checked module view available to lowering, keyed by `key_bytes`, so
-    /// an imported-scheme site can resolve its defining module's frozen types and
-    /// names (reunify.md 7.1, Slice 6). Includes the root; the consuming module is
-    /// found here too.
-    modules_by_hash: []const ShadowModule = &.{},
 };
-
-/// The defining module of an imported scheme, or null when that module was not
-/// among the loaded views.
-fn moduleByHash(inputs: Inputs, hash: [32]u8) ?ShadowModule {
-    for (inputs.modules_by_hash) |module| {
-        if (std.mem.eql(u8, &module.key_bytes, &hash)) return module;
-    }
-    return null;
-}
 
 /// Whether the shadow should run: compiled in, and turned on by the env var.
 pub fn shouldRun() bool {
@@ -287,14 +273,35 @@ fn runConcreteRoots(
 }
 
 /// One side's checked store plus the name store and module identity that
-/// resolve it. The consuming context translates a site's actuals and
-/// instantiated root; the scheme context resolves the scheme root and binders.
-/// They differ exactly when the site instantiates an imported scheme
-/// (reunify.md 7.1).
+/// resolve it. Every site's scheme root, binders, actuals, and instantiated root
+/// now live in the CONSUMING store: a local site's scheme is recorded there
+/// directly, and an imported site's defining scheme is projected there when the
+/// consumer's checked store is built (reunify.md 7.1, Slice 6), so no
+/// defining-module view is needed.
 const TranslationContext = struct {
     view: checked.CheckedTypeStoreView,
     source_names: *const names.NameStore,
     module_bytes: [32]u8,
+};
+
+/// A `ResolvedScheme.owner_kind` value for an imported scheme, whose defining
+/// `CheckedTypeScheme.owner_kind` is not carried into the consuming checked store.
+/// Distinct from every real `CheckedSchemeOwnerKind` and from `owner_kind_none`.
+const owner_kind_imported: u8 = 0xFE;
+
+/// One site's scheme resolved entirely within the consuming store: the identity
+/// that keys instantiation memoization and skolemization, the scheme root, and
+/// its ordered binders. `ident.module_bytes` is the consuming module for a local
+/// scheme and the DEFINING module for an imported one, so an imported scheme's
+/// memo key and captured-binder skolemization stay attributed to its defining
+/// module even though its structure is projected into the consumer.
+const ResolvedScheme = struct {
+    ident: logic.SchemeIdent,
+    root: checked.CheckedTypeId,
+    binders: []const checked.CheckedTypeId,
+    owner_node: u32,
+    owner_kind: u8,
+    imported: bool,
 };
 
 fn runSchemeEdges(
@@ -316,42 +323,49 @@ fn runSchemeEdges(
                 continue;
             };
 
-            // Resolve the scheme root and binders. A local site reads them from
-            // the consuming module; an imported site reads them from the defining
-            // module's own frozen types under the defining scheme id (reunify.md
-            // 7.1, Slice 6).
-            var scheme_ctx = consuming;
-            if (site.importedDefiningModule()) |defining_hash| {
-                const defining = moduleByHash(inputs, defining_hash) orelse {
+            // Resolve the scheme root and binders — both from the CONSUMING store
+            // (reunify.md 7.1, Slice 6). A local site reads its recorded scheme; an
+            // imported site reads the defining scheme projected into this store's
+            // imported-scheme table, keyed by (defining module, source owner node).
+            const resolved: ResolvedScheme = if (site.importedDefiningModule()) |defining_hash| blk: {
+                const entry = consuming.view.importedSchemeByOwner(defining_hash, site.scheme_owner_node) orelse {
                     counts.scheme_skipped_imported += 1;
                     continue;
                 };
-                scheme_ctx = .{
-                    .view = defining.view,
-                    .source_names = defining.source_names,
-                    .module_bytes = defining.key_bytes,
+                break :blk .{
+                    .ident = .{ .module_bytes = defining_hash, .scheme = @intFromEnum(scheme_id) },
+                    .root = entry.localRoot(),
+                    .binders = entry.binders(consuming.view),
+                    .owner_node = site.scheme_owner_node,
+                    .owner_kind = owner_kind_imported,
+                    .imported = true,
                 };
-            }
-
-            const scheme = scheme_ctx.view.schemeById(scheme_id) orelse {
-                counts.scheme_skipped_unresolved_scheme += 1;
-                continue;
+            } else blk: {
+                const scheme = consuming.view.schemeById(scheme_id) orelse {
+                    counts.scheme_skipped_unresolved_scheme += 1;
+                    continue;
+                };
+                if (scheme.snapshotRoot() == null) {
+                    counts.scheme_skipped_no_snapshot += 1;
+                    continue;
+                }
+                break :blk .{
+                    .ident = .{ .module_bytes = consuming.module_bytes, .scheme = @intFromEnum(scheme_id) },
+                    .root = scheme.root,
+                    .binders = scheme.generalizedVars(consuming.view),
+                    .owner_node = scheme.owner_node,
+                    .owner_kind = @intFromEnum(scheme.owner_kind),
+                    .imported = false,
+                };
             };
-            if (scheme.snapshotRoot() == null) {
-                counts.scheme_skipped_no_snapshot += 1;
-                continue;
-            }
 
-            const binders = scheme.generalizedVars(scheme_ctx.view);
-            // The actuals are the CONSUMING module's checked ids at this edge,
-            // whether or not the scheme is imported.
             const actuals = site.actuals(source.store);
-            if (actuals.len != binders.len) {
+            if (actuals.len != resolved.binders.len) {
                 counts.scheme_skipped_arity_mismatch += 1;
                 continue;
             }
 
-            try compareSchemeEdge(allocator, logical, consuming, scheme_ctx, scheme, binders, actuals, site, counts, details);
+            try compareSchemeEdge(allocator, logical, consuming, resolved, actuals, site, counts, details);
         }
     }
 }
@@ -360,15 +374,12 @@ fn compareSchemeEdge(
     allocator: Allocator,
     logical: *LogicalStore,
     consuming: TranslationContext,
-    scheme_ctx: TranslationContext,
-    scheme: checked.CheckedTypeScheme,
-    binders: []const checked.CheckedTypeId,
+    resolved: ResolvedScheme,
     actuals: []const checked.CheckedTypeId,
     site: checked.CheckedInstantiationSite,
     counts: *ShadowCensus,
     details: *std.ArrayList(MismatchDetail),
 ) Allocator.Error!void {
-    const imported = !std.mem.eql(u8, &consuming.module_bytes, &scheme_ctx.module_bytes);
     var binding = std.ArrayList(logic.BoundType).empty;
     defer binding.deinit(allocator);
 
@@ -400,16 +411,19 @@ fn compareSchemeEdge(
         try binding.append(allocator, logic.BoundType.closed(actual_logical));
     }
 
-    // Instantiate the scheme root under its own (possibly imported) module's
-    // frozen types and names; the binding carries the consuming-side actuals.
+    // Instantiate the scheme root. Its structure lives in the CONSUMING store for
+    // both local and imported (projected) schemes (reunify.md 7.1, Slice 6); the
+    // scheme identity (`resolved.ident`) keys the memo and skolemizes captured
+    // enclosing binders under the scheme's owning module, and the binding carries
+    // the consuming-side actuals.
     var inst_reason: SkipReason = undefined;
     const instantiated = logical.instantiateScheme(
-        .{ .module_bytes = scheme_ctx.module_bytes, .scheme = @intFromEnum(scheme.id) },
-        scheme_ctx.view,
-        scheme_ctx.source_names,
-        scheme.owner_node,
-        scheme.root,
-        binders,
+        resolved.ident,
+        consuming.view,
+        consuming.source_names,
+        resolved.owner_node,
+        resolved.root,
+        resolved.binders,
         binding.items,
         &.{},
         .skolemize,
@@ -440,7 +454,7 @@ fn compareSchemeEdge(
     };
 
     if (instantiated == direct) {
-        if (imported) counts.scheme_match_imported += 1 else counts.scheme_match += 1;
+        if (resolved.imported) counts.scheme_match_imported += 1 else counts.scheme_match += 1;
     } else if (try logical.alphaEqual(instantiated, direct)) {
         // Equal up to a renaming of enclosing binders that appear as independent
         // fresh copies on the two sides (a binders=0 nested scheme's root versus
@@ -449,16 +463,16 @@ fn compareSchemeEdge(
         // stay visible rather than folded into the mismatch total.
         counts.scheme_match_alpha += 1;
     } else {
-        if (imported) counts.scheme_mismatch_imported += 1 else counts.scheme_mismatch += 1;
+        if (resolved.imported) counts.scheme_mismatch_imported += 1 else counts.scheme_mismatch += 1;
         try recordMismatch(allocator, logical, details, .{
-            .scope = if (imported) "scheme_imported" else "scheme",
+            .scope = if (resolved.imported) "scheme_imported" else "scheme",
             .module_bytes = consuming.module_bytes,
             .checked_ty = site.instantiated_root,
             .shadow_id = instantiated,
             .other_id = direct,
-            .owner_kind = @intFromEnum(scheme.owner_kind),
+            .owner_kind = resolved.owner_kind,
             .use_node = site.use_node,
-            .binders = @intCast(binders.len),
+            .binders = @intCast(resolved.binders.len),
         });
     }
 }
