@@ -56,7 +56,8 @@ pub const Constants = struct {
     /// 31: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
     /// 32: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
     /// 33: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
-    pub const CACHE_VERSION = 33;
+    /// 34: checked store carries a scheme owner index and residual-variable dispositions.
+    pub const CACHE_VERSION = 34;
 };
 
 /// Configuration for the Roc cache system.

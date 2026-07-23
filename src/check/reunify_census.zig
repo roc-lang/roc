@@ -119,7 +119,24 @@ var captured_refs_attributed = std.atomic.Value(u64).init(0);
 var captured_refs_unattributed = std.atomic.Value(u64).init(0);
 var site_imported_value_use = std.atomic.Value(u64).init(0);
 var site_imported_dispatch = std.atomic.Value(u64).init(0);
+// Publication-side imported-scheme resolution (reunify.md 7.1, Slice 2). Where the
+// check-time `site_imported_*` counters above count every recorded imported-scheme
+// instantiation (per instantiation, including duplicates), these count the
+// published (edge-deduped) imported sites split by whether the consuming side could
+// name the DEFINING module's `CheckedTypeSchemeId` through its serialized owner
+// index: `resolved` when it could, `without_defining_scheme` when it could not
+// (defining artifact not among the loaded import views, or its owner unindexed).
+var site_imported_defining_scheme_resolved = std.atomic.Value(u64).init(0);
 var site_imported_without_defining_scheme = std.atomic.Value(u64).init(0);
+
+// Slice 2 (this sub-slice) residual-variable dispositions (reunify.md 7.4 phase
+// one). Every reachable plain-unconstrained residual variable in a published scheme
+// body gets exactly one recorded disposition; a variable-shaped residual that does
+// not fit the plain-unconstrained classification (a dispatcher-constrained flex or a
+// stray rigid) is counted but left undisposed.
+var disposition_contextual = std.atomic.Value(u64).init(0);
+var disposition_uninhabited = std.atomic.Value(u64).init(0);
+var residual_undisposed = std.atomic.Value(u64).init(0);
 
 var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var divergent_id_count: usize = 0;
@@ -352,13 +369,36 @@ pub fn recordImportedSchemeSite(slot_kind: u32) void {
     }
 }
 
-/// Record one imported-scheme site whose DEFINING module scheme id is not
-/// resolvable at the consuming side today — the record names the defining module
-/// and source owner node, but not an artifact-qualified `CheckedTypeSchemeId`
-/// (reunify.md 7.1, Slice 2). The shortfall a later slice must close.
-pub fn recordImportedSiteWithoutDefiningScheme() void {
+/// Record whether one published imported-scheme site resolved to the DEFINING
+/// module's `CheckedTypeSchemeId` at the consuming side (reunify.md 7.1, Slice 2).
+/// Resolution runs at publication of the consuming module against the defining
+/// module's serialized owner index (the defining artifact is a loaded import view);
+/// `resolved` is whether that lookup succeeded.
+pub fn recordImportedSiteResolution(resolved: bool) void {
     if (comptime !enabled) return;
-    _ = site_imported_without_defining_scheme.fetchAdd(1, .monotonic);
+    if (resolved) {
+        _ = site_imported_defining_scheme_resolved.fetchAdd(1, .monotonic);
+    } else {
+        _ = site_imported_without_defining_scheme.fetchAdd(1, .monotonic);
+    }
+}
+
+/// Which residual-variable disposition outcome a census record counts (reunify.md
+/// 7.4, Slice 2 phase one): `contextual` (adopts an enclosing use edge's concrete
+/// type), `uninhabited` (defaults to the uninhabited leaf, matching today's
+/// empty-tag-union materialization), or `undisposed` (variable-shaped but not a
+/// plain unconstrained residual, so left unclassified).
+pub const DispositionCensus = enum { contextual, uninhabited, undisposed };
+
+/// Record one residual-variable disposition decision (reunify.md 7.4, Slice 2 phase
+/// one) into the matching census counter.
+pub fn recordResidualDisposition(kind: DispositionCensus) void {
+    if (comptime !enabled) return;
+    switch (kind) {
+        .contextual => _ = disposition_contextual.fetchAdd(1, .monotonic),
+        .uninhabited => _ = disposition_uninhabited.fetchAdd(1, .monotonic),
+        .undisposed => _ = residual_undisposed.fetchAdd(1, .monotonic),
+    }
 }
 
 const Sink = struct {
@@ -426,7 +466,11 @@ pub fn dumpAppend() void {
     sink.print("captured_refs_unattributed={d}\n", .{captured_refs_unattributed.load(.monotonic)});
     sink.print("site_imported_value_use={d}\n", .{site_imported_value_use.load(.monotonic)});
     sink.print("site_imported_dispatch={d}\n", .{site_imported_dispatch.load(.monotonic)});
+    sink.print("site_imported_defining_scheme_resolved={d}\n", .{site_imported_defining_scheme_resolved.load(.monotonic)});
     sink.print("site_imported_without_defining_scheme={d}\n", .{site_imported_without_defining_scheme.load(.monotonic)});
+    sink.print("disposition_contextual={d}\n", .{disposition_contextual.load(.monotonic)});
+    sink.print("disposition_uninhabited={d}\n", .{disposition_uninhabited.load(.monotonic)});
+    sink.print("residual_undisposed={d}\n", .{residual_undisposed.load(.monotonic)});
     for (divergent_ids[0..divergent_id_count], 0..) |id, i| {
         sink.print("divergent_scheme_use_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
     }

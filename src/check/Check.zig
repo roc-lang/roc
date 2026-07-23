@@ -4171,12 +4171,12 @@ fn recordImportedInstantiationSite(
     );
 
     if (reunify_census.active()) {
+        // Count the imported-scheme site at check time; whether the consuming side
+        // can name the DEFINING module's `CheckedTypeSchemeId` is a publication-time
+        // fact (the defining artifact's serialized owner index is consulted then),
+        // measured by `recordImportedSiteResolution` in `publishInstantiationSites`
+        // (reunify.md 7.1, Slice 2).
         reunify_census.recordImportedSchemeSite(@intFromEnum(slot));
-        // The defining module's published scheme id is not resolvable at the
-        // consuming side today (reunify.md 7.1, Slice 2): the record names the
-        // defining module + source owner node, not an artifact-qualified scheme
-        // id. A later slice must add that resolution.
-        reunify_census.recordImportedSiteWithoutDefiningScheme();
     }
 }
 
@@ -16953,7 +16953,24 @@ fn registerImportedSchemeProjection(
     local_root: Var,
 ) std.mem.Allocator.Error!void {
     const source_def = hoistedTopLevelDefForNode(other_module_env, target_node_idx) orelse return;
-    const source_owner_node = @intFromEnum(other_module_env.store.getDef(source_def.def).expr);
+    try self.registerImportedSchemeProjectionForDef(other_module_env, source_def.def, local_root);
+}
+
+/// Project the defining module's scheme binders onto this module's copies for a
+/// known imported definition (reunify.md 7.1, Slice 2). This is the core of
+/// `registerImportedSchemeProjection`; the dispatch-target discharge sites call it
+/// directly, since they already hold the chosen method's `Def.Idx` in the defining
+/// module and copy its scheme through `copyVar`, whose `var_map` still holds the
+/// source->local binder mapping when this runs. Keying off the resolved local root
+/// of the copy lets the ordinary dense-site recorder attribute this instantiation
+/// to the defining module's binder order.
+fn registerImportedSchemeProjectionForDef(
+    self: *Self,
+    other_module_env: *const ModuleEnv,
+    source_def_idx: CIR.Def.Idx,
+    local_root: Var,
+) std.mem.Allocator.Error!void {
+    const source_owner_node = @intFromEnum(other_module_env.store.getDef(source_def_idx).expr);
 
     // Find the defining module's snapshot for this def (keyed by its expr node).
     var mb_record: ?ModuleEnv.SchemeSnapshotRecord = null;
@@ -19502,6 +19519,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     } else blk: {
                         // Copy the method from the other module's type store
                         const copied_var = try self.copyVar(method_type_var, method_env, region);
+                        // Project the imported method scheme's binders onto this
+                        // module's copies while `var_map` still holds the
+                        // source->local mapping, so the dispatch-target
+                        // instantiation below records dense actuals in the
+                        // defining module's binder order (reunify.md 7.1/7.2,
+                        // Slice 2). `copyVar` reset `var_map` for this copy and
+                        // `instantiateVar` will reset it again next.
+                        try self.registerImportedSchemeProjectionForDef(method_env, def_idx, copied_var);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
                     self.evidence_target_site = null;
@@ -19834,6 +19859,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         break :blk local_method_type_var;
                     } else blk: {
                         const copied_var = try self.copyVar(method_type_var, method_env, region);
+                        // See the nominal branch above: project the imported
+                        // method scheme's binders onto this module's copies
+                        // (reunify.md 7.1/7.2, Slice 2) before `instantiateVar`
+                        // resets `var_map`, so the dispatch-target dense site
+                        // records actuals in the defining module's binder order.
+                        try self.registerImportedSchemeProjectionForDef(method_env, def_idx, copied_var);
                         break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                     };
                     self.evidence_target_site = null;

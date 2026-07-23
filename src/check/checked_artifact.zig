@@ -2512,10 +2512,14 @@ pub const CheckedInstantiationSite = struct {
     /// The owning definition's scheme snapshot key (its CIR owner node).
     scheme_owner_node: u32,
     /// The owning `CheckedTypeSchemeId` as `u32`, or `instantiation_site_scheme_none`.
-    /// Always `instantiation_site_scheme_none` for an imported-scheme site: the
-    /// defining module's published scheme id is not resolvable at the consuming
-    /// side today (reunify.md 7.1, Slice 2). `scheme_owner_node` then names the
-    /// DEFINING module's snapshot owner node and `defining_module_hash` its module.
+    /// For an imported-scheme site this is the DEFINING module's own scheme id,
+    /// resolved through that module's serialized owner index at publication and
+    /// qualified by `defining_module_hash` (reunify.md 7.1, Slice 2) — an
+    /// artifact-qualified `(module, scheme id)` reference. It stays
+    /// `instantiation_site_scheme_none` only when the defining artifact was not
+    /// among the loaded import views. For a local site it is this module's own
+    /// scheme id (`defining_module_hash` all-zero). `scheme_owner_node` names the
+    /// owning definition's snapshot owner node in whichever module owns the scheme.
     scheme: u32 = instantiation_site_scheme_none,
     /// The instantiated root's checked type at this edge.
     instantiated_root: CheckedTypeId,
@@ -2544,6 +2548,77 @@ pub const CheckedInstantiationSite = struct {
     /// The site's positional actuals within its store's `instantiation_site_actuals`.
     pub fn actuals(self: CheckedInstantiationSite, pool_owner: anytype) []const CheckedTypeId {
         return pool_owner.instantiationSiteActuals()[self.actuals_start .. self.actuals_start + self.actuals_len];
+    }
+};
+
+/// One `(scheme owner CIR node -> published CheckedTypeSchemeId)` entry
+/// (reunify.md 7.1, Slice 2). Publication builds this while assigning scheme ids;
+/// serializing it lets a CONSUMING module resolve an imported-scheme
+/// instantiation site to the defining module's own `CheckedTypeSchemeId` — the
+/// second half of the artifact-qualified `(module, scheme id)` reference the
+/// defining side could not name. Only def-owned schemes (top-level, nested,
+/// required) are indexed: their `owner_node` is a defining-module CIR node,
+/// disjoint from a synthetic scheme's checked-type-id owner, so a cross-module
+/// lookup by source owner node cannot alias a synthetic scheme.
+pub const SchemeOwnerScheme = extern struct {
+    /// The owning definition's CIR node (a def expr, annotation, or binding).
+    owner_node: u32,
+    /// The published `CheckedTypeSchemeId` for that owner, as `u32`.
+    scheme: u32,
+};
+
+/// Which explicit disposition a residual checked variable adopts in a given body
+/// context (reunify.md 7.4, Slice 2 phase one). A plain unconstrained residual
+/// today implicitly materializes as an empty tag union; this records the intended
+/// disposition WITHOUT changing that materialization.
+pub const CheckedResidualDispositionKind = enum(u32) {
+    /// The position provably admits no value; lowers to the uninhabited leaf.
+    uninhabited,
+    /// The position adopts an enclosing use edge's concrete checked type; the
+    /// payload is that fully-disposed `CheckedTypeId`, translated under the same
+    /// lexical scheme environment (never another `contextual`, never inward).
+    contextual,
+};
+
+/// A `CheckedResidualDisposition.target` value used for the `uninhabited` kind,
+/// which carries no `CheckedTypeId` payload. Distinct from every real id.
+pub const checked_residual_disposition_no_target: u32 = std.math.maxInt(u32);
+
+/// A `CheckedResidualDisposition.scheme_owner_node` value meaning "module body,
+/// not a specific scheme" (reunify.md 7.4, Slice 2 phase one). A residual reachable
+/// only from body-expression type roots — not from any scheme's published type — is
+/// disposed in this module-level body context rather than a per-definition one;
+/// the per-definition refinement is a later slice's work. Distinct from every real
+/// CIR owner node.
+pub const checked_residual_disposition_module_body_owner: u32 = std.math.maxInt(u32);
+
+/// One residual-variable disposition, scoped to a body context (reunify.md 7.4,
+/// Slice 2 phase one). Keyed by `(scheme_owner_node, type_id)` so one checked
+/// variable can carry different dispositions in different scheme bodies without
+/// cloning roots. `kind`/`target` encode `uninhabited` (no target) or
+/// `contextual(target)`. Recorded and round-tripped; not yet consumed by
+/// materialization.
+pub const CheckedResidualDisposition = extern struct {
+    /// The owning scheme's CIR owner node — the body context this disposition
+    /// applies in.
+    scheme_owner_node: u32,
+    /// The residual variable's `CheckedTypeId`, as `u32`.
+    type_id: u32,
+    kind: CheckedResidualDispositionKind = .uninhabited,
+    /// For `contextual`, the adopted concrete `CheckedTypeId` as `u32`; otherwise
+    /// `checked_residual_disposition_no_target`.
+    target: u32 = checked_residual_disposition_no_target,
+
+    /// The residual variable's checked type id.
+    pub fn typeId(self: CheckedResidualDisposition) CheckedTypeId {
+        return @enumFromInt(self.type_id);
+    }
+
+    /// The adopted contextual target, or null for `uninhabited`.
+    pub fn contextualTarget(self: CheckedResidualDisposition) ?CheckedTypeId {
+        if (self.kind != .contextual) return null;
+        if (self.target == checked_residual_disposition_no_target) return null;
+        return @enumFromInt(self.target);
     }
 };
 
@@ -3094,11 +3169,33 @@ pub const CheckedTypeStoreView = struct {
     nominal_record_field_pool: []const CheckedNominalRecordField = &.{},
     constraint_pool: []const CheckedStaticDispatchConstraint = &.{},
     tag_pool: []const CheckedTag = &.{},
+    scheme_ids_by_owner: []const SchemeOwnerScheme = &.{},
+    residual_dispositions: []const CheckedResidualDisposition = &.{},
     var_names: *const canonical.NameInterner = &empty_view_var_names,
 
     /// The shared flat pool of `CheckedTypeId`s backing range fields.
     pub fn typeIdPool(self: CheckedTypeStoreView) []const CheckedTypeId {
         return self.type_id_pool;
+    }
+
+    /// The `(scheme owner node -> scheme id)` index of this view.
+    pub fn schemeIdsByOwner(self: CheckedTypeStoreView) []const SchemeOwnerScheme {
+        return self.scheme_ids_by_owner;
+    }
+
+    /// The published residual-variable dispositions of this view.
+    pub fn residualDispositions(self: CheckedTypeStoreView) []const CheckedResidualDisposition {
+        return self.residual_dispositions;
+    }
+
+    /// Resolve a scheme owner node to its published scheme id, or null
+    /// (reunify.md 7.1, Slice 2). A consuming module calls this on an imported
+    /// module's view to name the defining scheme of an imported-scheme site.
+    pub fn schemeIdForOwnerNode(self: CheckedTypeStoreView, owner_node: u32) ?CheckedTypeSchemeId {
+        for (self.scheme_ids_by_owner) |entry| {
+            if (entry.owner_node == owner_node) return @enumFromInt(entry.scheme);
+        }
+        return null;
     }
 
     /// The shared flat pool of record fields backing record range fields.
@@ -3543,6 +3640,13 @@ pub const CheckedTypeStore = struct {
     /// Flat pool of nested schemes' captured enclosing-scheme binders
     /// (reunify.md 7.1, Slice 2), backing `CheckedTypeScheme.capturedBinders`.
     captured_binders: std.ArrayList(CheckedCapturedBinder) = .empty,
+    /// `(scheme owner node -> published scheme id)` index (reunify.md 7.1, Slice
+    /// 2), so a consuming module can resolve an imported-scheme site to the
+    /// defining module's own `CheckedTypeSchemeId`.
+    scheme_ids_by_owner: std.ArrayList(SchemeOwnerScheme) = .empty,
+    /// Residual-variable dispositions scoped to a body context (reunify.md 7.4,
+    /// Slice 2 phase one), keyed by `(scheme owner node, CheckedTypeId)`.
+    residual_dispositions: std.ArrayList(CheckedResidualDisposition) = .empty,
     /// Interner backing variable names.
     var_names: canonical.NameInterner = .{},
     /// True for a store reconstructed from a serialized buffer (pools point into
@@ -3591,6 +3695,26 @@ pub const CheckedTypeStore = struct {
     /// The shared flat pool of nested schemes' captured enclosing-scheme binders.
     pub fn capturedBinders(self: *const CheckedTypeStore) []const CheckedCapturedBinder {
         return self.captured_binders.items;
+    }
+
+    /// The `(scheme owner node -> scheme id)` index.
+    pub fn schemeIdsByOwner(self: *const CheckedTypeStore) []const SchemeOwnerScheme {
+        return self.scheme_ids_by_owner.items;
+    }
+
+    /// The published residual-variable dispositions.
+    pub fn residualDispositions(self: *const CheckedTypeStore) []const CheckedResidualDisposition {
+        return self.residual_dispositions.items;
+    }
+
+    /// Resolve a scheme owner node to its published scheme id, or null. Linear
+    /// over the (small) owner index; a consuming module calls this on an imported
+    /// module's view to name the defining scheme (reunify.md 7.1, Slice 2).
+    pub fn schemeIdForOwnerNode(self: *const CheckedTypeStore, owner_node: u32) ?CheckedTypeSchemeId {
+        for (self.scheme_ids_by_owner.items) |entry| {
+            if (entry.owner_node == owner_node) return @enumFromInt(entry.scheme);
+        }
+        return null;
     }
 
     /// Text of a stored variable name id, or null for the absent sentinel.
@@ -3647,6 +3771,18 @@ pub const CheckedTypeStore = struct {
     fn appendCapturedBinders(self: *CheckedTypeStore, allocator: Allocator, captured: []const CheckedCapturedBinder) Allocator.Error!CheckedTypeRange {
         std.debug.assert(!self.serialized);
         return artifact_serialize.appendSpan(CheckedTypeRange, CheckedCapturedBinder, &self.captured_binders, allocator, captured);
+    }
+
+    /// Append one `(owner node -> scheme id)` entry to the owner index.
+    fn appendSchemeOwnerScheme(self: *CheckedTypeStore, allocator: Allocator, entry: SchemeOwnerScheme) Allocator.Error!void {
+        std.debug.assert(!self.serialized);
+        try self.scheme_ids_by_owner.append(allocator, entry);
+    }
+
+    /// Append one residual-variable disposition to the disposition table.
+    fn appendResidualDisposition(self: *CheckedTypeStore, allocator: Allocator, disposition: CheckedResidualDisposition) Allocator.Error!void {
+        std.debug.assert(!self.serialized);
+        try self.residual_dispositions.append(allocator, disposition);
     }
 
     /// Append `fields` to `record_field_pool`, returning their range.
@@ -3980,8 +4116,25 @@ pub const CheckedTypeStore = struct {
         // last: translating a site's actual and instantiated-root vars appends to
         // the store's roots without joining `source_type_roots`, which is already
         // fixed above — the derived site payloads are additive published data, not
-        // source-of-truth roots for lowering.
+        // source-of-truth roots for lowering. Imported sites resolve their defining
+        // scheme id through each import view's serialized owner index (reunify.md
+        // 7.1, Slice 2), so the defining index must be built by the time an importer
+        // publishes — publication order (imports before dependents) guarantees it.
         try publishInstantiationSites(allocator, module, names, import_views, &store, &active, &scheme_id_by_owner);
+
+        // Serialize this module's `(owner node -> scheme id)` index so a later
+        // CONSUMING module can name this module's schemes for its imported sites
+        // (reunify.md 7.1, Slice 2). Built from the final published def-owned
+        // schemes in id order (synthetic schemes, whose owner is a checked-type id
+        // rather than a CIR node, are excluded so no cross-module lookup aliases
+        // one).
+        try publishSchemeOwnerIndex(allocator, &store);
+
+        // Record an explicit disposition for every reachable plain-unconstrained
+        // residual variable of every published scheme body (reunify.md 7.4, Slice 2
+        // phase one). Recorded and verified against today's materialization, which
+        // is left unchanged.
+        try publishResidualDispositions(allocator, &store);
 
         return .{
             .store = store,
@@ -4000,6 +4153,8 @@ pub const CheckedTypeStore = struct {
             .nominal_record_field_pool = self.nominal_record_field_pool.items,
             .constraint_pool = self.constraint_pool.items,
             .tag_pool = self.tag_pool.items,
+            .scheme_ids_by_owner = self.scheme_ids_by_owner.items,
+            .residual_dispositions = self.residual_dispositions.items,
             .var_names = &self.var_names,
         };
     }
@@ -4315,6 +4470,8 @@ pub const CheckedTypeStore = struct {
             self.instantiation_sites.deinit(allocator);
             self.instantiation_site_actuals.deinit(allocator);
             self.captured_binders.deinit(allocator);
+            self.scheme_ids_by_owner.deinit(allocator);
+            self.residual_dispositions.deinit(allocator);
             self.var_names.deinit(allocator);
         }
         self.* = .{};
@@ -4336,13 +4493,15 @@ pub const CheckedTypeStore = struct {
         instantiation_sites: SerializedSlice(CheckedInstantiationSite) = .{},
         instantiation_site_actuals: SerializedSlice(CheckedTypeId) = .{},
         captured_binders: SerializedSlice(CheckedCapturedBinder) = .{},
+        scheme_ids_by_owner: SerializedSlice(SchemeOwnerScheme) = .{},
+        residual_dispositions: SerializedSlice(CheckedResidualDisposition) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 15 = 12 `SerializedSlice` fields + 3 for the nested `var_names`
+            // 17 = 14 `SerializedSlice` fields + 3 for the nested `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -6807,11 +6966,18 @@ fn publishInstantiationSites(
         seen_entry.value_ptr.* = @intCast(record_idx);
 
         // An imported-scheme site's `scheme_owner_node` names the DEFINING
-        // module's owner node, which must never be resolved through this module's
-        // owner index (reunify.md 7.1, Slice 2); its defining scheme id is not
-        // resolvable at the consuming side today.
+        // module's owner node, resolved through that module's serialized owner
+        // index rather than this module's (reunify.md 7.1, Slice 2). The resolved
+        // id is DEFINING-artifact-local; `defining_module_hash` qualifies it. A
+        // local site resolves through this module's owner map.
         const is_imported = !std.meta.eql(record.defining_module_hash, ModuleEnv.scheme_use_site_local_module);
-        const scheme_id = if (is_imported) null else scheme_id_by_owner.get(record.scheme_owner_node);
+        const local_scheme_id: ?CheckedTypeSchemeId = if (is_imported) null else scheme_id_by_owner.get(record.scheme_owner_node);
+        const imported_scheme_id: ?CheckedTypeSchemeId = if (is_imported)
+            resolveImportedDefiningScheme(imports, record.defining_module_hash, record.scheme_owner_node)
+        else
+            null;
+        if (census_on and is_imported) reunify_census.recordImportedSiteResolution(imported_scheme_id != null);
+        const scheme_id = local_scheme_id;
         const is_shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
 
         const instantiated_root = try appendCheckedTypeRoot(
@@ -6854,17 +7020,368 @@ fn publishInstantiationSites(
             reunify_census.recordSharedEdgeResolution(scheme_id != null);
         }
 
+        const resolved_scheme = local_scheme_id orelse imported_scheme_id;
         try store.instantiation_sites.append(allocator, .{
             .use_node = record.use_node,
             .slot_kind = record.slot_kind,
             .slot_data = record.slot_data,
             .scheme_owner_node = record.scheme_owner_node,
-            .scheme = if (scheme_id) |sid| @intFromEnum(sid) else instantiation_site_scheme_none,
+            .scheme = if (resolved_scheme) |sid| @intFromEnum(sid) else instantiation_site_scheme_none,
             .instantiated_root = instantiated_root,
             .actuals_start = actuals_range.start,
             .actuals_len = actuals_range.len,
             .defining_module_hash = record.defining_module_hash,
         });
+    }
+}
+
+/// Find the loaded import view whose module content identity matches
+/// `module_hash` (reunify.md 7.1, Slice 2). The dense-site `defining_module_hash`
+/// is the defining module's content identity, the same value an
+/// `ImportedModuleView.module_identity.stable_hash` carries, so a consuming module
+/// can address the defining artifact among its loaded imports.
+fn importedViewByModuleHash(imports: CheckedImportViews, module_hash: [32]u8) ?ImportedModuleView {
+    for (imports.direct) |direct| {
+        if (std.meta.eql(direct.view.module_identity.stable_hash, module_hash)) return direct.view;
+    }
+    for (imports.available) |view| {
+        if (std.meta.eql(view.module_identity.stable_hash, module_hash)) return view;
+    }
+    for (imports.relations) |view| {
+        if (std.meta.eql(view.module_identity.stable_hash, module_hash)) return view;
+    }
+    return null;
+}
+
+/// Resolve an imported-scheme instantiation site to the DEFINING module's own
+/// `CheckedTypeSchemeId` (reunify.md 7.1, Slice 2). The defining artifact is a
+/// loaded import view; its serialized `scheme_ids_by_owner` index maps the source
+/// owner node (recorded on the site) to the defining scheme id. Null when the
+/// defining artifact is not among the loaded views or its owner is unindexed —
+/// the consuming site then stays scheme-unresolved and is measured as a shortfall.
+fn resolveImportedDefiningScheme(imports: CheckedImportViews, module_hash: [32]u8, owner_node: u32) ?CheckedTypeSchemeId {
+    const view = importedViewByModuleHash(imports, module_hash) orelse return null;
+    return view.checked_types.schemeIdForOwnerNode(owner_node);
+}
+
+/// Build this module's `(scheme owner node -> scheme id)` index (reunify.md 7.1,
+/// Slice 2) from the final published def-owned schemes, in id order and deduped
+/// keep-first by owner node (matching the publication-time scheme_id_by_owner map).
+/// Synthetic schemes are excluded: their owner node is a checked-type id rather
+/// than a defining-module CIR node, so indexing one could alias a real owner node
+/// in a consuming module's cross-module lookup.
+fn publishSchemeOwnerIndex(allocator: Allocator, store: *CheckedTypeStore) Allocator.Error!void {
+    var seen = std.AutoHashMap(u32, void).init(allocator);
+    defer seen.deinit();
+    for (store.schemes.items) |scheme| {
+        if (scheme.owner_kind == .synthetic) continue;
+        const entry = try seen.getOrPut(scheme.owner_node);
+        if (entry.found_existing) continue;
+        try store.appendSchemeOwnerScheme(allocator, .{
+            .owner_node = scheme.owner_node,
+            .scheme = @intFromEnum(scheme.id),
+        });
+    }
+}
+
+/// Collects the reachable plain-unconstrained residual variables of a checked
+/// scheme body and counts the variable-shaped residuals it does not classify
+/// (reunify.md 7.4, Slice 2 phase one). A "plain unconstrained residual" is a
+/// reachable flex variable that is no scheme's binder and carries neither a
+/// dispatch constraint nor numeric/row defaulting evidence — exactly the
+/// population that materializes as an empty tag union today. A reachable rigid, or
+/// a dispatch-constrained flex, that is no binder and carries no defaulting is
+/// variable-shaped but not plain-unconstrained, so it is counted `undisposed` and
+/// left out of the disposition table (a constrained flex is disposed through
+/// dispatch evidence; a stray non-binder rigid is an anomaly). Defaulted variables
+/// and scheme binders are already disposed and skipped. The traversal memo visits
+/// each reachable node once, so each residual is collected and each undisposed
+/// counted once per body.
+const ResidualDispositionScan = struct {
+    store: *const CheckedTypeStore,
+    binders: *const std.AutoHashMap(CheckedTypeId, void),
+    allocator: Allocator,
+    residuals: *std.ArrayList(CheckedTypeId),
+    /// Distinct type ids of variable-shaped residuals that are not plain
+    /// unconstrained residuals (a stray non-binder rigid or a dispatcher-
+    /// constrained flex), accumulated across every body walk so the census counts
+    /// each once.
+    undisposed: *std.AutoHashMap(CheckedTypeId, void),
+
+    pub fn visit(self: *@This(), traversal: anytype, root: CheckedTypeId) Allocator.Error!bool {
+        const payload = self.store.payload(root);
+        switch (payload) {
+            .flex => |v| {
+                if (!self.binders.contains(root) and v.numeric_default_phase == null and v.row_default == null) {
+                    if (v.constraints.len == 0) {
+                        try self.residuals.append(self.allocator, root);
+                    } else {
+                        try self.undisposed.put(root, {});
+                    }
+                }
+                return true;
+            },
+            .rigid => |v| {
+                if (!self.binders.contains(root) and v.numeric_default_phase == null and v.row_default == null) {
+                    try self.undisposed.put(root, {});
+                }
+                return true;
+            },
+            else => return try checked_traverse.checkedTypePayloadContainsIdentityVariables(
+                .forbid,
+                traversal,
+                self.store,
+                root,
+                payload,
+                self,
+            ),
+        }
+    }
+};
+
+/// Fold one contextual-target candidate into a running unique-target decision: the
+/// first candidate is adopted; a second, distinct candidate marks a conflict, after
+/// which the position stays conflicted (its residual falls back to `uninhabited`).
+fn accumulateContextualTarget(target: *?CheckedTypeId, conflict: *bool, candidate: CheckedTypeId) void {
+    if (conflict.*) return;
+    if (target.*) |existing| {
+        if (existing != candidate) conflict.* = true;
+    } else {
+        target.* = candidate;
+    }
+}
+
+/// Identify, for a scheme's residuals, the ones that adopt an enclosing use edge's
+/// concrete checked type (reunify.md 7.4, Slice 2 phase one). Only two positions
+/// carry an identifiable enclosing type from the scheme's own concrete use sites:
+/// the whole scheme root when it is itself a residual, and a top-level function's
+/// return when the return is a residual (the classic context-bound unconstrained
+/// return, e.g. `empty : List a` used where a concrete list is expected). For each,
+/// the contextual target is the corresponding position of this scheme's concrete
+/// instantiation sites' instantiated roots, and only when every such site agrees on
+/// one fully-concrete target — a fully-concrete target is by construction fully
+/// disposed, not itself contextual, and free of any inner-scheme reference, so it
+/// satisfies §7.4's structural rules. Anything ambiguous stays uninhabited.
+fn collectContextualTargets(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    scheme: CheckedTypeScheme,
+    residuals: *const std.ArrayList(CheckedTypeId),
+    out: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+) Allocator.Error!void {
+    const root_residual: ?CheckedTypeId = blk: {
+        for (residuals.items) |r| {
+            if (r == scheme.root) break :blk r;
+        }
+        break :blk null;
+    };
+    const ret_residual: ?CheckedTypeId = switch (store.payload(scheme.root)) {
+        .function => |f| blk: {
+            for (residuals.items) |r| {
+                if (r == f.ret) break :blk r;
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+    if (root_residual == null and ret_residual == null) return;
+
+    var root_target: ?CheckedTypeId = null;
+    var root_conflict = false;
+    var ret_target: ?CheckedTypeId = null;
+    var ret_conflict = false;
+    for (store.instantiation_sites.items) |site| {
+        if (site.importedDefiningModule() != null) continue;
+        const sid = site.schemeId() orelse continue;
+        if (sid != scheme.id) continue;
+        // A contextual target must be fully disposed; require the instantiated
+        // root fully concrete (no reachable variable), which makes any sub-part
+        // of it fully concrete too.
+        if (try store.checkedTypeContainsIdentityVariables(allocator, site.instantiated_root)) continue;
+        if (root_residual != null) {
+            accumulateContextualTarget(&root_target, &root_conflict, site.instantiated_root);
+        }
+        if (ret_residual != null) {
+            switch (store.payload(site.instantiated_root)) {
+                .function => |f| accumulateContextualTarget(&ret_target, &ret_conflict, f.ret),
+                else => {},
+            }
+        }
+    }
+
+    if (root_residual) |r| {
+        if (!root_conflict) {
+            if (root_target) |t| try out.put(r, t);
+        }
+    }
+    if (ret_residual) |r| {
+        if (!ret_conflict) {
+            if (ret_target) |t| try out.put(r, t);
+        }
+    }
+}
+
+/// Publish an explicit residual-variable disposition for every reachable
+/// plain-unconstrained residual of every published body (reunify.md 7.4, Slice 2
+/// phase one). This covers the population that materializes as an empty tag union
+/// during lowering — residuals live not only in a scheme's type but in the body
+/// expression types reachable while lowering it — so both are walked: first every
+/// scheme's own root, keyed by that scheme's owner node (a residual in a scheme's
+/// type gets that scheme's precise body context, and a scheme's concrete use sites
+/// can pin a `contextual` target there), then every remaining published root for
+/// the body-expression residuals no scheme type reaches, keyed by the module-body
+/// owner (per-definition refinement is a later slice's work). A residual is
+/// recorded `contextual(target)` when the owning scheme's concrete use sites agree
+/// on a fully-concrete enclosing type at its position, else `uninhabited` — the
+/// same uninhabited leaf today's materialization already produces, which this phase
+/// does not change. Entries are keyed by `(scheme owner node, CheckedTypeId)` and
+/// deduped so one body context records a residual once. The Debug census counts the
+/// distribution and every distinct residual left undisposed (a stray non-binder
+/// rigid or a dispatcher-constrained flex).
+fn publishResidualDispositions(allocator: Allocator, store: *CheckedTypeStore) Allocator.Error!void {
+    if (store.schemes.items.len == 0 and store.roots.items.len == 0) return;
+    const census_on = reunify_census.active();
+
+    // Global binder set: every checked type id that is a binder of any scheme.
+    var binders = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer binders.deinit();
+    for (store.schemes.items) |scheme| {
+        for (scheme.generalizedVars(store)) |gv| {
+            try binders.put(gv, {});
+        }
+    }
+
+    var residuals = std.ArrayList(CheckedTypeId).empty;
+    defer residuals.deinit(allocator);
+    var contextual_targets = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer contextual_targets.deinit();
+    // `(owner node, type id)` already recorded, so a residual is disposed once per
+    // body context; also used by the module-body pass to skip residuals already
+    // disposed under a scheme owner.
+    var recorded = std.AutoHashMap(u64, void).init(allocator);
+    defer recorded.deinit();
+    // Distinct residual/undisposed type ids already accounted for across the whole
+    // module, so census counts are per-distinct-residual, not per-occurrence.
+    var residual_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer residual_seen.deinit();
+    var undisposed_seen = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer undisposed_seen.deinit();
+    // Residual type ids disposed under a scheme owner in pass one, so pass two
+    // records only the body-expression residuals no scheme type reached.
+    var pass_one_residual_ids = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer pass_one_residual_ids.deinit();
+
+    // Pass one: each scheme's own type, keyed by that scheme's owner node.
+    for (store.schemes.items) |scheme| {
+        residuals.clearRetainingCapacity();
+        contextual_targets.clearRetainingCapacity();
+
+        var scan = ResidualDispositionScan{
+            .store = store,
+            .binders = &binders,
+            .allocator = allocator,
+            .residuals = &residuals,
+            .undisposed = &undisposed_seen,
+        };
+        {
+            var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, ResidualDispositionScan).init(allocator, &scan);
+            defer traversal.deinit();
+            _ = try traversal.visit(scheme.root);
+        }
+
+        if (residuals.items.len > 0) {
+            try collectContextualTargets(allocator, store, scheme, &residuals, &contextual_targets);
+        }
+
+        for (residuals.items) |residual| {
+            try pass_one_residual_ids.put(residual, {});
+            try recordResidualDisposition(
+                allocator,
+                store,
+                scheme.owner_node,
+                residual,
+                contextual_targets.get(residual),
+                &recorded,
+                &residual_seen,
+                census_on,
+            );
+        }
+    }
+
+    // Pass two: every remaining published root, for body-expression residuals no
+    // scheme type reaches, keyed by the module-body owner.
+    residuals.clearRetainingCapacity();
+    {
+        var scan = ResidualDispositionScan{
+            .store = store,
+            .binders = &binders,
+            .allocator = allocator,
+            .residuals = &residuals,
+            .undisposed = &undisposed_seen,
+        };
+        var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, ResidualDispositionScan).init(allocator, &scan);
+        defer traversal.deinit();
+        for (store.roots.items) |root| {
+            _ = try traversal.visit(root.id);
+        }
+    }
+    for (residuals.items) |residual| {
+        if (pass_one_residual_ids.contains(residual)) continue;
+        try recordResidualDisposition(
+            allocator,
+            store,
+            checked_residual_disposition_module_body_owner,
+            residual,
+            null,
+            &recorded,
+            &residual_seen,
+            census_on,
+        );
+    }
+
+    if (census_on) {
+        var undisposed_iter = undisposed_seen.keyIterator();
+        while (undisposed_iter.next()) |_| reunify_census.recordResidualDisposition(.undisposed);
+    }
+}
+
+/// Record one residual's disposition under a body context (reunify.md 7.4, Slice 2
+/// phase one), deduped by `(owner node, type id)` so a body context records a
+/// residual once, and census-counted once per distinct residual type id across the
+/// module. `contextual_target` non-null records `contextual`; null records
+/// `uninhabited`.
+fn recordResidualDisposition(
+    allocator: Allocator,
+    store: *CheckedTypeStore,
+    owner_node: u32,
+    residual: CheckedTypeId,
+    contextual_target: ?CheckedTypeId,
+    recorded: *std.AutoHashMap(u64, void),
+    residual_seen: *std.AutoHashMap(CheckedTypeId, void),
+    census_on: bool,
+) Allocator.Error!void {
+    const dedup_key = (@as(u64, owner_node) << 32) | @intFromEnum(residual);
+    const dedup_entry = try recorded.getOrPut(dedup_key);
+    if (dedup_entry.found_existing) return;
+
+    const count_this = census_on and !residual_seen.contains(residual);
+    if (count_this) try residual_seen.put(residual, {});
+
+    if (contextual_target) |target| {
+        try store.appendResidualDisposition(allocator, .{
+            .scheme_owner_node = owner_node,
+            .type_id = @intFromEnum(residual),
+            .kind = .contextual,
+            .target = @intFromEnum(target),
+        });
+        if (count_this) reunify_census.recordResidualDisposition(.contextual);
+    } else {
+        try store.appendResidualDisposition(allocator, .{
+            .scheme_owner_node = owner_node,
+            .type_id = @intFromEnum(residual),
+            .kind = .uninhabited,
+        });
+        if (count_this) reunify_census.recordResidualDisposition(.uninhabited);
     }
 }
 
@@ -23743,10 +24260,10 @@ pub const CheckedModuleArtifact = struct {
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3 and
-            // its instantiation-site and captured-binder pools). POD inline
-            // `key`/`module_identity` contribute 0. Fixed at compile time,
-            // independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 199);
+            // its instantiation-site, captured-binder, scheme-owner-index, and
+            // residual-disposition pools). POD inline `key`/`module_identity`
+            // contribute 0. Fixed at compile time, independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 201);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -23894,7 +24411,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 28;
+    const serialized_layout_version: u32 = 29;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28376,6 +28893,13 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .defining_module_hash = [_]u8{0x3A} ** 32,
     });
 
+    // A scheme owner index entry (reunify.md 7.1, Slice 2) and residual-variable
+    // dispositions (reunify.md 7.4, Slice 2) round-trip: `uninhabited` (no target)
+    // and `contextual(target)` both survive, and the owner lookup resolves.
+    try store.appendSchemeOwnerScheme(gpa, .{ .owner_node = 987, .scheme = 0 });
+    try store.appendResidualDisposition(gpa, .{ .scheme_owner_node = 987, .type_id = @intFromEnum(a), .kind = .uninhabited });
+    try store.appendResidualDisposition(gpa, .{ .scheme_owner_node = 987, .type_id = @intFromEnum(b), .kind = .contextual, .target = @intFromEnum(c) });
+
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
     // declared record sequence [{field}, {_ : a}].
     const fa = try store.appendTypeIds(gpa, &.{c});
@@ -28468,6 +28992,24 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), nested_captured[1].outerScheme());
     }
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));
+
+    // Scheme owner index and residual dispositions survive the round-trip.
+    try std.testing.expectEqual(@as(usize, 1), loaded.scheme_ids_by_owner.items.len);
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), loaded.schemeIdForOwnerNode(987));
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), loaded.schemeIdForOwnerNode(111));
+    try std.testing.expectEqual(@as(usize, 2), loaded.residual_dispositions.items.len);
+    {
+        const uninhabited = loaded.residual_dispositions.items[0];
+        try std.testing.expectEqual(CheckedResidualDispositionKind.uninhabited, uninhabited.kind);
+        try std.testing.expectEqual(a, uninhabited.typeId());
+        try std.testing.expectEqual(@as(?CheckedTypeId, null), uninhabited.contextualTarget());
+        const contextual = loaded.residual_dispositions.items[1];
+        try std.testing.expectEqual(CheckedResidualDispositionKind.contextual, contextual.kind);
+        try std.testing.expectEqual(b, contextual.typeId());
+        try std.testing.expectEqual(@as(?CheckedTypeId, c), contextual.contextualTarget());
+    }
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), loaded.view().schemeIdForOwnerNode(987));
+
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, loaded.nominal_declarations.items[0].formalArgs(&loaded));
     try std.testing.expectEqual(c, loaded.nominal_declarations.items[0].backing);
     try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, loaded.nominal_declarations.items[0].paddingFieldTypes(&loaded));
@@ -28762,8 +29304,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xEB, 0x73, 0x9B, 0x63, 0x42, 0x31, 0x87, 0x40, 0x7D, 0xAC, 0xBA, 0xD4, 0x71, 0xFA, 0x1B, 0xF4,
-        0x43, 0x33, 0xA0, 0x97, 0x86, 0x63, 0x31, 0x0A, 0xAA, 0x34, 0x86, 0x74, 0x08, 0xFF, 0x80, 0xEF,
+        0x01, 0xD0, 0x35, 0x37, 0x7E, 0x2F, 0x44, 0x7A, 0x39, 0xC4, 0x1C, 0xB4, 0xEB, 0xF1, 0x1B, 0x33,
+        0x07, 0x15, 0xC1, 0xC1, 0xD7, 0x40, 0x7E, 0xFB, 0xC2, 0x58, 0x12, 0x71, 0xA4, 0xB1, 0x6C, 0x51,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
