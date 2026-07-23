@@ -107,6 +107,23 @@ batches and of each other:
   — each subcommand's struct/parser/help triple becomes one table;
   target rosters and defaults render from their enums.
 
+A fourth batch (2026-07-20) targets operational robustness and
+build-throughput gaps rather than sources of truth. The projects are
+independent of the earlier batches and of each other:
+
+- [big/parallel-backend-codegen.md](big/parallel-backend-codegen.md)
+  — dev-backend code generation moves from one sequential proc loop to
+  per-proc worker generation feeding a single deterministic writer; no
+  new IR, the per-proc code/relocation artifacts are the handoff unit.
+- [big/unreachable-rationale-comments.md](big/unreachable-rationale-comments.md)
+  — every `unreachable` under `src/` carries a same-line rationale (or
+  is converted to a checked invariant), enforced forever by a CI lint
+  with a shrinking allowlist.
+- [small/ice-crash-context.md](small/ice-crash-context.md)
+  — a panic handler that prints what the compiler was doing (phase,
+  module, def) plus a repro command before the stack trace, built from
+  thread-local context frames pushed at existing phase boundaries.
+
 ## Recommended order
 
 ### Start here — enforcement layers, cheap and load-bearing

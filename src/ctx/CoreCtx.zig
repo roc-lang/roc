@@ -131,7 +131,44 @@ pub const VTable = struct {
     /// Return the width (in columns) of the stderr terminal, or `null` if it
     /// is not a terminal or the width cannot be determined.
     terminalWidth: *const fn (?*anyopaque, std.Io) ?u16,
+
+    // --- File mapping ---
+
+    /// Map the file at `path` into memory as a private, copy-on-write
+    /// mapping: writes to the returned bytes stay process-private and never
+    /// reach the file on disk. Returns `null` when this implementation cannot
+    /// map files (virtual filesystems, targets without `mmap`) or when this
+    /// particular file cannot be mapped; callers then read the file through
+    /// `readFile` instead. Release a returned mapping with `MappedFile.unmap`.
+    mapFilePrivate: *const fn (?*anyopaque, std.Io, []const u8) ?MappedFile = &defaultMapFilePrivate,
 };
+
+/// Whether this target can produce private file mappings.
+pub const can_map_files = @hasDecl(std.posix, "mmap") and
+    builtin.target.os.tag != .windows and
+    builtin.target.os.tag != .freestanding;
+
+/// A private, copy-on-write file mapping produced by `mapFilePrivate`.
+pub const MappedFile = struct {
+    /// The mapped region, page-aligned. The leading `file_len` bytes are the
+    /// file's contents; any bytes beyond them are zero padding to page size.
+    region: []align(std.heap.page_size_min) u8,
+    /// The mapped file's size in bytes.
+    file_len: usize,
+
+    /// The file's bytes within the mapping.
+    pub fn bytes(self: MappedFile) []u8 {
+        return self.region[0..self.file_len];
+    }
+
+    pub fn unmap(self: MappedFile) void {
+        if (comptime can_map_files) std.posix.munmap(self.region);
+    }
+};
+
+fn defaultMapFilePrivate(_: ?*anyopaque, _: std.Io, _: []const u8) ?MappedFile {
+    return null;
+}
 
 // --- Filesystem wrapper methods ---
 
@@ -158,6 +195,12 @@ pub fn fileExists(self: Self, path: []const u8) bool {
 /// Get metadata for `path`.
 pub fn stat(self: Self, path: []const u8) StatError!FileInfo {
     return self.vtable.stat(self.ctx, self.std_io, path);
+}
+
+/// Map the file at `path` as a private, copy-on-write mapping, or `null` when
+/// this context or target cannot map it. Release with `MappedFile.unmap`.
+pub fn mapFilePrivate(self: Self, path: []const u8) ?MappedFile {
+    return self.vtable.mapFilePrivate(self.ctx, self.std_io, path);
 }
 
 /// Backward-compat alias for `stat`.
@@ -482,6 +525,7 @@ const os_vtable = VTable{
     .readStdin = &osReadStdin,
     .isTty = &osIsTty,
     .terminalWidth = &osTerminalWidth,
+    .mapFilePrivate = &osMapFilePrivate,
 };
 
 const testing_vtable = VTable{
@@ -567,6 +611,25 @@ pub fn writeFileCwd(io: std.Io, sub_path: []const u8, data: []const u8) std.Io.D
 }
 
 // --- OS implementations ---
+
+fn osMapFilePrivate(_: ?*anyopaque, std_io: std.Io, path: []const u8) ?MappedFile {
+    if (comptime !can_map_files) return null;
+
+    var file = std.Io.Dir.cwd().openFile(std_io, path, .{}) catch return null;
+    defer file.close(std_io);
+
+    const info = file.stat(std_io) catch return null;
+    const size = std.math.cast(usize, info.size) orelse return null;
+    // mmap rejects a zero length; an empty file has no bytes worth mapping.
+    if (size == 0) return null;
+
+    // Copy-on-write: writes into the mapping stay process-private and never
+    // reach the file on disk.
+    const prot: std.posix.PROT = .{ .READ = true, .WRITE = true };
+    const flags: std.posix.MAP = .{ .TYPE = .PRIVATE };
+    const region = std.posix.mmap(null, size, prot, flags, file.handle, 0) catch return null;
+    return .{ .region = region, .file_len = size };
+}
 
 fn osReadFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: Allocator) ReadError![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(std_io, path, allocator, .limited(max_file_size)) catch |err| return switch (err) {

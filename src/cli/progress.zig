@@ -428,6 +428,10 @@ fn collectStatic(buf: *std.Io.Writer.Allocating, timings_flag: bool) void {
     });
     reporter.begin("Code Generation");
     reporter.end();
+    reporter.begin("LLVM Optimize + Emit");
+    reporter.end();
+    reporter.begin("Linking");
+    reporter.end();
     reporter.finish();
 }
 
@@ -443,6 +447,9 @@ test "static breakdown lists every phase with the timings flag" {
     try testing.expect(std.mem.find(u8, out, "Name Resolution") != null);
     try testing.expect(std.mem.find(u8, out, "Type Inference") != null);
     try testing.expect(std.mem.find(u8, out, "Code Generation") != null);
+    // The post-codegen backend phases each get their own aligned row.
+    try testing.expect(std.mem.find(u8, out, "LLVM Optimize + Emit") != null);
+    try testing.expect(std.mem.find(u8, out, "Linking") != null);
     // Type Checking is replaced by its breakdown, not shown directly.
     try testing.expect(std.mem.find(u8, out, "Type Checking") == null);
 }

@@ -2988,14 +2988,29 @@ pub const Coordinator = struct {
         };
         defer manager.allocator.free(entries_dir);
 
-        const entry = manager.loadRawBytes(cache_key.bytes, entries_dir) orelse return false;
-        defer manager.allocator.free(entry);
+        // Load the entry as a copy-on-write mmap where the OS supports it, heap-read
+        // otherwise. The mapping's lifetime is confined to this function: the entry
+        // is decoded and its env/artifact bodies are copied into separately-owned
+        // 16-byte-aligned buffers below, then `cache_data.deinit` unmaps (or frees)
+        // it before returning. The deserialized env and artifact alias those copies,
+        // never this mapping, so nothing outlives the `defer`.
+        const cache_data = manager.loadRawBytesMapped(cache_key.bytes, entries_dir) orelse return false;
+        defer cache_data.deinit(manager.allocator);
+        const entry = cache_data.data();
 
         const bodies = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
             manager.stats.recordInvalidation();
             return false;
         };
 
+        // The env and artifact bodies are copied (not aliased) out of `entry`: each
+        // needs its own 16-byte-aligned, independently-owned buffer whose lifetime
+        // outlives this function. The env buffer flows into the artifact's
+        // `.cached_buffer` (freed via `allocator.free`) and the artifact buffer into
+        // its `serialized_backing`; the artifact body's file offset (header + env
+        // length) is not 16-aligned, so a single mapping could not back both in
+        // place. Threading the mapping's munmap-based ownership through those two
+        // distinct owners is why this path copies rather than aliasing the mmap.
         const module_alloc = self.getModuleAllocator();
         const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.env_body.len) catch {
             manager.stats.recordInvalidation();

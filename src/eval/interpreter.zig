@@ -270,6 +270,19 @@ const InterpreterRocEnv = struct {
 /// Interprets statement-only LIR procs directly.
 pub const Interpreter = struct {
     const LirInterpreter = @This();
+    /// Debug-build-only call-depth guard. Release builds of the compiler must
+    /// never constrain what compile-time evaluation (or interpreted execution)
+    /// can do, including how deeply it recurses — an arbitrary depth budget
+    /// would make well-formed programs compile in Debug and fail in release,
+    /// or vice versa. In release builds recursion is bounded only by actual
+    /// native stack memory. Exhausting it is reported by whoever owns the
+    /// executing thread: compile-time evaluation runs on compiler threads
+    /// covered by the stack overflow guard in `src/base`, while runtime
+    /// interpretation runs in the shim/app process, where stack-overflow
+    /// reporting belongs to the platform host. The Debug check exists to turn
+    /// runaway recursion into a deterministic Roc crash with this
+    /// interpreter's context attached instead of a native fault. See
+    /// design.md ("Compile-Time Evaluation And Static Storage").
     const max_call_depth: usize = 1024;
     const stack_overflow_message =
         "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
@@ -1693,8 +1706,10 @@ pub const Interpreter = struct {
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
 
-        if (self.call_depth >= max_call_depth) {
-            return self.triggerCrash(stack_overflow_message);
+        if (comptime builtin.mode == .Debug) {
+            if (self.call_depth >= max_call_depth) {
+                return self.triggerCrash(stack_overflow_message);
+            }
         }
         if (args.len != arg_layouts.len) {
             return self.invariantFailedError(
