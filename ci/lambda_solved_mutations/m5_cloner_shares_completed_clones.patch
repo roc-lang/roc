@@ -1,0 +1,21 @@
+diff --git a/src/postcheck/lambda_solved/solve.zig b/src/postcheck/lambda_solved/solve.zig
+--- a/src/postcheck/lambda_solved/solve.zig
++++ b/src/postcheck/lambda_solved/solve.zig
+@@ -2172,7 +2172,7 @@
+         // A callable-free subgraph carries no callable slot, so its completed
+         // clone is safe to share across occurrences.
+         const callable_free = !(try self.solver.containsCallableOccurrence(ty));
+-        if (callable_free) {
++        if (callable_free or true) { // seeded mutation: share every completed clone
+             if (self.shared_callable_free.get(ty)) |cached| return cached;
+         }
+ 
+@@ -2186,7 +2186,7 @@
+             try self.forced_dynamic_backings.append(self.solver.allocator, backing.ty);
+         }
+         _ = self.active_path.remove(ty);
+-        if (callable_free) {
++        if (callable_free or true) { // seeded mutation: share every completed clone
+             try self.shared_callable_free.put(ty, reserved);
+         }
+         return reserved;

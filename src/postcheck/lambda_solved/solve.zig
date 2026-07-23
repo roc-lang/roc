@@ -1,4 +1,67 @@
 //! Lambda solving over lifted Monotype IR.
+//!
+//! This stage computes callable flow: the finite set of concrete lambdas that
+//! can reach each function-typed position. That flow appears nowhere in the
+//! checked module, so unlike the Monotype stage this solver derives its domain
+//! for the first time rather than re-deriving a checked one. It is the sole
+//! general unifier kept after checking, exempt by design (reunify.md section
+//! 12.1), and its architecture — a close port of the cor `lss` lambdasolved
+//! experiment — does not change. The load-bearing invariants (reunify.md
+//! section 12):
+//!
+//! - Sets live inside types. Every `func` node carries a third slot, its
+//!   `callable`, alongside args and ret; a lambda set buried in a record field,
+//!   tag payload, or list element propagates by ordinary structural traversal.
+//!   The solver builds enriched types, it does not read a side table.
+//! - Set agreement is equality closure, never directed subset flow. A set
+//!   determines the tag-union layout of its closures, so the producer and
+//!   consumer of one runtime value must share the same set; one-way propagation
+//!   would permit two layouts for one value and would need re-tagging coercions
+//!   on every edge to stay sound. Merging slots by equality is union-find, i.e.
+//!   unification (`unify`, `mergeLambdaSets` keyed by lambda symbol,
+//!   `unifyCaptures` pointwise with a hard capture-identity invariant).
+//! - Erasure infects both directions. A consumer that boxes a callable erases
+//!   the producer's construction site too, so `markErasedCallablesReachedByType`
+//!   unifies a minted erased node into every callable slot reached as data, and
+//!   erased absorbs a lambda set from either side. Still-unbound slots — never
+//!   called, never stored — seal to the empty set (`closeCallableSlot`).
+//! - Downstream identity depends on merged roots. `FnSpec` deduplicates
+//!   procedures on the rooted solved function type var, so the merged
+//!   equivalence class is the specialization identity.
+//! - The solver never generalizes. `Content.forall` is never constructed; it
+//!   exists only as an invariant trap. Each lifted function gets exactly one
+//!   solved type, and every use unifies against that same var. Where cor mints
+//!   two specializations of a polymorphic `id`, roc pools both closures into one
+//!   merged set and one procedure: coarser but self-consistent, because every
+//!   connected position shares one equivalence class and one layout. This is a
+//!   deliberate divergence from cor's per-use instantiation, not a defect;
+//!   lambda-set polymorphism is a separate design effort if ever wanted, so do
+//!   not "fix" it in either direction here.
+//! - Monotype structural identity never implies callable-flow identity. Types
+//!   enter through `lowerTypeFresh`, whose cloner keeps an active-path map (not
+//!   a completed-graph memo): a reservation is reused only by a genuine
+//!   recursive back-edge, and a later non-recursive occurrence of one monotype
+//!   id clones fresh with its own callable slot. Two structurally identical
+//!   function types therefore get distinct slots; slots become equal only
+//!   through recursion or an explicit value-flow unification. Callable-free
+//!   subgraphs may still share a completed clone, behind a
+//!   `containsCallableOccurrence` proof. This lands before the Monotype store is
+//!   interned, so interning cannot silently coarsen sets (reunify.md section
+//!   12.5).
+//!
+//! Beyond the callable slots, the structural walk makes a fixed, inventoried
+//! set of non-callable decisions — the empty-tag-union tie-break, backed-alias
+//! unwrapping (`transparentAliasBacking`), score-selected generated-evidence
+//! backings, four iterator nominal-identity joins, named backing authority, and
+//! the erasure pass's iterator-backing exemption. That inventory is the census
+//! in reunify.md section 12.4 item 5. The Debug-only `seamResidualShapesAgree`
+//! checkpoint asserts that, past every census relation, both seam sides share a
+//! content constructor, so Monotype drift during its migration is caught at the
+//! seam; the census identifiers are also pinned by line count in
+//! `ci/check_reunify_manifest.pl`, so a new special relation must be classified
+//! there and in the census before it can land. The field pair deliberately
+//! outside the seam contract is a named type's layout-only `declared_order` and
+//! `named_type`, which the close and erase passes also skip.
 
 const std = @import("std");
 const can = @import("can");
@@ -1565,6 +1628,10 @@ const Solver = struct {
             return;
         }
 
+        if (@import("builtin").mode == .Debug and !seamResidualShapesAgree(left, right)) {
+            Common.invariant("Lambda Solved seam saw divergent structural shapes past the reunify section 12.4 census");
+        }
+
         switch (left) {
             .primitive => |left_primitive| switch (right) {
                 .primitive => |right_primitive| {
@@ -1842,6 +1909,30 @@ const Solver = struct {
     fn isEmptyTagUnion(content: Type.Content) bool {
         return switch (content) {
             .tag_union => |tags| tags.count() == 0,
+            else => false,
+        };
+    }
+
+    /// Debug-only seam assertion for reunify.md section 12.6. Both operands of
+    /// a structural unification descend from the same ground lifted monotypes,
+    /// so once the section 12.4 census relations above have each had their
+    /// chance to fire, the residual pair must share a content constructor
+    /// before the structural walk recurses. The only census relation that
+    /// legitimately crosses constructors at this point is erased-callable
+    /// dominance, which absorbs a lambda set from either direction. This is a
+    /// single seam checkpoint, not a re-check of the walk: constructor-internal
+    /// disagreement stays the walk's job (the count and label checks in
+    /// unifySpans/unifyFields/unifyTags and the per-constructor else arms), the
+    /// layout-only declared_order and named_type fields are never compared (the
+    /// named arm discards the loser's copies), and a func's callable slot is
+    /// the solver's own unknown rather than shared structure. A firing here
+    /// means the Monotype stage handed the seam two divergent shapes: report it
+    /// as a census gap, never widen this exemption to silence it.
+    fn seamResidualShapesAgree(left: Type.Content, right: Type.Content) bool {
+        if (std.meta.activeTag(left) == std.meta.activeTag(right)) return true;
+        return switch (left) {
+            .erased => right == .lambda_set,
+            .lambda_set => right == .erased,
             else => false,
         };
     }
@@ -2284,6 +2375,338 @@ fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {
     if (left == null and right == null) return true;
     if (left == null or right == null) return false;
     return std.mem.eql(u8, left.?.bytes[0..], right.?.bytes[0..]);
+}
+
+// --- Direct lambda-set invariant tests (reunify.md section 12.6) ---
+//
+// The Lambda Mono differential harness consumes the same solved program on
+// both sides, so a mutated set corrupts both identically and the harness
+// cannot see it; set-coarsening is usually behavior-preserving so output tests
+// miss it too. These tests drive the solver's own store directly, each one
+// pinning one section 12 invariant. They build a bare `Solver` over an
+// `Ast.Program` whose lifted half is left unset (the store-only tests never
+// read it, and the cloning tests point `lifted.types` at a hand-built monotype
+// store), so no lifted program scaffolding is needed.
+
+fn testProgram(gpa: Allocator) Ast.Program {
+    return .{
+        .allocator = gpa,
+        .lifted = undefined,
+        .types = Type.Store.init(gpa),
+        .defs = .empty,
+        .local_tys = .empty,
+        .expr_tys = .empty,
+        .pat_tys = .empty,
+        .fn_tys = .empty,
+        .layout_requests = .empty,
+        .runtime_schema_requests = .empty,
+    };
+}
+
+fn testSolver(program: *Ast.Program) Solver {
+    return .{
+        .allocator = program.allocator,
+        .program = program,
+        .lifted = undefined,
+        .local_tys = &.{},
+        .expr_tys = &.{},
+        .pat_tys = &.{},
+        .expr_done = &.{},
+        .generated_backing_pats = &.{},
+        .loop_results = .empty,
+        .loop_params = .empty,
+        .join_points = .empty,
+        .return_contexts = .empty,
+        .active_unifications = std.AutoHashMap(UnifyPair, void).init(program.allocator),
+        .callable_occurrence_memo = std.AutoHashMap(MonoType.TypeId, bool).init(program.allocator),
+    };
+}
+
+fn deinitTestSolver(solver: *Solver) void {
+    solver.callable_occurrence_memo.deinit();
+    solver.active_unifications.deinit();
+}
+
+fn testSym(n: u32) Common.Symbol {
+    return @enumFromInt(n);
+}
+
+fn addSingletonSet(store: *Type.Store, lambda: Common.Symbol) Allocator.Error!Type.TypeVarId {
+    const members = try store.addMembers(&.{.{ .lambda = lambda, .captures = Type.Span.empty() }});
+    return store.add(.{ .lambda_set = members });
+}
+
+fn solvedRoot(store: *Type.Store, ty: Type.TypeVarId) Type.Content {
+    return store.get(store.rootCompressed(ty));
+}
+
+test "occurrence cloning gives structurally identical function-typed fields distinct callable slots" {
+    const gpa = std.testing.allocator;
+
+    // Two record fields whose declared type is the *same* monotype function id,
+    // the shape interning would coarsen. The cloner must still hand each
+    // occurrence its own callable slot; sharing would merge their lambda sets
+    // with no value-flow edge.
+    var mono = MonoType.Store.init(gpa);
+    defer mono.deinit();
+
+    const elem = try mono.add(.{ .primitive = .u64 });
+    const arg_span = try mono.addSpan(&.{elem});
+    const fn_ty = try mono.add(.{ .func = .{ .args = arg_span, .ret = elem } });
+    const fields = try mono.addFields(&.{
+        .{ .name = @enumFromInt(0), .ty = fn_ty },
+        .{ .name = @enumFromInt(1), .ty = fn_ty },
+    });
+    const record = try mono.add(.{ .record = fields });
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    solver.lifted.types = mono.view();
+
+    const lowered = try solver.lowerTypeFresh(record);
+
+    const record_fields = program.types.fieldSpan(solvedRoot(&program.types, lowered).record);
+    const first = record_fields[0].ty;
+    const second = record_fields[1].ty;
+    try std.testing.expect(program.types.rootCompressed(first) != program.types.rootCompressed(second));
+
+    const first_fn = solvedRoot(&program.types, first).func;
+    const second_fn = solvedRoot(&program.types, second).func;
+    try std.testing.expect(first_fn.callable != second_fn.callable);
+    try std.testing.expect(program.types.get(first_fn.callable) == .unbound);
+    try std.testing.expect(program.types.get(second_fn.callable) == .unbound);
+}
+
+test "explicit value flow merges the callable slots of two function positions" {
+    const gpa = std.testing.allocator;
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    const store = &program.types;
+
+    const set_a = try addSingletonSet(store, testSym(1));
+    const set_b = try addSingletonSet(store, testSym(2));
+    const ret_a = try store.add(.zst);
+    const ret_b = try store.add(.zst);
+    const fn_a = try store.add(.{ .func = .{ .args = Type.Span.empty(), .callable = set_a, .ret = ret_a } });
+    const fn_b = try store.add(.{ .func = .{ .args = Type.Span.empty(), .callable = set_b, .ret = ret_b } });
+
+    try solver.unify(fn_a, fn_b);
+
+    try std.testing.expect(store.rootCompressed(fn_a) == store.rootCompressed(fn_b));
+    const merged_callable = solvedRoot(store, solvedRoot(store, fn_a).func.callable);
+    const members = store.memberSpan(merged_callable.lambda_set);
+    try std.testing.expectEqual(@as(usize, 2), members.len);
+    try std.testing.expectEqual(testSym(1), members[0].lambda);
+    try std.testing.expectEqual(testSym(2), members[1].lambda);
+}
+
+test "occurrence cloning ties a genuine recursive back-reference and nothing else" {
+    const gpa = std.testing.allocator;
+
+    // `rec = (rec) -> u64` is self-referential through its argument. A record
+    // with two `rec` fields gives two independent occurrences of that type.
+    var mono = MonoType.Store.init(gpa);
+    defer mono.deinit();
+
+    const ret = try mono.add(.{ .primitive = .u64 });
+    const Ctx = struct { store: *MonoType.Store, ret: MonoType.TypeId };
+    const rec = try mono.addRecursive(Ctx{ .store = &mono, .ret = ret }, struct {
+        fn fill(ctx: Ctx, self_id: MonoType.TypeId) Allocator.Error!MonoType.Content {
+            const args = try ctx.store.addSpan(&.{self_id});
+            return .{ .func = .{ .args = args, .ret = ctx.ret } };
+        }
+    }.fill);
+    const fields = try mono.addFields(&.{
+        .{ .name = @enumFromInt(0), .ty = rec },
+        .{ .name = @enumFromInt(1), .ty = rec },
+    });
+    const record = try mono.add(.{ .record = fields });
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    solver.lifted.types = mono.view();
+
+    const lowered = try solver.lowerTypeFresh(record);
+    const record_fields = program.types.fieldSpan(solvedRoot(&program.types, lowered).record);
+    const first = program.types.rootCompressed(record_fields[0].ty);
+    const second = program.types.rootCompressed(record_fields[1].ty);
+
+    // Separate occurrences do not share.
+    try std.testing.expect(first != second);
+    const first_fn = program.types.get(first).func;
+    const second_fn = program.types.get(second).func;
+    try std.testing.expect(first_fn.callable != second_fn.callable);
+
+    // The recursive self-reference inside one clone ties the genuine back-edge:
+    // the argument var is the cloned function itself.
+    const first_arg = program.types.rootCompressed(program.types.spanItem(first_fn.args, 0));
+    try std.testing.expectEqual(first, first_arg);
+    const second_arg = program.types.rootCompressed(program.types.spanItem(second_fn.args, 0));
+    try std.testing.expectEqual(second, second_arg);
+}
+
+test "mergeLambdaSets unions members by lambda symbol and unifies shared captures pointwise" {
+    const gpa = std.testing.allocator;
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    const store = &program.types;
+
+    const cap_a = try store.add(.unbound);
+    const cap_b = try store.add(.unbound);
+    const capture_id: check.CheckedModule.CaptureId = @enumFromInt(9);
+    const captures_left = try store.addCaptures(&.{
+        .{ .local = @enumFromInt(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = cap_a },
+    });
+    const captures_right = try store.addCaptures(&.{
+        .{ .local = @enumFromInt(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = cap_b },
+    });
+    const left = try store.addMembers(&.{.{ .lambda = testSym(1), .captures = captures_left }});
+    const right = try store.addMembers(&.{
+        .{ .lambda = testSym(1), .captures = captures_right },
+        .{ .lambda = testSym(2), .captures = Type.Span.empty() },
+    });
+
+    const merged = try solver.mergeLambdaSets(left, right);
+
+    const members = store.memberSpan(merged);
+    try std.testing.expectEqual(@as(usize, 2), members.len);
+    try std.testing.expectEqual(testSym(1), members[0].lambda);
+    try std.testing.expectEqual(testSym(2), members[1].lambda);
+    // The shared lambda merged once, and its capture types unified pointwise.
+    try std.testing.expectEqual(store.rootCompressed(cap_a), store.rootCompressed(cap_b));
+}
+
+test "unifyCaptures unifies capture types under matching identity" {
+    const gpa = std.testing.allocator;
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    const store = &program.types;
+
+    const left_ty = try store.add(.unbound);
+    const right_ty = try store.add(.zst);
+    const capture_id: check.CheckedModule.CaptureId = @enumFromInt(4);
+    const left = try store.addCaptures(&.{
+        .{ .local = @enumFromInt(0), .symbol = testSym(0), .binder = null, .capture_id = capture_id, .ty = left_ty },
+    });
+    const right = try store.addCaptures(&.{
+        .{ .local = @enumFromInt(1), .symbol = testSym(3), .binder = null, .capture_id = capture_id, .ty = right_ty },
+    });
+
+    try solver.unifyCaptures(left, right);
+    try std.testing.expectEqual(store.rootCompressed(left_ty), store.rootCompressed(right_ty));
+    // A capture-count or capture-identity mismatch is a `Common.invariant`
+    // hard failure, which aborts the process rather than returning an error, so
+    // that path is exercised by the seeded mutation check, not in-process here.
+}
+
+test "erased callable absorbs a lambda set from either direction and accumulates members" {
+    const gpa = std.testing.allocator;
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    const store = &program.types;
+
+    const digest = Type.names.TypeDigest{ .bytes = [_]u8{0} ** 32 };
+
+    // lambda_set on the left, erased on the right.
+    const set_a = try addSingletonSet(store, testSym(1));
+    const erased_a = try store.add(.{ .erased = .{
+        .source_fn_ty = digest,
+        .members = try store.addMembers(&.{.{ .lambda = testSym(2), .captures = Type.Span.empty() }}),
+    } });
+    try solver.unify(set_a, erased_a);
+    const left_root = solvedRoot(store, set_a);
+    try std.testing.expect(left_root == .erased);
+    try std.testing.expectEqual(@as(usize, 2), store.memberSpan(left_root.erased.members).len);
+
+    // erased on the left, lambda_set on the right.
+    const erased_b = try store.add(.{ .erased = .{
+        .source_fn_ty = digest,
+        .members = try store.addMembers(&.{.{ .lambda = testSym(3), .captures = Type.Span.empty() }}),
+    } });
+    const set_b = try addSingletonSet(store, testSym(4));
+    try solver.unify(erased_b, set_b);
+    const right_root = solvedRoot(store, erased_b);
+    try std.testing.expect(right_root == .erased);
+    try std.testing.expectEqual(@as(usize, 2), store.memberSpan(right_root.erased.members).len);
+}
+
+test "an unbound callable slot seals to the empty set" {
+    const gpa = std.testing.allocator;
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    const store = &program.types;
+
+    const callable = try store.add(.unbound);
+    const ret = try store.add(.zst);
+    _ = try store.add(.{ .func = .{ .args = Type.Span.empty(), .callable = callable, .ret = ret } });
+
+    try solver.closeUnfilledCallableSlots();
+
+    const sealed = solvedRoot(store, callable);
+    try std.testing.expect(sealed == .lambda_set);
+    try std.testing.expectEqual(@as(usize, 0), store.memberSpan(sealed.lambda_set).len);
+}
+
+test "the erasure pass keeps a minted iterator step closure a lambda set while erasing plain callables" {
+    const gpa = std.testing.allocator;
+
+    var program = testProgram(gpa);
+    defer program.types.deinit();
+    var solver = testSolver(&program);
+    defer deinitTestSolver(&solver);
+    const store = &program.types;
+
+    // A minted `Iter` nominal holds its step closure by value in its backing;
+    // the erasure pass must leave that closure a lambda set.
+    const step_set = try addSingletonSet(store, testSym(1));
+    const step_ret = try store.add(.zst);
+    const step_fn = try store.add(.{ .func = .{ .args = Type.Span.empty(), .callable = step_set, .ret = step_ret } });
+    const iter_def = MonoType.TypeDef{
+        .module = @enumFromInt(0),
+        .type_name = @enumFromInt(0),
+        .iterator_representation = .minted,
+        .iterator_kind = .map,
+        .iterator_depth = 1,
+    };
+    const iterator = try store.add(.{ .named = .{
+        .named_type = std.mem.zeroes(MonoType.NamedType),
+        .def = iter_def,
+        .kind = .nominal,
+        .builtin_owner = .iter,
+        .args = Type.Span.empty(),
+        .backing = .{ .ty = step_fn, .use = .runtime_layout_only },
+        .declared_order = Type.Span.empty(),
+    } });
+
+    // A plain callable reached as data, by contrast, must erase.
+    const plain_set = try addSingletonSet(store, testSym(2));
+    const plain_ret = try store.add(.zst);
+    const plain_fn = try store.add(.{ .func = .{ .args = Type.Span.empty(), .callable = plain_set, .ret = plain_ret } });
+
+    try solver.markErasedCallablesReachedByType(iterator);
+    try solver.markErasedCallablesReachedByType(plain_fn);
+
+    try std.testing.expect(solvedRoot(store, step_set) == .lambda_set);
+    try std.testing.expect(solvedRoot(store, plain_set) == .erased);
 }
 
 test "lambda solved solve declarations are referenced" {

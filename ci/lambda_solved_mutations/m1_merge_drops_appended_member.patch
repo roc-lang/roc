@@ -1,0 +1,12 @@
+diff --git a/src/postcheck/lambda_solved/solve.zig b/src/postcheck/lambda_solved/solve.zig
+--- a/src/postcheck/lambda_solved/solve.zig
++++ b/src/postcheck/lambda_solved/solve.zig
+@@ -1981,7 +1981,7 @@
+                 try self.unifyCaptures(left_member.captures, right_member.captures);
+                 break;
+             }
+-            if (!found) try members.append(self.allocator, right_member);
++            if (!found) {} // seeded mutation: drop the appended member
+         }
+ 
+         return try self.program.types.addMembers(members.items);

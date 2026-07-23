@@ -1,0 +1,12 @@
+diff --git a/src/postcheck/lambda_solved/solve.zig b/src/postcheck/lambda_solved/solve.zig
+--- a/src/postcheck/lambda_solved/solve.zig
++++ b/src/postcheck/lambda_solved/solve.zig
+@@ -1995,7 +1995,7 @@
+             if (left_capture.capture_id != right_capture.capture_id) {
+                 Common.invariant("capture identity failed Lambda Solved unification");
+             }
+-            try self.unify(left_capture.ty, right_capture.ty);
++            _ = left_capture.ty; // seeded mutation: skip capture-type unify
+         }
+     }
+ 

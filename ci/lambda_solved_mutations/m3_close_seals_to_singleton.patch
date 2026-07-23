@@ -1,0 +1,12 @@
+diff --git a/src/postcheck/lambda_solved/solve.zig b/src/postcheck/lambda_solved/solve.zig
+--- a/src/postcheck/lambda_solved/solve.zig
++++ b/src/postcheck/lambda_solved/solve.zig
+@@ -457,7 +457,7 @@
+     ) Allocator.Error!void {
+         const root = self.program.types.rootCompressed(callable);
+         switch (self.program.types.get(root)) {
+-            .unbound => self.program.types.set(root, .{ .lambda_set = .empty() }),
++            .unbound => self.program.types.set(root, .{ .lambda_set = try self.program.types.addMembers(&.{.{ .lambda = @enumFromInt(0), .captures = Type.Span.empty() }}) }), // seeded mutation: seal to a singleton
+             .lambda_set,
+             .erased,
+             => try self.closeCallableSlotsInType(root, done, active),
