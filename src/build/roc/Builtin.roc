@@ -2234,17 +2234,13 @@ Builtin :: [].{
 		## returns `Err(BadUtf8)`. Valid slices do not allocate.
 		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
 		drop_first_bytes = |str, count| {
-			len = Str.count_utf8_bytes(str)
-			if count >= len {
-				Ok("")
-			} else {
+			if count < Str.count_utf8_bytes(str) {
 				byte = str_get_utf8_byte_unsafe(str, count)
 				if byte >= 128 and byte < 192 {
-					Err(BadUtf8)
-				} else {
-					Ok(str_substring_unsafe(str, count, len - count))
+					return Err(BadUtf8)
 				}
 			}
+			Ok(str_drop_first_bytes_unsafe(str, count))
 		}
 
 		## Drop a byte count from the end of a string. Counts at or beyond the byte
@@ -21773,6 +21769,20 @@ str_get_utf8_byte_unsafe : Str, U64 -> U8
 # Implemented by the compiler. The caller guarantees the byte range is in bounds.
 # The result shares the source string's allocation.
 str_substring_unsafe : Str, U64, U64 -> Str
+
+## Drop `count` bytes from the front of a string as a zero-copy slice ("" when
+## `count` is at or past the end). Bounds are handled; what is NOT checked is
+## that `count` falls on a UTF-8 boundary — the caller guarantees that, so the
+## slice is a valid string. (`Str.drop_first_bytes` is the checked version.)
+str_drop_first_bytes_unsafe : Str, U64 -> Str
+str_drop_first_bytes_unsafe = |s, count| {
+	len = Str.count_utf8_bytes(s)
+	if count >= len {
+		""
+	} else {
+		str_substring_unsafe(s, count, len - count)
+	}
+}
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element
