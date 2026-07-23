@@ -1458,6 +1458,16 @@ pub const StaticDispatchPlanTable = struct {
         return self.evidence_refs[found.start .. found.start + found.len];
     }
 
+    /// The `evidence_refs` range for the site evidence at `expr`, or null when the
+    /// use needed no evidence (reunify.md 9.7, Slice 6): the same lookup as
+    /// `siteEvidence`, returning the range rather than the resolved slice so a caller
+    /// can record the reference (an instantiation site's evidence vector) without
+    /// recovering an offset from a slice.
+    pub fn siteEvidenceRange(self: *const StaticDispatchPlanTable, expr: CheckedExprId) ?SiteEvidenceEntry {
+        const found = artifact_serialize.binarySearchByKey(SiteEvidenceEntry, u32, self.site_evidence, @intFromEnum(expr), siteEvidenceOrder) orelse return null;
+        return found.*;
+    }
+
     /// Build-time-only teardown: frees the heap-owned slices. A frozen
     /// (deserialized) table's slices alias the artifact's single backing buffer and are
     /// NEVER freed here — the artifact's `deinitInternal` frees the buffer wholesale and

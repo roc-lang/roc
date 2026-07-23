@@ -33,6 +33,7 @@ const Allocator = std.mem.Allocator;
 const check = @import("check");
 
 const MonoType = @import("../monotype/type.zig");
+const monotype_ast = @import("../monotype/ast.zig");
 const census = @import("../monotype/census.zig");
 const logic = @import("logical_identity.zig");
 
@@ -80,6 +81,11 @@ pub const Inputs = struct {
     concrete_modules: []const ShadowModule,
     concrete_roots: []const ConcreteRoot,
     scheme_sources: []const SchemeSource,
+    /// The sealed specialization records (reunify.md 11, Slice 6): one record per
+    /// reserved, lowering, or ready specialization. The shadow reads these read-only
+    /// to census the logical identity of each record and to locate and classify the
+    /// records whose solved type digest differs from the requested type digest.
+    program_specs: []const monotype_ast.SpecRecord,
 };
 
 /// Whether the shadow should run: compiled in, and turned on by the env var.
@@ -111,6 +117,36 @@ const MismatchDetail = struct {
     fn deinit(self: MismatchDetail, allocator: Allocator) void {
         allocator.free(self.shadow_desc);
         allocator.free(self.other_desc);
+    }
+};
+
+/// One dispatch-target site that carries no resolved evidence reference (reunify.md
+/// 9.7, Slice 6): the edge identity, so the gap can be located exactly. Bounded to
+/// `max_mismatch_details`.
+const EvidenceGapDetail = struct {
+    module_bytes: [32]u8,
+    use_node: u32,
+    slot_data: u32,
+    scheme_owner_node: u32,
+};
+
+/// One specialization record whose solved type digest differs from its requested
+/// type digest AND whose two sides reduce to DIFFERENT logical skeletons (reunify.md
+/// 11.4, Slice 6). The digest difference is not explained by a representation-only
+/// change, so it is either a corrected checked output or a rejected compiler
+/// bug; the bounded detail locates the record for classification. `logical_divergent`
+/// is a red flag: the request and solved logical skeletons are not equal.
+const SpecDiffDetail = struct {
+    request_digest: [32]u8,
+    solved_digest: [32]u8,
+    request_logical_digest: [32]u8,
+    solved_logical_digest: [32]u8,
+    request_shape: []u8,
+    solved_shape: []u8,
+
+    fn deinit(self: SpecDiffDetail, allocator: Allocator) void {
+        allocator.free(self.request_shape);
+        allocator.free(self.solved_shape);
     }
 };
 
@@ -160,6 +196,38 @@ const ShadowCensus = struct {
     scheme_walk_alias_without_backing: u64 = 0,
     scheme_walk_malformed_builtin_arity: u64 = 0,
     scheme_walk_binder_not_found: u64 = 0,
+
+    // Evidence-carry totality (reunify.md 9.7, Slice 6): per slot kind, how many
+    // recorded sites carry a resolved evidence-vector reference and how many do not.
+    // A dispatch-target site whose nested evidence checking resolved always carries
+    // one, so an absent one is a flagged gap (bounded detail in `evidence_gaps`); a
+    // value or shared use with an evidence-free scheme legitimately carries none.
+    evidence_dispatch_target_present: u64 = 0,
+    evidence_dispatch_target_absent: u64 = 0,
+    evidence_value_use_present: u64 = 0,
+    evidence_value_use_absent: u64 = 0,
+    evidence_shared_value_use_present: u64 = 0,
+    evidence_shared_value_use_absent: u64 = 0,
+    evidence_nested_function_use_present: u64 = 0,
+    evidence_nested_function_use_absent: u64 = 0,
+
+    // Specialization registry census (reunify.md 11, Slice 6). The shadow reserves
+    // one provisional record per sealed production record, so record-count parity is
+    // `spec_records_total` by construction. Per record it reduces the requested type to
+    // a logical skeleton (`spec_logical_computed` when reducible, `spec_logical_skipped`
+    // when representation-bearing or recursive). Where the solved type digest differs
+    // from the requested digest (reunify.md 11.4), it reduces both sides: equal logical
+    // skeletons mean a representation-interface relation (legitimate); unequal skeletons
+    // mean a corrected checked output or a rejected bug (a red flag, bounded detail
+    // in `spec_diffs`); a side that will not reduce is `spec_diff_skipped`.
+    spec_records_total: u64 = 0,
+    spec_logical_computed: u64 = 0,
+    spec_logical_skipped: u64 = 0,
+    spec_request_equals_solved: u64 = 0,
+    spec_request_differs_solved: u64 = 0,
+    spec_diff_representation_only: u64 = 0,
+    spec_diff_logical_divergent: u64 = 0,
+    spec_diff_skipped: u64 = 0,
 
     fn bumpSkip(self: *ShadowCensus, reason: SkipReason) void {
         switch (reason) {
@@ -213,10 +281,145 @@ fn runInner(allocator: Allocator, inputs: Inputs) Allocator.Error!void {
         details.deinit(allocator);
     }
 
+    var evidence_gaps = std.ArrayList(EvidenceGapDetail).empty;
+    defer evidence_gaps.deinit(allocator);
+
+    var spec_diffs = std.ArrayList(SpecDiffDetail).empty;
+    defer {
+        for (spec_diffs.items) |diff| diff.deinit(allocator);
+        spec_diffs.deinit(allocator);
+    }
+
     try runConcreteRoots(allocator, &logical, inputs, &counts, &details);
     try runSchemeEdges(allocator, &logical, inputs, &counts, &details);
+    try runSiteEvidenceCensus(allocator, inputs, &counts, &evidence_gaps);
+    try runSpecRegistryCensus(allocator, &logical, inputs, &counts, &spec_diffs);
 
-    dump(allocator, &counts, details.items);
+    dump(allocator, &counts, details.items, evidence_gaps.items, spec_diffs.items);
+}
+
+/// Census the sealed specialization registry (reunify.md 11, Slice 6). Read-only: the
+/// shadow reduces each record's requested type to a logical skeleton and, where the
+/// solved type digest differs from the requested digest, reduces both sides to
+/// classify the difference per reunify.md 11.4 as a representation-interface relation
+/// (equal logical skeletons) or a corrected-output/rejected-bug divergence
+/// (unequal logical skeletons, bounded detail). Record-count parity holds by
+/// construction: the shadow reserves one provisional record per production record.
+fn runSpecRegistryCensus(
+    allocator: Allocator,
+    logical: *LogicalStore,
+    inputs: Inputs,
+    counts: *ShadowCensus,
+    spec_diffs: *std.ArrayList(SpecDiffDetail),
+) Allocator.Error!void {
+    counts.spec_records_total = inputs.program_specs.len;
+
+    for (inputs.program_specs) |record| {
+        // The record's requested type reduces to a logical skeleton unless it is
+        // representation-bearing or recursive (outside the reducible subset).
+        const request_logical = logicalOf(logical, inputs, record.request_fn_ty) catch |err| switch (err) {
+            error.Skip => {
+                counts.spec_logical_skipped += 1;
+                continue;
+            },
+            else => |other| return other,
+        };
+        counts.spec_logical_computed += 1;
+
+        if (std.meta.eql(record.request_fn_ty_digest.bytes, record.solved_fn_ty_digest.bytes)) {
+            counts.spec_request_equals_solved += 1;
+            continue;
+        }
+        counts.spec_request_differs_solved += 1;
+
+        const solved_logical = logicalOf(logical, inputs, record.solved_fn_ty) catch |err| switch (err) {
+            error.Skip => {
+                counts.spec_diff_skipped += 1;
+                continue;
+            },
+            else => |other| return other,
+        };
+
+        if (request_logical == solved_logical) {
+            // reunify.md 11.4: logically equal, differing only in representation — an
+            // explicit representation-interface relation, not a logical refinement.
+            counts.spec_diff_representation_only += 1;
+        } else {
+            // reunify.md 11.4: the solved skeleton is not logically equal to the
+            // requested one — a corrected checked output or a rejected bug.
+            counts.spec_diff_logical_divergent += 1;
+            if (spec_diffs.items.len < max_mismatch_details) {
+                const request_shape = try logical.describe(allocator, request_logical);
+                errdefer allocator.free(request_shape);
+                const solved_shape = try logical.describe(allocator, solved_logical);
+                errdefer allocator.free(solved_shape);
+                try spec_diffs.append(allocator, .{
+                    .request_digest = record.request_fn_ty_digest.bytes,
+                    .solved_digest = record.solved_fn_ty_digest.bytes,
+                    .request_logical_digest = logical.digestBytes(request_logical),
+                    .solved_logical_digest = logical.digestBytes(solved_logical),
+                    .request_shape = request_shape,
+                    .solved_shape = solved_shape,
+                });
+            }
+        }
+    }
+}
+
+/// The logical skeleton of a program Monotype id, resolving the skip reason locally
+/// (the specialization census does not distinguish the reason). Read-only.
+fn logicalOf(logical: *LogicalStore, inputs: Inputs, mono_ty: MonoType.TypeId) logic.WalkError!logic.LogicalTypeIdentity {
+    var reason: SkipReason = undefined;
+    return logical.monoLogicalIdentity(inputs.program_store, inputs.program_names, mono_ty, &reason);
+}
+
+/// Census the evidence-carry totality of every recorded instantiation site
+/// (reunify.md 9.7, Slice 6). Per slot kind, count sites whose `evidenceRange` is
+/// present versus absent; a dispatch-target site with no reference is a flagged gap
+/// with bounded detail. Read-only over the sealed checked store.
+fn runSiteEvidenceCensus(
+    allocator: Allocator,
+    inputs: Inputs,
+    counts: *ShadowCensus,
+    gaps: *std.ArrayList(EvidenceGapDetail),
+) Allocator.Error!void {
+    for (inputs.scheme_sources) |source| {
+        for (source.store.instantiationSites()) |site| {
+            const present = site.evidenceRange() != null;
+            switch (@as(checked.InstantiationSiteSlotKind, @enumFromInt(site.slot_kind))) {
+                .dispatch_target => {
+                    if (present) {
+                        counts.evidence_dispatch_target_present += 1;
+                    } else {
+                        counts.evidence_dispatch_target_absent += 1;
+                        if (gaps.items.len < max_mismatch_details) {
+                            try gaps.append(allocator, .{
+                                .module_bytes = source.module_bytes,
+                                .use_node = site.use_node,
+                                .slot_data = site.slot_data,
+                                .scheme_owner_node = site.scheme_owner_node,
+                            });
+                        }
+                    }
+                },
+                .value_use => if (present) {
+                    counts.evidence_value_use_present += 1;
+                } else {
+                    counts.evidence_value_use_absent += 1;
+                },
+                .shared_value_use => if (present) {
+                    counts.evidence_shared_value_use_present += 1;
+                } else {
+                    counts.evidence_shared_value_use_absent += 1;
+                },
+                .nested_function_use => if (present) {
+                    counts.evidence_nested_function_use_present += 1;
+                } else {
+                    counts.evidence_nested_function_use_absent += 1;
+                },
+            }
+        }
+    }
 }
 
 fn runConcreteRoots(
@@ -516,8 +719,15 @@ fn recordMismatch(
     });
 }
 
-/// Append the counter dump and any bounded mismatch detail to the census file.
-fn dump(allocator: Allocator, counts: *ShadowCensus, details: []const MismatchDetail) void {
+/// Append the counter dump and any bounded mismatch/evidence-gap/spec-diff detail to
+/// the census file.
+fn dump(
+    allocator: Allocator,
+    counts: *ShadowCensus,
+    details: []const MismatchDetail,
+    evidence_gaps: []const EvidenceGapDetail,
+    spec_diffs: []const SpecDiffDetail,
+) void {
     if (comptime !enabled) return;
     const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
     if (std.mem.len(raw_path) == 0) return;
@@ -528,6 +738,31 @@ fn dump(allocator: Allocator, counts: *ShadowCensus, details: []const MismatchDe
     inline for (@typeInfo(ShadowCensus).@"struct".fields) |field| {
         const value = @field(counts, field.name);
         const line = std.fmt.allocPrint(allocator, "shadow_{s} {d}\n", .{ field.name, value }) catch return;
+        defer allocator.free(line);
+        out.appendSlice(allocator, line) catch return;
+    }
+
+    for (evidence_gaps) |gap| {
+        const module_hex = std.fmt.bytesToHex(gap.module_bytes[0..8].*, .lower);
+        const line = std.fmt.allocPrint(
+            allocator,
+            "shadow_evidence_gap_detail scope=dispatch_target module={s} use_node={d} slot_data={d} scheme_owner_node={d}\n",
+            .{ &module_hex, gap.use_node, gap.slot_data, gap.scheme_owner_node },
+        ) catch return;
+        defer allocator.free(line);
+        out.appendSlice(allocator, line) catch return;
+    }
+
+    for (spec_diffs) |diff| {
+        const request_hex = std.fmt.bytesToHex(diff.request_digest[0..8].*, .lower);
+        const solved_hex = std.fmt.bytesToHex(diff.solved_digest[0..8].*, .lower);
+        const request_logical_hex = std.fmt.bytesToHex(diff.request_logical_digest[0..8].*, .lower);
+        const solved_logical_hex = std.fmt.bytesToHex(diff.solved_logical_digest[0..8].*, .lower);
+        const line = std.fmt.allocPrint(
+            allocator,
+            "shadow_spec_diff_detail request={s} solved={s} request_logical={s} solved_logical={s}\n  request_shape={s}\n  solved_shape={s}\n",
+            .{ &request_hex, &solved_hex, &request_logical_hex, &solved_logical_hex, diff.request_shape, diff.solved_shape },
+        ) catch return;
         defer allocator.free(line);
         out.appendSlice(allocator, line) catch return;
     }

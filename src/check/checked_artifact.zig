@@ -2503,6 +2503,19 @@ pub const instantiation_site_scheme_none: u32 = std.math.maxInt(u32);
 /// every real `CheckedTypeId`.
 pub const checked_instantiation_actual_unreached: u32 = std.math.maxInt(u32);
 
+/// A `CheckedInstantiationSite.evidence_start` value meaning the site carries no
+/// resolved evidence reference (reunify.md 9.7, Slice 6). Distinct from a resolved
+/// range whose `len` is zero, which means the site's evidence vector is present but
+/// empty (a monomorphic dispatch target with no nested obligations). A dispatch
+/// target whose obligations checking resolved always carries a present reference; a
+/// value use only carries one when its scheme has evidence params.
+pub const instantiation_site_evidence_none: u32 = std.math.maxInt(u32);
+
+/// The slot discriminator a `CheckedInstantiationSite.slot_kind` holds, re-exported
+/// so a consumer classifies a site by kind without depending on the checker's
+/// use-record module (reunify.md 7.2/9.7, Slice 6).
+pub const InstantiationSiteSlotKind = ModuleEnv.SchemeUseRecord.Slot;
+
 /// Public `CheckedInstantiationSite` declaration (reunify.md 7.2, Slice 2).
 ///
 /// One dense scheme-instantiation edge published from the checker's positional
@@ -2540,6 +2553,20 @@ pub const CheckedInstantiationSite = struct {
     /// Its actuals are recorded against that module's binder order (reunify.md
     /// 7.1, Slice 2).
     defining_module_hash: [32]u8 = [_]u8{0} ** 32,
+    /// Start of this site's evidence vector as a range into the module's
+    /// `StaticDispatchPlanTable.evidence_refs`, or `instantiation_site_evidence_none`
+    /// when no evidence reference was resolved (reunify.md 9.7, Slice 6). A dispatch
+    /// target's vector is its resolved evidence node's nested obligations; a value or
+    /// shared use's vector is the site-evidence range keyed by the use's checked
+    /// expression. The reference is resolved at checking time, when the type store's
+    /// union-find is still live, so a later stage reads the vector without re-resolving
+    /// any variable. The evidence itself is disjoint from this store (it lives in the
+    /// plan table); the site carries only the reference the binding is instantiated
+    /// alongside. Verified, not yet authoritative — nothing lowers from it.
+    evidence_start: u32 = instantiation_site_evidence_none,
+    /// Length of this site's evidence vector within `evidence_refs`; zero when the
+    /// vector is present but empty (see `evidence_start`).
+    evidence_len: u32 = 0,
 
     /// The owning published scheme id, or null when unresolved.
     pub fn schemeId(self: CheckedInstantiationSite) ?CheckedTypeSchemeId {
@@ -2557,6 +2584,15 @@ pub const CheckedInstantiationSite = struct {
     /// The site's positional actuals within its store's `instantiation_site_actuals`.
     pub fn actuals(self: CheckedInstantiationSite, pool_owner: anytype) []const CheckedTypeId {
         return pool_owner.instantiationSiteActuals()[self.actuals_start .. self.actuals_start + self.actuals_len];
+    }
+
+    /// This site's evidence-vector reference into the module's
+    /// `StaticDispatchPlanTable.evidence_refs` (reunify.md 9.7, Slice 6), or null when
+    /// no evidence reference was resolved. A present range with `len == 0` is an empty
+    /// evidence vector (present, not absent).
+    pub fn evidenceRange(self: CheckedInstantiationSite) ?struct { start: u32, len: u32 } {
+        if (self.evidence_start == instantiation_site_evidence_none) return null;
+        return .{ .start = self.evidence_start, .len = self.evidence_len };
     }
 };
 
@@ -14679,7 +14715,11 @@ const EvidencePass = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    checked_types: *const CheckedTypePublication,
+    /// Mutable so `wireInstantiationSiteEvidence` can record each dense site's
+    /// evidence-vector reference back onto `checked_types.store.instantiation_sites`
+    /// once the plan table's evidence is built (reunify.md 9.7, Slice 6). Every other
+    /// use reads it.
+    checked_types: *CheckedTypePublication,
     checked_bodies: *const CheckedBodyStore,
     local_method_registry: *const static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
@@ -14744,7 +14784,7 @@ const EvidencePass = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
-        checked_types: *const CheckedTypePublication,
+        checked_types: *CheckedTypePublication,
         checked_bodies: *const CheckedBodyStore,
         local_method_registry: *const static_dispatch.MethodRegistry,
         import_views: CheckedImportViews,
@@ -14974,6 +15014,61 @@ const EvidencePass = struct {
         self.plan_table.site_evidence = try self.site_evidence.toOwnedSlice(self.allocator);
         self.templates.evidence_params_pool = try self.evidence_params_pool.toOwnedSlice(self.allocator);
         self.templates.evidence_param_paths = try self.evidence_param_paths.toOwnedSlice(self.allocator);
+
+        // With the plan table's evidence built and the type store's union-find still
+        // live, record each dense instantiation site's evidence-vector reference so a
+        // later stage carries it alongside the site's binding without re-resolving any
+        // variable (reunify.md 9.7, Slice 6).
+        try self.wireInstantiationSiteEvidence();
+    }
+
+    /// Record each published instantiation site's evidence-vector reference into its
+    /// `evidence_start`/`evidence_len` (reunify.md 9.7, Slice 6). A dispatch-target
+    /// site's vector is its resolved evidence node's nested obligations, reached
+    /// through the constraint fn var it recorded; a value or shared use's vector is the
+    /// site-evidence range keyed by the use's checked expression. A site with no
+    /// resolvable evidence keeps the `instantiation_site_evidence_none` sentinel it was
+    /// published with (a dispatch target should always resolve; a value use with an
+    /// evidence-free scheme legitimately does not). The evidence lives in the plan
+    /// table, disjoint from this store; the site records only the reference.
+    fn wireInstantiationSiteEvidence(self: *EvidencePass) Allocator.Error!void {
+        const dispatch_target: u32 = @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target);
+        const value_use: u32 = @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.value_use);
+        const shared_value_use: u32 = @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
+        const census_on = reunify_census.active();
+
+        for (self.checked_types.store.instantiation_sites.items) |*site| {
+            if (site.slot_kind == dispatch_target) {
+                // The dense site's `slot_data` is the raw constraint fn var; the
+                // pass keyed its dispatch-target record by that var's settled root.
+                const root = self.types.resolveVar(@enumFromInt(site.slot_data)).var_;
+                const record_idx = self.target_by_fn_var.get(@intFromEnum(root)) orelse {
+                    if (census_on) reunify_census.recordEvidenceCarry(.dispatch_no_pair_record);
+                    continue;
+                };
+                const node_id = self.node_by_record.get(record_idx) orelse {
+                    if (census_on) reunify_census.recordEvidenceCarry(.dispatch_no_evidence_node);
+                    continue;
+                };
+                const nested = self.plan_table.evidenceNode(node_id).nested;
+                site.evidence_start = nested.start;
+                site.evidence_len = nested.len;
+                if (census_on) reunify_census.recordEvidenceCarry(.dispatch_wired);
+            } else if (site.slot_kind == value_use or site.slot_kind == shared_value_use) {
+                const shared = site.slot_kind == shared_value_use;
+                const checked_expr = self.checked_bodies.exprIdForSource(@enumFromInt(site.use_node)) orelse {
+                    if (census_on) reunify_census.recordEvidenceCarry(if (shared) .shared_no_site_entry else .value_no_site_entry);
+                    continue;
+                };
+                const entry = self.plan_table.siteEvidenceRange(checked_expr) orelse {
+                    if (census_on) reunify_census.recordEvidenceCarry(if (shared) .shared_no_site_entry else .value_no_site_entry);
+                    continue;
+                };
+                site.evidence_start = entry.start;
+                site.evidence_len = entry.len;
+                if (census_on) reunify_census.recordEvidenceCarry(if (shared) .shared_wired else .value_wired);
+            }
+        }
     }
 
     fn buildIndexes(self: *EvidencePass) Allocator.Error!void {
@@ -15733,7 +15828,7 @@ fn resolveTotalDispatchPlans(
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
-    checked_types: *const CheckedTypePublication,
+    checked_types: *CheckedTypePublication,
     checked_bodies: *const CheckedBodyStore,
     local_method_registry: *const static_dispatch.MethodRegistry,
     import_views: CheckedImportViews,
@@ -25206,7 +25301,11 @@ pub const CheckedModuleArtifact = struct {
     // v31 (reunify.md 7.1, Slice 6): `CheckedTypeStore` gained a consuming-side
     // imported-scheme table (`imported_schemes` + `imported_scheme_binders`)
     // projecting each imported scheme's defining root and binders into the consumer.
-    const serialized_layout_version: u32 = 31;
+    // v32 (reunify.md 9.7, Slice 6): `CheckedInstantiationSite` gained an
+    // evidence-vector reference (`evidence_start`/`evidence_len`) into the plan
+    // table's `evidence_refs`, so a site's binding carries its resolved dispatch
+    // evidence without a registry query.
+    const serialized_layout_version: u32 = 32;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -29715,6 +29814,20 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .actuals_start = site_actuals.start,
         .actuals_len = site_actuals.len,
         .defining_module_hash = [_]u8{0x3A} ** 32,
+        // A resolved evidence-vector reference (reunify.md 9.7, Slice 6): a present,
+        // non-empty range into the plan table's evidence refs.
+        .evidence_start = 5,
+        .evidence_len = 2,
+    });
+    // A second site with no resolved evidence reference: the `none` sentinel round-trips
+    // and `evidenceRange` reads back as absent.
+    try store.instantiation_sites.append(gpa, .{
+        .use_node = 322,
+        .slot_kind = @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target),
+        .slot_data = 42,
+        .scheme_owner_node = 654,
+        .scheme = 0,
+        .instantiated_root = c,
     });
 
     // A scheme owner index entry (reunify.md 7.1, Slice 2) and residual-variable
@@ -29798,9 +29911,10 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, nominal.args);
     try std.testing.expectEqualSlices(CheckedTypeId, &.{a}, nominal.padding_field_types);
 
-    // Dense instantiation site: edge fields, scheme id, instantiated root, and
-    // positional actuals (with the unreached sentinel) all survive.
-    try std.testing.expectEqual(@as(usize, 1), loaded.instantiation_sites.items.len);
+    // Dense instantiation site: edge fields, scheme id, instantiated root,
+    // positional actuals (with the unreached sentinel), and the evidence-vector
+    // reference all survive.
+    try std.testing.expectEqual(@as(usize, 2), loaded.instantiation_sites.items.len);
     {
         const site = loaded.instantiation_sites.items[0];
         try std.testing.expectEqual(@as(u32, 321), site.use_node);
@@ -29812,6 +29926,15 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqual(@as(usize, 2), actuals.len);
         try std.testing.expectEqual(b, actuals[0]);
         try std.testing.expectEqual(@as(u32, checked_instantiation_actual_unreached), @intFromEnum(actuals[1]));
+        const evidence = site.evidenceRange() orelse unreachable;
+        try std.testing.expectEqual(@as(u32, 5), evidence.start);
+        try std.testing.expectEqual(@as(u32, 2), evidence.len);
+    }
+    {
+        // The second site's `none` sentinel round-trips as an absent reference.
+        const site = loaded.instantiation_sites.items[1];
+        try std.testing.expectEqual(@as(u32, 322), site.use_node);
+        try std.testing.expect(site.evidenceRange() == null);
     }
 
     // Scheme owner discriminator, generalized vars, and a nested scheme's
@@ -30153,8 +30276,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x44, 0x8A, 0x34, 0xC9, 0x2C, 0x33, 0x2B, 0x85, 0x62, 0x27, 0x69, 0x15, 0x1F, 0xF6, 0x4F, 0x5C,
-        0x60, 0x27, 0x75, 0x2B, 0x85, 0x87, 0x54, 0x3D, 0xCB, 0x6B, 0x31, 0x20, 0xBA, 0x80, 0x69, 0x66,
+        0x00, 0x5F, 0xA3, 0x80, 0xC0, 0x95, 0x6A, 0x3D, 0x77, 0x5C, 0xCA, 0x9F, 0xB7, 0x4F, 0xA5, 0x99,
+        0xFB, 0x05, 0x77, 0x5D, 0x99, 0x2A, 0xF5, 0x6D, 0xE6, 0x42, 0xAF, 0x21, 0xD2, 0xF5, 0xDB, 0xF4,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

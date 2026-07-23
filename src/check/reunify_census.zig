@@ -164,6 +164,22 @@ var matcher_mismatch_details: [max_identifications][detail_capacity]u8 = undefin
 var matcher_mismatch_detail_lens: [max_identifications]usize = [_]usize{0} ** max_identifications;
 var matcher_mismatch_detail_count: usize = 0;
 
+// Slice 6 evidence carry (reunify.md 9.7). When wiring each dense site's
+// evidence-vector reference, classify the outcome. A dispatch-target site's
+// reference is its resolved evidence node's nested vector; the two absent reasons
+// distinguish a target whose dispatch did not discharge a scheme-use pair record
+// (its resolution is a chain forward, structural derivation, checked error, or
+// vacuous edge — no procedure evidence node exists) from a record that resolved with
+// no evidence node. A value or shared use's reference is its site-evidence range;
+// an absent one means the used scheme carries no evidence params.
+var evidence_dispatch_wired = std.atomic.Value(u64).init(0);
+var evidence_dispatch_no_pair_record = std.atomic.Value(u64).init(0);
+var evidence_dispatch_no_evidence_node = std.atomic.Value(u64).init(0);
+var evidence_value_wired = std.atomic.Value(u64).init(0);
+var evidence_value_no_site_entry = std.atomic.Value(u64).init(0);
+var evidence_shared_wired = std.atomic.Value(u64).init(0);
+var evidence_shared_no_site_entry = std.atomic.Value(u64).init(0);
+
 var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var divergent_id_count: usize = 0;
 var err_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
@@ -474,6 +490,32 @@ pub fn recordMatcherOutcome(outcome: MatcherOutcome) void {
     }
 }
 
+/// Which evidence-carry (reunify.md 9.7, Slice 6) outcome a census record counts,
+/// classifying how each dense site's evidence-vector reference was resolved.
+pub const EvidenceCarryOutcome = enum {
+    dispatch_wired,
+    dispatch_no_pair_record,
+    dispatch_no_evidence_node,
+    value_wired,
+    value_no_site_entry,
+    shared_wired,
+    shared_no_site_entry,
+};
+
+/// Record one evidence-carry classification (reunify.md 9.7, Slice 6).
+pub fn recordEvidenceCarry(outcome: EvidenceCarryOutcome) void {
+    if (comptime !enabled) return;
+    switch (outcome) {
+        .dispatch_wired => _ = evidence_dispatch_wired.fetchAdd(1, .monotonic),
+        .dispatch_no_pair_record => _ = evidence_dispatch_no_pair_record.fetchAdd(1, .monotonic),
+        .dispatch_no_evidence_node => _ = evidence_dispatch_no_evidence_node.fetchAdd(1, .monotonic),
+        .value_wired => _ = evidence_value_wired.fetchAdd(1, .monotonic),
+        .value_no_site_entry => _ = evidence_value_no_site_entry.fetchAdd(1, .monotonic),
+        .shared_wired => _ = evidence_shared_wired.fetchAdd(1, .monotonic),
+        .shared_no_site_entry => _ = evidence_shared_no_site_entry.fetchAdd(1, .monotonic),
+    }
+}
+
 /// Retain one bounded detail line describing a validation-matcher mismatch
 /// (reunify.md 7.6, Slice 2), so a nonzero mismatch count can be located in the
 /// corpus and investigated.
@@ -568,6 +610,13 @@ pub fn dumpAppend() void {
     sink.print("matcher_skipped_unreached={d}\n", .{matcher_skipped_unreached.load(.monotonic)});
     sink.print("matcher_skipped_no_scheme={d}\n", .{matcher_skipped_no_scheme.load(.monotonic)});
     sink.print("matcher_skipped_walk={d}\n", .{matcher_skipped_walk.load(.monotonic)});
+    sink.print("evidence_dispatch_wired={d}\n", .{evidence_dispatch_wired.load(.monotonic)});
+    sink.print("evidence_dispatch_no_pair_record={d}\n", .{evidence_dispatch_no_pair_record.load(.monotonic)});
+    sink.print("evidence_dispatch_no_evidence_node={d}\n", .{evidence_dispatch_no_evidence_node.load(.monotonic)});
+    sink.print("evidence_value_wired={d}\n", .{evidence_value_wired.load(.monotonic)});
+    sink.print("evidence_value_no_site_entry={d}\n", .{evidence_value_no_site_entry.load(.monotonic)});
+    sink.print("evidence_shared_wired={d}\n", .{evidence_shared_wired.load(.monotonic)});
+    sink.print("evidence_shared_no_site_entry={d}\n", .{evidence_shared_no_site_entry.load(.monotonic)});
     for (divergent_ids[0..divergent_id_count], 0..) |id, i| {
         sink.print("divergent_scheme_use_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
     }

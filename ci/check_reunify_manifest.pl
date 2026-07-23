@@ -270,8 +270,12 @@ my @categories = (
               counts => { $RSLOG => 18, $RSHAD => 1 } },
             { label => 'checkedLogicalIdentityUnder', re => qr/\bcheckedLogicalIdentityUnder\b/,
               counts => { $RSLOG => 10, $RSHAD => 2 } },
+            # $RSHAD grew 1 -> 2 in Slice 6: the specialization-registry census
+            # (reunify.md 11) reduces each sealed spec record's requested and solved
+            # types to a logical skeleton through a second `monoLogicalIdentity` call
+            # site (`logicalOf`), alongside the concrete-root comparison's call.
             { label => 'monoLogicalIdentity', re => qr/\bmonoLogicalIdentity\b/,
-              counts => { $RSLOG => 2, $RSHAD => 1 } },
+              counts => { $RSLOG => 2, $RSHAD => 2 } },
             { label => 'instantiateScheme', re => qr/\binstantiateScheme\b/,
               counts => { $RSLOG => 7, $RSHAD => 1 } },
             { label => 'alphaEqual', re => qr/\balphaEqual\b/,

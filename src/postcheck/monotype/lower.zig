@@ -2610,6 +2610,7 @@ const Builder = struct {
             .concrete_modules = modules.items,
             .concrete_roots = roots.items,
             .scheme_sources = &scheme_sources,
+            .program_specs = self.program.specsView(),
         });
     }
 
