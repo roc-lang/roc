@@ -1236,7 +1236,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.ExprId {
         return switch (binding.body) {
             .direct_template => blk: {
-                const source_fn_ty = schemeRoot(view, binding.source_scheme, "procedure binding source scheme was not output");
+                const source_fn_ty = schemeRoot(view, binding, "procedure binding source scheme was not output");
                 const fn_template = self.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
@@ -2881,14 +2881,14 @@ const Builder = struct {
             .top_level => |top_level| blk: {
                 const view = self.moduleForId(checked.topLevelProcedureModuleId(top_level));
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not output");
+                const binding_source = schemeRoot(view, binding, "top-level procedure binding source scheme was not output");
                 break :blk self.fnDefForProcedureBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
             },
             .imported => |imported| blk: {
                 const view = self.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
+                        const binding_source = schemeRoot(view, binding, "imported procedure binding source scheme was not output");
                         break :blk self.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
                     }
                 }
@@ -9796,7 +9796,7 @@ const BodyContext = struct {
                 const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
+                        const binding_source = schemeRoot(view, binding, "imported procedure binding source scheme was not output");
                         const fn_template = self.builder.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
                         const fn_id = try self.builder.lowerFnTemplateDef(self.method_scope, fn_template, evidence);
                         break :blk try self.addExpr(.{
@@ -9833,7 +9833,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         return switch (binding.body) {
             .direct_template => blk: {
-                const source_fn_ty = schemeRoot(view, binding.source_scheme, "procedure binding source scheme was not output");
+                const source_fn_ty = schemeRoot(view, binding, "procedure binding source scheme was not output");
                 const fn_template = self.builder.fnDefForProcedureBindingBody(
                     view,
                     binding.body,
@@ -17245,14 +17245,14 @@ const BodyContext = struct {
             .top_level => |top_level| blk: {
                 const view = self.builder.moduleForId(checked.topLevelProcedureModuleId(top_level));
                 const binding = view.top_level_procedure_bindings.get(top_level.binding);
-                const binding_source = schemeRoot(view, binding.source_scheme, "top-level procedure binding source scheme was not output");
+                const binding_source = schemeRoot(view, binding, "top-level procedure binding source scheme was not output");
                 break :blk self.builder.fnDefForProcedureBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
             },
             .imported => |imported| blk: {
                 const view = self.builder.moduleForId(checked.importedProcedureModuleId(imported));
                 for (view.exported_procedure_bindings.bindings) |binding| {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                        const binding_source = schemeRoot(view, binding.source_scheme, "imported procedure binding source scheme was not output");
+                        const binding_source = schemeRoot(view, binding, "imported procedure binding source scheme was not output");
                         break :blk self.builder.fnDefForImportedBindingBody(view, binding.body, binding_source, view.types.rootKey(binding_source), mono_fn_ty);
                     }
                 }
@@ -17481,6 +17481,7 @@ const BodyContext = struct {
                     if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
                         break :blk try self.lowerTopLevelProcedureBindingValue(view, .{
                             .source_scheme = binding.source_scheme,
+                            .source_scheme_id = binding.source_scheme_id,
                             .body = switch (binding.body) {
                                 .direct_template => |direct| .{ .direct_template = direct },
                                 .callable_eval_template => |template_id| .{ .callable_eval_template = template_id },
@@ -28060,8 +28061,23 @@ fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.C
     return view.types.payload(checked_ty);
 }
 
-fn schemeRoot(view: ModuleView, source_scheme: anytype, comptime missing_message: []const u8) checked.CheckedTypeId {
-    const scheme = view.types.schemeForKey(source_scheme) orelse Common.invariant(missing_message);
+fn schemeRoot(view: ModuleView, binding: anytype, comptime missing_message: []const u8) checked.CheckedTypeId {
+    // Prefer the binding's dense scheme id (reunify.md 7.1, Slice 2): checking
+    // resolved it once, so postcheck names the scheme directly instead of a
+    // content-key lookup. The content key is the sole route only when the binding
+    // carries no id.
+    if (binding.sourceSchemeId()) |scheme_id| {
+        const scheme = view.types.schemeById(scheme_id) orelse Common.invariant(missing_message);
+        census.bump("scheme_lookup_by_id");
+        if (@import("builtin").mode == .Debug) {
+            if (view.types.schemeForKey(binding.source_scheme)) |by_key| {
+                std.debug.assert(@intFromEnum(by_key.root) == @intFromEnum(scheme.root));
+            }
+        }
+        return scheme.root;
+    }
+    const scheme = view.types.schemeForKey(binding.source_scheme) orelse Common.invariant(missing_message);
+    census.bump("scheme_lookup_by_content_digest");
     return scheme.root;
 }
 

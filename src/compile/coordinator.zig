@@ -3052,6 +3052,11 @@ pub const Coordinator = struct {
         var artifact_owned = true;
         defer if (artifact_owned) artifact.deinit(artifact.canonical_names.allocator);
 
+        // reunify Slice 2 checked-boundary verifier on cached-artifact load
+        // (reunify.md 7.5). Debug-only and census-gated, since a full boundary walk
+        // on every cache load is too hot to run unconditionally.
+        artifact.debugVerifyCheckedTypeBoundaryOnLoad();
+
         if (!std.mem.eql(u8, &artifact.key.bytes, &cache_key.bytes)) {
             manager.stats.recordInvalidation();
             return false;

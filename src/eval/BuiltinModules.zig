@@ -70,6 +70,12 @@ pub const BuiltinModules = struct {
             .{ .static_builtin = builtin_module.env },
         );
 
+        // reunify Slice 2 checked-boundary verifier on baked builtin load
+        // (reunify.md 7.5). Debug-only and census-gated: the builtin data carries
+        // hundreds of schemes and loads on every compiler invocation, so a full
+        // boundary walk here is too hot to run unconditionally.
+        checked_artifact.debugVerifyCheckedTypeBoundaryOnLoad();
+
         return BuiltinModules{
             .allocator = allocator,
             .builtin_module = builtin_module,

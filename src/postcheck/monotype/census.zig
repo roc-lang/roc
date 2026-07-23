@@ -50,6 +50,11 @@ pub const Census = struct {
     builtin_owned_alias_created: Counter = Counter.init(0),
     lambda_alias_unwrap_builtin_owned: Counter = Counter.init(0),
     lambda_generated_backing_equal_score: Counter = Counter.init(0),
+    // reunify.md 7.1, Slice 2: how a procedure binding's source scheme root was
+    // resolved. `by_id` is the dense scheme id carried on the binding; `by_content_digest`
+    // is the content-key lookup used only when the binding stored no id.
+    scheme_lookup_by_id: Counter = Counter.init(0),
+    scheme_lookup_by_content_digest: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the

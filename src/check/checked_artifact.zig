@@ -2364,6 +2364,15 @@ pub const ConstValue = const_store.ConstValue;
 pub const ConstScalar = const_store.ConstScalar;
 pub const ConstNamedType = const_store.NamedType;
 pub const CheckedTypeSchemeId = checked_ids.CheckedTypeSchemeId;
+
+/// A `u32` scheme-id field value meaning "no published `CheckedTypeSchemeId` was
+/// resolved for this reference" (reunify.md 7.1, Slice 2). A procedure binding
+/// carries its source scheme id alongside the content key so postcheck resolves
+/// the scheme by dense id rather than by content-key lookup; this sentinel marks
+/// the rare producer that could not name the id, so the consumer falls back to the
+/// key. Distinct from every real `CheckedTypeSchemeId`.
+pub const checked_scheme_id_none: u32 = std.math.maxInt(u32);
+
 pub const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
 pub const IteratorForPlanId = static_dispatch.IteratorForPlanId;
 /// Public `PatternBinderId` declaration.
@@ -3253,6 +3262,14 @@ pub const CheckedTypeStoreView = struct {
             if (std.meta.eql(scheme.key.bytes, key.bytes)) return scheme;
         }
         return null;
+    }
+
+    /// Looks up a published checked source scheme by its dense id, or null when
+    /// the id is out of range (reunify.md 7.1, Slice 2).
+    pub fn schemeById(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) ?CheckedTypeScheme {
+        const index: usize = @intFromEnum(id);
+        if (index >= self.schemes.len) return null;
+        return self.schemes[index];
     }
 
     /// Returns the canonical key for a checked type root in this view.
@@ -7419,6 +7436,555 @@ fn instantiationSiteRecordsEquivalent(module: TypedCIR.Module, a_idx: u32, b_idx
     }
     return true;
 }
+
+/// reunify Slice 2 checked-boundary verifier (reunify.md 7.5). A Debug-only pass
+/// over a published checked type store that proves the structural invariants later
+/// slices build on. Invariants the committed data fully supports are hard —
+/// `checkedArtifactInvariant` panics on violation; the two checks gated on a known
+/// Slice 2 gap (a local site's dense actual count versus its scheme binder count,
+/// and imported-site scheme resolution) are measured through the opt-in census
+/// rather than failed. When the census is active it also drives the validation
+/// matcher (reunify.md 7.6). Runs at publication and, census-gated, on cached load.
+fn debugVerifyCheckedBoundary(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    executable_roots: []const RootRequest,
+) Allocator.Error!void {
+    if (comptime builtin.mode != .Debug) return;
+    const census_on = reunify_census.active();
+    const payload_count = store.payloadCount();
+
+    // Executable roots reach no `.err` (hard; reunify.md 5.4/7.5). Slice 0 measured
+    // zero violations over the whole store for lowerable modules; the executable
+    // roots are a guarded subset, so this holds for every published module.
+    for (executable_roots) |request| {
+        if (@intFromEnum(request.checked_type) >= payload_count) {
+            checkedArtifactInvariant("boundary verifier: executable root type id is out of range", .{});
+        }
+        if (try checkedTypeContainsError(allocator, store, request.checked_type)) {
+            checkedArtifactInvariant("boundary verifier: an executable root reaches an error type", .{});
+        }
+    }
+
+    // Every scheme's binder range, root, and captured range are in bounds and not
+    // pending (hard). Collect the global binder set while validating.
+    var binder_set = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer binder_set.deinit();
+    for (store.schemes.items) |scheme| {
+        if (@as(u64, scheme.gv_start) + scheme.gv_len > store.type_id_pool.items.len) {
+            checkedArtifactInvariant("boundary verifier: scheme generalized-var range is out of bounds", .{});
+        }
+        for (scheme.generalizedVars(store)) |gv| {
+            debugVerifyCheckedIdReachable(store, gv, "scheme binder");
+            try binder_set.put(gv, {});
+        }
+        debugVerifyCheckedIdReachable(store, scheme.root, "scheme root");
+        if (scheme.snapshotRoot()) |snapshot_root| {
+            debugVerifyCheckedIdReachable(store, snapshot_root, "scheme snapshot root");
+        }
+        if (@as(u64, scheme.captured_start) + scheme.captured_len > store.captured_binders.items.len) {
+            checkedArtifactInvariant("boundary verifier: scheme captured-binder range is out of bounds", .{});
+        }
+    }
+
+    // Captured references name an existing enclosing scheme and a valid binder
+    // index within it, and never the capturing scheme's own binders (hard).
+    for (store.schemes.items) |scheme| {
+        for (scheme.capturedBinders(store)) |captured| {
+            const outer_id = captured.outerScheme() orelse continue; // unattributed: a measured Slice 2 gap
+            if (@intFromEnum(outer_id) >= store.schemes.items.len) {
+                checkedArtifactInvariant("boundary verifier: captured reference names a missing outer scheme", .{});
+            }
+            if (outer_id == scheme.id) {
+                checkedArtifactInvariant("boundary verifier: a scheme captured its own binder", .{});
+            }
+            const outer = store.schemes.items[@intFromEnum(outer_id)];
+            if (captured.binder_index >= outer.gv_len) {
+                checkedArtifactInvariant("boundary verifier: captured binder index is outside the outer scheme's binders", .{});
+            }
+        }
+    }
+
+    // Every instantiation edge appears exactly once, its roots/actuals are in
+    // range, and a local resolved scheme reference is valid (hard). The local
+    // actual-count-versus-binder-count check and imported-site resolution are
+    // measured (reunify.md 7.5 known gaps).
+    var seen_edges = std.AutoHashMap(InstantiationEdgeKey, void).init(allocator);
+    defer seen_edges.deinit();
+    for (store.instantiation_sites.items) |site| {
+        const edge = InstantiationEdgeKey{
+            .use_node = site.use_node,
+            .slot_kind = site.slot_kind,
+            .slot_data = site.slot_data,
+            .scheme_owner_node = site.scheme_owner_node,
+        };
+        const edge_entry = try seen_edges.getOrPut(edge);
+        if (edge_entry.found_existing) {
+            checkedArtifactInvariant("boundary verifier: two published sites share one edge tuple", .{});
+        }
+
+        debugVerifyCheckedIdReachable(store, site.instantiated_root, "site instantiated root");
+
+        if (@as(u64, site.actuals_start) + site.actuals_len > store.instantiation_site_actuals.items.len) {
+            checkedArtifactInvariant("boundary verifier: site actual range is out of bounds", .{});
+        }
+        for (site.actuals(store)) |actual| {
+            if (@intFromEnum(actual) == checked_instantiation_actual_unreached) continue;
+            debugVerifyCheckedIdReachable(store, actual, "site actual");
+        }
+
+        if (site.importedDefiningModule() == null) {
+            if (site.schemeId()) |sid| {
+                if (@intFromEnum(sid) >= store.schemes.items.len) {
+                    checkedArtifactInvariant("boundary verifier: a local site names a missing scheme", .{});
+                }
+                const scheme = store.schemes.items[@intFromEnum(sid)];
+                if (census_on) reunify_census.recordSiteActualsLenMatchesBinders(scheme.gv_len == site.actuals_len);
+            }
+            // A local site with no resolved scheme is a shared/annotation-owned edge
+            // whose target owns no local scheme — a measured Slice 2 gap, not hard.
+        }
+        // An imported site's scheme resolution is already measured at publication.
+    }
+
+    // Residual dispositions: every entry is in range, and a contextual target is
+    // itself in range and fully disposed — never another contextual (no chains or
+    // cycles) (hard; reunify.md 7.4/7.5).
+    var disposition_by_key = std.AutoHashMap(u64, CheckedResidualDisposition).init(allocator);
+    defer disposition_by_key.deinit();
+    for (store.residual_dispositions.items) |disposition| {
+        if (disposition.type_id >= payload_count) {
+            checkedArtifactInvariant("boundary verifier: residual disposition type id is out of range", .{});
+        }
+        const key = (@as(u64, disposition.scheme_owner_node) << 32) | disposition.type_id;
+        try disposition_by_key.put(key, disposition);
+    }
+    for (store.residual_dispositions.items) |disposition| {
+        const target = disposition.contextualTarget() orelse continue;
+        if (@intFromEnum(target) >= payload_count) {
+            checkedArtifactInvariant("boundary verifier: contextual disposition target is out of range", .{});
+        }
+        const target_key = (@as(u64, disposition.scheme_owner_node) << 32) | @intFromEnum(target);
+        if (disposition_by_key.get(target_key)) |target_disposition| {
+            if (target_disposition.kind == .contextual) {
+                checkedArtifactInvariant("boundary verifier: contextual disposition chains to another contextual", .{});
+            }
+        }
+    }
+
+    if (census_on) {
+        try debugRunValidationMatcher(allocator, store, &binder_set, &disposition_by_key);
+    }
+}
+
+/// Assert one checked type id is in range and its payload is not `pending`
+/// (reunify.md 7.5). Debug-only; a violation panics through `checkedArtifactInvariant`.
+fn debugVerifyCheckedIdReachable(store: *const CheckedTypeStore, id: CheckedTypeId, comptime what: []const u8) void {
+    if (@intFromEnum(id) >= store.payloadCount()) {
+        checkedArtifactInvariant("boundary verifier: " ++ what ++ " id is out of range", .{});
+    }
+    switch (store.payload(id)) {
+        .pending => checkedArtifactInvariant("boundary verifier: " ++ what ++ " payload is pending", .{}),
+        else => {},
+    }
+}
+
+/// reunify Slice 2 validation matcher (reunify.md 7.6). For each local site whose
+/// scheme is verified-pristine (`snapshot_root != none`) and whose actuals carry no
+/// unreached sentinel, apply the published substitution to the scheme structure and
+/// compare it against the published instantiated root under logical equality
+/// (alias-erasing, empty-row-normalizing, nominal-preserving), counting
+/// match/mismatch/skip. It reads only checked data and never affects output.
+fn debugRunValidationMatcher(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    binder_set: *const std.AutoHashMap(CheckedTypeId, void),
+    disposition_by_key: *const std.AutoHashMap(u64, CheckedResidualDisposition),
+) Allocator.Error!void {
+    for (store.instantiation_sites.items) |site| {
+        if (site.importedDefiningModule() != null) {
+            reunify_census.recordMatcherOutcome(.skipped_imported);
+            continue;
+        }
+        const sid = site.schemeId() orelse {
+            reunify_census.recordMatcherOutcome(.skipped_no_scheme);
+            continue;
+        };
+        const scheme = store.schemes.items[@intFromEnum(sid)];
+        if (scheme.snapshotRoot() == null) {
+            reunify_census.recordMatcherOutcome(.skipped_no_snapshot);
+            continue;
+        }
+        const actuals = site.actuals(store);
+        var has_unreached = false;
+        for (actuals) |actual| {
+            if (@intFromEnum(actual) == checked_instantiation_actual_unreached) has_unreached = true;
+        }
+        if (has_unreached) {
+            reunify_census.recordMatcherOutcome(.skipped_unreached);
+            continue;
+        }
+
+        // Map each scheme binder to the site's positional actual. A shorter actual
+        // vector than the binder list leaves later binders unmapped (treated as a
+        // walk skip if reached).
+        var subst = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+        defer subst.deinit();
+        const binders = scheme.generalizedVars(store);
+        const mapped = @min(binders.len, actuals.len);
+        for (binders[0..mapped], actuals[0..mapped]) |binder, actual| {
+            try subst.put(binder, actual);
+        }
+
+        var walker = MatcherWalk{
+            .store = store,
+            .binder_set = binder_set,
+            .disposition_by_key = disposition_by_key,
+            .subst = &subst,
+            .owner_node = scheme.owner_node,
+            .allocator = allocator,
+        };
+        var visited = std.AutoHashMap(MatcherPair, void).init(allocator);
+        defer visited.deinit();
+        const result = try walker.compare(scheme.root, site.instantiated_root, &visited);
+        switch (result) {
+            .match => reunify_census.recordMatcherOutcome(.match),
+            .skip => reunify_census.recordMatcherOutcome(.skipped_walk),
+            .mismatch => {
+                reunify_census.recordMatcherOutcome(.mismatch);
+                var buf: [256]u8 = undefined;
+                const detail = std.fmt.bufPrint(&buf, "scheme {d} owner {d} use_node {d} root {d} vs inst {d}: {s}", .{
+                    @intFromEnum(sid),
+                    scheme.owner_node,
+                    site.use_node,
+                    @intFromEnum(scheme.root),
+                    @intFromEnum(site.instantiated_root),
+                    walker.reason(),
+                }) catch "matcher mismatch";
+                reunify_census.recordMatcherMismatchDetail(detail);
+            },
+        }
+    }
+}
+
+/// One (scheme-side, instantiated-side) checked type id pair the matcher has
+/// entered, used to tie recursive nodes (reunify.md 7.6).
+const MatcherPair = struct { left: CheckedTypeId, right: CheckedTypeId };
+
+/// The result of one matcher comparison (reunify.md 7.6): `match` (logically
+/// equal), `mismatch` (a structural disagreement — a publication bug), or `skip`
+/// (a residual or shape the phase-one matcher does not model definitively).
+const MatcherResult = enum { match, mismatch, skip };
+
+/// The directed symbolic matcher walk (reunify.md 7.6). Compares the scheme
+/// structure (with binders substituted by the site's actuals and residuals read
+/// through their recorded dispositions) against the instantiated root.
+const MatcherWalk = struct {
+    store: *const CheckedTypeStore,
+    binder_set: *const std.AutoHashMap(CheckedTypeId, void),
+    disposition_by_key: *const std.AutoHashMap(u64, CheckedResidualDisposition),
+    subst: *std.AutoHashMap(CheckedTypeId, CheckedTypeId),
+    owner_node: u32,
+    allocator: Allocator,
+    /// The first structural disagreement's reason, for bounded mismatch detail.
+    reason_buf: [96]u8 = undefined,
+    reason_len: usize = 0,
+
+    /// Record the first structural disagreement's reason and return `.mismatch`.
+    fn mismatch(self: *MatcherWalk, comptime fmt: []const u8, args: anytype) MatcherResult {
+        if (self.reason_len == 0) {
+            const written = std.fmt.bufPrint(&self.reason_buf, fmt, args) catch "";
+            self.reason_len = written.len;
+        }
+        return .mismatch;
+    }
+
+    fn reason(self: *const MatcherWalk) []const u8 {
+        return self.reason_buf[0..self.reason_len];
+    }
+
+    /// Resolve a backed source alias to its backing (logical equality erases every
+    /// backed alias; §7.6). A backing-less alias has no type to project to and is
+    /// returned as-is. Cycles are bounded by the payload count.
+    fn eraseAlias(self: *const MatcherWalk, id: CheckedTypeId) CheckedTypeId {
+        var current = id;
+        var remaining = self.store.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.store.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                else => return current,
+            }
+        }
+        return current;
+    }
+
+    /// Normalize an empty-row encoding to a canonical empty leaf (§7.6): a record
+    /// with no fields whose extension erases to an empty record is `empty_record`;
+    /// a tag union with no tags whose extension erases to an empty tag union is
+    /// `empty_tag_union`. Returns the normalized payload kind's representative id,
+    /// or the input id unchanged.
+    fn normalizeEmptyRow(self: *const MatcherWalk, id: CheckedTypeId) CheckedTypeId {
+        switch (self.store.payload(id)) {
+            .record => |record| {
+                if (record.fields.len == 0) {
+                    switch (self.store.payload(self.eraseAlias(record.ext))) {
+                        .empty_record => return record.ext,
+                        else => {},
+                    }
+                }
+            },
+            .record_unbound => |fields| {
+                if (fields.len == 0) return id; // an unbound empty row stays open; compared as-is
+            },
+            .tag_union => |tag_union| {
+                if (tag_union.tags.len == 0) {
+                    switch (self.store.payload(self.eraseAlias(tag_union.ext))) {
+                        .empty_tag_union => return tag_union.ext,
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+        return id;
+    }
+
+    fn dispositionFor(self: *const MatcherWalk, id: CheckedTypeId) ?CheckedResidualDisposition {
+        const key = (@as(u64, self.owner_node) << 32) | @intFromEnum(id);
+        return self.disposition_by_key.get(key);
+    }
+
+    fn compare(self: *MatcherWalk, left_in: CheckedTypeId, right_in: CheckedTypeId, visited: *std.AutoHashMap(MatcherPair, void)) Allocator.Error!MatcherResult {
+        const left = self.eraseAlias(left_in);
+        const right = self.eraseAlias(right_in);
+
+        // Tie every entered pair before descending, including a binder or residual
+        // pair (§7.6). A shared in-group site maps a binder to itself, and a
+        // recursive instantiation cycles back to an earlier pair; tying here bounds
+        // both — a revisit is an already-assumed-equal node.
+        const pair = MatcherPair{ .left = left, .right = right };
+        if (visited.contains(pair)) return .match;
+        try visited.put(pair, {});
+
+        // A scheme binder stands for the site's actual at that position; continue
+        // comparing the actual against the instantiated side.
+        if (self.binder_set.contains(left)) {
+            if (self.subst.get(left)) |actual| {
+                if (@intFromEnum(actual) == @intFromEnum(left)) {
+                    // Identity mapping (a shared in-group site): the binder stands
+                    // for itself, so the two sides are the same node.
+                    return .match;
+                }
+                return self.compare(actual, right, visited);
+            }
+            return .skip; // an unmapped binder (shorter actual vector) is not modeled
+        }
+
+        // A residual reads through its recorded disposition: contextual adopts a
+        // concrete target compared against the instantiated side; anything else the
+        // phase-one matcher does not model definitively.
+        switch (self.store.payload(left)) {
+            .flex, .rigid => {
+                if (self.dispositionFor(left)) |disposition| {
+                    if (disposition.contextualTarget()) |target| {
+                        return self.compare(target, right, visited);
+                    }
+                }
+                if (@intFromEnum(left) == @intFromEnum(right)) return .match;
+                return .skip;
+            },
+            else => {},
+        }
+
+        const left_n = self.normalizeEmptyRow(left);
+        const right_n = self.normalizeEmptyRow(right);
+        return self.comparePayloads(left_n, right_n, visited);
+    }
+
+    fn comparePayloads(self: *MatcherWalk, left: CheckedTypeId, right: CheckedTypeId, visited: *std.AutoHashMap(MatcherPair, void)) Allocator.Error!MatcherResult {
+        const left_payload = self.store.payload(left);
+        const right_payload = self.store.payload(right);
+        switch (left_payload) {
+            .err => return if (right_payload == .err) .match else self.mismatch("err vs {s}", .{@tagName(right_payload)}),
+            .empty_record => return if (right_payload == .empty_record) .match else self.mismatch("empty_record vs {s}", .{@tagName(right_payload)}),
+            .empty_tag_union => return if (right_payload == .empty_tag_union) .match else self.mismatch("empty_tag_union vs {s}", .{@tagName(right_payload)}),
+            .pending => return .skip,
+            .flex, .rigid, .alias => return .skip, // aliases already erased; a residual is handled in `compare`
+            .nominal => |left_nominal| {
+                const right_nominal = switch (right_payload) {
+                    .nominal => |n| n,
+                    else => return self.mismatch("nominal vs {s}", .{@tagName(right_payload)}),
+                };
+                if (!canonicalNominalTypeKeyEql(checkedNominalTypeKey(left_nominal), checkedNominalTypeKey(right_nominal))) return self.mismatch("nominal identity differs", .{});
+                return self.compareSlices(left_nominal.args, right_nominal.args, visited, "nominal arg");
+            },
+            .function => |left_fn| {
+                const right_fn = switch (right_payload) {
+                    .function => |f| f,
+                    else => return self.mismatch("function vs {s}", .{@tagName(right_payload)}),
+                };
+                // The effect kind is not compared: a use site legitimately coerces a
+                // pure (or effect-unbound) scheme function to effectful (effect
+                // subsumption), so the pristine scheme's kind and the instantiated
+                // kind differ soundly. Only the argument and result structure is
+                // validated.
+                const args_result = try self.compareSlices(left_fn.args, right_fn.args, visited, "fn arg");
+                if (args_result != .match) return args_result;
+                return self.compare(left_fn.ret, right_fn.ret, visited);
+            },
+            .tuple => |left_items| {
+                const right_items = switch (right_payload) {
+                    .tuple => |items| items,
+                    else => return self.mismatch("tuple vs {s}", .{@tagName(right_payload)}),
+                };
+                return self.compareSlices(left_items, right_items, visited, "tuple elem");
+            },
+            .record, .record_unbound => return self.compareRecordRows(left, right, visited),
+            .tag_union => return self.compareTagRows(left, right, visited),
+        }
+    }
+
+    /// Compare two tag-union rows under logical equality (§7.6): flatten each row's
+    /// extension chain (substitution-aware on the scheme side, so an open tail
+    /// binder absorbs the widened tags the instantiated side carries inline), match
+    /// tags by label, and compare the terminal extensions.
+    fn compareTagRows(self: *MatcherWalk, left: CheckedTypeId, right: CheckedTypeId, visited: *std.AutoHashMap(MatcherPair, void)) Allocator.Error!MatcherResult {
+        var left_tags = std.ArrayList(CheckedTag).empty;
+        defer left_tags.deinit(self.allocator);
+        var right_tags = std.ArrayList(CheckedTag).empty;
+        defer right_tags.deinit(self.allocator);
+        const left_tail = try self.flattenTagRow(left, &left_tags);
+        const right_tail = try self.flattenTagRow(right, &right_tags);
+
+        if (left_tags.items.len != right_tags.items.len) {
+            return self.mismatch("tag count {d} vs {d}", .{ left_tags.items.len, right_tags.items.len });
+        }
+        var saw_skip = false;
+        for (left_tags.items) |lt| {
+            const rt = blk: {
+                for (right_tags.items) |candidate| {
+                    if (@intFromEnum(candidate.name) == @intFromEnum(lt.name)) break :blk candidate;
+                }
+                return self.mismatch("tag label missing on instantiated side", .{});
+            };
+            switch (try self.compareSlices(lt.argsSlice(self.store), rt.argsSlice(self.store), visited, "tag arg")) {
+                .mismatch => return .mismatch,
+                .skip => saw_skip = true,
+                .match => {},
+            }
+        }
+        switch (try self.compare(left_tail, right_tail, visited)) {
+            .mismatch => return .mismatch,
+            .skip => saw_skip = true,
+            .match => {},
+        }
+        return if (saw_skip) .skip else .match;
+    }
+
+    /// Follow a tag-union row's extension chain, accumulating every tag and
+    /// returning the terminal extension id (§7.6). Substitutes a scheme binder tail
+    /// so the row's widened tags are collected; a bare residual or non-row tail
+    /// stops the walk. Bounded by the payload count.
+    fn flattenTagRow(self: *MatcherWalk, start: CheckedTypeId, out: *std.ArrayList(CheckedTag)) Allocator.Error!CheckedTypeId {
+        var current = start;
+        var remaining = self.store.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            current = self.eraseAlias(current);
+            if (self.binder_set.contains(current)) {
+                const actual = self.subst.get(current) orelse return current;
+                if (@intFromEnum(actual) == @intFromEnum(current)) return current;
+                current = actual;
+                continue;
+            }
+            switch (self.store.payload(current)) {
+                .tag_union => |tu| {
+                    try out.appendSlice(self.allocator, tu.tags);
+                    current = tu.ext;
+                },
+                else => return current,
+            }
+        }
+        return current;
+    }
+
+    /// Compare two record rows under logical equality (§7.6): flatten each row's
+    /// extension chain (substitution-aware on the scheme side), match fields by
+    /// label, and compare the terminal extensions.
+    fn compareRecordRows(self: *MatcherWalk, left: CheckedTypeId, right: CheckedTypeId, visited: *std.AutoHashMap(MatcherPair, void)) Allocator.Error!MatcherResult {
+        var left_fields = std.ArrayList(CheckedRecordField).empty;
+        defer left_fields.deinit(self.allocator);
+        var right_fields = std.ArrayList(CheckedRecordField).empty;
+        defer right_fields.deinit(self.allocator);
+        const left_tail = try self.flattenRecordRow(left, &left_fields);
+        const right_tail = try self.flattenRecordRow(right, &right_fields);
+
+        if (left_fields.items.len != right_fields.items.len) {
+            return self.mismatch("record field count {d} vs {d}", .{ left_fields.items.len, right_fields.items.len });
+        }
+        var saw_skip = false;
+        for (left_fields.items) |lf| {
+            const rf = blk: {
+                for (right_fields.items) |candidate| {
+                    if (@intFromEnum(candidate.name) == @intFromEnum(lf.name)) break :blk candidate;
+                }
+                return self.mismatch("record field label missing on instantiated side", .{});
+            };
+            switch (try self.compare(lf.ty, rf.ty, visited)) {
+                .mismatch => return .mismatch,
+                .skip => saw_skip = true,
+                .match => {},
+            }
+        }
+        switch (try self.compare(left_tail, right_tail, visited)) {
+            .mismatch => return .mismatch,
+            .skip => saw_skip = true,
+            .match => {},
+        }
+        return if (saw_skip) .skip else .match;
+    }
+
+    /// Follow a record row's extension chain, accumulating every field and returning
+    /// the terminal extension id (§7.6). A `record_unbound` carries fields with no
+    /// stored extension, so its terminal is an open row leaf.
+    fn flattenRecordRow(self: *MatcherWalk, start: CheckedTypeId, out: *std.ArrayList(CheckedRecordField)) Allocator.Error!CheckedTypeId {
+        var current = start;
+        var remaining = self.store.payloadCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            current = self.eraseAlias(current);
+            if (self.binder_set.contains(current)) {
+                const actual = self.subst.get(current) orelse return current;
+                if (@intFromEnum(actual) == @intFromEnum(current)) return current;
+                current = actual;
+                continue;
+            }
+            switch (self.store.payload(current)) {
+                .record => |record| {
+                    try out.appendSlice(self.allocator, record.fields);
+                    current = record.ext;
+                },
+                .record_unbound => |fields| {
+                    try out.appendSlice(self.allocator, fields);
+                    return current;
+                },
+                else => return current,
+            }
+        }
+        return current;
+    }
+
+    fn compareSlices(self: *MatcherWalk, left: []const CheckedTypeId, right: []const CheckedTypeId, visited: *std.AutoHashMap(MatcherPair, void), comptime what: []const u8) Allocator.Error!MatcherResult {
+        if (left.len != right.len) return self.mismatch(what ++ " count {d} vs {d}", .{ left.len, right.len });
+        var saw_skip = false;
+        for (left, right) |l, r| {
+            switch (try self.compare(l, r, visited)) {
+                .mismatch => return .mismatch,
+                .skip => saw_skip = true,
+                .match => {},
+            }
+        }
+        return if (saw_skip) .skip else .match;
+    }
+};
 
 fn appendCheckedTypeRoot(
     allocator: Allocator,
@@ -12582,9 +13148,23 @@ pub const ProcedureBindingBody = union(enum) {
 };
 
 /// Public `TopLevelProcedureBinding` declaration.
+///
+/// `source_scheme` is the content key of the binding's source scheme;
+/// `source_scheme_id` is the same scheme's dense published `CheckedTypeSchemeId`
+/// (as `u32`), resolved once at publication so postcheck names the scheme by id
+/// instead of a content-key lookup (reunify.md 7.1, Slice 2). It is
+/// `checked_scheme_id_none` only when the key resolved to no published scheme.
 pub const TopLevelProcedureBinding = struct {
     source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme_id: u32 = checked_scheme_id_none,
     body: ProcedureBindingBody,
+
+    /// The binding's source scheme id, or null when the producer stored the
+    /// sentinel (postcheck then resolves by content key).
+    pub fn sourceSchemeId(self: TopLevelProcedureBinding) ?CheckedTypeSchemeId {
+        if (self.source_scheme_id == checked_scheme_id_none) return null;
+        return @enumFromInt(self.source_scheme_id);
+    }
 };
 
 /// Public `TopLevelProcedureBindingTable` declaration.
@@ -12606,6 +13186,7 @@ pub const TopLevelProcedureBindingTable = struct {
         self: *TopLevelProcedureBindingTable,
         allocator: Allocator,
         source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme_id: u32,
         proc_value: canonical.ProcedureValueRef,
         template: canonical.ProcedureTemplateRef,
     ) Allocator.Error!TopLevelProcedureBindingRef {
@@ -12617,6 +13198,7 @@ pub const TopLevelProcedureBindingTable = struct {
         const ref: TopLevelProcedureBindingRef = @enumFromInt(@as(u32, @intCast(old.len)));
         self.bindings[old.len] = .{
             .source_scheme = source_scheme,
+            .source_scheme_id = source_scheme_id,
             .body = .{ .direct_template = .{
                 .proc_value = proc_value,
                 .template = .{ .checked = template },
@@ -12629,6 +13211,7 @@ pub const TopLevelProcedureBindingTable = struct {
         self: *TopLevelProcedureBindingTable,
         allocator: Allocator,
         source_scheme: canonical.CanonicalTypeSchemeKey,
+        source_scheme_id: u32,
         template: CallableEvalTemplateId,
     ) Allocator.Error!TopLevelProcedureBindingRef {
         const old = self.bindings;
@@ -12639,6 +13222,7 @@ pub const TopLevelProcedureBindingTable = struct {
         const ref: TopLevelProcedureBindingRef = @enumFromInt(@as(u32, @intCast(old.len)));
         self.bindings[old.len] = .{
             .source_scheme = source_scheme,
+            .source_scheme_id = source_scheme_id,
             .body = .{ .callable_eval_template = template },
         };
         return ref;
@@ -20700,6 +21284,7 @@ pub const TopLevelValueTable = struct {
         global_value_defs: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
         checked_bodies: *const CheckedBodyStore,
+        checked_types: *const CheckedTypeStore,
         templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
@@ -20734,10 +21319,20 @@ pub const TopLevelValueTable = struct {
                 module.moduleEnvConst(),
                 source_ty,
             );
+            // Resolve the source scheme's dense published id once, here, so the
+            // procedure binding names its scheme by id and postcheck never repeats
+            // the content-key lookup (reunify.md 7.1, Slice 2). Schemes are already
+            // published by this point; the sentinel covers the rare key with no
+            // published scheme.
+            const source_scheme_id: u32 = if (checked_types.schemeForKey(source_scheme)) |scheme|
+                @intFromEnum(scheme.id)
+            else
+                checked_scheme_id_none;
             const value: TopLevelValueKind = if (templates.lookupByDef(def_idx)) |template| blk: {
                 const binding = try procedure_bindings.appendDirect(
                     allocator,
                     source_scheme,
+                    source_scheme_id,
                     .{ .artifact = template.artifact, .proc_base = template.proc_base },
                     template,
                 );
@@ -20774,6 +21369,7 @@ pub const TopLevelValueTable = struct {
                 const binding = try procedure_bindings.appendCallableEval(
                     allocator,
                     source_scheme,
+                    source_scheme_id,
                     callable_template,
                 );
                 break :blk .{ .procedure_binding = binding };
@@ -23373,11 +23969,25 @@ pub const ImportedProcedureBindingBody = union(enum) {
 };
 
 /// Public `ImportedProcedureBindingView` declaration.
+///
+/// `source_scheme_id` is the defining module's dense published
+/// `CheckedTypeSchemeId` for this binding's source scheme (as `u32`), carried
+/// through from the defining module's `TopLevelProcedureBinding` so a consumer
+/// resolves the scheme by id rather than a content-key lookup (reunify.md 7.1,
+/// Slice 2). `checked_scheme_id_none` when the defining side stored the sentinel.
 pub const ImportedProcedureBindingView = struct {
     binding: ImportedProcedureBindingRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
+    source_scheme_id: u32 = checked_scheme_id_none,
     body: ImportedProcedureBindingBody,
     template_closure: StoredImportedTemplateClosure = .{},
+
+    /// The binding's source scheme id in its defining module, or null when the
+    /// defining side stored the sentinel (a consumer then resolves by content key).
+    pub fn sourceSchemeId(self: ImportedProcedureBindingView) ?CheckedTypeSchemeId {
+        if (self.source_scheme_id == checked_scheme_id_none) return null;
+        return @enumFromInt(self.source_scheme_id);
+    }
 };
 
 /// Public `ExportedProcedureBindingView` declaration.
@@ -23456,6 +24066,7 @@ pub const ExportedProcedureBindingTable = struct {
                     .pattern = top_level.pattern,
                 },
                 .source_scheme = binding.source_scheme,
+                .source_scheme_id = binding.source_scheme_id,
                 .body = body,
                 .template_closure = stored_closure,
             });
@@ -24411,7 +25022,10 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 29;
+    // v30 (reunify.md 7.1, Slice 2): `TopLevelProcedureBinding` and
+    // `ImportedProcedureBindingView` each gained a `source_scheme_id` field so
+    // postcheck resolves a binding's scheme by dense id instead of content key.
+    const serialized_layout_version: u32 = 30;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -24953,11 +25567,38 @@ pub const CheckedModuleArtifact = struct {
         return null;
     }
 
+    /// reunify Slice 2 checked-boundary verifier entry point (reunify.md 7.5/7.6).
+    /// Debug-only; runs the structural boundary invariants (hard) and, when the
+    /// opt-in census is active, the validation matcher, over this module's published
+    /// checked types and executable roots. Owns a scratch arena so callers that
+    /// hold no allocator (publication, cached-load) can invoke it, and never blocks
+    /// a compile: out-of-memory in the measurement path is simply skipped.
+    pub fn debugVerifyCheckedTypeBoundary(self: *const CheckedModuleArtifact) void {
+        if (builtin.mode != .Debug) return;
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        debugVerifyCheckedBoundary(arena.allocator(), &self.checked_types, self.root_requests.runtime_requests) catch |err| switch (err) {
+            error.OutOfMemory => {},
+        };
+    }
+
+    /// Cached-load variant of `debugVerifyCheckedTypeBoundary` (reunify.md 7.5). A
+    /// full boundary walk on every builtin/cache load would be too hot even for
+    /// Debug — the builtin data alone carries hundreds of schemes and loads on every
+    /// compiler invocation — so the load-time run is gated behind the opt-in census
+    /// env var. A no-op outside Debug or when the census is disabled.
+    pub fn debugVerifyCheckedTypeBoundaryOnLoad(self: *const CheckedModuleArtifact) void {
+        if (builtin.mode != .Debug) return;
+        if (!reunify_census.active()) return;
+        self.debugVerifyCheckedTypeBoundary();
+    }
+
     pub fn verifyComplete(self: *const CheckedModuleArtifact) Allocator.Error!void {
         if (builtin.mode != .Debug) return;
 
         std.debug.assert(self.module_identity.module_idx != std.math.maxInt(u32));
         verifyRootRequestSubsets(self.root_requests);
+        self.debugVerifyCheckedTypeBoundary();
 
         if (self.validateDispatchEvidence()) |failure| {
             const expr_idx: ?u32 = if (failure.expr) |expr| @intFromEnum(expr) else null;
@@ -27083,6 +27724,7 @@ pub fn publishFromTypedModule(
         global_value_defs,
         &canonical_names,
         checked_bodies,
+        checked_types,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
@@ -27743,6 +28385,7 @@ fn expectProvidedExportKind(
         global_value_defs,
         &canonical_names,
         checked_bodies,
+        checked_types,
         &checked_procedure_templates,
         &callable_eval_templates,
         &top_level_procedure_bindings,
@@ -29304,8 +29947,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x01, 0xD0, 0x35, 0x37, 0x7E, 0x2F, 0x44, 0x7A, 0x39, 0xC4, 0x1C, 0xB4, 0xEB, 0xF1, 0x1B, 0x33,
-        0x07, 0x15, 0xC1, 0xC1, 0xD7, 0x40, 0x7E, 0xFB, 0xC2, 0x58, 0x12, 0x71, 0xA4, 0xB1, 0x6C, 0x51,
+        0x88, 0xF7, 0xEC, 0x14, 0x40, 0x5F, 0x9C, 0xA9, 0x24, 0x03, 0xBE, 0x25, 0x83, 0xDB, 0x0F, 0x6B,
+        0xCF, 0x43, 0xB6, 0xFD, 0x4C, 0x99, 0x10, 0x60, 0x05, 0x6E, 0x0B, 0x47, 0xDE, 0x77, 0x9B, 0x44,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

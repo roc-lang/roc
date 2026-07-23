@@ -138,6 +138,32 @@ var disposition_contextual = std.atomic.Value(u64).init(0);
 var disposition_uninhabited = std.atomic.Value(u64).init(0);
 var residual_undisposed = std.atomic.Value(u64).init(0);
 
+// Slice 2 boundary verifier (reunify.md 7.5). The verifier hard-asserts the
+// structural invariants; these count the two checks left measured because a later
+// slice must first close their gap: whether a local resolved site's dense actual
+// count equals its scheme's binder count, and whether an imported site resolved a
+// defining scheme id.
+var site_actuals_len_matches_binders = std.atomic.Value(u64).init(0);
+var site_actuals_len_diverges_from_binders = std.atomic.Value(u64).init(0);
+
+// Slice 2 validation matcher (reunify.md 7.6). For each local site whose scheme is
+// verified-pristine (snapshot_root != none) and whose actuals carry no unreached
+// sentinel, the matcher applies the published substitution to the scheme structure
+// and compares against the published instantiated root. Match/mismatch/skip
+// distribution; a mismatch is a publication bug (bounded detail retained).
+var matcher_sites_total = std.atomic.Value(u64).init(0);
+var matcher_match = std.atomic.Value(u64).init(0);
+var matcher_mismatch = std.atomic.Value(u64).init(0);
+var matcher_skipped_imported = std.atomic.Value(u64).init(0);
+var matcher_skipped_no_snapshot = std.atomic.Value(u64).init(0);
+var matcher_skipped_unreached = std.atomic.Value(u64).init(0);
+var matcher_skipped_no_scheme = std.atomic.Value(u64).init(0);
+var matcher_skipped_walk = std.atomic.Value(u64).init(0);
+
+var matcher_mismatch_details: [max_identifications][detail_capacity]u8 = undefined;
+var matcher_mismatch_detail_lens: [max_identifications]usize = [_]usize{0} ** max_identifications;
+var matcher_mismatch_detail_count: usize = 0;
+
 var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var divergent_id_count: usize = 0;
 var err_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
@@ -401,6 +427,68 @@ pub fn recordResidualDisposition(kind: DispositionCensus) void {
     }
 }
 
+/// Record whether one local resolved instantiation site's dense actual count equals
+/// its scheme's binder count (reunify.md 7.5, Slice 2). Measured rather than
+/// hard-asserted because the site actuals and the scheme binders are recorded by
+/// two independent checker passes; the corpus run reports whether they agree.
+pub fn recordSiteActualsLenMatchesBinders(matches: bool) void {
+    if (comptime !enabled) return;
+    if (matches) {
+        _ = site_actuals_len_matches_binders.fetchAdd(1, .monotonic);
+    } else {
+        _ = site_actuals_len_diverges_from_binders.fetchAdd(1, .monotonic);
+    }
+}
+
+/// Which validation-matcher (reunify.md 7.6) outcome a census record counts.
+pub const MatcherOutcome = enum {
+    match,
+    mismatch,
+    skipped_imported,
+    skipped_no_snapshot,
+    skipped_unreached,
+    skipped_no_scheme,
+    skipped_walk,
+};
+
+/// Record one validation-matcher outcome (reunify.md 7.6, Slice 2). Sites the
+/// matcher actually walked (match/mismatch/skipped_walk) also bump the walked-total.
+pub fn recordMatcherOutcome(outcome: MatcherOutcome) void {
+    if (comptime !enabled) return;
+    switch (outcome) {
+        .match => {
+            _ = matcher_sites_total.fetchAdd(1, .monotonic);
+            _ = matcher_match.fetchAdd(1, .monotonic);
+        },
+        .mismatch => {
+            _ = matcher_sites_total.fetchAdd(1, .monotonic);
+            _ = matcher_mismatch.fetchAdd(1, .monotonic);
+        },
+        .skipped_walk => {
+            _ = matcher_sites_total.fetchAdd(1, .monotonic);
+            _ = matcher_skipped_walk.fetchAdd(1, .monotonic);
+        },
+        .skipped_imported => _ = matcher_skipped_imported.fetchAdd(1, .monotonic),
+        .skipped_no_snapshot => _ = matcher_skipped_no_snapshot.fetchAdd(1, .monotonic),
+        .skipped_unreached => _ = matcher_skipped_unreached.fetchAdd(1, .monotonic),
+        .skipped_no_scheme => _ = matcher_skipped_no_scheme.fetchAdd(1, .monotonic),
+    }
+}
+
+/// Retain one bounded detail line describing a validation-matcher mismatch
+/// (reunify.md 7.6, Slice 2), so a nonzero mismatch count can be located in the
+/// corpus and investigated.
+pub fn recordMatcherMismatchDetail(text: []const u8) void {
+    if (comptime !enabled) return;
+    lockBuffer();
+    defer unlockBuffer();
+    if (matcher_mismatch_detail_count >= max_identifications) return;
+    const copied = @min(text.len, detail_capacity);
+    @memcpy(matcher_mismatch_details[matcher_mismatch_detail_count][0..copied], text[0..copied]);
+    matcher_mismatch_detail_lens[matcher_mismatch_detail_count] = copied;
+    matcher_mismatch_detail_count += 1;
+}
+
 const Sink = struct {
     data: []u8,
     len: usize = 0,
@@ -471,6 +559,16 @@ pub fn dumpAppend() void {
     sink.print("disposition_contextual={d}\n", .{disposition_contextual.load(.monotonic)});
     sink.print("disposition_uninhabited={d}\n", .{disposition_uninhabited.load(.monotonic)});
     sink.print("residual_undisposed={d}\n", .{residual_undisposed.load(.monotonic)});
+    sink.print("site_actuals_len_matches_binders={d}\n", .{site_actuals_len_matches_binders.load(.monotonic)});
+    sink.print("site_actuals_len_diverges_from_binders={d}\n", .{site_actuals_len_diverges_from_binders.load(.monotonic)});
+    sink.print("matcher_sites_total={d}\n", .{matcher_sites_total.load(.monotonic)});
+    sink.print("matcher_match={d}\n", .{matcher_match.load(.monotonic)});
+    sink.print("matcher_mismatch={d}\n", .{matcher_mismatch.load(.monotonic)});
+    sink.print("matcher_skipped_imported={d}\n", .{matcher_skipped_imported.load(.monotonic)});
+    sink.print("matcher_skipped_no_snapshot={d}\n", .{matcher_skipped_no_snapshot.load(.monotonic)});
+    sink.print("matcher_skipped_unreached={d}\n", .{matcher_skipped_unreached.load(.monotonic)});
+    sink.print("matcher_skipped_no_scheme={d}\n", .{matcher_skipped_no_scheme.load(.monotonic)});
+    sink.print("matcher_skipped_walk={d}\n", .{matcher_skipped_walk.load(.monotonic)});
     for (divergent_ids[0..divergent_id_count], 0..) |id, i| {
         sink.print("divergent_scheme_use_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
     }
@@ -482,6 +580,9 @@ pub fn dumpAppend() void {
     }
     for (0..divergent_detail_count) |i| {
         sink.print("divergent_detail_{d}={s}\n", .{ i, divergent_details[i][0..divergent_detail_lens[i]] });
+    }
+    for (0..matcher_mismatch_detail_count) |i| {
+        sink.print("matcher_mismatch_detail_{d}={s}\n", .{ i, matcher_mismatch_details[i][0..matcher_mismatch_detail_lens[i]] });
     }
 
     const fd = std.c.open(path_z, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, @as(std.c.mode_t, 0o644));
