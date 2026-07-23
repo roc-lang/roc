@@ -2389,6 +2389,25 @@ pub const CheckedTypeRange = extern struct { start: u32 = 0, len: u32 = 0 };
 /// never reaches this value in practice.
 pub const scheme_snapshot_root_none: u32 = std.math.maxInt(u32);
 
+/// Which kind of source owns a published `CheckedTypeScheme` (reunify.md 7.1,
+/// Slice 2). Every postcheck-visible specialization source has a scheme with an
+/// owner — monomorphic and zero-binder schemes included — so there are no
+/// ownerless paths. `owner_node` carries the owner's CIR identity: the
+/// definition's expression node (`top_level_def`, `nested_def`), the required
+/// type's annotation node (`required_type`), or the scheme's checked root id for
+/// a compiler-synthesized template (`synthetic`).
+pub const CheckedSchemeOwnerKind = enum(u8) {
+    /// A generalized or monomorphic top-level value definition.
+    top_level_def,
+    /// A nested owner snapshotted at an inner generalization boundary: an
+    /// annotation's standalone scheme, an inner lambda, or a block-local binding.
+    nested_def,
+    /// A required (platform) value.
+    required_type,
+    /// A compiler-synthesized template scheme with no CIR owner.
+    synthetic,
+};
+
 /// Public `CheckedTypeScheme` declaration.
 ///
 /// `gv_start`/`gv_len` are a range into `CheckedTypeStore.type_id_pool` (POD).
@@ -2403,12 +2422,22 @@ pub const scheme_snapshot_root_none: u32 = std.math.maxInt(u32);
 /// `scheme_snapshot_root_none` when the pristine scheme diverged from the final
 /// root or no snapshot was captured. The snapshot is verified against the final
 /// root, not yet authoritative.
+///
+/// `owner_kind`/`owner_node` name the source that owns this scheme (reunify.md
+/// 7.1). `captured_start`/`captured_len` range over
+/// `CheckedTypeStore.captured_binders`: for a nested scheme, the distinct free
+/// binders of enclosing schemes it closes over, in first-encounter identity
+/// order (a nested scheme is a closure).
 pub const CheckedTypeScheme = struct {
     id: CheckedTypeSchemeId,
     key: canonical.CanonicalTypeSchemeKey,
+    owner_kind: CheckedSchemeOwnerKind = .synthetic,
+    owner_node: u32 = 0,
     root: CheckedTypeId,
     gv_start: u32 = 0,
     gv_len: u32 = 0,
+    captured_start: u32 = 0,
+    captured_len: u32 = 0,
     snapshot_root: u32 = scheme_snapshot_root_none,
 
     /// The scheme's generalized vars within its store's `type_id_pool`.
@@ -2416,10 +2445,40 @@ pub const CheckedTypeScheme = struct {
         return pool_owner.typeIdPool()[self.gv_start .. self.gv_start + self.gv_len];
     }
 
+    /// The scheme's captured enclosing-scheme binders within its store's
+    /// `captured_binders` pool.
+    pub fn capturedBinders(self: CheckedTypeScheme, pool_owner: anytype) []const CheckedCapturedBinder {
+        return pool_owner.capturedBinders()[self.captured_start .. self.captured_start + self.captured_len];
+    }
+
     /// The pristine snapshot root, or null when no snapshot was captured.
     pub fn snapshotRoot(self: CheckedTypeScheme) ?CheckedTypeId {
         if (self.snapshot_root == scheme_snapshot_root_none) return null;
         return @enumFromInt(self.snapshot_root);
+    }
+};
+
+/// A `CheckedCapturedBinder.outer_scheme` value meaning the captured reference
+/// could not be attributed to an enclosing scheme's published binder at
+/// publication (measured, not an error — reunify.md 7.1, Slice 2).
+pub const captured_binder_outer_scheme_none: u32 = std.math.maxInt(u32);
+
+/// One captured reference of a nested `CheckedTypeScheme` (reunify.md 7.1, Slice
+/// 2): an `(outer scheme, binder index)` pair naming a free binder of an
+/// enclosing scheme that the nested scheme closes over. Ordered by the nested
+/// scheme's first-encounter identity traversal, each distinct captured binder
+/// once.
+pub const CheckedCapturedBinder = extern struct {
+    /// The enclosing owning `CheckedTypeSchemeId` as `u32`, or
+    /// `captured_binder_outer_scheme_none`.
+    outer_scheme: u32 = captured_binder_outer_scheme_none,
+    /// The captured binder's index within the enclosing scheme's ordered binders.
+    binder_index: u32 = 0,
+
+    /// The enclosing scheme id, or null when unattributed.
+    pub fn outerScheme(self: CheckedCapturedBinder) ?CheckedTypeSchemeId {
+        if (self.outer_scheme == captured_binder_outer_scheme_none) return null;
+        return @enumFromInt(self.outer_scheme);
     }
 };
 
@@ -2453,17 +2512,33 @@ pub const CheckedInstantiationSite = struct {
     /// The owning definition's scheme snapshot key (its CIR owner node).
     scheme_owner_node: u32,
     /// The owning `CheckedTypeSchemeId` as `u32`, or `instantiation_site_scheme_none`.
+    /// Always `instantiation_site_scheme_none` for an imported-scheme site: the
+    /// defining module's published scheme id is not resolvable at the consuming
+    /// side today (reunify.md 7.1, Slice 2). `scheme_owner_node` then names the
+    /// DEFINING module's snapshot owner node and `defining_module_hash` its module.
     scheme: u32 = instantiation_site_scheme_none,
     /// The instantiated root's checked type at this edge.
     instantiated_root: CheckedTypeId,
     /// Range into `CheckedTypeStore.instantiation_site_actuals` (POD).
     actuals_start: u32 = 0,
     actuals_len: u32 = 0,
+    /// The 32-byte content identity of the DEFINING module when this edge
+    /// instantiates an imported scheme; all-zero for a site owned by this module.
+    /// Its actuals are recorded against that module's binder order (reunify.md
+    /// 7.1, Slice 2).
+    defining_module_hash: [32]u8 = [_]u8{0} ** 32,
 
     /// The owning published scheme id, or null when unresolved.
     pub fn schemeId(self: CheckedInstantiationSite) ?CheckedTypeSchemeId {
         if (self.scheme == instantiation_site_scheme_none) return null;
         return @enumFromInt(self.scheme);
+    }
+
+    /// The defining module's content identity when this is an imported-scheme
+    /// site, or null when this module owns the scheme.
+    pub fn importedDefiningModule(self: CheckedInstantiationSite) ?[32]u8 {
+        if (std.meta.eql(self.defining_module_hash, ModuleEnv.scheme_use_site_local_module)) return null;
+        return self.defining_module_hash;
     }
 
     /// The site's positional actuals within its store's `instantiation_site_actuals`.
@@ -3465,6 +3540,9 @@ pub const CheckedTypeStore = struct {
     instantiation_sites: std.ArrayList(CheckedInstantiationSite) = .empty,
     /// Flat pool of positional actuals backing `instantiation_sites`.
     instantiation_site_actuals: std.ArrayList(CheckedTypeId) = .empty,
+    /// Flat pool of nested schemes' captured enclosing-scheme binders
+    /// (reunify.md 7.1, Slice 2), backing `CheckedTypeScheme.capturedBinders`.
+    captured_binders: std.ArrayList(CheckedCapturedBinder) = .empty,
     /// Interner backing variable names.
     var_names: canonical.NameInterner = .{},
     /// True for a store reconstructed from a serialized buffer (pools point into
@@ -3508,6 +3586,11 @@ pub const CheckedTypeStore = struct {
     /// The shared flat pool of instantiation-site positional actuals.
     pub fn instantiationSiteActuals(self: *const CheckedTypeStore) []const CheckedTypeId {
         return self.instantiation_site_actuals.items;
+    }
+
+    /// The shared flat pool of nested schemes' captured enclosing-scheme binders.
+    pub fn capturedBinders(self: *const CheckedTypeStore) []const CheckedCapturedBinder {
+        return self.captured_binders.items;
     }
 
     /// Text of a stored variable name id, or null for the absent sentinel.
@@ -3558,6 +3641,12 @@ pub const CheckedTypeStore = struct {
     fn appendInstantiationSiteActuals(self: *CheckedTypeStore, allocator: Allocator, ids: []const CheckedTypeId) Allocator.Error!CheckedTypeRange {
         std.debug.assert(!self.serialized);
         return artifact_serialize.appendSpan(CheckedTypeRange, CheckedTypeId, &self.instantiation_site_actuals, allocator, ids);
+    }
+
+    /// Append `captured` to `captured_binders`, returning their range.
+    fn appendCapturedBinders(self: *CheckedTypeStore, allocator: Allocator, captured: []const CheckedCapturedBinder) Allocator.Error!CheckedTypeRange {
+        std.debug.assert(!self.serialized);
+        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedCapturedBinder, &self.captured_binders, allocator, captured);
     }
 
     /// Append `fields` to `record_field_pool`, returning their range.
@@ -3807,6 +3896,8 @@ pub const CheckedTypeStore = struct {
                 try store.schemes.append(allocator, .{
                     .id = scheme_id,
                     .key = scheme_key,
+                    .owner_kind = .required_type,
+                    .owner_node = owner_node,
                     .root = root,
                     .gv_start = snapshot.gv_start,
                     .gv_len = snapshot.gv_len,
@@ -3848,6 +3939,8 @@ pub const CheckedTypeStore = struct {
                 try store.schemes.append(allocator, .{
                     .id = scheme_id,
                     .key = scheme_key,
+                    .owner_kind = .top_level_def,
+                    .owner_node = owner_node,
                     .root = root,
                     .gv_start = snapshot.gv_start,
                     .gv_len = snapshot.gv_len,
@@ -3856,6 +3949,21 @@ pub const CheckedTypeStore = struct {
                 try scheme_id_by_owner.put(owner_node, scheme_id);
             }
         }
+
+        // Publish a scheme for every remaining nested owner the checker
+        // snapshotted (reunify.md 7.1, Slice 2): annotation-owned schemes, inner
+        // lambdas, and block-local bindings. Top-level and required owners are
+        // already in `scheme_id_by_owner`, so this appends only the nested ones,
+        // AFTER the existing entries — existing scheme ids and order stay stable.
+        // Nested schemes are NOT deduplicated by content key: each owner is a
+        // distinct scheme so its shared-edge and dense-site records can resolve
+        // a scheme id and its own owner identity.
+        try publishNestedSchemes(allocator, module, names, import_views, &store, &active, &snapshot_index, &scheme_id_by_owner);
+
+        // Resolve each nested scheme's captured-binder closure (reunify.md 7.1,
+        // Slice 2) now that every scheme (top-level, required, nested) is
+        // published and its owner is addressable.
+        try resolveCapturedBinders(allocator, module, &store, &scheme_id_by_owner);
 
         // Self-containment (issue #9983 / Option A): the published declaration
         // table so far holds only THIS module's own declarations. Standalone
@@ -4187,6 +4295,8 @@ pub const CheckedTypeStore = struct {
         try self.schemes.append(allocator, .{
             .id = @enumFromInt(@as(u32, @intCast(self.schemes.items.len))),
             .key = scheme_key,
+            .owner_kind = .synthetic,
+            .owner_node = @intFromEnum(root),
             .root = root,
         });
     }
@@ -4204,6 +4314,7 @@ pub const CheckedTypeStore = struct {
             self.tag_pool.deinit(allocator);
             self.instantiation_sites.deinit(allocator);
             self.instantiation_site_actuals.deinit(allocator);
+            self.captured_binders.deinit(allocator);
             self.var_names.deinit(allocator);
         }
         self.* = .{};
@@ -4224,13 +4335,14 @@ pub const CheckedTypeStore = struct {
         tag_pool: SerializedSlice(CheckedTag) = .{},
         instantiation_sites: SerializedSlice(CheckedInstantiationSite) = .{},
         instantiation_site_actuals: SerializedSlice(CheckedTypeId) = .{},
+        captured_binders: SerializedSlice(CheckedCapturedBinder) = .{},
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 14 = 11 `SerializedSlice` fields + 3 for the nested `var_names`
+            // 15 = 12 `SerializedSlice` fields + 3 for the nested `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -6495,6 +6607,150 @@ fn publishSchemeSnapshot(
     };
 }
 
+/// Publish a `CheckedTypeScheme` for every nested owner the checker snapshotted
+/// that is not already published as a top-level or required scheme (reunify.md
+/// 7.1, Slice 2): annotation-owned schemes, inner lambdas, and block-local
+/// bindings. A nested snapshot's final root has no other addressable form, so its
+/// stored root var is translated into the store here. Appended after the existing
+/// top-level and required entries, so their scheme ids and order are unchanged.
+/// Nested schemes are keyed but never deduplicated by content key — each owner is
+/// its own scheme (an owner identity, not a content key) — and each records its
+/// owner so shared-edge and dense-site records can resolve it.
+fn publishNestedSchemes(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    names: *canonical.CanonicalNameStore,
+    imports: CheckedImportViews,
+    store: *CheckedTypeStore,
+    active: *std.AutoHashMap(Var, CheckedTypeId),
+    snapshot_index: *const std.AutoHashMap(u32, u32),
+    scheme_id_by_owner: *std.AutoHashMap(u32, CheckedTypeSchemeId),
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+
+    for (module_env.scheme_snapshots.items.items) |record| {
+        // Top-level and required owners are already published; a duplicate nested
+        // owner (keep-first, matching `snapshot_index`) is already in the map too.
+        if (scheme_id_by_owner.contains(record.owner_node)) continue;
+
+        const root = try appendCheckedTypeRoot(
+            allocator,
+            module,
+            names,
+            imports,
+            store,
+            active,
+            @enumFromInt(record.root),
+        );
+        const scheme_key = try canonical_type_keys.schemeFromVar(
+            allocator,
+            module.typeStoreConst(),
+            module_env,
+            @enumFromInt(record.root),
+        );
+        const snapshot = try publishSchemeSnapshot(allocator, module, names, imports, store, active, snapshot_index, record.owner_node, root);
+        const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
+        try store.schemes.append(allocator, .{
+            .id = scheme_id,
+            .key = scheme_key,
+            .owner_kind = .nested_def,
+            .owner_node = record.owner_node,
+            .root = root,
+            .gv_start = snapshot.gv_start,
+            .gv_len = snapshot.gv_len,
+            .snapshot_root = snapshot.snapshot_root,
+        });
+        try scheme_id_by_owner.put(record.owner_node, scheme_id);
+    }
+}
+
+/// Where one generalized binder lives: the snapshot owner that generalized it and
+/// its index within that owner's ordered binders.
+const BinderOwner = struct { owner_node: u32, binder_index: u32 };
+
+/// Resolve every nested scheme's captured-binder closure (reunify.md 7.1, Slice
+/// 2): a nested scheme is a closure over the free binders of the schemes that
+/// enclose it. The ordering authority is the SAME first-encounter identity
+/// traversal that orders a scheme's own binders (`identityVarsFromVar` over its
+/// root); this walks that traversal once and splits each identity variable into
+/// this scheme's own binder (skipped) or a captured reference — a binder OWNED BY
+/// A DIFFERENT scheme. Each captured reference resolves to an `(outer scheme,
+/// binder index)` pair, distinct, in first-encounter order.
+///
+/// This runs at publication rather than at the boundary because a captured
+/// binder's index is not knowable when the nested boundary fires: an enclosing
+/// binder is still at its frame's rank then (it generalizes later, at the
+/// enclosing boundary), so neither its generalized identity nor its ordered
+/// position exists yet. At publication every boundary has completed, so the same
+/// identity traversal the boundary would have used resolves every enclosing owner
+/// and index exactly.
+fn resolveCapturedBinders(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    store: *CheckedTypeStore,
+    scheme_id_by_owner: *const std.AutoHashMap(u32, CheckedTypeSchemeId),
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+    if (module_env.scheme_snapshots.items.items.len == 0) return;
+    const type_store = module.typeStoreConst();
+    const census_on = reunify_census.active();
+
+    // Global index: resolved binder var -> the scheme owner and index that
+    // generalized it. A generalized variable belongs to exactly one scheme, so a
+    // keep-first insert never loses a distinct owner.
+    var binder_owner = std.AutoHashMap(Var, BinderOwner).init(allocator);
+    defer binder_owner.deinit();
+    for (module_env.scheme_snapshots.items.items) |record| {
+        const binders = module_env.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
+        for (binders, 0..) |binder, i| {
+            const key = type_store.resolveVar(@enumFromInt(binder.original)).var_;
+            const entry = try binder_owner.getOrPut(key);
+            if (!entry.found_existing) entry.value_ptr.* = .{ .owner_node = record.owner_node, .binder_index = @intCast(i) };
+        }
+    }
+
+    var seen = std.AutoHashMap(u64, void).init(allocator);
+    defer seen.deinit();
+    var captured = std.ArrayList(CheckedCapturedBinder).empty;
+    defer captured.deinit(allocator);
+
+    for (module_env.scheme_snapshots.items.items) |record| {
+        const scheme_id = scheme_id_by_owner.get(record.owner_node) orelse continue;
+        const identity_vars = try canonical_type_keys.identityVarsFromVar(allocator, type_store, module_env, @enumFromInt(record.root));
+        defer allocator.free(identity_vars);
+
+        seen.clearRetainingCapacity();
+        captured.clearRetainingCapacity();
+        var attributed: u32 = 0;
+        var unattributed: u32 = 0;
+        for (identity_vars) |identity_var| {
+            const resolved = type_store.resolveVar(identity_var).var_;
+            // A captured reference is a binder of an ENCLOSING scheme; a variable
+            // that is no scheme's binder is a monomorphic/escaped free variable,
+            // already ground, and is not part of the closure.
+            const owner = binder_owner.get(resolved) orelse continue;
+            if (owner.owner_node == record.owner_node) continue; // this scheme's own binder
+            const dedup_key = (@as(u64, owner.owner_node) << 32) | owner.binder_index;
+            const seen_entry = try seen.getOrPut(dedup_key);
+            if (seen_entry.found_existing) continue;
+            if (scheme_id_by_owner.get(owner.owner_node)) |outer_id| {
+                attributed += 1;
+                try captured.append(allocator, .{ .outer_scheme = @intFromEnum(outer_id), .binder_index = owner.binder_index });
+            } else {
+                unattributed += 1;
+                try captured.append(allocator, .{ .outer_scheme = captured_binder_outer_scheme_none, .binder_index = owner.binder_index });
+            }
+        }
+
+        if (captured.items.len > 0) {
+            const range = try store.appendCapturedBinders(allocator, captured.items);
+            store.schemes.items[@intFromEnum(scheme_id)].captured_start = range.start;
+            store.schemes.items[@intFromEnum(scheme_id)].captured_len = range.len;
+        }
+        if (census_on) reunify_census.recordSchemeCaptures(attributed, unattributed);
+    }
+}
+
 /// The stable identity of one dense scheme-instantiation edge (reunify.md 7.2):
 /// the CIR use node, the slot discriminator, the slot data (a dispatch
 /// constraint's fn var, else 0), and the owning scheme's snapshot node. Two
@@ -6550,7 +6806,12 @@ fn publishInstantiationSites(
         }
         seen_entry.value_ptr.* = @intCast(record_idx);
 
-        const scheme_id = scheme_id_by_owner.get(record.scheme_owner_node);
+        // An imported-scheme site's `scheme_owner_node` names the DEFINING
+        // module's owner node, which must never be resolved through this module's
+        // owner index (reunify.md 7.1, Slice 2); its defining scheme id is not
+        // resolvable at the consuming side today.
+        const is_imported = !std.meta.eql(record.defining_module_hash, ModuleEnv.scheme_use_site_local_module);
+        const scheme_id = if (is_imported) null else scheme_id_by_owner.get(record.scheme_owner_node);
         const is_shared = record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.shared_value_use);
 
         const instantiated_root = try appendCheckedTypeRoot(
@@ -6602,6 +6863,7 @@ fn publishInstantiationSites(
             .instantiated_root = instantiated_root,
             .actuals_start = actuals_range.start,
             .actuals_len = actuals_range.len,
+            .defining_module_hash = record.defining_module_hash,
         });
     }
 }
@@ -23481,9 +23743,10 @@ pub const CheckedModuleArtifact = struct {
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3 and
-            // its instantiation-site pools). POD inline `key`/`module_identity`
-            // contribute 0. Fixed at compile time, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 198);
+            // its instantiation-site and captured-binder pools). POD inline
+            // `key`/`module_identity` contribute 0. Fixed at compile time,
+            // independent of stored data size.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 199);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -23631,7 +23894,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 27;
+    const serialized_layout_version: u32 = 28;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28074,9 +28337,28 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try store.schemes.append(gpa, .{
         .id = @enumFromInt(@as(u32, @intCast(store.schemes.items.len))),
         .key = .{ .bytes = [_]u8{3} ** 32 },
+        .owner_kind = .top_level_def,
+        .owner_node = 987,
         .root = a,
         .gv_start = gv.start,
         .gv_len = gv.len,
+    });
+
+    // A nested scheme (reunify.md 7.1, Slice 2) that closes over one captured
+    // enclosing-scheme binder (outer scheme 0, binder index 1) and one
+    // unattributed captured reference.
+    const captured = try store.appendCapturedBinders(gpa, &.{
+        .{ .outer_scheme = 0, .binder_index = 1 },
+        .{ .outer_scheme = captured_binder_outer_scheme_none, .binder_index = 0 },
+    });
+    try store.schemes.append(gpa, .{
+        .id = @enumFromInt(@as(u32, @intCast(store.schemes.items.len))),
+        .key = .{ .bytes = [_]u8{7} ** 32 },
+        .owner_kind = .nested_def,
+        .owner_node = 246,
+        .root = b,
+        .captured_start = captured.start,
+        .captured_len = captured.len,
     });
 
     // A dense instantiation site (reunify.md 7.2, Slice 2) whose positional
@@ -28091,6 +28373,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .instantiated_root = c,
         .actuals_start = site_actuals.start,
         .actuals_len = site_actuals.len,
+        .defining_module_hash = [_]u8{0x3A} ** 32,
     });
 
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
@@ -28164,13 +28447,26 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqual(@as(u32, 654), site.scheme_owner_node);
         try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), site.schemeId());
         try std.testing.expectEqual(c, site.instantiated_root);
+        try std.testing.expectEqualSlices(u8, &([_]u8{0x3A} ** 32), &(site.importedDefiningModule() orelse unreachable));
         const actuals = site.actuals(&loaded);
         try std.testing.expectEqual(@as(usize, 2), actuals.len);
         try std.testing.expectEqual(b, actuals[0]);
         try std.testing.expectEqual(@as(u32, checked_instantiation_actual_unreached), @intFromEnum(actuals[1]));
     }
 
-    // Scheme generalized vars + decl formal args.
+    // Scheme owner discriminator, generalized vars, and a nested scheme's
+    // captured enclosing-scheme binders all survive the round-trip.
+    try std.testing.expectEqual(CheckedSchemeOwnerKind.top_level_def, loaded.schemes.items[0].owner_kind);
+    try std.testing.expectEqual(@as(u32, 987), loaded.schemes.items[0].owner_node);
+    try std.testing.expectEqual(CheckedSchemeOwnerKind.nested_def, loaded.schemes.items[1].owner_kind);
+    try std.testing.expectEqual(@as(u32, 246), loaded.schemes.items[1].owner_node);
+    {
+        const nested_captured = loaded.schemes.items[1].capturedBinders(&loaded);
+        try std.testing.expectEqual(@as(usize, 2), nested_captured.len);
+        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(0)), nested_captured[0].outerScheme());
+        try std.testing.expectEqual(@as(u32, 1), nested_captured[0].binder_index);
+        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), nested_captured[1].outerScheme());
+    }
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));
     try std.testing.expectEqualSlices(CheckedTypeId, &.{c}, loaded.nominal_declarations.items[0].formalArgs(&loaded));
     try std.testing.expectEqual(c, loaded.nominal_declarations.items[0].backing);
@@ -28466,8 +28762,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE4, 0x27, 0x99, 0x49, 0x66, 0x22, 0x58, 0x6B, 0xE0, 0x77, 0xB5, 0x7A, 0x8E, 0x00, 0xAB, 0x03,
-        0x61, 0x7E, 0xA2, 0x7F, 0x80, 0x52, 0x4E, 0x99, 0x28, 0xB0, 0x92, 0x17, 0x84, 0x88, 0x3F, 0x6D,
+        0xEB, 0x73, 0x9B, 0x63, 0x42, 0x31, 0x87, 0x40, 0x7D, 0xAC, 0xBA, 0xD4, 0x71, 0xFA, 0x1B, 0xF4,
+        0x43, 0x33, 0xA0, 0x97, 0x86, 0x63, 0x31, 0x0A, 0xAA, 0x34, 0x86, 0x74, 0x08, 0xFF, 0x80, 0xEF,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

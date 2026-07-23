@@ -465,6 +465,22 @@ snapshot_record_by_root: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// so `Probe` rollback can drop the corresponding `snapshot_record_by_root`
 /// entries for records the savepoint discarded (reunify.md 7.2, Slice 2).
 snapshot_root_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Index from the resolved LOCAL root var of an imported scheme copy to its
+/// `imported_projections` entry, so a use site instantiating an imported scheme
+/// can record its actuals against the DEFINING module's binder order (reunify.md
+/// 7.1, Slice 2). Registered when an external lookup first copies the scheme,
+/// keyed by the copied root; lives as long as `import_cache` (session-scoped,
+/// never rolled back — the copied generalized vars are preserve-mode and never
+/// discarded), so it needs no `Probe` truncation.
+imported_projection_by_root: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// One imported scheme's binder projection: the defining module's 32-byte content
+/// identity, its snapshot owner node, and a range into `imported_projection_binders`
+/// of this module's local copies of the defining scheme's binders, ordered by the
+/// defining module's binder index (reunify.md 7.1, Slice 2).
+imported_projections: std.ArrayListUnmanaged(ImportedSchemeProjection) = .empty,
+/// Flat pool of local binder-copy vars backing `imported_projections`, in the
+/// defining module's binder order.
+imported_projection_binders: std.ArrayListUnmanaged(Var) = .empty,
 /// Worklist of flex vars created by literal conversions (`from_numeral`,
 /// `from_quote`, or `from_interpolation`) — open literals that may still need
 /// defaulting. Checker bookkeeping, not type data:
@@ -1634,6 +1650,9 @@ pub fn deinit(self: *Self) void {
     self.scratch_site_actuals.deinit(self.gpa);
     self.snapshot_record_by_root.deinit(self.gpa);
     self.snapshot_root_vars.deinit(self.gpa);
+    self.imported_projection_by_root.deinit(self.gpa);
+    self.imported_projections.deinit(self.gpa);
+    self.imported_projection_binders.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
@@ -3283,6 +3302,17 @@ const PendingTupleAccess = struct {
     region: Region,
 };
 
+/// One imported scheme's binder projection (reunify.md 7.1, Slice 2): the
+/// defining module's content identity, its snapshot owner node, and the range of
+/// this module's local binder copies (in the defining module's binder order)
+/// within `imported_projection_binders`.
+const ImportedSchemeProjection = struct {
+    defining_module_hash: [32]u8,
+    source_owner_node: u32,
+    binders_start: u32,
+    binders_len: u32,
+};
+
 // env //
 
 /// Solver env
@@ -3713,8 +3743,10 @@ fn captureSchemeSnapshot(self: *Self, owner_node_idx: u32, root: Var) std.mem.Al
         });
     }
 
+    const resolved_root = self.types.resolveVar(root).var_;
+
     const record_idx: u32 = @intCast(self.cir.scheme_snapshots.items.items.len);
-    try self.cir.recordSchemeSnapshot(owner_node_idx, digest.bytes, self.scratch_snapshot_binders.items);
+    try self.cir.recordSchemeSnapshot(owner_node_idx, resolved_root, digest.bytes, self.scratch_snapshot_binders.items);
 
     // Index this scheme's resolved root so an ordinary use site (reunify.md 7.2,
     // Slice 2) can find the owning snapshot's binder order while its `var_map` is
@@ -3722,7 +3754,6 @@ fn captureSchemeSnapshot(self: *Self, owner_node_idx: u32, root: Var) std.mem.Al
     // the RESOLVED root so `Probe` rollback can drop the entries a speculative
     // capture added without resolving a var the savepoint already discarded.
     // Keep-first on a root collision matches publication's snapshot selection.
-    const resolved_root = self.types.resolveVar(root).var_;
     try self.snapshot_root_vars.append(self.gpa, resolved_root);
     const entry = try self.snapshot_record_by_root.getOrPut(self.gpa, resolved_root);
     if (!entry.found_existing) entry.value_ptr.* = record_idx;
@@ -4019,7 +4050,7 @@ fn recordSharedSchemeUse(
     // the identity mapping (binder i ↦ binder i), the substitution a shared use
     // expresses. `scheme_owner_node` is `scheme_use_site_owner_none` when the
     // referenced definition owns no local snapshot (a cross-module target).
-    _ = try self.cir.recordSchemeUseSite(node_idx, slot, slot_data, scheme_owner_node, scheme_root, &.{});
+    _ = try self.cir.recordSchemeUseSite(node_idx, slot, slot_data, scheme_owner_node, scheme_root, &.{}, ModuleEnv.scheme_use_site_local_module);
     if (reunify_census.active()) {
         reunify_census.recordSchemeUseSiteShared(@intFromEnum(slot));
     }
@@ -4060,10 +4091,13 @@ fn recordDenseInstantiationSite(
 
     const resolved_root = self.types.resolveVar(var_to_instantiate).var_;
     const record_idx = self.snapshot_record_by_root.get(resolved_root) orelse {
-        // Instantiation of a definition with no local snapshot — an imported,
-        // external, required, or synthetic scheme, which a later sub-slice
-        // handles. Measured, not failed.
-        if (reunify_census.active()) {
+        // No LOCAL snapshot owns this scheme. If an imported-scheme projection
+        // (reunify.md 7.1, Slice 2) covers it, record the dense actuals against
+        // the DEFINING module's binder order; otherwise measure it as a plain
+        // snapshotless site (a required, synthetic, or unprojectable target).
+        if (self.imported_projection_by_root.get(resolved_root)) |projection_idx| {
+            try self.recordImportedInstantiationSite(use_node, slot, slot_data, instantiated_var, projection_idx);
+        } else if (reunify_census.active()) {
             reunify_census.recordSchemeUseSiteWithoutSnapshot(@intFromEnum(slot));
         }
         return;
@@ -4090,10 +4124,59 @@ fn recordDenseInstantiationSite(
         record.owner_node,
         instantiated_var,
         self.scratch_site_actuals.items,
+        ModuleEnv.scheme_use_site_local_module,
     );
 
     if (reunify_census.active()) {
         reunify_census.recordSchemeUseSite(@intFromEnum(slot), unreached);
+    }
+}
+
+/// Record the dense actual vector for one instantiation of an IMPORTED scheme
+/// (reunify.md 7.1/7.2, Slice 2). The projection pins this module's local copies
+/// of the defining scheme's binders in the defining module's binder order; each
+/// binder's actual at this edge is the fresh var it was copied to (from the live
+/// `var_map`), or `scheme_use_site_unreached`. The record names the defining
+/// module's content identity and its snapshot owner node.
+fn recordImportedInstantiationSite(
+    self: *Self,
+    use_node: u32,
+    slot: ModuleEnv.SchemeUseRecord.Slot,
+    slot_data: u32,
+    instantiated_var: Var,
+    projection_idx: u32,
+) std.mem.Allocator.Error!void {
+    const projection = self.imported_projections.items[projection_idx];
+    const local_binders = self.imported_projection_binders.items[projection.binders_start .. projection.binders_start + projection.binders_len];
+
+    self.scratch_site_actuals.clearRetainingCapacity();
+    for (local_binders) |local_binder| {
+        if (@intFromEnum(local_binder) == ModuleEnv.scheme_use_site_unreached) {
+            try self.scratch_site_actuals.append(self.gpa, .{ .fresh_var = ModuleEnv.scheme_use_site_unreached });
+        } else if (self.var_map.get(local_binder)) |fresh_var| {
+            try self.scratch_site_actuals.append(self.gpa, .{ .fresh_var = @intFromEnum(fresh_var) });
+        } else {
+            try self.scratch_site_actuals.append(self.gpa, .{ .fresh_var = ModuleEnv.scheme_use_site_unreached });
+        }
+    }
+
+    _ = try self.cir.recordSchemeUseSite(
+        use_node,
+        slot,
+        slot_data,
+        projection.source_owner_node,
+        instantiated_var,
+        self.scratch_site_actuals.items,
+        projection.defining_module_hash,
+    );
+
+    if (reunify_census.active()) {
+        reunify_census.recordImportedSchemeSite(@intFromEnum(slot));
+        // The defining module's published scheme id is not resolvable at the
+        // consuming side today (reunify.md 7.1, Slice 2): the record names the
+        // defining module + source owner node, not an artifact-qualified scheme
+        // id. A later slice must add that resolution.
+        reunify_census.recordImportedSiteWithoutDefiningScheme();
     }
 }
 
@@ -16855,6 +16938,54 @@ const ExternalType = struct {
     other_cir: *const ModuleEnv,
 };
 
+/// Register the imported-scheme binder projection for a scheme just copied from
+/// `other_module_env` (reunify.md 7.1, Slice 2). The defining module's snapshot
+/// pins the scheme's binders in canonical order; each is mapped through the live
+/// `var_map` (source var -> local copy) to this module's local copy, so a use
+/// site instantiating the copy can record its actuals against the DEFINING
+/// module's binder order and name that module. When the defining module has no
+/// snapshot for this def (an unsnapshotted or non-top-level target), nothing is
+/// registered — the use is measured as a plain snapshotless site, unchanged.
+fn registerImportedSchemeProjection(
+    self: *Self,
+    other_module_env: *const ModuleEnv,
+    target_node_idx: CIR.Node.Idx,
+    local_root: Var,
+) std.mem.Allocator.Error!void {
+    const source_def = hoistedTopLevelDefForNode(other_module_env, target_node_idx) orelse return;
+    const source_owner_node = @intFromEnum(other_module_env.store.getDef(source_def.def).expr);
+
+    // Find the defining module's snapshot for this def (keyed by its expr node).
+    var mb_record: ?ModuleEnv.SchemeSnapshotRecord = null;
+    for (other_module_env.scheme_snapshots.items.items) |record| {
+        if (record.owner_node == source_owner_node) {
+            mb_record = record;
+            break;
+        }
+    }
+    const record = mb_record orelse return;
+
+    const source_binders = other_module_env.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
+    const binders_start: u32 = @intCast(self.imported_projection_binders.items.len);
+    for (source_binders) |binder| {
+        const source_var = other_module_env.types.resolveVar(@enumFromInt(binder.original)).var_;
+        const local_binder = self.var_map.get(source_var) orelse @as(Var, @enumFromInt(ModuleEnv.scheme_use_site_unreached));
+        try self.imported_projection_binders.append(self.gpa, local_binder);
+    }
+
+    const projection_idx: u32 = @intCast(self.imported_projections.items.len);
+    try self.imported_projections.append(self.gpa, .{
+        .defining_module_hash = other_module_env.moduleIdentityHash(other_module_env.selfModuleIdentity()).*,
+        .source_owner_node = source_owner_node,
+        .binders_start = binders_start,
+        .binders_len = @intCast(source_binders.len),
+    });
+
+    const resolved_root = self.types.resolveVar(local_root).var_;
+    const entry = try self.imported_projection_by_root.getOrPut(self.gpa, resolved_root);
+    if (!entry.found_existing) entry.value_ptr.* = projection_idx;
+}
+
 /// Copy a variable from a different module into this module's types store.
 ///
 /// IMPORTANT: The caller must instantiate this variable before unifying
@@ -16897,6 +17028,11 @@ fn resolveVarFromExternal(
 
             const new_copy = try self.copyVar(imported_var, other_module_env, null);
             try self.import_cache.put(self.gpa, cache_key, new_copy);
+            // Project the defining module's scheme binders onto this module's
+            // copies while `var_map` still holds the copy's source->local mapping
+            // (reunify.md 7.1, Slice 2). Cache misses are the only path that runs
+            // the copy, so this fires exactly once per imported scheme.
+            try self.registerImportedSchemeProjection(other_module_env, target_node_idx, new_copy);
             break :blk new_copy;
         };
 

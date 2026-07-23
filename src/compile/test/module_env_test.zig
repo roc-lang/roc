@@ -42,6 +42,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // through the module cache: its digest and ordered binders both survive.
     try original.recordSchemeSnapshot(
         1234,
+        @enumFromInt(4321),
         [_]u8{0xAB} ** 32,
         &.{ .{ .original = 7 }, .{ .original = 9 } },
     );
@@ -57,6 +58,7 @@ test "ModuleEnv.Serialized roundtrip" {
         1234,
         @enumFromInt(88),
         &.{ .{ .fresh_var = 21 }, .{ .fresh_var = ModuleEnv.scheme_use_site_unreached } },
+        [_]u8{0x5C} ** 32,
     );
     try std.testing.expectEqual(@as(usize, 1), original.scheme_use_sites.items.items.len);
 
@@ -120,6 +122,7 @@ test "ModuleEnv.Serialized roundtrip" {
     {
         const record = env.scheme_snapshots.items.items[0];
         try std.testing.expectEqual(@as(u32, 1234), record.owner_node);
+        try std.testing.expectEqual(@as(u32, 4321), record.root);
         try std.testing.expectEqual(@as(u32, 2), record.binders_len);
         try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), &record.digest);
         const binders = env.scheme_snapshot_binders.items.items[record.binders_start .. record.binders_start + record.binders_len];
@@ -134,6 +137,7 @@ test "ModuleEnv.Serialized roundtrip" {
         try std.testing.expectEqual(@as(u32, @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.value_use)), record.slot_kind);
         try std.testing.expectEqual(@as(u32, 1234), record.scheme_owner_node);
         try std.testing.expectEqual(@as(u32, 88), record.instantiated_root);
+        try std.testing.expectEqualSlices(u8, &([_]u8{0x5C} ** 32), &record.defining_module_hash);
         try std.testing.expectEqual(@as(u32, 2), record.actuals_len);
         const actuals = env.scheme_use_site_actuals.items.items[record.actuals_start .. record.actuals_start + record.actuals_len];
         try std.testing.expectEqual(@as(u32, 21), actuals[0].fresh_var);

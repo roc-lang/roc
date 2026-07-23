@@ -674,6 +674,13 @@ pub const SchemeSnapshotRecord = extern struct {
     /// annotation, or a binding pattern). Publication looks a definition's
     /// snapshot up by this node.
     owner_node: u32,
+    /// The scheme root's resolved `Var` at the boundary. For a top-level or
+    /// required scheme publication translates the definition's final root
+    /// directly and never consults this; a nested scheme (an annotation, inner
+    /// lambda, or block-local binding) has no other addressable final root, so
+    /// its publication translates this var into the checked store (reunify.md
+    /// 7.1, Slice 2).
+    root: u32,
     /// Range into `scheme_snapshot_binders`.
     binders_start: u32,
     binders_len: u32,
@@ -735,7 +742,8 @@ pub const SchemeUseSiteRecord = extern struct {
     slot_data: u32,
     /// The owning definition's scheme snapshot key (its `SchemeSnapshotRecord`
     /// `owner_node`), or `scheme_use_site_owner_none` for an as-yet-unresolved
-    /// shared in-group site.
+    /// shared in-group site. For an imported-scheme site (`defining_module_hash`
+    /// nonzero) this is the DEFINING module's snapshot owner node.
     scheme_owner_node: u32,
     /// The instantiated root's fresh `Var` at this edge (the scheme root itself
     /// for a shared in-group site, which does not mint a copy).
@@ -743,9 +751,18 @@ pub const SchemeUseSiteRecord = extern struct {
     /// Range into `scheme_use_site_actuals`.
     actuals_start: u32,
     actuals_len: u32,
+    /// The 32-byte content identity of the DEFINING module when this edge
+    /// instantiates a scheme defined in ANOTHER module (reunify.md 7.1, Slice 2);
+    /// its actuals are recorded against that module's binder order. All-zero
+    /// (`scheme_use_site_local_module`) for a site owned by this module.
+    defining_module_hash: [32]u8 = [_]u8{0} ** 32,
 
     pub const SafeList = collections.SafeList(@This());
 };
+
+/// A `SchemeUseSiteRecord.defining_module_hash` value meaning "this module owns
+/// the instantiated scheme" — the ordinary local case.
+pub const scheme_use_site_local_module: [32]u8 = [_]u8{0} ** 32;
 
 /// One positional actual of a `SchemeUseSiteRecord`: the fresh `Var` created for
 /// the owning scheme's binder at this position, or `scheme_use_site_unreached`.
@@ -3915,6 +3932,7 @@ pub fn recordSchemeUse(
 pub fn recordSchemeSnapshot(
     self: *Self,
     owner_node: u32,
+    root: TypeVar,
     digest: [32]u8,
     binders: []const SchemeSnapshotBinder,
 ) std.mem.Allocator.Error!void {
@@ -3924,6 +3942,7 @@ pub fn recordSchemeSnapshot(
     }
     _ = try self.scheme_snapshots.append(self.gpa, .{
         .owner_node = owner_node,
+        .root = @intFromEnum(root),
         .binders_start = binders_start,
         .binders_len = @intCast(binders.len),
         .digest = digest,
@@ -3943,6 +3962,7 @@ pub fn recordSchemeUseSite(
     scheme_owner_node: u32,
     instantiated_root: TypeVar,
     actuals: []const SchemeUseSiteActual,
+    defining_module_hash: [32]u8,
 ) std.mem.Allocator.Error!u32 {
     const actuals_start: u32 = @intCast(self.scheme_use_site_actuals.items.items.len);
     for (actuals) |actual| {
@@ -3957,6 +3977,7 @@ pub fn recordSchemeUseSite(
         .instantiated_root = @intFromEnum(instantiated_root),
         .actuals_start = actuals_start,
         .actuals_len = @intCast(actuals.len),
+        .defining_module_hash = defining_module_hash,
     });
     return record_idx;
 }

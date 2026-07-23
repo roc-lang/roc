@@ -55,7 +55,8 @@ pub const Constants = struct {
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
     /// 31: ModuleEnv carries pristine scheme snapshots; checked schemes carry a snapshot root and binder range.
     /// 32: ModuleEnv carries dense positional scheme-use sites; checked store carries published instantiation sites.
-    pub const CACHE_VERSION = 32;
+    /// 33: scheme snapshots carry their root var; checked schemes carry owner + captured binders; scheme keys encode binder/free.
+    pub const CACHE_VERSION = 33;
 };
 
 /// Configuration for the Roc cache system.

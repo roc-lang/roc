@@ -112,6 +112,15 @@ var census_env_bytes = std.atomic.Value(u64).init(0);
 var census_artifact_bytes = std.atomic.Value(u64).init(0);
 var census_module_count = std.atomic.Value(u64).init(0);
 
+// Slice 2 (this sub-slice) captured-binder closures (reunify.md 7.1) and
+// imported-scheme instantiation projections (reunify.md 7.1/7.2).
+var schemes_with_captures = std.atomic.Value(u64).init(0);
+var captured_refs_attributed = std.atomic.Value(u64).init(0);
+var captured_refs_unattributed = std.atomic.Value(u64).init(0);
+var site_imported_value_use = std.atomic.Value(u64).init(0);
+var site_imported_dispatch = std.atomic.Value(u64).init(0);
+var site_imported_without_defining_scheme = std.atomic.Value(u64).init(0);
+
 var divergent_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
 var divergent_id_count: usize = 0;
 var err_ids: [max_identifications]Identification = [_]Identification{.{}} ** max_identifications;
@@ -317,6 +326,41 @@ pub fn recordErrReachableInLowerableModule(module_name: []const u8) void {
     }
 }
 
+/// Record one published nested scheme's captured-binder closure (reunify.md 7.1,
+/// Slice 2). `attributed` is how many captured references resolved to an
+/// enclosing scheme's published binder; `unattributed` is how many could not be
+/// (a free reference that turned out not to be an enclosing generalized binder).
+/// A scheme is counted as having captures only when `attributed > 0`.
+pub fn recordSchemeCaptures(attributed: u32, unattributed: u32) void {
+    if (comptime !enabled) return;
+    if (attributed > 0) {
+        _ = schemes_with_captures.fetchAdd(1, .monotonic);
+        _ = captured_refs_attributed.fetchAdd(attributed, .monotonic);
+    }
+    if (unattributed > 0) _ = captured_refs_unattributed.fetchAdd(unattributed, .monotonic);
+}
+
+/// Record one instantiation site of a scheme defined in ANOTHER module that this
+/// sub-slice's imported-binder projection resolved (reunify.md 7.1/7.2, Slice 2):
+/// its dense actuals were recorded against the defining module's binder order.
+/// `slot_kind` is a `SchemeUseRecord.Slot`.
+pub fn recordImportedSchemeSite(slot_kind: u32) void {
+    if (comptime !enabled) return;
+    switch (slot_kind) {
+        2 => _ = site_imported_dispatch.fetchAdd(1, .monotonic),
+        else => _ = site_imported_value_use.fetchAdd(1, .monotonic),
+    }
+}
+
+/// Record one imported-scheme site whose DEFINING module scheme id is not
+/// resolvable at the consuming side today — the record names the defining module
+/// and source owner node, but not an artifact-qualified `CheckedTypeSchemeId`
+/// (reunify.md 7.1, Slice 2). The shortfall a later slice must close.
+pub fn recordImportedSiteWithoutDefiningScheme() void {
+    if (comptime !enabled) return;
+    _ = site_imported_without_defining_scheme.fetchAdd(1, .monotonic);
+}
+
 const Sink = struct {
     data: []u8,
     len: usize = 0,
@@ -377,6 +421,12 @@ pub fn dumpAppend() void {
     sink.print("census_module_count={d}\n", .{census_module_count.load(.monotonic)});
     sink.print("census_env_bytes={d}\n", .{census_env_bytes.load(.monotonic)});
     sink.print("census_artifact_bytes={d}\n", .{census_artifact_bytes.load(.monotonic)});
+    sink.print("schemes_with_captures={d}\n", .{schemes_with_captures.load(.monotonic)});
+    sink.print("captured_refs_attributed={d}\n", .{captured_refs_attributed.load(.monotonic)});
+    sink.print("captured_refs_unattributed={d}\n", .{captured_refs_unattributed.load(.monotonic)});
+    sink.print("site_imported_value_use={d}\n", .{site_imported_value_use.load(.monotonic)});
+    sink.print("site_imported_dispatch={d}\n", .{site_imported_dispatch.load(.monotonic)});
+    sink.print("site_imported_without_defining_scheme={d}\n", .{site_imported_without_defining_scheme.load(.monotonic)});
     for (divergent_ids[0..divergent_id_count], 0..) |id, i| {
         sink.print("divergent_scheme_use_{d}={s}:node{d}\n", .{ i, id.moduleText(), id.node_idx });
     }

@@ -18,6 +18,7 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const TypeStore = types.Store;
 const Var = types.Var;
+const Rank = types.Rank;
 const LiteralKind = types.StaticDispatchConstraint.LiteralKind;
 
 /// Public `TypeKeyInfo` declaration.
@@ -105,6 +106,15 @@ pub fn defaultDec(idents: *const Ident.Store) canonical.CanonicalTypeKey {
 }
 
 /// Public `schemeFromVar` function.
+///
+/// The canonical scheme key gives `CanonicalTypeSchemeKey` its stated semantics
+/// (reunify.md 7.1, Slice 2): unlike `fromVar`, it encodes for each identity
+/// variable reached whether it is a scheme BINDER (a generalized variable) or a
+/// FREE variable (an enclosing scheme's binder, or an escaped/monomorphic
+/// variable). Two roots with identical structure but a different binder/free
+/// split therefore key differently. The classification is the solver rank
+/// (`rank == .generalized`), the same split the boundary snapshotter uses to
+/// select a scheme's binders, so every scheme-key call site agrees on it.
 pub fn schemeFromVar(
     allocator: Allocator,
     store: *const TypeStore,
@@ -113,6 +123,7 @@ pub fn schemeFromVar(
 ) Allocator.Error!canonical.CanonicalTypeSchemeKey {
     var builder = Builder.init(allocator, store, env);
     defer builder.deinit();
+    builder.scheme_key = true;
     builder.writeTag("canonical_type_scheme");
     try builder.writeVar(var_);
     return .{ .bytes = builder.hasher.finalResult() };
@@ -146,6 +157,9 @@ const Builder = struct {
     contains_identity_variables: bool = false,
     detect_errors: bool = false,
     contains_error: bool = false,
+    /// When true (scheme-key mode only), each identity variable's binder-vs-free
+    /// classification is mixed into the digest (reunify.md 7.1, Slice 2).
+    scheme_key: bool = false,
 
     fn init(allocator: Allocator, store: *const TypeStore, env: *const ModuleEnv) Builder {
         return .{
@@ -177,14 +191,14 @@ const Builder = struct {
                     }
                     invariantViolation("concrete canonical type key requested for unsolved flex type variable");
                 }
-                try self.writeIdentityVariable(root, "flex", flex.name, flex.constraints);
+                try self.writeIdentityVariable(root, resolved.desc.rank, "flex", flex.name, flex.constraints);
                 return;
             },
             .rigid => |rigid| {
                 if (self.require_concrete) {
                     invariantViolation("concrete canonical type key requested for unsolved rigid type variable");
                 }
-                try self.writeIdentityVariable(root, "rigid", rigid.name, rigid.constraints);
+                try self.writeIdentityVariable(root, resolved.desc.rank, "rigid", rigid.name, rigid.constraints);
                 return;
             },
             else => {},
@@ -205,6 +219,7 @@ const Builder = struct {
     fn writeIdentityVariable(
         self: *Builder,
         root: Var,
+        rank: Rank,
         comptime tag: []const u8,
         name: ?Ident.Idx,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
@@ -220,6 +235,14 @@ const Builder = struct {
         try self.identity_variables.append(self.allocator, root);
         self.writeTag(tag);
         self.writeU32(slot);
+        // Scheme-key mode encodes each identity slot's binder-vs-free split
+        // (reunify.md 7.1): a generalized-rank variable is one of this scheme's
+        // binders; any other rank is free (an enclosing scheme's binder or an
+        // escaped/monomorphic variable). The bit is mixed only on first
+        // encounter, keying the slot; later references cite the fixed slot.
+        if (self.scheme_key) {
+            self.writeBool(rank == Rank.generalized);
+        }
         try self.writeOptionalIdent(name);
         try self.writeConstraints(constraints);
     }
