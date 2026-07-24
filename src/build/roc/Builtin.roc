@@ -1,4 +1,52 @@
 Builtin :: [].{
+	# A format implements the container protocol below to be usable with derived
+	# parsers and encoders. Every method is resolved per encoding type, so a
+	# format only needs the methods the shapes its users parse actually reach:
+	# a format with no tuple syntax simply omits parse_tuple_*, and using a
+	# tuple with it is a compile-time error rather than a runtime one.
+	#
+	# Containers come in two kinds.
+	#
+	# Fixed-arity sequences (tuples, and the payloads of a tag) have an arity
+	# the shape already fixes, so the format never decides when they end. It
+	# receives the count and returns plain states:
+	#
+	#     parse_tuple_start : encoding, state, U64 -> Try(state, err)
+	#     parse_tuple_next  : encoding, state, U64, U64 -> Try(state, err)
+	#     parse_tuple_end   : encoding, state, U64 -> Try(state, err)
+	#
+	# parse_tuple_next runs before every element after the first and receives
+	# that element's zero-based index along with the total. Because the format
+	# knows the expected arity, it is the one that reports an arity mismatch,
+	# at the position where it can say what it actually found.
+	#
+	# Variable-length containers (lists, sets, records, dicts) begin with a
+	# start method that reports whether the format knows the entry count up
+	# front:
+	#
+	#     parse_list_start : encoding, state
+	#         -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
+	#
+	# Counted means the driver reads exactly len entries back to back, with no
+	# further protocol calls between them, and preallocates. A length-prefixed
+	# binary format returns Counted and needs no state of its own to track
+	# where it is. A format that is both length-prefixed and separated must
+	# return Uncounted and count in its own state, which keeps the counted path
+	# free of per-entry calls.
+	#
+	# Uncounted drives an event loop instead. For lists:
+	#
+	#     parse_list_next          : encoding, state -> Try([Element(state), Done(state)], err)
+	#     parse_list_after_element : encoding, state -> Try([Continue(state), Done(state)], err)
+	#
+	# Records use parse_record_start, then parse_record_field to read a field
+	# name, then parse_record_after_field. A field event may also be Continue,
+	# which means the format consumed an entry itself and the cursor is already
+	# at the next boundary; that is how a format skips entries it can rule out
+	# without tokenizing them. Dicts use parse_dict_start, parse_dict_next,
+	# parse_dict_after_key between a key and its value, and
+	# parse_dict_after_entry. Dict keys are parsed by parse_key_* methods,
+	# which are ordinary state-based parsers like any other value parser.
 	Encoding :: {}.{
 		# Compiler-generated structural record field-name metadata used by derived
 		# parsers. The phantom _shape ties a FieldName handle to the exact

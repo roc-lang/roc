@@ -53,6 +53,9 @@ const cache_control_value = "no-cache";
 const request_body = "hello";
 const request_count_value: u64 = 17;
 const long_unknown_header_name = "X-Super-Long-Unknown-Header-Name-That-Would-Allocate-If-Converted";
+// Shorter than the shortest field name, so it takes the other length-bucket
+// skip branch in parse_record_field.
+const short_unknown_header_name = "Ab";
 
 const optional_headers = [_]OptionalHeader{
     .{ .name = "Explicit-Optional", .value = "abc" },
@@ -261,6 +264,7 @@ fn buildRequest(allocator: std.mem.Allocator, optional_mask: u8) TestError![]u8 
     try request.appendSlice(allocator, "GET /header-lengths HTTP/1.1\r\n");
     try request.appendSlice(allocator, "Host: localhost\r\n");
     try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
+    try appendHeader(&request, allocator, short_unknown_header_name, "ignored");
     try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
 
     if ((optional_mask & 1) == 0) {
@@ -351,6 +355,7 @@ fn buildKnownHeadersScrambledOrderRequest(allocator: std.mem.Allocator) TestErro
     try appendHeader(&request, allocator, optional_headers[2].name, optional_headers[2].value);
     try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
     try appendHeader(&request, allocator, long_unknown_header_name, "ignored");
+    try appendHeader(&request, allocator, short_unknown_header_name, "ignored");
     try appendHeader(&request, allocator, optional_headers[0].name, optional_headers[0].value);
     try appendHeader(&request, allocator, "Foo", required_foo_value);
     try appendHeader(&request, allocator, "X-Unknown-Middle", "ignored");

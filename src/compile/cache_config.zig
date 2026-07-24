@@ -63,7 +63,8 @@ pub const Constants = struct {
     /// 37: Nested procedure sites declare their producer-authored evidence source.
     /// 38: Platform provides entries include their exact platform-local definition.
     /// 39: ModuleEnv stores exact top-level demand dependencies.
-    pub const CACHE_VERSION = 40;
+    /// 41: Encoding protocol names containers by Roc shape: list, tuple, record, dict.
+    pub const CACHE_VERSION = 41;
 };
 
 /// Configuration for the Roc cache system.
