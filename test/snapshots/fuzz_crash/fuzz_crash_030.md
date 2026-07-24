@@ -49,7 +49,7 @@ UNEXPECTED STATEMENT - fuzz_crash_030.md:16:3:16:4
     `Type.*` entries.
 
     For example:
-        module [main, Result, Result.*]
+        package [main, Result, Result.*]
 
     I found `.` here.
 

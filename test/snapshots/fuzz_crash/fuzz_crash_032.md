@@ -115,7 +115,7 @@ TYPE MISMATCH - fuzz_crash_032.md:7:10:7:21
  │                   ‾‾‾‾‾‾                                                   │
  └──────────────────────────────────────────────────── fuzz_crash_032.md:4:18 ┘
 
-    Move this import after the module header and before declarations or
+    Move this import after the mod header and before declarations or
     executable statements.
 
     For example:
@@ -266,7 +266,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "LocalStatus")

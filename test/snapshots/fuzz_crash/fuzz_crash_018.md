@@ -48,7 +48,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
 
     I found `.R` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌─────────────────┐
@@ -69,7 +69,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_018.md:1:3:1:6
  │    ‾‾‾                                                                     │
  └───────────────────────────────────────────────────── fuzz_crash_018.md:1:3 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -81,7 +81,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-type-anno (name "b")

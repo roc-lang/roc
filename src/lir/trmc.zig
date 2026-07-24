@@ -448,7 +448,7 @@ const Detection = struct {
                     try work.append(gpa, .{ .stmt = s.on_match, .edge = .{ .boxy_tag_on_match = item.stmt } });
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -517,7 +517,7 @@ const Detection = struct {
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try self.appendSharedSuccessor(work, s.next);
             },
         }
@@ -706,7 +706,10 @@ const Detection = struct {
                 .list_reinterpret => |l| c.chainContains(l.backing_ref),
                 .nominal => |n| c.chainContains(n.backing_ref),
             },
-            .assign_literal, .assign_packed_erased_fn => false,
+            .assign_literal => false,
+            .assign_packed_erased_fn => |s| (s.capture != null and c.chainContains(s.capture.?)) or
+                (s.reuse != null and c.chainContains(s.reuse.?)) or
+                (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
             .init_uninitialized => |s| c.chainContains(s.target),
             .assign_call => |s| self.spanTouchesChain(s.args, c),
             .assign_call_erased => |s| c.chainContains(s.closure) or self.spanTouchesChain(s.args, c),
@@ -735,6 +738,8 @@ const Detection = struct {
             .assign_struct => |s| self.spanTouchesChain(s.fields, c),
             .assign_tag => |s| (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)) or
                 (if (s.payload) |payload| c.chainContains(payload) else false),
+            .store_struct => |s| c.chainContains(s.dest) or self.spanTouchesChain(s.fields, c),
+            .store_tag => |s| c.chainContains(s.dest) or if (s.payload) |payload| c.chainContains(payload) else false,
             // Reading the value is a use; overwriting a tracked local would
             // corrupt the chain, so treat that as disqualifying too.
             .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),
@@ -1205,7 +1210,7 @@ const Transform = struct {
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
         return switch (self.store.getCFStmt(stmt_id)) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
             else => unreachable,
         };
     }
@@ -1213,7 +1218,7 @@ const Transform = struct {
     fn setNext(self: *Transform, stmt_id: CFStmtId, next: CFStmtId) void {
         const ptr = self.store.getCFStmtPtr(stmt_id);
         switch (ptr.*) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
             else => unreachable,
         }
     }

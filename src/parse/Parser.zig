@@ -100,6 +100,13 @@ inline fn consumeComma(self: *Parser) bool {
     return true;
 }
 
+inline fn directCollectionLayout(self: *const Parser) AST.CollectionLayout {
+    return if (self.pos > 0 and self.tok_buf.tokens.items(.tag)[self.pos - 1] == .Comma)
+        .expanded
+    else
+        .compact;
+}
+
 /// Peek at the token at the current position
 ///
 /// **note** caller is responsible to ensure this isn't the last token
@@ -785,6 +792,7 @@ fn parseExposedItemTokens(self: *Parser) std.mem.Allocator.Error!AST.ExposedItem
                 return try self.store.addExposedItem(.{ .upper_ident_star = .{
                     .region = .{ .start = start, .end = self.pos },
                     .ident = ident,
+                    .qualifiers = qual_result.qualifiers,
                 } });
             }
             return try self.store.addExposedItem(.{ .upper_ident = .{
@@ -864,13 +872,16 @@ fn parseTypeHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.TypeHeader.I
         self.store.clearScratchTypeAnnosFrom(scratch_top);
         return try self.pushMalformed(AST.TypeHeader.Idx, .expected_ty_anno_close_round_or_comma, start);
     }
+    const layout = self.directCollectionLayout();
     self.advance();
     const args = try self.store.typeAnnoSpanFrom(scratch_top);
-    return try self.store.addTypeHeader(.{
+    const header = try self.store.addTypeHeader(.{
         .name = start,
         .args = args,
         .region = .{ .start = start, .end = self.pos },
     });
+    self.store.setCollectionLayout(header, layout);
+    return header;
 }
 
 fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Statement.Idx {
@@ -954,6 +965,7 @@ fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Stateme
     }
 
     var exposes = AST.ExposedItem.Span{ .span = base.DataSpan.empty() };
+    var exposes_layout: AST.CollectionLayout = .compact;
     var nested_import = false;
     var last_upper_tok: TokenIdx = self.pos;
     const module_name_tok = self.pos;
@@ -1005,6 +1017,7 @@ fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Stateme
                 self.store.clearScratchExposedItemsFrom(scratch_top);
                 return try self.pushMalformed(AST.Statement.Idx, .import_exposing_no_close, start);
             }
+            exposes_layout = self.directCollectionLayout();
             self.advance();
             exposes = try self.store.exposedItemSpanFrom(scratch_top);
         }
@@ -1018,6 +1031,7 @@ fn parseImportStatementTokens(self: *Parser) std.mem.Allocator.Error!AST.Stateme
         .nested_import = nested_import,
         .region = .{ .start = start, .end = self.pos },
     } });
+    self.store.setCollectionLayout(statement_idx, exposes_layout);
     if (qualifier == null and !nested_import) {
         if (self.tok_buf.resolveIdentifier(module_name_tok)) |module_ident| {
             try self.decl_index.addExplicitUnqualifiedImport(module_ident);
@@ -1060,12 +1074,14 @@ fn parseExposedCollectionTokens(
     while (true) {
         switch (self.peek()) {
             .CloseSquare => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const span = try self.store.exposedItemSpanFrom(scratch_top);
                 return .{ .ok = .{
                     .collection = try self.store.addCollection(.collection_exposed, .{
                         .span = span.span,
                         .region = .{ .start = exposes_start, .end = self.pos },
+                        .layout = layout,
                     }),
                     .span = span,
                 } };
@@ -1135,11 +1151,13 @@ fn parseRecordFieldCollectionTokens(
         self.store.clearScratchRecordFieldsFrom(scratch_top);
         return try self.pushMalformed(AST.Collection.Idx, close_error, start);
     }
+    const layout = self.directCollectionLayout();
     self.advance();
     const span = try self.store.recordFieldSpanFrom(scratch_top);
     return try self.store.addCollection(collection_tag, .{
         .span = span.span,
         .region = .{ .start = fields_start, .end = self.pos },
+        .layout = layout,
     });
 }
 
@@ -1233,11 +1251,21 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
                 return try self.pushMalformed(AST.Header.Idx, .multiple_platforms, start);
             }
             self.advance();
-            if (self.peek() != .StringStart) {
+            const value = if (self.peek() == .StringStart)
+                try self.parseStringExprTokens()
+            else if (self.peek() == .LowerIdent and std.mem.eql(u8, self.tokenText(self.pos), "glue")) blk: {
+                const ident_tok = self.pos;
+                self.advance();
+                const empty_qualifiers = try self.store.tokenSpanFrom(self.store.scratchTokenTop());
+                break :blk try self.store.addExpr(.{ .ident = .{
+                    .token = ident_tok,
+                    .qualifiers = empty_qualifiers,
+                    .region = .{ .start = ident_tok, .end = self.pos },
+                } });
+            } else {
                 self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
                 return try self.pushMalformed(AST.Header.Idx, .expected_platform_string, start);
-            }
-            const value = try self.parseStringExprTokens();
+            };
             const field = try self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
@@ -1265,12 +1293,14 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
         return try self.pushMalformed(AST.Header.Idx, .expected_package_platform_close_curly, start);
     }
+    const packages_layout = self.directCollectionLayout();
     self.advance();
 
     const packages_span = try self.store.recordFieldSpanFrom(fields_scratch_top);
     const packages = try self.store.addCollection(.collection_packages, .{
         .span = packages_span.span,
         .region = .{ .start = packages_start, .end = self.pos },
+        .layout = packages_layout,
     });
 
     if (platform) |platform_idx| {
@@ -1487,8 +1517,11 @@ fn parseTargetFileTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetFile.I
     switch (self.peek()) {
         .StringStart => {
             self.advance();
-            var content_tok = start;
-            if (self.peek() == .StringPart) {
+            var content_tok: ?Token.Idx = null;
+            if (switch (self.peek()) {
+                .StringPart, .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => true,
+                else => false,
+            }) {
                 content_tok = self.pos;
                 self.advance();
             }
@@ -1538,8 +1571,11 @@ fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.Targe
         },
         .StringStart => {
             self.advance();
-            var content_tok = start;
-            if (self.peek() == .StringPart) {
+            var content_tok: ?Token.Idx = null;
+            if (switch (self.peek()) {
+                .StringPart, .MalformedStringPart, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence => true,
+                else => false,
+            }) {
                 content_tok = self.pos;
                 self.advance();
             }
@@ -1791,12 +1827,13 @@ fn parseSymbolMapCollectionTokens(
             break;
         }
     }
+    const layout: AST.CollectionLayout = if (self.peek() == .CloseCurly) self.directCollectionLayout() else .compact;
     self.expect(.CloseCurly) catch {
         self.store.clearScratchSymbolMapEntriesFrom(top);
         _ = try self.pushMalformed(AST.SymbolMapEntry.Idx, close_tag, self.pos);
         return .{ .span = .{ .start = 0, .len = 0 }, .region = .{ .start = start, .end = self.pos } };
     };
-    return try self.store.symbolMapEntrySpanFrom(top, .{ .start = start, .end = self.pos });
+    return try self.store.symbolMapEntrySpanFrom(top, .{ .start = start, .end = self.pos }, layout);
 }
 
 fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
@@ -2247,12 +2284,14 @@ const ExprStringState = struct {
 
 const ExprRecordExtState = struct {
     start: Token.Idx,
+    record_start: Token.Idx,
     min_bp: u8,
     nominal_mapper: ?AST.Expr.Idx,
 };
 
 const ExprRecordState = struct {
     start: Token.Idx,
+    record_start: Token.Idx,
     min_bp: u8,
     scratch_top: u32,
     ext: ?AST.Expr.Idx,
@@ -2261,6 +2300,7 @@ const ExprRecordState = struct {
 
 const ExprRecordFieldState = struct {
     start: Token.Idx,
+    record_start: Token.Idx,
     min_bp: u8,
     scratch_top: u32,
     ext: ?AST.Expr.Idx,
@@ -2273,6 +2313,7 @@ const ExprLambdaAfterBodyState = struct {
     start: Token.Idx,
     min_bp: u8,
     args: AST.Pattern.Span,
+    args_layout: AST.CollectionLayout,
 };
 
 const ExprLambdaArgsState = struct {
@@ -2644,6 +2685,7 @@ const TypeRecordState = struct {
 const TypeRecordExtState = struct {
     start: Token.Idx,
     scratch_top: u32,
+    double_dot: Token.Idx,
     looking_for_args: TyFnArgs,
 };
 
@@ -2666,6 +2708,7 @@ const TypeTagUnionState = struct {
 const TypeTagUnionExtState = struct {
     start: Token.Idx,
     scratch_top: u32,
+    double_dot: Token.Idx,
     looking_for_args: TyFnArgs,
 };
 
@@ -3111,6 +3154,7 @@ fn runExprStatementKernel(
                     if (self.peek() == .CloseCurly) {
                         expr_record_state = .{
                             .start = start,
+                            .record_start = start,
                             .min_bp = expr_state.min_bp,
                             .scratch_top = self.store.scratchRecordFieldTop(),
                             .ext = null,
@@ -3121,6 +3165,7 @@ fn runExprStatementKernel(
                         self.advance();
                         try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
                             .start = start,
+                            .record_start = start,
                             .min_bp = expr_state.min_bp,
                             .nominal_mapper = null,
                         });
@@ -3164,6 +3209,7 @@ fn runExprStatementKernel(
                         }
                         expr_record_state = .{
                             .start = start,
+                            .record_start = start,
                             .min_bp = expr_state.min_bp,
                             .scratch_top = self.store.scratchRecordFieldTop(),
                             .ext = null,
@@ -3208,6 +3254,7 @@ fn runExprStatementKernel(
                             .start = lambda_args_state.start,
                             .min_bp = lambda_args_state.min_bp,
                             .args = args,
+                            .args_layout = .compact,
                         });
                         try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
                         expr_state = .{ .start = self.pos, .min_bp = 0 };
@@ -3350,10 +3397,12 @@ fn runExprStatementKernel(
             const tok_int = @intFromEnum(tok);
 
             if (tok == .Dot and self.peekN(1) == .OpenCurly) {
+                const record_start = self.pos + 1;
                 self.advance();
                 self.advance();
                 expr_record_state = .{
                     .start = expr_finish_state.start,
+                    .record_start = record_start,
                     .min_bp = expr_finish_state.min_bp,
                     .scratch_top = self.store.scratchRecordFieldTop(),
                     .ext = null,
@@ -3367,6 +3416,7 @@ fn runExprStatementKernel(
                     self.advance();
                     try open_syntax.pushExpr(open_allocator, .expr_record_ext, ExprRecordExtState, .{
                         .start = expr_finish_state.start,
+                        .record_start = record_start,
                         .min_bp = expr_finish_state.min_bp,
                         .nominal_mapper = expr_finish_state.expr,
                     });
@@ -3641,6 +3691,7 @@ fn runExprStatementKernel(
                         self.advance();
                         expr_record_state = .{
                             .start = state.start,
+                            .record_start = state.record_start,
                             .min_bp = state.min_bp,
                             .scratch_top = self.store.scratchRecordFieldTop(),
                             .ext = completed,
@@ -3659,6 +3710,7 @@ fn runExprStatementKernel(
                         try self.store.addScratchRecordField(field);
                         expr_record_state = .{
                             .start = state.start,
+                            .record_start = state.record_start,
                             .min_bp = state.min_bp,
                             .scratch_top = state.scratch_top,
                             .ext = state.ext,
@@ -3852,6 +3904,7 @@ fn runExprStatementKernel(
                             .args = state.args,
                             .region = .{ .start = state.start, .end = self.pos },
                         } });
+                        self.store.setCollectionLayout(expr, state.args_layout);
                         expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp, .expr = expr };
                         continue :expr_kernel .suffix;
                     },
@@ -4002,17 +4055,20 @@ fn runExprStatementKernel(
             .CloseRound, .CloseSquare => {
                 const active_collection = expr_collections.active();
                 if (self.peek() == active_collection.end_token) {
+                    const layout = self.directCollectionLayout();
                     self.advance();
                     const state = expr_collections.leave();
                     const span = try self.store.exprSpanFrom(state.scratch_top);
                     switch (state.result) {
                         .list => {
                             const expr = try self.store.addExpr(.{ .list = .{ .items = span, .region = .{ .start = state.start, .end = self.pos } } });
+                            self.store.setCollectionLayout(expr, layout);
                             expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse 0, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
                         .tuple => {
                             const expr = try self.store.addExpr(.{ .tuple = .{ .items = span, .region = .{ .start = state.start, .end = self.pos } } });
+                            self.store.setCollectionLayout(expr, layout);
                             expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse unreachable, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4022,6 +4078,7 @@ fn runExprStatementKernel(
                                 .@"fn" = apply_state.function,
                                 .region = .{ .start = apply_state.start, .end = self.pos },
                             } });
+                            self.store.setCollectionLayout(expr, layout);
                             expr_finish_state = .{ .start = apply_state.start, .min_bp = apply_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4032,6 +4089,7 @@ fn runExprStatementKernel(
                                 .args = span,
                                 .region = .{ .start = method_state.start, .end = self.pos },
                             } });
+                            self.store.setCollectionLayout(expr, layout);
                             expr_finish_state = .{ .start = method_state.start, .min_bp = method_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4041,6 +4099,7 @@ fn runExprStatementKernel(
                                 .args = span,
                                 .region = .{ .start = nominal_state.start, .end = self.pos },
                             } });
+                            self.store.setCollectionLayout(expr, layout);
                             expr_finish_state = .{ .start = nominal_state.start, .min_bp = nominal_state.min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
@@ -4050,6 +4109,7 @@ fn runExprStatementKernel(
                                 .@"fn" = arrow_state.function,
                                 .region = .{ .start = arrow_state.operator, .end = self.pos },
                             } });
+                            self.store.setCollectionLayout(rhs, layout);
                             expr_arrow_app_state = .{
                                 .start = arrow_state.start,
                                 .min_bp = arrow_state.min_bp,
@@ -4210,6 +4270,7 @@ fn runExprStatementKernel(
                     self.advance();
                     try open_syntax.pushExpr(open_allocator, .expr_record_field, ExprRecordFieldState, .{
                         .start = expr_record_state.start,
+                        .record_start = expr_record_state.record_start,
                         .min_bp = expr_record_state.min_bp,
                         .scratch_top = expr_record_state.scratch_top,
                         .ext = expr_record_state.ext,
@@ -4254,9 +4315,10 @@ fn runExprStatementKernel(
         },
         .record_finish => switch (self.peek()) {
             .CloseCurly => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const fields = try self.store.recordFieldSpanFrom(expr_record_state.scratch_top);
-                const expr = try self.finishRecordExpr(expr_record_state.start, fields, expr_record_state.ext, expr_record_state.nominal_mapper);
+                const expr = try self.finishRecordExpr(expr_record_state.start, expr_record_state.record_start, fields, expr_record_state.ext, expr_record_state.nominal_mapper, layout);
                 expr_finish_state = .{ .start = expr_record_state.start, .min_bp = expr_record_state.min_bp, .expr = expr };
                 continue :expr_kernel .suffix;
             },
@@ -4558,7 +4620,10 @@ fn runExprStatementKernel(
                         type_record_state = .{
                             .start = state.start,
                             .scratch_top = state.scratch_top,
-                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .ext = .{ .named = .{ .anno = completed, .region = .{
+                                .start = state.double_dot,
+                                .end = anno_region.end,
+                            } } },
                             .looking_for_args = state.looking_for_args,
                         };
                         continue :expr_kernel .type_record_finish;
@@ -4599,7 +4664,10 @@ fn runExprStatementKernel(
                         type_tag_union_state = .{
                             .start = state.start,
                             .scratch_top = state.scratch_top,
-                            .ext = .{ .named = .{ .anno = completed, .region = anno_region } },
+                            .ext = .{ .named = .{ .anno = completed, .region = .{
+                                .start = state.double_dot,
+                                .end = anno_region.end,
+                            } } },
                             .looking_for_args = state.looking_for_args,
                         };
                         continue :expr_kernel .type_tag_union_finish;
@@ -4659,6 +4727,7 @@ fn runExprStatementKernel(
                                 .var_tok = state.var_tok,
                                 .args = args,
                                 .ret_anno = fn_type.ret,
+                                .effectful = fn_type.effectful,
                             } }));
                             continue :expr_kernel .where_after_clause;
                         }
@@ -4673,6 +4742,7 @@ fn runExprStatementKernel(
                             .var_tok = state.var_tok,
                             .args = empty_args,
                             .ret_anno = completed,
+                            .effectful = false,
                         } }));
                         continue :expr_kernel .where_after_clause;
                     },
@@ -4747,11 +4817,13 @@ fn runExprStatementKernel(
         },
         .type_apply_next => switch (self.peek()) {
             .CloseRound => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 last_type_anno = try self.store.addTypeAnno(.{ .apply = .{
                     .region = .{ .start = type_apply_state.start, .end = self.pos },
                     .args = try self.store.typeAnnoSpanFrom(type_apply_state.scratch_top),
                 } });
+                self.store.setCollectionLayout(last_type_anno.?, layout);
                 type_after_primary_state = .{ .start = type_apply_state.start, .looking_for_args = type_apply_state.looking_for_args };
                 continue :expr_kernel .type_after_primary;
             },
@@ -4798,6 +4870,7 @@ fn runExprStatementKernel(
                     type_args = .looking_for_args;
                     continue :expr_kernel .type_prefix;
                 }
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const annos = args;
                 if (annos.span.len == 1 and !type_paren_state.saw_comma) {
@@ -4810,6 +4883,7 @@ fn runExprStatementKernel(
                         .region = .{ .start = type_paren_state.start, .end = self.pos },
                         .annos = annos,
                     } });
+                    self.store.setCollectionLayout(last_type_anno.?, layout);
                 }
                 type_after_primary_state = .{ .start = type_paren_state.start, .looking_for_args = type_paren_state.looking_for_args };
                 continue :expr_kernel .type_after_primary;
@@ -4841,6 +4915,7 @@ fn runExprStatementKernel(
                     try open_syntax.pushType(open_allocator, .type_record_ext, TypeRecordExtState, .{
                         .start = type_record_state.start,
                         .scratch_top = type_record_state.scratch_top,
+                        .double_dot = double_dot_start,
                         .looking_for_args = type_record_state.looking_for_args,
                     });
                     type_args = .looking_for_args;
@@ -4898,6 +4973,7 @@ fn runExprStatementKernel(
         },
         .type_record_finish => switch (self.peek()) {
             .CloseCurly => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const fields = try self.store.annoRecordFieldSpanFrom(type_record_state.scratch_top);
                 last_type_anno = try self.store.addTypeAnno(.{ .record = .{
@@ -4905,6 +4981,7 @@ fn runExprStatementKernel(
                     .fields = fields,
                     .ext = type_record_state.ext,
                 } });
+                self.store.setCollectionLayout(last_type_anno.?, layout);
                 type_after_primary_state = .{ .start = type_record_state.start, .looking_for_args = type_record_state.looking_for_args };
                 continue :expr_kernel .type_after_primary;
             },
@@ -4924,6 +5001,7 @@ fn runExprStatementKernel(
                     try open_syntax.pushType(open_allocator, .type_tag_union_ext, TypeTagUnionExtState, .{
                         .start = type_tag_union_state.start,
                         .scratch_top = type_tag_union_state.scratch_top,
+                        .double_dot = double_dot_pos,
                         .looking_for_args = type_tag_union_state.looking_for_args,
                     });
                     type_args = .looking_for_args;
@@ -4954,6 +5032,7 @@ fn runExprStatementKernel(
         },
         .type_tag_union_finish => switch (self.peek()) {
             .CloseSquare => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const tags = try self.store.typeAnnoSpanFrom(type_tag_union_state.scratch_top);
                 last_type_anno = try self.store.addTypeAnno(.{ .tag_union = .{
@@ -4961,6 +5040,7 @@ fn runExprStatementKernel(
                     .ext = type_tag_union_state.ext,
                     .tags = tags,
                 } });
+                self.store.setCollectionLayout(last_type_anno.?, layout);
                 type_after_primary_state = .{ .start = type_tag_union_state.start, .looking_for_args = type_tag_union_state.looking_for_args };
                 continue :expr_kernel .type_after_primary;
             },
@@ -5088,6 +5168,7 @@ fn runExprStatementKernel(
                 continue :expr_kernel .where_complete;
             }
 
+            const layout: AST.CollectionLayout = if (self.peek() == .CloseSquare) self.directCollectionLayout() else .compact;
             if (self.peek() == .CloseSquare) {
                 self.advance();
             } else {
@@ -5101,6 +5182,7 @@ fn runExprStatementKernel(
             last_where = try self.store.addCollection(.collection_where_clause, .{
                 .region = .{ .start = where_state.start, .end = self.pos },
                 .span = where_clauses.span,
+                .layout = layout,
             });
             continue :expr_kernel .where_complete;
         },
@@ -5363,6 +5445,7 @@ fn runExprStatementKernel(
                     try open_syntax.pushExpr(open_allocator, .statement_expr_body, Token.Idx, start);
                     expr_record_state = .{
                         .start = start,
+                        .record_start = start,
                         .min_bp = 0,
                         .scratch_top = self.store.scratchRecordFieldTop(),
                         .ext = null,
@@ -5835,6 +5918,7 @@ fn runExprStatementKernel(
                             self.advance();
                         }
                         if (self.peek() == .OpBar or self.peek() == .EndOfFile) {
+                            const args_layout = self.directCollectionLayout();
                             if (self.peek() == .OpBar) {
                                 self.advance();
                             }
@@ -5843,6 +5927,7 @@ fn runExprStatementKernel(
                                 .start = state.start,
                                 .min_bp = state.min_bp,
                                 .args = args,
+                                .args_layout = args_layout,
                             });
                             try open_syntax.pushExprMarker(open_allocator, .expr_lambda_body);
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
@@ -6025,6 +6110,7 @@ fn runExprStatementKernel(
         },
         .pattern_tag_args_next => switch (self.peek()) {
             .CloseRound => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const args = try self.store.patternSpanFrom(pattern_tag_args_state.scratch_top);
                 last_pattern = try self.store.addPattern(.{ .tag = .{
@@ -6032,8 +6118,10 @@ fn runExprStatementKernel(
                     .args = args,
                     .tag_tok = pattern_tag_args_state.final_token,
                     .qualifiers = pattern_tag_args_state.qualifiers,
+                    .has_args = true,
                     .backing_value = pattern_tag_args_state.backing_value,
                 } });
+                self.store.setCollectionLayout(last_pattern.?, layout);
                 continue :expr_kernel .pattern_complete;
             },
             else => {
@@ -6096,12 +6184,14 @@ fn runExprStatementKernel(
         },
         .pattern_list_finish => switch (self.peek()) {
             .CloseSquare => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const patterns = try self.store.patternSpanFrom(pattern_list_state.scratch_top);
                 last_pattern = try self.store.addPattern(.{ .list = .{
                     .region = .{ .start = pattern_list_state.start, .end = self.pos },
                     .patterns = patterns,
                 } });
+                self.store.setCollectionLayout(last_pattern.?, layout);
                 continue :expr_kernel .pattern_complete;
             },
             else => {
@@ -6196,12 +6286,14 @@ fn runExprStatementKernel(
         },
         .pattern_record_finish => switch (self.peek()) {
             .CloseCurly => {
+                const layout = self.directCollectionLayout();
                 const fields = try self.store.patternRecordFieldSpanFrom(pattern_record_state.scratch_top);
                 self.advance();
                 last_pattern = try self.store.addPattern(.{ .record = .{
                     .region = .{ .start = pattern_record_state.start, .end = self.pos },
                     .fields = fields,
                 } });
+                self.store.setCollectionLayout(last_pattern.?, layout);
                 continue :expr_kernel .pattern_complete;
             },
             else => {
@@ -6228,12 +6320,14 @@ fn runExprStatementKernel(
         },
         .pattern_tuple_finish => switch (self.peek()) {
             .CloseRound => {
+                const layout = self.directCollectionLayout();
                 self.advance();
                 const patterns = try self.store.patternSpanFrom(pattern_tuple_state.scratch_top);
                 last_pattern = try self.store.addPattern(.{ .tuple = .{
                     .patterns = patterns,
                     .region = .{ .start = pattern_tuple_state.start, .end = self.pos },
                 } });
+                self.store.setCollectionLayout(last_pattern.?, layout);
                 continue :expr_kernel .pattern_complete;
             },
             else => {
@@ -6384,16 +6478,19 @@ pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIn
 fn finishRecordExpr(
     self: *Parser,
     start: Token.Idx,
+    record_start: Token.Idx,
     fields: AST.RecordField.Span,
     ext: ?AST.Expr.Idx,
     nominal_mapper: ?AST.Expr.Idx,
+    layout: AST.CollectionLayout,
 ) std.mem.Allocator.Error!AST.Expr.Idx {
     if (nominal_mapper) |mapper| {
         const record_expr = try self.store.addExpr(.{ .record = .{
             .fields = fields,
             .ext = ext,
-            .region = .{ .start = start, .end = self.pos },
+            .region = .{ .start = record_start, .end = self.pos },
         } });
+        self.store.setCollectionLayout(record_expr, layout);
 
         return try self.store.addExpr(.{ .nominal_record = .{
             .mapper = mapper,
@@ -6420,11 +6517,13 @@ fn finishRecordExpr(
             .qualifiers = qualifiers,
         } });
 
-        return try self.store.addExpr(.{ .record_builder = .{
+        const record_builder = try self.store.addExpr(.{ .record_builder = .{
             .mapper = mapper,
             .fields = fields,
             .region = .{ .start = start, .end = self.pos },
         } });
+        self.store.setCollectionLayout(record_builder, layout);
+        return record_builder;
     }
 
     const record_expr = try self.store.addExpr(.{ .record = .{
@@ -6432,6 +6531,7 @@ fn finishRecordExpr(
         .ext = ext,
         .region = .{ .start = start, .end = self.pos },
     } });
+    self.store.setCollectionLayout(record_expr, layout);
 
     return record_expr;
 }

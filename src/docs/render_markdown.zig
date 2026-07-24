@@ -852,11 +852,21 @@ fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
     // (served at `/langref/<slug>/`). A reference to another article is that
     // base plus its extensionless slug; the README is the `langref/` directory
     // itself ("./" when we are already in it, otherwise `langref_base`).
+    //
+    // Every target is a directory-index page (`<slug>/index.html`, a module's
+    // `<Module>/index.html`, ...), so we emit a trailing slash. Without it the
+    // link relies on the server redirecting the extensionless URL to its
+    // slashed form before the browser resolves the *next* relative link: on
+    // `/langref/statements` (no slash) a bare `../pattern-matching` resolves to
+    // `/pattern-matching` (dropping `langref/`), whereas from the slashed
+    // `/langref/statements/` it correctly lands on `/langref/pattern-matching`.
+    // The README case already ends in a slash ("./" or `langref_base`).
     if (std.ascii.eqlIgnoreCase(path, "README")) {
         try writeEscaped(w, if (rctx.langref_base.len == 0) "./" else rctx.langref_base);
     } else {
         try writeEscaped(w, rctx.langref_base);
         try writeEscaped(w, path);
+        if (!std.mem.endsWith(u8, path, "/")) try writeEscaped(w, "/");
     }
     try writeEscaped(w, anchor);
 }
@@ -1233,8 +1243,8 @@ test "renderInline emphasis, code, and escaping" {
 
 test "renderInline rewrites relative links and preserves external ones" {
     const gpa = testing.allocator;
-    try expectInline(gpa, "[match](pattern-matching#match)", "<a href=\"pattern-matching#match\">match</a>");
-    try expectInline(gpa, "[v](types.md#nominal-types)", "<a href=\"types#nominal-types\">v</a>");
+    try expectInline(gpa, "[match](pattern-matching#match)", "<a href=\"pattern-matching/#match\">match</a>");
+    try expectInline(gpa, "[v](types.md#nominal-types)", "<a href=\"types/#nominal-types\">v</a>");
     try expectInline(gpa, "[home](README.md)", "<a href=\"./\">home</a>");
     try expectInline(gpa, "[here](#values)", "<a href=\"#values\">here</a>");
     try expectInline(gpa, "[ext](https://roc-lang.org)", "<a href=\"https://roc-lang.org\">ext</a>");
@@ -1289,7 +1299,7 @@ test "renderArticleBody resolves cross-article links against langref_base" {
         var aw = std.Io.Writer.Allocating.init(gpa);
         defer aw.deinit();
         try renderArticleBody(&aw.writer, gpa, &[_]Article{}, &article, "");
-        try testing.expect(std.mem.find(u8, aw.written(), "href=\"expressions#value\"") != null);
+        try testing.expect(std.mem.find(u8, aw.written(), "href=\"expressions/#value\"") != null);
         try testing.expect(std.mem.find(u8, aw.written(), "href=\"./\"") != null);
     }
 
@@ -1299,7 +1309,7 @@ test "renderArticleBody resolves cross-article links against langref_base" {
         var aw = std.Io.Writer.Allocating.init(gpa);
         defer aw.deinit();
         try renderArticleBody(&aw.writer, gpa, &[_]Article{}, &article, "../");
-        try testing.expect(std.mem.find(u8, aw.written(), "href=\"../expressions#value\"") != null);
+        try testing.expect(std.mem.find(u8, aw.written(), "href=\"../expressions/#value\"") != null);
         try testing.expect(std.mem.find(u8, aw.written(), "href=\"../\"") != null);
     }
 }
@@ -1344,8 +1354,8 @@ test "linkTargetSlug extracts article slugs" {
 
 test "conditionals links resolve to the if-else page" {
     const gpa = testing.allocator;
-    try expectInline(gpa, "[c](conditionals.md)", "<a href=\"if-else\">c</a>");
-    try expectInline(gpa, "[if](conditionals.md#if)", "<a href=\"if-else#if\">if</a>");
+    try expectInline(gpa, "[c](conditionals.md)", "<a href=\"if-else/\">c</a>");
+    try expectInline(gpa, "[if](conditionals.md#if)", "<a href=\"if-else/#if\">if</a>");
     try testing.expectEqualStrings("if-else", linkTargetSlug("conditionals.md#if").?);
 }
 

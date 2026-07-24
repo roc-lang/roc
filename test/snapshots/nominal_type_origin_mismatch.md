@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type mismatch showing nominal type origin from different module
+description=Type mismatch showing nominal type origin from different mod
 type=snippet
 ~~~
 # SOURCE
@@ -52,7 +52,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Data")
 			(exposing
@@ -102,12 +102,12 @@ main =
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 107)
+		(e-call (constraint-fn-var 231)
 			(e-lookup-local
 				(p-assign (ident "expectsPerson")))
 			(e-string
 				(e-literal (string "not a person")))))
-	(s-import (module "Data")
+	(s-import (mod "Data")
 		(exposes
 			(exposed (name "Person") (wildcard false)))))
 ~~~

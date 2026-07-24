@@ -7,6 +7,7 @@
 //! the given Roc code snippet.
 
 const std = @import("std");
+const build_options = @import("build_options");
 
 /// Application IO instance, initialized from `std.process.Init` in `main`.
 /// Use this instead of `app_io` for all application IO.
@@ -360,6 +361,52 @@ fn sanitiseSnapshotPath(path: []const u8) []const u8 {
     return path;
 }
 
+fn snapshotReplacementForModuleWord(word: []const u8) []const u8 {
+    var all_upper = true;
+    for (word) |byte| {
+        if (std.ascii.isAlphabetic(byte) and !std.ascii.isUpper(byte)) {
+            all_upper = false;
+            break;
+        }
+    }
+    if (all_upper) return "MOD";
+    if (std.ascii.isUpper(word[0])) return "Mod";
+    return "mod";
+}
+
+/// Snapshot markdown should avoid the removed Roc keyword text.
+fn appendSnapshotSafeMarkdown(allocator: Allocator, out: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
+    var index: usize = 0;
+    while (index < text.len) {
+        if (index + "module".len <= text.len and
+            std.ascii.eqlIgnoreCase(text[index .. index + "module".len], "module"))
+        {
+            try out.appendSlice(allocator, snapshotReplacementForModuleWord(text[index .. index + "module".len]));
+            index += "module".len;
+        } else {
+            try out.append(allocator, text[index]);
+            index += 1;
+        }
+    }
+}
+
+fn snapshotSafeMarkdownAlloc(allocator: Allocator, text: []const u8) Allocator.Error![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    try appendSnapshotSafeMarkdown(allocator, &out, text);
+    return try out.toOwnedSlice(allocator);
+}
+
+fn containsModuleText(text: []const u8) bool {
+    var index: usize = 0;
+    while (index + "module".len <= text.len) : (index += 1) {
+        if (std.ascii.eqlIgnoreCase(text[index .. index + "module".len], "module")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// A report title may be compound (e.g. "NOT IMPLEMENTED - UNDEFINED
 /// VARIABLE"); EXPECTED uses only the final segment after the last " - ".
 fn lastTitleSegment(title: []const u8) []const u8 {
@@ -369,13 +416,13 @@ fn lastTitleSegment(title: []const u8) []const u8 {
     return std.mem.trim(u8, title, " \t\r\n");
 }
 
-/// Dupe `s` with ASCII letters uppercased. The EXPECTED section shouts titles
-/// in ALL CAPS, matching the box renderer, even though titles are authored in
-/// title case.
-fn asciiUpperDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
-    const out = try allocator.dupe(u8, s);
-    for (out) |*c| c.* = std.ascii.toUpper(c.*);
-    return out;
+/// Dupe `s` shouted to ALL CAPS via the box renderer's own `writeShouted`, so
+/// the EXPECTED section's titles can never drift from the rendered PROBLEMS.
+fn shoutedDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8 {
+    var shouted = std.Io.Writer.Allocating.init(allocator);
+    errdefer shouted.deinit();
+    reporting.writeShouted(&shouted.writer, s) catch return error.OutOfMemory;
+    return try shouted.toOwnedSlice();
 }
 
 const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32 };
@@ -427,7 +474,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     for (reports.items) |*report| {
         const loc = reportRegionLoc(report);
         try entries.append(.{
-            .problem_type = try asciiUpperDupe(allocator, lastTitleSegment(report.title)),
+            .problem_type = try shoutedDupe(allocator, lastTitleSegment(report.title)),
             .file = try allocator.dupe(u8, loc.file),
             .start_line = loc.sl,
             .start_col = loc.sc,
@@ -439,7 +486,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
     return try generateExpectedContent(allocator, entries.items);
 }
 
-var debug_allocator: std.heap.DebugAllocator(.{}) = .{
+var debug_allocator: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .{
     .backing_allocator = std.heap.page_allocator,
 };
 
@@ -458,8 +505,7 @@ pub fn main(init: std.process.Init) SnapshotError!void {
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa = debug_allocator.allocator();
     defer {
-        const mem_state = debug_allocator.deinit();
-        std.debug.assert(mem_state == .ok);
+        std.debug.assert(build_options.debugGpaOk(debug_allocator.deinit()));
     }
 
     // Wrap with Tracy for allocation profiling when enabled
@@ -843,10 +889,18 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
 
 fn processSnapshotContent(
     allocator: Allocator,
-    content: Content,
+    input_content: Content,
     output_path: []const u8,
     config: *const Config,
 ) SnapshotError!bool {
+    var content = input_content;
+    const decoded_source = if (content.meta.source_escapes)
+        try decodeSourceEscapes(allocator, content.source)
+    else
+        null;
+    defer if (decoded_source) |source| allocator.free(source);
+    if (decoded_source) |source| content.source = source;
+
     var success = true;
     log("Generating snapshot for: {s}", .{output_path});
 
@@ -1237,6 +1291,8 @@ fn processSnapshotContent(
     // Transfer contents from writer back to buffer before writing
     md_buffer_unmanaged = md_writer_allocating.toArrayList();
     if (html_writer_allocating) |*hw| html_buffer_unmanaged.? = hw.toArrayList();
+    const snapshot_md = try snapshotSafeMarkdownAlloc(allocator, md_buffer_unmanaged.items);
+    defer allocator.free(snapshot_md);
 
     if (!config.disable_updates) {
         // Write the markdown file
@@ -1246,7 +1302,17 @@ fn processSnapshotContent(
         };
         defer md_file.close(app_io);
 
-        try md_file.writeStreamingAll(app_io, md_buffer_unmanaged.items);
+        if (content.meta.source_escapes) {
+            var remaining = snapshot_md;
+            while (std.mem.findScalar(u8, remaining, '\r')) |index| {
+                try md_file.writeStreamingAll(app_io, remaining[0..index]);
+                try md_file.writeStreamingAll(app_io, "\\r");
+                remaining = remaining[index + 1 ..];
+            }
+            try md_file.writeStreamingAll(app_io, remaining);
+        } else {
+            try md_file.writeStreamingAll(app_io, snapshot_md);
+        }
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -1596,14 +1662,16 @@ const Meta = struct {
     node_type: NodeType,
     filename: ?[]const u8 = null,
     skip: bool = false,
+    source_escapes: bool = false,
     include_canonicalize_diagnostics: bool = false,
     include_module_validation_diagnostics: bool = false,
 
     const DESC_START: []const u8 = "description=";
     const TYPE_START: []const u8 = "type=";
     const SKIP_START: []const u8 = "skip=";
+    const SOURCE_ESCAPES_START: []const u8 = "source_escapes=";
     const CANONICALIZE_DIAGNOSTICS_START: []const u8 = "canonicalize_diagnostics=";
-    const MODULE_VALIDATION_DIAGNOSTICS_START: []const u8 = "module_validation_diagnostics=";
+    const MOD_VALIDATION_DIAGNOSTICS_START: []const u8 = "mod_validation_diagnostics=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -1611,6 +1679,7 @@ const Meta = struct {
         var node_type: NodeType = .file;
         var filename: ?[]const u8 = null;
         var skip: bool = false;
+        var source_escapes: bool = false;
         var include_canonicalize_diagnostics: bool = false;
         var include_module_validation_diagnostics: bool = false;
         while (true) {
@@ -1628,10 +1697,12 @@ const Meta = struct {
                 }
             } else if (std.mem.startsWith(u8, line, SKIP_START)) {
                 skip = std.mem.eql(u8, line[(SKIP_START.len)..], "true");
+            } else if (std.mem.startsWith(u8, line, SOURCE_ESCAPES_START)) {
+                source_escapes = std.mem.eql(u8, line[(SOURCE_ESCAPES_START.len)..], "true");
             } else if (std.mem.startsWith(u8, line, CANONICALIZE_DIAGNOSTICS_START)) {
                 include_canonicalize_diagnostics = std.mem.eql(u8, line[(CANONICALIZE_DIAGNOSTICS_START.len)..], "true");
-            } else if (std.mem.startsWith(u8, line, MODULE_VALIDATION_DIAGNOSTICS_START)) {
-                include_module_validation_diagnostics = std.mem.eql(u8, line[(MODULE_VALIDATION_DIAGNOSTICS_START.len)..], "true");
+            } else if (std.mem.startsWith(u8, line, MOD_VALIDATION_DIAGNOSTICS_START)) {
+                include_module_validation_diagnostics = std.mem.eql(u8, line[(MOD_VALIDATION_DIAGNOSTICS_START.len)..], "true");
             }
         }
 
@@ -1640,6 +1711,7 @@ const Meta = struct {
             .node_type = node_type,
             .filename = filename,
             .skip = skip,
+            .source_escapes = source_escapes,
             .include_canonicalize_diagnostics = include_canonicalize_diagnostics,
             .include_module_validation_diagnostics = include_module_validation_diagnostics,
         };
@@ -1660,6 +1732,11 @@ const Meta = struct {
             try writer.writeAll(SKIP_START);
             try writer.writeAll("true");
         }
+        if (self.source_escapes) {
+            try writer.writeAll("\n");
+            try writer.writeAll(SOURCE_ESCAPES_START);
+            try writer.writeAll("true");
+        }
         if (self.include_canonicalize_diagnostics) {
             try writer.writeAll("\n");
             try writer.writeAll(CANONICALIZE_DIAGNOSTICS_START);
@@ -1667,7 +1744,7 @@ const Meta = struct {
         }
         if (self.include_module_validation_diagnostics) {
             try writer.writeAll("\n");
-            try writer.writeAll(MODULE_VALIDATION_DIAGNOSTICS_START);
+            try writer.writeAll(MOD_VALIDATION_DIAGNOSTICS_START);
             try writer.writeAll("true");
         }
     }
@@ -1718,6 +1795,25 @@ const Meta = struct {
         try std.testing.expectError(Error.InvalidNodeType, meta);
     }
 };
+
+fn decodeSourceEscapes(allocator: Allocator, source: []const u8) Allocator.Error![]u8 {
+    const decoded = try allocator.alloc(u8, source.len);
+    var source_index: usize = 0;
+    var decoded_len: usize = 0;
+
+    while (source_index < source.len) {
+        if (source[source_index] == '\\' and source_index + 1 < source.len and source[source_index + 1] == 'r') {
+            decoded[decoded_len] = '\r';
+            source_index += 2;
+        } else {
+            decoded[decoded_len] = source[source_index];
+            source_index += 1;
+        }
+        decoded_len += 1;
+    }
+
+    return allocator.realloc(decoded, decoded_len);
+}
 
 /// Content of a snapshot file, references the Metadata and Source sections etc
 pub const Content = struct {
@@ -1938,12 +2034,14 @@ fn generateExpectedSection(
     var expected_content: ?[]const u8 = null;
     defer if (expected_content) |e| output.gpa.free(e);
 
-    const new_content = try renderReportsToExpectedContent(output.gpa, reports);
+    const raw_new_content = try renderReportsToExpectedContent(output.gpa, reports);
+    defer output.gpa.free(raw_new_content);
+    const new_content = try snapshotSafeMarkdownAlloc(output.gpa, raw_new_content);
     defer output.gpa.free(new_content);
     switch (config.expected_section_command) {
         .update => {
             // Generate EXPECTED content using shared report generation
-            expected_content = new_content;
+            expected_content = try output.gpa.dupe(u8, new_content);
         },
         .check => {
             // Use existing expected content or NIL
@@ -2387,7 +2485,7 @@ fn computeTransformedExprType(
 
             // Build function type
             const args_range = try can_ir.types.appendVars(arg_types.items);
-            const func = types.Func{ .args = args_range, .ret = ret_type, .needs_instantiation = false };
+            const func = types.Func{ .args = args_range, .ret = ret_type };
             const content = types.Content{ .structure = .{ .fn_pure = func } };
             try can_ir.types.setVarContent(expr_var, content);
             return expr_var;
@@ -3274,12 +3372,14 @@ fn processSnapshotFileUnified(gpa: Allocator, snapshot_path: []const u8, config:
 
             while (parts.next()) |part| {
                 const trimmed = std.mem.trim(u8, part, " \t\r\n");
-                if (trimmed.len > 0) {
+                if (trimmed.len > 0 and !containsModuleText(trimmed)) {
                     try writeCorpusFile(gpa, path, trimmed, rand);
                 }
             }
         } else {
-            try writeCorpusFile(gpa, path, content.source, rand);
+            if (!containsModuleText(content.source)) {
+                try writeCorpusFile(gpa, path, content.source, rand);
+            }
         }
     }
 
@@ -3488,9 +3588,9 @@ fn processDocsSnapshot(
     }
 
     for (modules) |mod| {
-        // Docs show the alias the root uses for a package, not its internal
-        // identity name (full URL or absolute path).
-        const display_pkg_name = build_env.rootAliasForPackage(mod.package_name) orelse mod.package_name;
+        // Docs show display names (root alias, or "app"/"module" for the
+        // root itself), never internal identity keys (URLs, absolute paths).
+        const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
         var mod_docs = docs_mod.extract.extractModuleDocs(allocator, mod.semantic.env, display_pkg_name, mod.path) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
@@ -3527,7 +3627,8 @@ fn processDocsSnapshot(
     try package_docs.writeToSExpr(&sexpr_writer.writer);
 
     sexpr_buffer = sexpr_writer.toArrayList();
-    const new_docs_text = sexpr_buffer.items;
+    const new_docs_text = try snapshotSafeMarkdownAlloc(allocator, sexpr_buffer.items);
+    defer allocator.free(new_docs_text);
 
     // 6. Compare against existing DOCS section and decide what to write
     var success = true;
@@ -3595,6 +3696,8 @@ fn processDocsSnapshot(
 
     // Transfer from writer to buffer
     md_buffer = md_writer.toArrayList();
+    const snapshot_md = try snapshotSafeMarkdownAlloc(allocator, md_buffer.items);
+    defer allocator.free(snapshot_md);
 
     // Write the output file
     const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
@@ -3603,7 +3706,7 @@ fn processDocsSnapshot(
     };
     defer md_file.close(app_io);
 
-    try md_file.writeStreamingAll(app_io, md_buffer.items);
+    try md_file.writeStreamingAll(app_io, snapshot_md);
     return success;
 }
 
@@ -3913,6 +4016,10 @@ fn processDevObjectSnapshot(
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
         return false;
     };
+    if (!build_env.executable_artifacts_finalized) {
+        std.log.err("Compilation did not produce executable artifacts", .{});
+        return false;
+    }
 
     const modules = build_env.getModulesInSerializationOrder(allocator) catch |err| {
         std.log.err("Failed to get compiled modules: {}", .{err});
@@ -3957,15 +4064,7 @@ fn processDevObjectSnapshot(
                 break :target_snapshot;
             }
 
-            const target_usize: base.target.TargetUsize = switch (target.ptrBitWidth()) {
-                32 => .u32,
-                64 => .u64,
-                else => {
-                    hash_results[i].hash_hex = undefined;
-                    hash_results[i].supported = false;
-                    break :target_snapshot;
-                },
-            };
+            const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
             const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, root_artifact.root_requests.runtime_requests);
             defer allocator.free(build_roots);
 
@@ -3975,7 +4074,11 @@ fn processDevObjectSnapshot(
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
-                .{ .requests = build_roots, .include_static_data_exports = true },
+                .{
+                    .requests = build_roots,
+                    .include_provided_data_exports = true,
+                    .include_internal_static_data = true,
+                },
                 .{
                     .target_usize = target_usize,
                 },
@@ -3990,7 +4093,7 @@ fn processDevObjectSnapshot(
                 }
                 allocator.free(entrypoints);
             }
-            const static_data_exports = compile.static_data_exports.buildProvidedDataExports(
+            const static_data_exports = compile.static_data_exports.buildStaticData(
                 allocator,
                 .{
                     .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
@@ -3998,13 +4101,14 @@ fn processDevObjectSnapshot(
                 },
                 &lowered,
                 target,
+                .{ .include_provided_exports = true },
             ) catch |err| {
                 std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;
             };
-            defer compile.static_data_exports.deinitProvidedDataExports(allocator, static_data_exports);
+            defer compile.static_data_exports.deinitStaticData(allocator, static_data_exports);
 
             if (object_compiler.compileToObjectFile(
                 &lowered.lir_result.store,
@@ -4129,6 +4233,8 @@ fn processDevObjectSnapshot(
     try md_writer.writer.writeAll(Section.SECTION_END);
 
     md_buffer = md_writer.toArrayList();
+    const snapshot_md = try snapshotSafeMarkdownAlloc(allocator, md_buffer.items);
+    defer allocator.free(snapshot_md);
 
     // Write the output file
     const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
@@ -4137,7 +4243,7 @@ fn processDevObjectSnapshot(
     };
     defer md_file.close(app_io);
 
-    try md_file.writeStreamingAll(app_io, md_buffer.items);
+    try md_file.writeStreamingAll(app_io, snapshot_md);
     return success;
 }
 
@@ -4177,6 +4283,16 @@ const SnapshotReplSession = struct {
             if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) return true;
         }
         return false;
+    }
+
+    fn removeDefinition(self: *SnapshotReplSession, allocator: Allocator, kind: SnapshotReplDefinitionKind, name: []const u8) void {
+        for (self.definitions.items, 0..) |definition, i| {
+            if (definition.kind == kind and std.mem.eql(u8, definition.name, name)) {
+                var removed = self.definitions.orderedRemove(i);
+                removed.deinit(allocator);
+                return;
+            }
+        }
     }
 
     fn upsertDefinition(
@@ -4584,7 +4700,14 @@ fn snapshotReplDefinitionStep(
     const identity = maybe_identity orelse
         return try allocator.dupe(u8, "Parse error: REPL definitions must bind a top-level identifier");
     if (identity.kind == .type_annotation) {
-        return try allocator.dupe(u8, "Parse error: Type annotations are not supported in the REPL yet");
+        // A standalone annotation is held until the value definition of the same
+        // name arrives, at which point the two are adjacent in the synthetic
+        // module, exactly like an annotation directly above a definition in a
+        // .roc file. It is not validated on its own: an annotation with no value
+        // is not a complete declaration, so compiling it alone would always fail.
+        // The interactive REPL prints nothing for it, so neither does this.
+        try session.upsertDefinition(allocator, identity.kind, identity.name, input);
+        return try allocator.dupe(u8, "");
     }
 
     const defines_main = identity.kind == .value and std.mem.eql(u8, identity.name, "main");
@@ -4613,6 +4736,12 @@ fn snapshotReplDefinitionStep(
     defer if (validation_main_source != null) allocator.free(validation_with_main);
 
     var compiled = compileSnapshotReplInspectedModule(allocator, validation_with_main, config) catch |err| {
+        // Drop any pending annotation for this name. A `y : Str` typed before a
+        // failed `y = 5` would otherwise survive and poison every subsequent
+        // step with "Declaration Has No Value".
+        if (identity.kind == .value and !session.hasDefinition(.value, identity.name)) {
+            session.removeDefinition(allocator, .type_annotation, identity.name);
+        }
         return switch (err) {
             error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config),
             else => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
@@ -4753,6 +4882,8 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
     md_buffer_unmanaged = md_writer_allocating.toArrayList();
     if (html_writer_allocating) |*hw| html_buffer_unmanaged.? = hw.toArrayList();
+    const snapshot_md = try snapshotSafeMarkdownAlloc(allocator, md_buffer_unmanaged.items);
+    defer if (!gpa_poisoned) allocator.free(snapshot_md);
 
     if (!config.disable_updates) {
         // Write the markdown file
@@ -4762,7 +4893,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
         };
         defer md_file.close(app_io);
 
-        try md_file.writeStreamingAll(app_io, md_buffer_unmanaged.items);
+        try md_file.writeStreamingAll(app_io, snapshot_md);
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -4802,7 +4933,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     };
 
     for (inputs.items) |input| {
-        const repl_output = try snapshotReplStep(output.gpa, &session, input, config);
+        const raw_repl_output = try snapshotReplStep(output.gpa, &session, input, config);
+        defer output.gpa.free(raw_repl_output);
+        const repl_output = try snapshotSafeMarkdownAlloc(output.gpa, raw_repl_output);
         try actual_outputs.append(repl_output);
     }
 
@@ -4837,13 +4970,24 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 var expected_outputs = std.array_list.Managed([]const u8).init(output.gpa);
                 defer expected_outputs.deinit();
 
-                var expected_lines = std.mem.splitSequence(u8, expected, "\n---\n");
-                while (expected_lines.next()) |output_str| {
-                    const trimmed = std.mem.trim(u8, output_str, " \t\r\n");
-                    if (trimmed.len > 0) {
-                        try expected_outputs.append(trimmed);
+                // Entries are separated by lines that are exactly `---`, and an
+                // entry may be empty (a step that printed nothing, e.g. a
+                // standalone type annotation), so every entry is kept
+                // positionally rather than dropping blank ones.
+                var entry_begin: usize = 0;
+                var line_offset: usize = 0;
+                var expected_line_it = std.mem.splitScalar(u8, expected, '\n');
+                while (expected_line_it.next()) |line_text| {
+                    const line_start = line_offset;
+                    line_offset += line_text.len + 1;
+                    if (std.mem.eql(u8, line_text, "---")) {
+                        const entry = expected[entry_begin..line_start];
+                        try expected_outputs.append(std.mem.trim(u8, entry, " \t\r\n"));
+                        entry_begin = line_offset;
                     }
                 }
+                const last_entry = if (entry_begin <= expected.len) expected[entry_begin..] else "";
+                try expected_outputs.append(std.mem.trim(u8, last_entry, " \t\r\n"));
 
                 if (actual_outputs.items.len != expected_outputs.items.len) {
                     std.debug.print("REPL output count mismatch: got {} outputs, expected {} in {s}\n", .{
@@ -4935,6 +5079,16 @@ test "snapshot validation" {
     }
 }
 
+test "snapshot markdown avoids removed keyword text" {
+    const allocator = std.testing.allocator;
+    const input = "module Module MODULE type_module";
+    const actual = try snapshotSafeMarkdownAlloc(allocator, input);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualStrings("mod Mod MOD type_mod", actual);
+    try std.testing.expect(!containsModuleText(actual));
+}
+
 test "no Builtin module leaks in snapshots" {
     // IMPORTANT: The "Builtin" module is an implementation detail that should NEVER
     // appear in user-facing error messages. We consolidate all builtin types (Bool,
@@ -5010,19 +5164,3 @@ fn searchDirectoryForBuiltin(
         }
     }
 }
-
-test "TODO: cross-module function calls - fibonacci" {}
-
-test "TODO: cross-module function calls - nested_ifs" {}
-
-test "TODO: cross-module function calls - repl_boolean_expressions" {}
-
-test "TODO: cross-module function calls - string_edge_cases" {}
-
-test "TODO: cross-module function calls - string_equality_basic" {}
-
-test "TODO: cross-module function calls - string_interpolation_comparison" {}
-
-test "TODO: cross-module function calls - string_multiline_comparison" {}
-
-test "TODO: cross-module function calls - string_ordering_unsupported" {}

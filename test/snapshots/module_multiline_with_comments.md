@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An empty module with multiline exposes and comments
+description=An empty mod with multiline exposes and comments
 type=snippet
 ~~~
 # SOURCE
@@ -11,11 +11,11 @@ type=snippet
 	]
 ~~~
 # EXPECTED
-UNEXPECTED STATEMENT - module_multiline_with_comments.md:1:2:1:3
-UNEXPECTED STATEMENT - module_multiline_with_comments.md:2:3:2:12
-UNEXPECTED STATEMENT - module_multiline_with_comments.md:2:12:2:13
-TYPE APPLICATION NEEDS PARENTHESES - module_multiline_with_comments.md:3:11:3:12
-UNEXPECTED STATEMENT - module_multiline_with_comments.md:4:2:4:3
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:1:2:1:3
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:2:3:2:12
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:2:12:2:13
+TYPE APPLICATION NEEDS PARENTHESES - mod_multiline_with_comments.md:3:11:3:12
+UNEXPECTED STATEMENT - mod_multiline_with_comments.md:4:2:4:3
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -24,7 +24,7 @@ UNEXPECTED STATEMENT - module_multiline_with_comments.md:4:2:4:3
  │                                                                            │
  │  [ # Comment After exposes open                                            │
  │  ‾                                                                         │
- └───────────────────────────────────── module_multiline_with_comments.md:1:2 ┘
+ └───────────────────────────────────── mod_multiline_with_comments.md:1:2 ┘
 
     Statements can be declarations, type annotations, imports, expectations,
     returns, crashes, loops, or expression statements inside a block.
@@ -41,7 +41,7 @@ UNEXPECTED STATEMENT - module_multiline_with_comments.md:4:2:4:3
  │                                                                            │
  │  something, # Comment after exposed item                                   │
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
- └───────────────────────────────────── module_multiline_with_comments.md:2:3 ┘
+ └───────────────────────────────────── mod_multiline_with_comments.md:2:3 ┘
 
     Statements can be declarations, type annotations, imports, expectations,
     returns, crashes, loops, or expression statements inside a block.
@@ -60,7 +60,7 @@ UNEXPECTED STATEMENT - module_multiline_with_comments.md:4:2:4:3
  │                                                                            │
  │  something, # Comment after exposed item                                   │
  │           ‾                                                                │
- └──────────────────────────────────── module_multiline_with_comments.md:2:12 ┘
+ └──────────────────────────────────── mod_multiline_with_comments.md:2:12 ┘
 
     Statements can be declarations, type annotations, imports, expectations,
     returns, crashes, loops, or expression statements inside a block.
@@ -79,7 +79,7 @@ UNEXPECTED STATEMENT - module_multiline_with_comments.md:4:2:4:3
  │                                                                            │
  │  SomeType, # Comment after final exposed item                              │
  │          ‾                                                                 │
- └──────────────────────────────────── module_multiline_with_comments.md:3:11 ┘
+ └──────────────────────────────────── mod_multiline_with_comments.md:3:11 ┘
 
     Roc type applications use parentheses around their arguments. Write
     `List(U8)`, not `List U8`.
@@ -97,7 +97,7 @@ UNEXPECTED STATEMENT - module_multiline_with_comments.md:4:2:4:3
  │                                                                            │
  │  ]                                                                         │
  │  ‾                                                                         │
- └───────────────────────────────────── module_multiline_with_comments.md:4:2 ┘
+ └───────────────────────────────────── mod_multiline_with_comments.md:4:2 ┘
 
     Statements can be declarations, type annotations, imports, expectations,
     returns, crashes, loops, or expression statements inside a block.
@@ -120,7 +120,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))

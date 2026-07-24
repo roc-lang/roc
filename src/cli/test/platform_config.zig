@@ -199,43 +199,6 @@ pub fn findTarget(platform: PlatformConfig, target_name: []const u8) ?TargetInfo
     return null;
 }
 
-/// Get list of all platform names
-pub fn getPlatformNames() []const []const u8 {
-    comptime {
-        var names: [platforms.len][]const u8 = undefined;
-        for (platforms, 0..) |platform, i| {
-            names[i] = platform.name;
-        }
-        return &names;
-    }
-}
-
-/// Get test app paths for a platform
-pub fn getTestApps(platform: PlatformConfig) []const []const u8 {
-    switch (platform.test_apps) {
-        inline .single => |app| {
-            const result = [_][]const u8{app};
-            return &result;
-        },
-        inline .spec_list => |specs| {
-            // Return just the roc_file paths
-            comptime var paths: [specs.len][]const u8 = undefined;
-            inline for (specs, 0..) |spec, i| {
-                paths[i] = spec.roc_file;
-            }
-            return &paths;
-        },
-        inline .simple_list => |specs| {
-            // Return just the roc_file paths
-            comptime var paths: [specs.len][]const u8 = undefined;
-            inline for (specs, 0..) |spec, i| {
-                paths[i] = spec.roc_file;
-            }
-            return &paths;
-        },
-    }
-}
-
 test "findPlatform works" {
     const int_platform = findPlatform("int");
     try std.testing.expect(int_platform != null);
@@ -272,7 +235,7 @@ test "fx platform has io specs" {
         .spec_list => |specs| {
             try std.testing.expect(specs.len > 0);
         },
-        .single => {
+        .single, .simple_list => {
             try std.testing.expect(false); // fx should have spec_list
         },
     }

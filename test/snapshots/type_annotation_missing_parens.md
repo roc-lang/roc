@@ -49,7 +49,7 @@ DECLARATION HAS NO VALUE - type_annotation_missing_parens.md:1:1:1:12
  │  ‾‾‾‾‾‾‾‾‾‾‾                                                               │
  └───────────────────────────────────── type_annotation_missing_parens.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -60,7 +60,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "nums")
 			(ty (name "List")))

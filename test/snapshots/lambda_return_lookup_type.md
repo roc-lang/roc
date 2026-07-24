@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -77,7 +77,7 @@ EndOfFile,
 				(p-assign (ident "x")))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 77)
+		(e-call (constraint-fn-var 203)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-num (value "0")))))

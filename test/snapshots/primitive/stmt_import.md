@@ -111,7 +111,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -126,7 +126,7 @@ import json.Json
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

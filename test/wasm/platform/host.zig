@@ -18,6 +18,9 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const host_alloc = @import("host_alloc");
+
+const shim_symbols = builtins.shim_symbols;
 
 const RocStr = builtins.str.RocStr;
 
@@ -40,187 +43,46 @@ fn panicImpl(msg: []const u8, _: ?usize) noreturn {
 // Use Zig's standard WASM allocator for proper memory management
 const wasm_allocator = std.heap.wasm_allocator;
 
-const AllocationHeader = extern struct {
-    size: usize,
-    magic: usize,
-};
+// Symbol-ABI runtime exports, exported under the shim_symbols names.
+// The size-prefix scheme comes from the shared host_alloc module, because
+// roc_dealloc doesn't provide the length (by design for seamless slices).
+// Diagnostics delegate to the imported env functions.
 
-const live_allocation_magic: usize = 0x726f6341;
-const freed_allocation_magic: usize = 0x66726565;
-
-fn backingAlignment(requested: usize) std.mem.Alignment {
-    const alignment = @max(requested, @alignOf(usize));
-    return @enumFromInt(std.math.log2_int(usize, alignment));
+comptime {
+    @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
+    @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
+    @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
+    @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
+    @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
+    @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
 }
 
-fn allocationHeaderSize(alignment: usize) usize {
-    return std.mem.alignForward(usize, @sizeOf(AllocationHeader), alignment);
-}
-
-fn initAllocationHeader(base: [*]u8, size: usize) AllocationHeader {
-    const header: *align(1) AllocationHeader = @ptrCast(base);
-    header.* = .{ .size = size, .magic = live_allocation_magic };
-    return header.*;
-}
-
-fn takeAllocationHeader(comptime operation: []const u8, base: [*]u8) AllocationHeader {
-    const header: *align(1) AllocationHeader = @ptrCast(base);
-    if (header.magic != live_allocation_magic) {
-        std.debug.panic(
-            "{s} received invalid allocation base=0x{x} size={d} magic=0x{x}",
-            .{ operation, @intFromPtr(base), header.size, header.magic },
-        );
-    }
-    const result = header.*;
-    header.magic = freed_allocation_magic;
-    return result;
-}
-
-// Raw exports for the interpreter shim's memory allocation
-// (The interpreter shim's wasmAlloc calls these directly)
-//
-// IMPORTANT: Since roc_dealloc doesn't receive the allocation size, but Zig's WasmAllocator
-// needs it to determine the correct size class, we store the size at the beginning of each
-// allocation and return a pointer past it.
-
-export fn roc_alloc_raw(size: usize, alignment: u32) callconv(.c) ?*anyopaque {
-    const align_log2 = backingAlignment(alignment);
-
-    // Header size must be at least alignment to ensure returned pointer is properly aligned
-    // We store the size in the header, which only needs @sizeOf(usize) bytes
-    const header_size = allocationHeaderSize(alignment);
-    const total_size = size + header_size;
-
-    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse return null;
-
-    _ = initAllocationHeader(result, size);
-
-    // Return pointer past the header (properly aligned)
-    return @ptrCast(result + header_size);
-}
-
-export fn roc_dealloc_raw(ptr: *anyopaque, alignment: u32) callconv(.c) void {
-    const align_log2 = backingAlignment(alignment);
-
-    // Calculate header size (must match roc_alloc)
-    const header_size = allocationHeaderSize(alignment);
-
-    // Get the base pointer (before the header we stored in roc_alloc)
-    const byte_ptr: [*]u8 = @ptrCast(ptr);
-    const base_ptr = byte_ptr - header_size;
-
-    const original_size = takeAllocationHeader("roc_dealloc_raw", base_ptr).size;
-
-    // Free the full allocation including the header
-    const total_size = original_size + header_size;
-    wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
-}
-
-export fn roc_realloc_raw(ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.c) ?*anyopaque {
-    const align_log2 = backingAlignment(alignment);
-
-    // Calculate header size (must match roc_alloc)
-    const header_size = allocationHeaderSize(alignment);
-
-    // Get the base pointer (before the header)
-    const byte_ptr: [*]u8 = @ptrCast(ptr);
-    const base_ptr = byte_ptr - header_size;
-
-    // Allocate new memory with header
-    const new_total_size = new_size + header_size;
-    const new_base_ptr = wasm_allocator.rawAlloc(new_total_size, align_log2, @returnAddress()) orelse return null;
-
-    _ = initAllocationHeader(new_base_ptr, new_size);
-
-    // Copy old data (from user pointer to new user pointer)
-    const new_user_ptr = new_base_ptr + header_size;
-    const copy_size = @min(old_size, new_size);
-    @memcpy(new_user_ptr[0..copy_size], byte_ptr[0..copy_size]);
-
-    const stored_old_size = takeAllocationHeader("roc_realloc_raw", base_ptr).size;
-    if (stored_old_size != old_size) @panic("roc_realloc_raw old size did not match its allocation header");
-    const old_total_size = stored_old_size + header_size;
-    wasm_allocator.rawFree(base_ptr[0..old_total_size], align_log2, @returnAddress());
-
-    return @ptrCast(new_user_ptr);
-}
-
-// Symbol-ABI runtime exports.
-// These use the same size-header approach as the raw roc_alloc/dealloc exports,
-// because roc_dealloc doesn't provide the length (by design for seamless slices).
-
-export fn roc_alloc(length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     canonical_alloc_counts[0] += 1;
-
-    const alignment: u32 = @intCast(alignment_arg);
-    const align_log2 = backingAlignment(alignment);
-
-    // Header size must be at least alignment to ensure returned pointer is properly aligned
-    const header_size = allocationHeaderSize(alignment);
-    const total_size = length + header_size;
-
-    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse
-        env_imports.roc_panic("roc_alloc returned null".ptr, "roc_alloc returned null".len);
-
-    _ = initAllocationHeader(result, length);
-
-    // Return pointer past the header (properly aligned)
-    return @ptrCast(result + header_size);
+    return host_alloc.alloc(wasm_allocator, length, alignment);
 }
 
-export fn roc_dealloc(ptr: *anyopaque, alignment_arg: usize) callconv(.c) void {
+fn rocDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
     canonical_alloc_counts[1] += 1;
-
-    const alignment: u32 = @intCast(alignment_arg);
-    const align_log2 = backingAlignment(alignment);
-
-    // Calculate header size (must match roc_alloc)
-    const header_size = allocationHeaderSize(alignment);
-
-    // Get the base pointer (before the header we stored in roc_alloc)
-    const byte_ptr: [*]u8 = @ptrCast(ptr);
-    const base_ptr = byte_ptr - header_size;
-
-    const original = takeAllocationHeader("roc_dealloc", base_ptr);
-
-    // Free the full allocation including the header
-    const total_size = original.size + header_size;
-    wasm_allocator.rawFree(base_ptr[0..total_size], align_log2, @returnAddress());
+    host_alloc.dealloc(wasm_allocator, ptr, alignment);
 }
 
-export fn roc_realloc(ptr: *anyopaque, new_length: usize, alignment_arg: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
     canonical_alloc_counts[0] += 1;
     canonical_alloc_counts[1] += 1;
+    return host_alloc.realloc(wasm_allocator, ptr, new_length, alignment);
+}
 
-    const alignment: u32 = @intCast(alignment_arg);
-    const align_log2 = backingAlignment(alignment);
+fn rocDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
+    env_imports.roc_dbg(bytes, len);
+}
 
-    // Header size must be at least alignment
-    const header_size = allocationHeaderSize(alignment);
-    const total_size = new_length + header_size;
+fn rocExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    env_imports.roc_expect_failed(bytes, len);
+}
 
-    const result = wasm_allocator.rawAlloc(total_size, align_log2, @returnAddress()) orelse
-        env_imports.roc_panic("roc_realloc returned null".ptr, "roc_realloc returned null".len);
-
-    _ = initAllocationHeader(result, new_length);
-
-    const old_byte_ptr: [*]u8 = @ptrCast(ptr);
-    const old_base_ptr = old_byte_ptr - header_size;
-    const old_header: *align(1) const AllocationHeader = @ptrCast(old_base_ptr);
-    if (old_header.magic != live_allocation_magic) {
-        @panic("roc_realloc received an invalid or already-freed allocation");
-    }
-    const old_size = old_header.size;
-
-    const new_user_ptr = result + header_size;
-    const copy_size = @min(old_size, new_length);
-    @memcpy(new_user_ptr[0..copy_size], old_byte_ptr[0..copy_size]);
-
-    _ = takeAllocationHeader("roc_realloc", old_base_ptr);
-    const old_total_size = old_size + header_size;
-    wasm_allocator.rawFree(old_base_ptr[0..old_total_size], align_log2, @returnAddress());
-
-    return @ptrCast(new_user_ptr);
+fn rocCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
+    env_imports.roc_panic(bytes, len);
 }
 
 export fn roc_runtime_seed() callconv(.c) u64 {
@@ -229,18 +91,6 @@ export fn roc_runtime_seed() callconv(.c) u64 {
 
 export fn roc_host_wrap_token(value: u64) callconv(.c) u64 {
     return value + 1;
-}
-
-export fn roc_dbg(bytes: [*]const u8, len: usize) callconv(.c) void {
-    env_imports.roc_dbg(bytes, len);
-}
-
-export fn roc_expect_failed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    env_imports.roc_expect_failed(bytes, len);
-}
-
-export fn roc_crashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    env_imports.roc_panic(bytes, len);
 }
 
 // Hosted function: Stdout.line!

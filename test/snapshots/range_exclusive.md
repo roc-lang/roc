@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Exclusive range expression desugars to until and types as Iter
+description=Exclusive range expression dispatches range_exclusive and types as Iter
 type=snippet
 ~~~
 # SOURCE
@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "r"))
@@ -36,11 +36,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-call (constraint-fn-var 207)
-			(e-lookup-external
-				(builtin))
-			(e-num (value "1"))
-			(e-num (value "5")))))
+		(e-dispatch-call (method "range_exclusive") (constraint-fn-var 194)
+			(receiver
+				(e-num (value "1")))
+			(args
+				(e-num (value "5"))))))
 ~~~
 # TYPES
 ~~~clojure

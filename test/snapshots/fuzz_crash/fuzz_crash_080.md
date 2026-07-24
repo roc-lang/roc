@@ -38,7 +38,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_080.md:1:1:5:10
  │                                                                            │
  └───────────────────────────────────────────────────── fuzz_crash_080.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -53,12 +53,12 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "c")
 			(ty (name "L"))
 			(where
-				(method (module-of "o") (name "h")
+				(method (mod-of "o") (name "h")
 					(args)
 					(ty-var (raw "a")))))))
 ~~~

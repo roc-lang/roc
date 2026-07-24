@@ -6,9 +6,9 @@ identity = |x| x
 
 main! = |_args| {
 	rec = identity({ label: "hi", nums: [1, 2] })
-	echo!(Str.inspect(rec))
+	echo!("${Str.inspect(rec)}\n")
 	tag : Try(I64, Str)
 	tag = identity(Ok(3))
-	echo!(Str.inspect(tag))
+	echo!("${Str.inspect(tag)}\n")
 	Ok({})
 }

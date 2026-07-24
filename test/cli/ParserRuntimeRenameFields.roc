@@ -4,14 +4,16 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
-			Done => Err(MissingRequired)
+			Done => Err(FormatError)
 		}
 
-	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
@@ -19,17 +21,20 @@ Format := [Default].{
 			Continue({ rest : State }),
 			Done({ rest : State }),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
 			Present(_) => {
-				renamed = Encoding.FieldName.FieldNames.rename_fields(fields, |name|
-					if Str.is_eq(name, "foo_bar") {
-						"foo-bar"
-					} else {
-						name
-					})
+				renamed = Encoding.FieldName.FieldNames.rename_fields(
+					fields,
+					|name|
+						if Str.is_eq(name, "foo_bar") {
+							"foo-bar"
+						} else {
+							name
+						},
+				)
 
 				match find_field(renamed, "foo-bar") {
 					Ok(field) => Ok(Field({ field, rest: state }))
@@ -40,11 +45,8 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, _| Ok(Done)
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Present(Str), Done]
@@ -68,13 +70,13 @@ find_field = |fields, name| {
 
 			Done =>
 				return Err(NotFound)
-		}
+			}
 	}
 }
 
-parse : Str -> Try(a, [MissingRequired])
+parse : Str -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -84,7 +86,7 @@ parse = |input| {
 }
 
 expect {
-	result : Try({ foo_bar : Str }, [MissingRequired])
+	result : Try({ foo_bar : Str }, [FormatError, MissingRequiredField(Str)])
 	result = parse("runtime-renamed")
 
 	result == Ok({ foo_bar: "runtime-renamed" })

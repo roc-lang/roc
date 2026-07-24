@@ -49,18 +49,18 @@ UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
 NAME NOT IN SCOPE - can_import_type_annotations.md:6:24:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
-MODULE NOT FOUND - can_import_type_annotations.md:8:24:8:30
+MOD NOT FOUND - can_import_type_annotations.md:8:24:8:30
 NAME NOT IN SCOPE - can_import_type_annotations.md:9:21:9:31
-MODULE NOT FOUND - can_import_type_annotations.md:11:17:11:25
-MODULE NOT FOUND - can_import_type_annotations.md:11:37:11:46
-MODULE NOT FOUND - can_import_type_annotations.md:11:52:11:58
+MOD NOT FOUND - can_import_type_annotations.md:11:17:11:25
+MOD NOT FOUND - can_import_type_annotations.md:11:37:11:46
+MOD NOT FOUND - can_import_type_annotations.md:11:52:11:58
 NAME NOT IN SCOPE - can_import_type_annotations.md:13:14:13:25
 NAME NOT IN SCOPE - can_import_type_annotations.md:15:24:15:36
-MODULE NOT FOUND - can_import_type_annotations.md:20:14:20:21
+MOD NOT FOUND - can_import_type_annotations.md:20:14:20:21
 NAME NOT IN SCOPE - can_import_type_annotations.md:21:10:21:28
-MODULE NOT FOUND - can_import_type_annotations.md:24:29:24:36
-MODULE NOT FOUND - can_import_type_annotations.md:24:53:24:59
-MODULE NOT FOUND - can_import_type_annotations.md:24:72:24:78
+MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
+MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
+MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
 NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 # PROBLEMS
 
@@ -123,7 +123,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
+│ MOD NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  parseJson : Str -> Json.Value                                             │
@@ -144,7 +144,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Request` type is declared to be in ───────────────┐
+│ MOD NOT FOUND ├─ This `Request` type is declared to be in ───────────────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
@@ -154,7 +154,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Response` type is declared to be in ──────────────┐
+│ MOD NOT FOUND ├─ This `Response` type is declared to be in ──────────────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
@@ -164,7 +164,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Error` type is declared to be in `json.Json`, ────┐
+│ MOD NOT FOUND ├─ This `Error` type is declared to be in `json.Json`, ────┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  handleApi : Http.Request -> Try(Http.Response, Json.Error)                │
@@ -196,7 +196,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Config` type is declared to be in `json.Json`, ───┐
+│ MOD NOT FOUND ├─ This `Config` type is declared to be in `json.Json`, ───┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  config : Json.Config                                                      │
@@ -217,7 +217,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Parser.Config` type is declared to be in ─────────┐
+│ MOD NOT FOUND ├─ This `Parser.Config` type is declared to be in ─────────┐
 └┬─────────────────┘  `json.Json`, which does not exist.                      │
  │                                                                            │
  │  …n.Parser.Config, Str -> Try(Json.Value, Json.Parser.Error)               │
@@ -227,7 +227,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
+│ MOD NOT FOUND ├─ This `Value` type is declared to be in `json.Json`, ────┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  …Try(Json.Value, Json.Parser.Error)                                       │
@@ -237,7 +237,7 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Parser.Error` type is declared to be in ──────────┐
+│ MOD NOT FOUND ├─ This `Parser.Error` type is declared to be in ──────────┐
 └┬─────────────────┘  `json.Json`, which does not exist.                      │
  │                                                                            │
  │  …n.Parser.Error)                                                          │
@@ -292,7 +292,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "http.Client") (alias "Http")
 			(exposing
@@ -641,13 +641,13 @@ combineTrys = |result1, result2|
 						(ty-rigid-var-lookup (ty-rigid-var (name "a")))
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))
 					(ty-rigid-var-lookup (ty-rigid-var (name "err")))))))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes))
-	(s-import (module "utils.Try")
+	(s-import (mod "utils.Try")
 		(exposes
 			(exposed (name "Try") (wildcard false)))))
 ~~~

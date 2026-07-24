@@ -7,6 +7,7 @@ app [
     names,
     tree,
     boxed_add_one,
+    boxed_static_label,
     literal_long,
     assembled_strings,
     intermediate_final,
@@ -16,6 +17,7 @@ app [
 Branch : [BranchLeaf(I64), BranchPair(Box(I64), Box(I64))]
 Tree : [Leaf(I64), Node(Box(Branch), Box(Branch))]
 I64ToI64 : I64 -> I64
+I64ToStr : I64 -> Str
 
 main! = || {}
 
@@ -70,6 +72,12 @@ tree =
 
 boxed_add_one : Box(I64ToI64)
 boxed_add_one = Box.box(|value| value + 1)
+
+boxed_static_label : Box(I64ToStr)
+boxed_static_label = {
+    label = "captured readonly label whose final-drop helper is relocated from static data"
+    Box.box(|_| label)
+}
 
 literal_long : Str
 literal_long = "literal readonly string longer than thirty bytes"

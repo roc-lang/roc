@@ -1,12 +1,12 @@
 # META
 ~~~ini
-description=Opaque type module whose field depends on a nested associated type (qualified ModuleType.InternalType). This compiles because the nested type is exposed as ModuleType.InternalType.
-type=file:ModuleType.roc
+description=Opaque type mod whose field depends on a nested associated type (qualified ModType.InternalType). This compiles because the nested type is exposed as ModType.InternalType.
+type=file:ModType.roc
 ~~~
 # SOURCE
 ~~~roc
-ModuleType :: {
-    field : ModuleType.InternalType,
+ModType :: {
+    field : ModType.InternalType,
 }.{
     InternalType := [Some, Other]
 }
@@ -27,14 +27,14 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
-			(header (name "ModuleType")
+			(header (name "ModType")
 				(args))
 			(ty-record
 				(anno-record-field (name "field")
-					(ty (name "ModuleType.InternalType"))))
+					(ty (name "ModType.InternalType"))))
 			(associated
 				(s-type-decl
 					(header (name "InternalType")
@@ -46,8 +46,8 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-ModuleType :: {
-	field : ModuleType.InternalType,
+ModType :: {
+	field : ModType.InternalType,
 }.{
 	InternalType := [Some, Other]
 }
@@ -56,12 +56,12 @@ ModuleType :: {
 ~~~clojure
 (can-ir
 	(s-nominal-decl
-		(ty-header (name "ModuleType"))
+		(ty-header (name "ModType"))
 		(ty-record
 			(field (field "field")
-				(ty-lookup (name "ModuleType.InternalType") (local)))))
+				(ty-lookup (name "ModType.InternalType") (local)))))
 	(s-nominal-decl
-		(ty-header (name "ModuleType.InternalType"))
+		(ty-header (name "ModType.InternalType"))
 		(ty-tag-union
 			(ty-tag-name (name "Some"))
 			(ty-tag-name (name "Other")))))
@@ -71,9 +71,9 @@ ModuleType :: {
 (inferred-types
 	(defs)
 	(type_decls
-		(nominal (type "ModuleType")
-			(ty-header (name "ModuleType")))
-		(nominal (type "ModuleType.InternalType")
-			(ty-header (name "ModuleType.InternalType"))))
+		(nominal (type "ModType")
+			(ty-header (name "ModType")))
+		(nominal (type "ModType.InternalType")
+			(ty-header (name "ModType.InternalType"))))
 	(expressions))
 ~~~

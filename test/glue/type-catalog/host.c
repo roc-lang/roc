@@ -77,13 +77,13 @@ void roc_crashed(const uint8_t *bytes, size_t len) {
     exit(1);
 }
 
-EmptyOrPairOrPayloadOrRecursiveType0 roc_catalog_roundtrip(EmptyOrPairOrPayloadOrRecursiveType0 arg0) {
+EmptyOrPairOrPayloadOrRecursive roc_catalog_roundtrip(EmptyOrPairOrPayloadOrRecursive arg0) {
     return arg0;
 }
 
 void roc_catalog_single_no_payload(void) {}
 
-CatalogPayloadType3 roc_catalog_single_payload_roundtrip(CatalogPayloadType3 arg0) {
+CatalogPayload roc_catalog_single_payload_roundtrip(CatalogPayload arg0) {
     return arg0;
 }
 
@@ -130,12 +130,12 @@ enum {
 };
 
 static void run_contract(void) {
-    CatalogPointType16 point = roc_point();
+    __typeof__(roc_point()) point = roc_point();
     if (read_i32(point.bytes + 0) != -17 || read_i32(point.bytes + 4) != 42) {
         record_failure("point bytes mismatch");
     }
 
-    AnonStruct19 structural = roc_structural();
+    __typeof__(roc_structural()) structural = roc_structural();
     if (read_u64(structural.bytes + 0) != 19) {
         record_failure("structural count mismatch");
     }

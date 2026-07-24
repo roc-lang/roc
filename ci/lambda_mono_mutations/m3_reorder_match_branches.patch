@@ -1,0 +1,12 @@
+diff --git a/src/postcheck/solved_lir_lower.zig b/src/postcheck/solved_lir_lower.zig
+index 269f5e573e..0644d522b0 100644
+--- a/src/postcheck/solved_lir_lower.zig
++++ b/src/postcheck/solved_lir_lower.zig
+@@ -4338,6 +4338,7 @@ const Lowerer = struct {
+                 .branch_index = @intCast(i),
+             };
+         }
++        if (mt_branches.len >= 2) std.mem.swap(MT.Branch, &mt_branches[0], &mt_branches[1]);
+         const built = try MT.build(arena, ctx, scrutinee_ty, mt_branches);
+         return try MT.Emitter.emitMatch(arena, ctx, built, scrutinee, done);
+     }

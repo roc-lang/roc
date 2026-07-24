@@ -43,26 +43,24 @@ Complex : {
 }
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - type_comprehensive_scope.md:10:1:10:34
+BUILTIN TYPE SHADOWED - type_comprehensive_scope.md:10:1:10:34
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:13:1:13:37
 MUTUALLY RECURSIVE TYPE ALIASES - type_comprehensive_scope.md:16:1:16:48
 TYPE REDECLARED - type_comprehensive_scope.md:22:1:22:13
 UNDECLARED TYPE - type_comprehensive_scope.md:25:11:25:29
 # PROBLEMS
 
-┌──────────────────────┐
-│ DUPLICATE DEFINITION ├─ The name `Try` is being redeclared here. ───────────┐
-└┬─────────────────────┘                                                      │
+┌───────────────────────┐
+│ BUILTIN TYPE SHADOWED ├─ The type `Try` shadows a builtin type. ────────────┐
+└┬──────────────────────┘                                                     │
  │                                                                            │
  │  Try(ok, err) : [Ok(ok), Err(err)]                                         │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └────────────────────────────────────────── type_comprehensive_scope.md:10:1 ┘
 
-    In this scope, `Try` was already defined here:
-      ┌───────────────────────────────────────────────────────────────────────┐
-    1 │  # Built-in types should work                                         │
-      │  ‾                                                                    │
-      └────────────────────────────────────── type_comprehensive_scope.md:1:1 ┘
+    This may make the builtin type inaccessible in this scope.
+
+    The new declaration is here:
 
 
 ┌─────────────────────────────────┐
@@ -155,7 +153,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "MyU64")
@@ -297,11 +295,7 @@ MyList : List(Str)
 MyDict : Dict(Str, U64)
 
 # Complex nested type using multiple declared types
-Complex : {
-	person : Person,
-	result : Try(Bool, Str),
-	tree : Tree(U64),
-}
+Complex : { person : Person, result : Try(Bool, Str), tree : Tree(U64) }
 ~~~
 # CANONICALIZE
 ~~~clojure

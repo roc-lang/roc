@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Platform docs hide internal modules not listed in exposes
+description=Platform docs hide internal mods not listed in exposes
 type=docs
 ~~~
 # SOURCE
@@ -48,10 +48,10 @@ Host := [].{
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "Stdout")
-    (package "app")
-    (kind type_module)
+    (package "mod")
+    (kind type_mod)
     (entry
       (name "Stdout")
       (kind nominal)

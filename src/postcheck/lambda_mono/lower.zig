@@ -43,6 +43,7 @@ pub fn run(
     name_store = undefined;
     string_literals = undefined;
     program.source_files = Ast.ProgramList([]const u8, "source_files").fromArrayList(owned.lifted.takeSourceFiles());
+    program.static_data_values = Ast.ProgramList(Ast.StaticDataValue, "static_data_values").fromArrayList(owned.lifted.takeStaticDataValues());
     errdefer program.deinit();
 
     const solved_view = movedSolvedView(&owned, &program);
@@ -78,6 +79,8 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .stmt_ids = lifted.stmt_ids,
             .field_exprs = lifted.field_exprs,
             .fn_def_captures = lifted.fn_def_captures,
+            .const_evidence_pool = lifted.const_evidence_pool,
+            .const_evidence_chain_pool = lifted.const_evidence_chain_pool,
             .capture_operands = lifted.capture_operands,
             .record_destructs = lifted.record_destructs,
             .str_pattern_steps = lifted.str_pattern_steps,
@@ -88,6 +91,7 @@ fn movedSolvedView(source: *const Solved.Program, moved: *const Ast.Program) Sol
             .roots = lifted.roots,
             .layout_requests = lifted.layout_requests,
             .runtime_schema_requests = lifted.runtime_schema_requests,
+            .static_data_values = moved.static_data_values.unsafeRawItemsForView(),
             .comptime_sites = lifted.comptime_sites,
             .source_files = moved.source_files.unsafeRawItemsForView(),
             .expr_locs = lifted.expr_locs,
@@ -296,6 +300,8 @@ const Lowerer = struct {
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
+                .initializer = if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null,
+                .const_locator = request.const_locator,
             });
         }
 
@@ -554,6 +560,10 @@ const Lowerer = struct {
             .dec_lit => |value| .{ .dec_lit = value },
             .str_lit => |value| .{ .str_lit = value },
             .bytes_lit => |value| .{ .bytes_lit = value },
+            .static_data_candidate => |candidate| .{ .static_data_candidate = .{
+                .static_data = candidate.static_data,
+                .runtime_expr = try self.lowerExpr(candidate.runtime_expr),
+            } },
             .uninitialized => .uninitialized,
             .uninitialized_payload => |payload| .{ .uninitialized_payload = .{
                 .condition = try self.localFor(payload.condition, try self.lowerType(self.solved.local_tys[@intFromEnum(payload.condition)])),
@@ -665,6 +675,16 @@ const Lowerer = struct {
             } },
             .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.lowerExpr(value) else null },
             .continue_ => |continue_| .{ .continue_ = .{ .values = try self.lowerExprSpan(continue_.values) } },
+            .join_point => |join_point| .{ .join_point = .{
+                .id = join_point.id,
+                .params = try self.lowerTypedLocalSpan(join_point.params),
+                .body = try self.lowerExpr(join_point.body),
+                .remainder = try self.lowerExpr(join_point.remainder),
+            } },
+            .jump => |jump| .{ .jump = .{
+                .target = jump.target,
+                .args = try self.lowerExprSpan(jump.args),
+            } },
             .return_ => |ret| .{ .return_ = try self.lowerExpr(ret.value) },
             .crash => |msg| .{ .crash = msg },
             .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
@@ -880,10 +900,18 @@ const Lowerer = struct {
         capture_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
         const captures = self.solved.types.captureSpan(capture_span);
-        const fields = switch (self.program.types.get(capture_ty)) {
-            .capture_record => |fields| self.program.types.captureFieldSpan(fields),
-            else => Common.invariant("callable capture payload was not a capture record"),
+        // Own a copy of the capture-record fields: lowering a capture operand
+        // below can lower a nested callable, which adds capture-record fields and
+        // may reallocate the store's capture-field backing. A borrowed field span
+        // would dangle across those calls, so read every field from this snapshot.
+        const fields = fields: {
+            const borrowed = switch (self.program.types.get(capture_ty)) {
+                .capture_record => |fields| self.program.types.captureFieldSpan(fields),
+                else => Common.invariant("callable capture payload was not a capture record"),
+            };
+            break :fields try GuardedList.dupe(self.allocator, Type.CaptureField, borrowed);
         };
+        defer self.allocator.free(fields);
         if (captures.len != fields.len) Common.invariant("callable capture payload arity differed from captured locals");
         if (captures.len != capture_operands.len) {
             Common.invariant("function reference capture operand count differed from lifted function captures");

@@ -74,7 +74,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "processItems"))
@@ -145,7 +145,7 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-reassign
 					(p-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 150)
+					(e-dispatch-call (method "plus") (constraint-fn-var 234)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "count_"))))
@@ -153,7 +153,7 @@ NO CHANGE
 							(e-num (value "1")))))
 				(s-reassign
 					(p-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 185)
+					(e-dispatch-call (method "plus") (constraint-fn-var 243)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "total_"))))
@@ -178,11 +178,11 @@ NO CHANGE
 									(p-assign (ident "count_")))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 189)
+					(e-call (constraint-fn-var 247)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 190)
+				(e-dispatch-call (method "plus") (constraint-fn-var 248)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "total_"))))

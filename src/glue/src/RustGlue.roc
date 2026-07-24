@@ -1,5 +1,5 @@
 ## A glue script for generating a Rust source file with hosted function bindings.
-app [make_glue] { pf: platform "../platform/main.roc" }
+app [make_glue] { pf: platform glue }
 
 import pf.Types exposing [Types]
 import pf.File exposing [File]
@@ -1002,6 +1002,10 @@ generate_host_abi_types_rust =
 	\\    pub on_drop: Option<RocErasedCallableOnDrop>,
 	\\}
 	\\
+	\\const _: () = assert!(core::mem::size_of::<RocErasedCallablePayload>() == 2 * core::mem::size_of::<usize>(), "RocErasedCallablePayload size mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocErasedCallablePayload, callable_fn_ptr) == 0, "RocErasedCallablePayload.callable_fn_ptr offset mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocErasedCallablePayload, on_drop) == core::mem::size_of::<usize>(), "RocErasedCallablePayload.on_drop offset mismatch");
+	\\
 	\\/// Runtime representation of `Box(function)`.
 	\\pub type RocErasedCallable = *mut u8;
 	\\
@@ -1286,6 +1290,12 @@ generate_rust_roc_str =
 	\\    pub length: usize,
 	\\}
 	\\
+	\\const _: () = assert!(core::mem::size_of::<RocStr>() == 3 * core::mem::size_of::<usize>(), "RocStr size mismatch");
+	\\const _: () = assert!(core::mem::align_of::<RocStr>() == core::mem::align_of::<usize>(), "RocStr alignment mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocStr, bytes) == 0, "RocStr.bytes offset mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocStr, capacity_or_alloc_ptr) == core::mem::size_of::<usize>(), "RocStr.capacity_or_alloc_ptr offset mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocStr, length) == 2 * core::mem::size_of::<usize>(), "RocStr.length offset mismatch");
+	\\
 	\\const ROC_STR_SIZE: usize = core::mem::size_of::<RocStr>();
 	\\const ROC_SMALL_STR_MAX_LEN: usize = ROC_STR_SIZE - 1;
 	\\const ROC_SMALL_STR_BIT: usize = isize::MIN as usize;
@@ -1490,6 +1500,12 @@ generate_rust_roc_list =
 	\\    pub length: usize,
 	\\    pub capacity_or_alloc_ptr: usize,
 	\\}
+	\\
+	\\const _: () = assert!(core::mem::size_of::<RocList<u8>>() == 3 * core::mem::size_of::<usize>(), "RocList size mismatch");
+	\\const _: () = assert!(core::mem::align_of::<RocList<u8>>() == core::mem::align_of::<usize>(), "RocList alignment mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocList<u8>, elements) == 0, "RocList.elements offset mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocList<u8>, length) == core::mem::size_of::<usize>(), "RocList.length offset mismatch");
+	\\const _: () = assert!(core::mem::offset_of!(RocList<u8>, capacity_or_alloc_ptr) == 2 * core::mem::size_of::<usize>(), "RocList.capacity_or_alloc_ptr offset mismatch");
 	\\
 	\\impl<T, const ELEMENTS_REFCOUNTED: bool> RocListWith<T, ELEMENTS_REFCOUNTED> {
 	\\    #[inline]

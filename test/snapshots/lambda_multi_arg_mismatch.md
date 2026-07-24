@@ -112,7 +112,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "multi_arg_fn")
 			(ty-fn
@@ -231,7 +231,7 @@ result = multi_arg_fn(
 					(ty-rigid-var-lookup (ty-rigid-var (name "e")))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 300)
+		(e-call (constraint-fn-var 306)
 			(e-lookup-local
 				(p-assign (ident "multi_arg_fn")))
 			(e-num (value "42"))

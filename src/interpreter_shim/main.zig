@@ -30,6 +30,7 @@ pub const std_options = shim_io.std_options_no_stack_tracing;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
+const shim_symbols = builtins.shim_symbols;
 const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 
 const RuntimeState = struct {
@@ -174,6 +175,7 @@ fn evaluateEntrypointInView(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         ops,
+        .preserve,
     ) catch {
         ops.crash("LIR shim could not initialize the LIR interpreter");
         return error.OutOfMemory;
@@ -211,11 +213,17 @@ fn viewEmbeddedLirImage(image_base: *anyopaque, image_len: usize, ops: *RocOps) 
     };
 }
 
-export fn roc_shim_get_ops() callconv(.c) *anyopaque {
+comptime {
+    @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
+    @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
+    @export(&shimEntrypointFromImage, .{ .name = shim_symbols.roc_entrypoint_from_image });
+}
+
+fn shimGetOps() callconv(.c) *anyopaque {
     return shim_host_abi.getOpsOpaque();
 }
 
-export fn roc_entrypoint(
+fn shimEntrypoint(
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,
@@ -229,7 +237,7 @@ export fn roc_entrypoint(
     };
 }
 
-export fn roc_entrypoint_from_image(
+fn shimEntrypointFromImage(
     entry_idx: u32,
     ops: *RocOps,
     ret_ptr: ?*anyopaque,

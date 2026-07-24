@@ -5,50 +5,50 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import MyTryModule
+import MyTryMod
 
-handleTry : MyTryModule.MyTryType(Str, I32) -> Str
+handleTry : MyTryMod.MyTryType(Str, I32) -> Str
 handleTry = |result| {
     match result {
-        MyTryModule.MyTryType.Ok(value) => value
-        MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
+        MyTryMod.MyTryType.Ok(value) => value
+        MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
     }
 }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - nominal_external_fully_qualified.md:3:24:3:34
-MODULE NOT FOUND - nominal_external_fully_qualified.md:6:20:6:30
-MODULE NOT FOUND - nominal_external_fully_qualified.md:7:20:7:30
-UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
+MOD NOT FOUND - nominal_external_fully_qualified.md:3:21:3:31
+MOD NOT FOUND - nominal_external_fully_qualified.md:6:17:6:27
+MOD NOT FOUND - nominal_external_fully_qualified.md:7:17:7:27
+UNUSED VARIABLE - nominal_external_fully_qualified.md:7:32:7:36
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
-└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
+│ MOD NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryMod`, which does not exist.                       │
  │                                                                            │
- │  handleTry : MyTryModule.MyTryType(Str, I32) -> Str                        │
- │                         ‾‾‾‾‾‾‾‾‾‾                                         │
- └────────────────────────────────── nominal_external_fully_qualified.md:3:24 ┘
+ │  handleTry : MyTryMod.MyTryType(Str, I32) -> Str                           │
+ │                      ‾‾‾‾‾‾‾‾‾‾                                            │
+ └────────────────────────────────── nominal_external_fully_qualified.md:3:21 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
-└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
+│ MOD NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryMod`, which does not exist.                       │
  │                                                                            │
- │  MyTryModule.MyTryType.Ok(value) => value                                  │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────── nominal_external_fully_qualified.md:6:20 ┘
+ │  MyTryMod.MyTryType.Ok(value) => value                                     │
+ │          ‾‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────── nominal_external_fully_qualified.md:6:17 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
-└┬─────────────────┘  `MyTryModule`, which does not exist.                    │
+│ MOD NOT FOUND ├─ This `MyTryType` type is declared to be in ─────────────┐
+└┬─────────────────┘  `MyTryMod`, which does not exist.                       │
  │                                                                            │
- │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
- │             ‾‾‾‾‾‾‾‾‾‾                                                     │
- └────────────────────────────────── nominal_external_fully_qualified.md:7:20 ┘
+ │  MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"                  │
+ │          ‾‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────── nominal_external_fully_qualified.md:7:17 ┘
 
 
 
@@ -56,9 +56,9 @@ UNUSED VARIABLE - nominal_external_fully_qualified.md:7:35:7:39
 │ UNUSED VARIABLE ├─ Variable `code` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"               │
- │                            ‾‾‾‾                                            │
- └────────────────────────────────── nominal_external_fully_qualified.md:7:35 ┘
+ │  MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"                  │
+ │                         ‾‾‾‾                                               │
+ └────────────────────────────────── nominal_external_fully_qualified.md:7:32 ┘
 
     If you don't need this variable, prefix it with an underscore like `_code`
     to suppress this warning.
@@ -78,13 +78,13 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
-		(s-import (raw "MyTryModule"))
+		(s-import (raw "MyTryMod"))
 		(s-type-anno (name "handleTry")
 			(ty-fn
 				(ty-apply
-					(ty (name "MyTryModule.MyTryType"))
+					(ty (name "MyTryMod.MyTryType"))
 					(ty (name "Str"))
 					(ty (name "I32")))
 				(ty (name "Str"))))
@@ -110,13 +110,13 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import MyTryModule
+import MyTryMod
 
-handleTry : MyTryModule.MyTryType(Str, I32) -> Str
+handleTry : MyTryMod.MyTryType(Str, I32) -> Str
 handleTry = |result| {
 	match result {
-		MyTryModule.MyTryType.Ok(value) => value
-		MyTryModule.MyTryType.Err(code) => "Error: $(code.toStr())"
+		MyTryMod.MyTryType.Ok(value) => value
+		MyTryMod.MyTryType.Err(code) => "Error: $(code.toStr())"
 	}
 }
 ~~~
@@ -141,14 +141,14 @@ handleTry = |result| {
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error (tag "type_from_missing_module"))))
+											(p-runtime-error (tag "type_from_missing_mod"))))
 									(value
 										(e-lookup-local
 											(p-assign (ident "value")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-runtime-error (tag "type_from_missing_module"))))
+											(p-runtime-error (tag "type_from_missing_mod"))))
 									(value
 										(e-string
 											(e-literal (string "Error: $(code.toStr())")))))))))))
@@ -156,7 +156,7 @@ handleTry = |result| {
 			(ty-fn (effectful false)
 				(ty-malformed)
 				(ty-lookup (name "Str") (builtin)))))
-	(s-import (module "MyTryModule")
+	(s-import (mod "MyTryMod")
 		(exposes)))
 ~~~
 # TYPES

@@ -1,11 +1,13 @@
 ParserEmptyTagUnion :: [].{}
 
 Format := [Default]
+
 State := [Present(Str)]
 
-parse : Str -> Try(a, [MissingRequired]) where [
-	a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
-]
+parse : Str -> Try(a, [FormatError, ..errs])
+	where [
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+	]
 parse = |input| {
 	Shape : a
 	parse_shape = Shape.parser_for(Format.Default)
@@ -13,5 +15,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try([], [MissingRequired])
+main : Try([], [FormatError])
 main = parse("")

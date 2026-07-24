@@ -13,26 +13,26 @@ EXPOSED BUT NOT DEFINED - app.md:1:6:1:9
 # PROBLEMS
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `a2!` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a2!` is exposed, ───┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  app [a1!, a2!] { pf: platform "../basic-cli/main.roc", a: "a" }           │
  │            ‾‾‾                                                             │
  └─────────────────────────────────────────────────────────────── app.md:1:11 ┘
 
-    You can fix this by either defining `a2!` in this module, or by removing it
+    You can fix this by either defining `a2!` in this mod, or by removing it
     from the list of exposed values.
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `a1!` is exposed, ───┐
-└┬────────────────────────┘  but it is not defined anywhere in this module.   │
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `a1!` is exposed, ───┐
+└┬────────────────────────┘  but it is not defined anywhere in this mod.   │
  │                                                                            │
  │  app [a1!, a2!] { pf: platform "../basic-cli/main.roc", a: "a" }           │
  │       ‾‾‾                                                                  │
  └──────────────────────────────────────────────────────────────── app.md:1:6 ┘
 
-    You can fix this by either defining `a1!` in this module, or by removing it
+    You can fix this by either defining `a1!` in this mod, or by removing it
     from the list of exposed values.
 
 # TOKENS

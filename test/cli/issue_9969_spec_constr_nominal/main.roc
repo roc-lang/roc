@@ -23,8 +23,8 @@ report! = |label, outcome| {
 
 main! = || {
 	unqualified = Cli.finish(Param.str_list({}))
-	report!("unqualified", unqualified.parser(["prog", "alpha", "beta"]))
+	report!("unqualified", (unqualified.parser)(["prog", "alpha", "beta"]))
 
 	qualified = Cli.finish(Param.str_list_qualified({}))
-	report!("qualified", qualified.parser(["prog", "alpha", "beta"]))
+	report!("qualified", (qualified.parser)(["prog", "alpha", "beta"]))
 }

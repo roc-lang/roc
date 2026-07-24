@@ -197,7 +197,6 @@ my @guarded_raw_items_checks = (
             'src/postcheck/monotype_lifted/lift.zig' => 1,
             'src/postcheck/monotype_lifted/spec_constr.zig' => 1,
             'src/postcheck/lambda_mono/lower.zig' => 1,
-            'src/postcheck/lir_lower.zig' => 1,
             'src/postcheck/solved_inline.zig' => 1,
             'src/postcheck/solved_lir_lower.zig' => 1,
         },
@@ -228,7 +227,6 @@ my @guarded_stale_write_checks = (
             'src/postcheck/monotype_lifted/lift.zig' => 1,
             'src/postcheck/monotype_lifted/spec_constr.zig' => 1,
             'src/postcheck/lambda_mono/lower.zig' => 1,
-            'src/postcheck/lir_lower.zig' => 1,
             'src/postcheck/solved_inline.zig' => 1,
             'src/postcheck/solved_lir_lower.zig' => 1,
         },
@@ -374,6 +372,31 @@ sub guarded_stale_write_reason {
 
 my @violations;
 
+sub scan_snapshot_module_words {
+    my $root = 'test/snapshots';
+    return unless -d $root;
+
+    find({
+        wanted => sub {
+            my $path = $File::Find::name;
+            return unless -f $path;
+            return unless $path =~ /\.md$/;
+
+            open my $fh, '<', $path or die "failed to open $path: $!";
+            my $line_no = 0;
+            while (my $line = <$fh>) {
+                ++$line_no;
+                chomp $line;
+                if ($line =~ /module/i) {
+                    push @violations, [$path, $line_no, "snapshot contains forbidden text `module`; use `mod` in snapshots", $line];
+                }
+            }
+            close $fh;
+        },
+        no_chdir => 1,
+    }, $root);
+}
+
 for my $root (@roots) {
     next unless -d $root;
     find({
@@ -508,6 +531,8 @@ for my $path (@postcheck_design_docs) {
     }
     close $fh;
 }
+
+scan_snapshot_module_words();
 
 if (@violations) {
     print "\nSEMANTIC AUDIT FAILED\n\n";

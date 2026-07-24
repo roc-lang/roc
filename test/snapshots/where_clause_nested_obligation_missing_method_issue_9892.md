@@ -50,7 +50,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Wrap")
@@ -69,7 +69,7 @@ EndOfFile,
 							(ty-var (raw "a")))
 						(ty (name "Str")))
 					(where
-						(method (module-of "a") (name "frobnicate")
+						(method (mod-of "a") (name "frobnicate")
 							(args
 								(ty-var (raw "a")))
 							(ty (name "Str")))))
@@ -88,7 +88,7 @@ EndOfFile,
 				(ty-var (raw "b"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "b") (name "unwrap")
+				(method (mod-of "b") (name "unwrap")
 					(args
 						(ty-var (raw "b")))
 					(ty (name "Str")))))
@@ -133,7 +133,7 @@ main = run(Wrap.W(42.U8))
 			(args
 				(p-nominal
 					(p-applied-tag)))
-			(e-dispatch-call (method "frobnicate") (constraint-fn-var 134)
+			(e-dispatch-call (method "frobnicate") (constraint-fn-var 256)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -153,7 +153,7 @@ main = run(Wrap.W(42.U8))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 153)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 267)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))
@@ -169,7 +169,7 @@ main = run(Wrap.W(42.U8))
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 205)
+		(e-call (constraint-fn-var 287)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-nominal (nominal "Wrap")

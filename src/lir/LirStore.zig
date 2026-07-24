@@ -445,6 +445,8 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
         .assign_list,
         .assign_struct,
         .assign_tag,
+        .store_struct,
+        .store_tag,
         .set_local,
         .debug,
         .expect,

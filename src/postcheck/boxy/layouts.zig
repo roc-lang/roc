@@ -1124,7 +1124,6 @@ test "boxy layout planner records private worker function arg and return layouts
             .kind = .pure,
             .args = .{ .start = 1, .len = 1 },
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         } },
     };
     const view = checked.CheckedTypeStoreView{
@@ -1231,6 +1230,17 @@ test "boxy layout planner commits nominal declared fields through shared layout 
         .{ .padding = 0 },
         .{ .named = field_b },
     };
+    const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
+        .id = @enumFromInt(fixtureTableIndex(0)),
+        .nominal = .{ .module = @enumFromInt(4), .type_name = @enumFromInt(3), .source_decl = null },
+        .source_statement = 0,
+        .declaration_root = @enumFromInt(4),
+        .backing = @enumFromInt(3),
+        .pf_start = 0,
+        .pf_len = 1,
+        .df_start = 0,
+        .df_len = declared_fields.len,
+    }};
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .nominal = builtinNominal(.u8, @enumFromInt(fixtureTableIndex(0)), .{}) },
         .{ .nominal = builtinNominal(.u16, @enumFromInt(1), .{}) },
@@ -1241,7 +1251,6 @@ test "boxy layout planner commits nominal declared fields through shared layout 
             .origin_module = @enumFromInt(4),
             .owner_module = .{},
             .is_opaque = false,
-            .backing = @enumFromInt(3),
             .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
@@ -1249,6 +1258,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_declarations = &nominal_declarations,
         .type_id_pool = &type_pool,
         .record_field_pool = &record_fields,
         .declared_field_pool = &declared_fields,
@@ -1272,7 +1282,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
 
 fn builtinNominal(
     builtin: checked.CheckedBuiltinNominal,
-    backing: checked.CheckedTypeId,
+    _: checked.CheckedTypeId,
     args: checked.CheckedTypeRange,
 ) checked.StoredNominal {
     return .{
@@ -1281,7 +1291,6 @@ fn builtinNominal(
         .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
-        .backing = backing,
         .representation = .{ .builtin = builtin },
         .args = args,
     };

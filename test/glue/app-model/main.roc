@@ -24,7 +24,7 @@ import Msg exposing [Msg]
 import View exposing [View]
 
 init_for_host : {} -> Box(Model)
-init_for_host = |{}| Box.box(program.init({}))
+init_for_host = |{}| Box.box((program.init)({}))
 
 update_for_host! : Box(Model), Msg => Box(Model)
 update_for_host! = |boxed_model, msg| {
@@ -35,5 +35,5 @@ update_for_host! = |boxed_model, msg| {
 render_for_host : Box(Model) -> View(Model)
 render_for_host = |boxed_model| {
     model = Box.unbox(boxed_model)
-    program.render(model)
+    (program.render)(model)
 }

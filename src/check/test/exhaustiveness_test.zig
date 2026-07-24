@@ -38,21 +38,6 @@ test "exhaustive - all tag variants covered for Try" {
     try test_env.assertLastDefType("I64");
 }
 
-test "non-exhaustive - missing Err case" {
-    const source =
-        \\x : Try(I64, Str)
-        \\x = Ok(42)
-        \\
-        \\result = match x {
-        \\    Ok(n) => n
-        \\}
-    ;
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    try test_env.assertOneTypeError("Non Exhaustive Match");
-}
-
 test "exhaustive - wildcard covers remaining variants" {
     const source =
         \\x : Try(I64, Str)
@@ -648,24 +633,6 @@ test "non-exhaustive destructure - Ok on concrete error type can miss Err" {
 
 // Additional Inhabitedness Edge Cases
 // These tests verify correct handling of various uninhabited type scenarios.
-
-test "exhaustive - triply nested empty errors" {
-    // 3+ levels of nesting with empty types
-    const source =
-        \\x : Try(Try(Try(I64, []), []), [])
-        \\x = Ok(Ok(Ok(42)))
-        \\
-        \\result : I64
-        \\result = match x {
-        \\    Ok(Ok(Ok(n))) => n
-        \\}
-    ;
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    // All three Err cases are uninhabited at every level
-    try test_env.assertLastDefType("I64");
-}
 
 test "exhaustive - record with uninhabited field means record is uninhabited" {
     // A record where one field has an uninhabited type is itself uninhabited

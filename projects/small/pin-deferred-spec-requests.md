@@ -2,210 +2,171 @@
 
 ## Problem
 
-A program that `roc check` accepts panics during `roc build`/`roc run` in the
-Monotype instantiation solver:
+Deferred template requests consume the checker's solved use-site type:
+`pinDeferredTemplateRequestToCheckedRoot`
+(`src/postcheck/monotype/lower.zig:2695`) instantiates the requested
+template's checked function root into the requester's graph at request
+creation, so type-level-only facts such as phantom nominal type arguments
+reach the request before sealing can default anything. Its doc comment
+asserts the resulting invariant: a row that still takes its `row_default`
+at seal time is genuinely unconstrained rather than starved.
 
-- roc-lang/roc#9968 — a parser built from record-combinators (an optional
-  parameter followed by a rest parameter) panics with `instantiation unified
-  a non-empty record with an empty record`
-  (`src/postcheck/monotype/solve.zig:793`, `unifyRowWithEmpty`, reached from
-  `unifyConcrete` at `solve.zig:524`).
+Three gaps keep that invariant a doc-comment promise rather than a fact:
 
-The mechanism, verified in lldb on the repro: the combinator chain threads a
-phantom, type-level-only row through a shared type variable — the failing
-binding is `to_action = { get_params : {} }`, which appears **only as an
-unused type argument of a nominal `Builder` type**, never as a value. The
-checker solves this fine. During Monotype lowering, however, the requester's
-per-spec instantiation graph re-derives call types by replaying value-flow
-constraints, and a phantom position has no value-level edge to travel on:
-`unifyThroughBacking` (`solve.zig:657`) relates a named node to a structural
-node through the *backing* type and never pairs the named type arguments, so
-no evidence ever delivers `{ get_params : {} }` to the graph node behind the
-deferred request. When the deferred request seals
-(`sealDeferredSpecRequestsFrom`, `src/postcheck/monotype/lower.zig:2829`),
-the unresolved row node takes its `row_default` and closes to `{}`. The
-callee template's own checked annotation then contradicts the sealed request
-— and the solver panics **by design**: its header doctrine says a
-"specialization that needs more than its requested type is a unification
-conflict rather than a silent rewrite" (`solve.zig:7-8`).
-
-The defect is not the panic; the panic is correct enforcement. The defect is
-that the request was sealed from *re-derived* value-flow evidence instead of
-from the type the checker already proved for the use site. This is the
-backlog's core disease shape — a fact proven during checking (the phantom-row
-binding), re-derived downstream through structural replay, a default papering
-over the gap, and a panic at the consumption site — landing inside the
-recently-landed instantiation-graph machinery itself.
+1. **The pin skips the snapshot regime.** When a request type carries
+   generated-opaque evidence, `stableSpecializationRequestType`
+   (`lower.zig:2149`) replaces the live `mono_fn_ty` with a detached,
+   *sealed* snapshot — and `pinDeferredTemplateRequestToCheckedRoot`
+   early-returns exactly there (`monoViewNode(fn_ty) == null` means "a
+   sealed snapshot, nothing to pin"). Rows sealed inside
+   `stableSpecializationRequestType` take their defaults with no
+   checked-root delivery. A request that is both snapshot-regime and
+   phantom-row-carrying therefore has an open path to the exact
+   #9968-class contradiction panic the pin was built to kill
+   ("instantiation unified a non-empty record with an empty record").
+   This regime is also where PR #10065's bug lived (the frozen snapshot
+   doubling as the evidence back-channel), which is independent evidence
+   that the snapshot regime drifts from the pinned regime.
+2. **`unifyThroughBacking` never pairs named type arguments.**
+   `src/postcheck/monotype/solve.zig:735` relates a named node to a
+   structural node through the *backing* type; named arguments are
+   paired only on the named↔named path in `unifyConcrete`
+   (`solve.zig:602`). Intra-graph nodes that connect only through a
+   backing can be starved of named-argument evidence, and if one is,
+   sealing silently closes it to its `row_default`.
+3. **Nothing observes the invariant.** No counter, assert, or log
+   anywhere reports "row defaulted at seal while its checked counterpart
+   was concrete" — the failure mode is a downstream panic
+   (`unifyRowWithEmpty`, `solve.zig:871`) or, worse, a silently wrong
+   default.
 
 ## Background
 
-The compiler pipeline: parse → canonicalize → type-check (checked artifacts;
-all user-facing failures end here) → postcheck: Monotype IR
+The compiler pipeline: parse → canonicalize → type-check (checked
+artifacts; all user-facing failures end here) → postcheck: Monotype IR
 (monomorphization; `src/postcheck/monotype/`) → Monotype Lifted → Lambda
 Solved → Lambda Mono → LIR → ARC → backends. `design.md` is authoritative;
 read "Monotype Instantiation" and "Row, Nominal, Alias, And Opaque
 Authority" before starting.
 
 Monotype lowering solves each specialization in a per-spec instantiation
-graph (`src/postcheck/monotype/solve.zig`). Procedure-template body requests
-discovered while lowering a specialization are **deferred to the end of the
-requesting specialization** and sealed then, so that requests are made at
-final types and specialization keys stay stable (`solve.zig:25-27`). A row
-node that no evidence has pinned by seal time takes its `row_default` —
-which is the correct treatment for *genuinely unconstrained* rows (that is
-what defaults are for), and the wrong treatment for rows the checker already
-solved but the graph never learned about.
-
-Each deferred request already carries the checked identity of what it is
-requesting: the `deferred_templates` entry records `source_fn_ty` (the
-checked function type at the use site) alongside the mono `fn_ty`
-(`lower.zig:2586-2596`). Today that checked type is consulted only on the
-**callee** side, **after** sealing, and **only when the requester and the
-template live in the same module**: `lowerTemplateWithMonoFor` constrains
-`source_fn_ty` against the template's public function type solely under
-`moduleBytesEqual(source_ty_view.key.bytes, view.key.bytes)`
-(`lower.zig:1451-1453`), then constrains the template's checked root
-(`constrainTypeToMono`, call at `lower.zig:1455`, implementation in
-`BodyContext` at `lower.zig:~7376`). By that point the requester's graph has
-already sealed the request with the defaulted row, and the contradiction is
-unrecoverable.
-
-The check-side sibling of this bug was already fixed once: the open-row
-widening work (issue roc-lang/roc#9614, PR roc-lang/roc#9617) kept
-`row_default`-closed rows widenable during constraint solving. This project
-is the Monotype-side counterpart, at a stage where widening is by-design
-impossible (sealed snapshots) — so the row must arrive *before* sealing,
-from checked data.
+graph (`solve.zig`). Template body requests discovered while lowering a
+specialization are deferred and sealed at the end of the requesting
+specialization. Each `DeferredTemplate` (`solve.zig:~41`) now carries
+three formerly-conflated things as separate fields — the frozen
+dedup/seal key (`fn_ty`, possibly a snapshot), the live requester cell
+for evidence flow-back (`requester_fn_node`, added by PR #10065), and
+checked-root delivery (the pin, added by PR #9997). The pin covers the
+live-graph regime; the snapshot regime seals through
+`GraphTypeFinals.sealType` inside `stableSpecializationRequestType`
+without it. A row node that no evidence has pinned by seal time takes
+its `row_default` — the correct treatment for genuinely unconstrained
+rows only.
 
 ## Evidence
 
-All symbols verified in the current tree.
-
-- `src/postcheck/monotype/solve.zig`: header doctrine (`:7-8`), deferred
-  request rationale (`:25-27`), `unifyConcrete` (`:524`),
-  `unifyThroughBacking` (`:657` — relates named↔structural through the
-  backing; named type arguments are not paired), `unifyRowWithEmpty`
-  (`:793`, the panic).
-- `src/postcheck/monotype/lower.zig`: deferred request creation carrying
-  `source_fn_ty` (`:2586-2596`), `sealDeferredSpecRequestsFrom` (`:2829`,
-  drain at `:~2887`), the same-module-only `constrainKnownType` condition
-  (`:1451-1453`) followed by `constrainTypeToMono` (`:1455`);
-  `BodyContext.constrainTypeToMono` (`:~7376`).
-- lldb specifics from the #9968 repro: failing template `Param.maybe_str`;
-  the non-empty side is the phantom `to_action = { get_params : {} }`
-  (field label resolved through the interner); the empty side is the sealed
-  request mono, requested from the app spec's graph via the
-  `main!`/`cli_parser` chain.
-- Discriminating experiments (all preserved in the investigation scratchpad,
-  reproducible from the issue): replacing `{ get_params : {} }` with `{}`
-  fixes it; making the second combinator's phantom concrete fixes it;
-  decoupling the combinators' shared type variable fixes it (the shared-var
-  chain is load-bearing); changing the phantom's *other* argument from `{}`
-  to `I64` does **not** change the panic (rules out positional/slot-pairing
-  bugs); local-vs-top-level placement of the parser is irrelevant.
-- The landed instantiation-graph work this extends: the per-spec solver
-  graph (merged to main ~2026-06-12) whose eager-materialize/refresh and
-  request-deferral design this project completes rather than revises.
+- `lower.zig:2695` `pinDeferredTemplateRequestToCheckedRoot` and its
+  early return for snapshot-regime requests; `lower.zig:2149`
+  `stableSpecializationRequestType` sealing without checked-root
+  delivery; `lower.zig:2065` `monoTypeHasGeneratedOpaqueEvidence`
+  deciding the regime.
+- `solve.zig:735` `unifyThroughBacking`: the named↔structural path
+  appends the backing/other pair without pairing `named.args`.
+- `row_default` consumption: `solve.zig` node field, materialization,
+  and the row-closing seal sites.
+- Regression coverage that must stay green throughout:
+  `test/cli/issue_9968_pin_deferred_spec_requests/` (phantom record/tag
+  rows, nested nominal, I64-arg variant, concrete-phantom control,
+  cross-module package repro) registered in
+  `src/cli/test/parallel_cli_runner.zig`, and issue #10021's
+  stored-closure evidence tests from PR #10065.
 
 ## Solution design
 
-Make every deferred request consume the checker's solved use-site type as
-explicit input to its graph node, before sealing can default anything.
-
-1. **Pin at request creation.** When a deferred template request is created
-   (`lower.zig:2586-2596`), constrain the request's function-type node in
-   the *requester's* graph against `instNode(request.source_fn_ty)` — the
-   checked use-site type it already carries. "Requesting at final types"
-   then means *final per the checker*, not "whatever the graph learned
-   through value flow". Phantom bindings travel as checked data;
-   `row_default` at seal time goes back to meaning "genuinely unconstrained".
-
-2. **Delete the same-module restriction, don't widen it.** The
-   `moduleBytesEqual` condition at `lower.zig:1451` exists because the
-   callee-side constraint needs the source type expressed in the callee's
-   type space. With pinning done requester-side (where `source_fn_ty` is
-   native), the callee-side special case becomes redundant for what it was
-   compensating for; remove it or reduce it to a debug agreement check —
-   whichever the migration shows, but do not leave two overlapping
-   constraint paths with different module conditions.
-
-3. **Audit `unifyThroughBacking`'s named-argument pairing.** Pinning fixes
-   the delivery of checked facts to requests; the propagation hole — a named
-   node meeting a structural node loses the named arguments' pairing — may
-   still starve *intra-graph* nodes that only connect through a backing.
-   Decide with evidence: add a debug counter/assert for "row node defaulted
-   at seal while its checked counterpart was concrete", run the full corpus,
-   and pair named arguments through the backing if any site still fires.
-
-4. **Enforcement stays.** The seal-time contradiction panic remains exactly
-   as it is (debug assertion / release unreachable per design.md). After
-   this project it is unreachable for checked programs; it is the regression
+1. **Instrument seal-time defaulting (permanent, debug-only).** At every
+   site where a row node closes to its `row_default` during sealing —
+   both `sealDeferredSpecRequestsFrom` and the seal inside
+   `stableSpecializationRequestType` — compare against the checked type
+   behind the request (`source_fn_ty` is on the `DeferredTemplate`);
+   assert when the defaulted row's checked counterpart is concrete. This
+   converts the pin's invariant from prose to an enforced contract.
+2. **Pin the snapshot regime.** `stableSpecializationRequestType` pins
+   the checked root before it seals, mirroring what
+   `pinDeferredTemplateRequestToCheckedRoot` does for the live regime —
+   so the two regimes cannot drift and "row took its default" means the
+   same thing in both. Construct the snapshot+phantom repro first (a
+   generated-opaque-evidence request whose type carries a phantom
+   nominal argument); if the combination is provably unreachable
+   instead, write that proof at the early return, citing the invariant
+   that excludes it.
+3. **Decide `unifyThroughBacking` with evidence.** Run the instrumented
+   corpus (snapshot corpus via `zig build run-snapshot-tool`, the CLI
+   suite, `examples/`, roc-parser) in debug. If the check fires on a
+   backing-only path, extend `unifyThroughBacking` to pair `named.args`
+   when relating named to structural; if it fires nowhere, record the
+   negative result in `unifyThroughBacking`'s doc comment as
+   current-state fact.
+4. **The end state that kills the class:** every row node that has a
+   checked counterpart is seeded from that checked type at creation, so
+   `row_default` is *unreachable* for checker-constrained rows and
+   remains only for rows with genuinely no checked origin. Treat 1–3 as
+   the staged path there; if seeding-at-creation turns out to be
+   directly implementable in this project's scope, prefer it and let the
+   instrumentation become the proof it holds.
+5. **Enforcement stays.** The seal-time contradiction panic
+   (`unifyRowWithEmpty`) remains exactly as it is — the regression
    tripwire, not a condition to soften.
 
 ## What success looks like
 
-- The #9968 repro checks, builds, and runs correctly on all backends.
-- The debug check from item 3 fires nowhere on the snapshot corpus, the
-  examples, and the roc-parser package suite.
-- There is exactly one place where a deferred request learns its type — the
-  pin at creation — and no module-conditional constraint path shadows it.
-- `row_default` at seal time is reachable only for rows the checker left
-  genuinely unconstrained (assertable in debug by comparing against the
-  checked type's row).
+Every criterion below must hold; the project is not done until all do:
+
+- Both seal sites (deferred-request sealing and
+  `stableSpecializationRequestType`) carry the debug check; there is no
+  seal path that closes a row to `row_default` without consulting the
+  checked counterpart. Verified by grep: every `row_default` close site
+  is either instrumented or unreachable-with-proof.
+- The snapshot regime is pinned (or proven unreachable for
+  phantom-carrying types, with the proof at the early return). If
+  pinned: a repro test exists for snapshot+phantom and passes on all
+  engines. There is no regime in which the pin is silently skipped.
+- The debug check fires nowhere across: the full snapshot corpus, the
+  CLI suite, `examples/`, and the roc-parser package suite — all run in
+  debug mode with the check live, and the runs are cited in the PR.
+- The `unifyThroughBacking` question is closed in one of exactly two
+  ways: named-arg pairing implemented plus a repro test (a
+  phantom-carrying named type meeting a structural type only through
+  its backing, no deferred request involved), or the negative result
+  recorded in the doc comment.
+- `test/cli/issue_9968_pin_deferred_spec_requests/` and the #10021
+  tests stay green; `unifyRowWithEmpty` is byte-identical.
+- Release builds are unchanged: the instrumentation compiles out
+  (verified by a release build).
 
 ## How to evaluate the result
 
 ### Correctness ideal
 
-- *Requests consume checked types*: a deferred request's sealed type is a
-  function of `source_fn_ty` plus genuine defaults — never of which
-  value-flow edges happened to exist. Enforced by the pin plus the item-3
-  debug check.
-- *No silent rewrite*: the solver's conflict-over-rewrite doctrine is
-  untouched; the panic remains the enforcement of record.
-- Behavioral: full snapshot corpus and cross-backend eval corpus
-  (interpreter/dev/LLVM/wasm agreement) unchanged; the #9968 repro and the
-  matrix below become permanent tests.
+A deferred request's sealed type is a function of `source_fn_ty` plus
+genuine defaults — never of which value-flow edges happened to exist and
+never of which regime (live vs snapshot) the request landed in. The
+debug check is the enforcement; the solver's conflict-over-rewrite
+doctrine is untouched.
 
 ### Performance ideal
 
-One `instNode` + one unification per deferred request, each bounded by the
-size of the requested function type — work proportional to data the request
-already stores. No new traversals, no name lookups, no per-seal re-walks.
-Measure Monotype lowering time on the specialization-heavy corpus
-(roc-parser examples) and `examples/`; require parity within noise. Zero
-effect on generated code.
+The instrumentation is debug-only: zero release cost. Snapshot-regime
+pinning adds one checked-root instantiation per opaque-evidence request
+(same cost the live regime already pays). If named-argument pairing is
+added, it appends one pending pair per named argument at
+named↔structural meets. Measure Monotype lowering time on the
+specialization-heavy corpus (roc-parser, `examples/`); require parity
+within noise.
 
 ## Tests to add
 
-Write the regression test first and confirm it panics on the unmodified
-tree:
-
-- `issue_9968`: the issue's optional-param + rest-param parser as a CLI run
-  test (`test/cli/issue_*.roc` + `src/cli/test/parallel_cli_runner.zig`
-  convention): `.exit = .not_panic`, `not_contains` the
-  `instantiation unified` panic strings, expected program output.
-- Phantom-row matrix: a nominal type with a phantom type argument bound to a
-  non-empty record row / a tag row / a nested nominal, each threaded through
-  a combinator chain with a shared type variable, each consumed only at the
-  type level; assert build + run output.
-- The discriminating controls from the investigation, pinned as tests: the
-  concrete-phantom variant (must keep working) and the `I64`-argument
-  variant (must now also work, and guards against slot-pairing regressions).
-- Cross-module split: requester and template in different modules with a
-  phantom-carrying request (exercises the deleted `moduleBytesEqual`
-  condition).
-- Debug-build corpus check: the item-3 counter asserts zero
-  defaulted-while-checked-concrete rows across `zig build snapshot` and the
-  CLI suite.
-
-## Related projects
-
-- The landed total-dispatch-plans work — the same discipline (downstream
-  consumes checked data; no re-derivation) applied to dispatch; this project
-  applies it to specialization request types.
-- The landed immutable specialization identity work (`SpecIdentity`,
-  `SpecBuilder` in `src/postcheck/monotype/`) — the other identity/typing
-  surface of `lower.zig` specialization records; pinning requests at checked
-  types also reduces the pressure that made request/solved dual entries
-  diverge.
+- The snapshot+phantom repro (or the unreachability proof).
+- Debug-corpus check: zero defaulted-while-checked-concrete rows across
+  the suites listed above.
+- If pairing is added: the backing-only phantom repro asserting build +
+  run output.

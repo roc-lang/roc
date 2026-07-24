@@ -9,7 +9,7 @@ import u.R}g:r->R.a.E
 ~~~
 # EXPECTED
 UNEXPECTED STATEMENT - fuzz_crash_042.md:1:11:1:12
-MODULE NOT FOUND - fuzz_crash_042.md:1:20:1:22
+MOD NOT FOUND - fuzz_crash_042.md:1:20:1:22
 DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 # PROBLEMS
 
@@ -33,7 +33,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
+│ MOD NOT FOUND ├─ This `a.E` type is declared to be in `u.R`, which ──────┐
 └┬─────────────────┘  does not exist.                                         │
  │                                                                            │
  │  import u.R}g:r->R.a.E                                                     │
@@ -50,7 +50,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_042.md:1:12:1:22
  │             ‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_042.md:1:12 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -61,7 +61,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "u.R"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -85,7 +85,7 @@ g : r -> R.a.E
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "r"))
 				(ty-malformed))))
-	(s-import (module "u.R")
+	(s-import (mod "u.R")
 		(exposes)))
 ~~~
 # TYPES

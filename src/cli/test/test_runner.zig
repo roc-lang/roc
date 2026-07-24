@@ -34,6 +34,7 @@
 //!   test_runner ./zig-out/bin/roc fx --opt=dev           # fx with dev backend
 
 const std = @import("std");
+const build_options = @import("build_options");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -65,8 +66,8 @@ const Args = struct {
 
 /// Entry point for the unified test platform runner.
 pub fn main(init: std.process.Init) TestRunnerError!void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa.deinit());
     const allocator = gpa.allocator();
 
     const args = try parseArgs(init.minimal.args, allocator);

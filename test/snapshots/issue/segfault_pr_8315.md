@@ -25,7 +25,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "selfCapturing")
 			(ty-fn
@@ -53,7 +53,7 @@ NO CHANGE
 			(args
 				(p-record-destructure
 					(destructs)))
-			(e-call (constraint-fn-var 40)
+			(e-call (constraint-fn-var 194)
 				(e-lookup-local
 					(p-assign (ident "selfCapturing")))
 				(e-empty_record)))

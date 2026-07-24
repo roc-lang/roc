@@ -1,11 +1,11 @@
 # META
 ~~~ini
-description=Module exposes values that are not implemented
+description=Mod exposes values that are not implemented
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
-# This module exposes foo, bar, MyType, and OtherType
+# This mod exposes foo, bar, MyType, and OtherType
 # but only implements foo and MyType
 # This should generate "exposed but not implemented" errors for bar and OtherType
 # Also tests redundant exposed entries for foo and MyType
@@ -27,7 +27,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))

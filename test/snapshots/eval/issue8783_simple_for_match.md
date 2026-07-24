@@ -62,7 +62,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Elem")
@@ -212,7 +212,7 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 426)
+								(e-dispatch-call (method "plus") (constraint-fn-var 380)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "acc"))))
@@ -223,7 +223,7 @@ NO CHANGE
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 541)
+								(e-dispatch-call (method "plus") (constraint-fn-var 415)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "acc"))))
@@ -236,7 +236,7 @@ NO CHANGE
 				(ty-lookup (name "I64") (builtin)))))
 	(d-let
 		(p-assign (ident "count"))
-		(e-call (constraint-fn-var 674)
+		(e-call (constraint-fn-var 464)
 			(e-lookup-external
 				(builtin))
 			(e-lookup-local

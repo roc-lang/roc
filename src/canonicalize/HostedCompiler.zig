@@ -9,7 +9,8 @@ const base = @import("base");
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 
-/// Replace all e_anno_only expressions in a Type Module with e_hosted_lambda operations (in-place).
+/// Replace ordinary e_anno_only expressions in a Type Module with e_hosted_lambda operations (in-place).
+/// Compiler-derived associated methods have their own CIR tag and are not host declarations.
 /// This transforms standalone annotations into hosted lambda operations that will be
 /// provided by the host application at runtime.
 /// Returns a list of def indices that were modified.
@@ -29,7 +30,7 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) Allocator.Error!std.ArrayList(
         }
     }
 
-    // Iterate through all defs and replace ALL anno-only defs with hosted implementations.
+    // Iterate through all defs and replace ordinary anno-only defs with hosted implementations.
     // Copy the def indices locally first: sliceDefs returns a slice backed by
     // store.index_data, which patternSpanFrom appends to inside the loop. A reallocation
     // there would invalidate a directly-held slice.

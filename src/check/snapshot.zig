@@ -81,11 +81,10 @@ pub const SnapshotNominalType = struct {
     origin_module: base.ModuleIdentity.Idx,
 };
 
-/// A snapshotted function type with argument types, return type, and instantiation flag.
+/// A snapshotted function type with argument types and return type.
 pub const SnapshotFunc = struct {
     args: SnapshotContentIdxSafeList.Range,
     ret: SnapshotContentIdx,
-    needs_instantiation: bool,
 };
 
 /// A snapshotted record type with fields and extension variable.
@@ -494,10 +493,20 @@ pub const Store = struct {
         // Mark starting position in the scratch array
         const scratch_top = self.scratch_content.top();
 
-        // Add backing var (must be first)
-        const backing_var = store.getNominalBackingVar(nominal_type);
-        const deep_var = try self.deepCopyVarInternal(store, type_writer, backing_var);
-        try self.scratch_content.append(deep_var);
+        // vars[0] is the backing, kept for report traversals (e.g. equality
+        // explanations descend into it). The application itself carries no
+        // backing, so snapshot the DECLARATION's backing template — formals
+        // read as rigids there, which the traversals treat optimistically.
+        const backing_snapshot: SnapshotContentIdx = blk: {
+            if (store.lookupNominalDecl(nominal_type)) |decl_idx| {
+                const decl = store.getNominalDecl(decl_idx);
+                if (decl.isValid()) {
+                    break :blk try self.deepCopyVarInternal(store, type_writer, decl.backing);
+                }
+            }
+            break :blk try self.contents.append(self.gpa, .err);
+        };
+        try self.scratch_content.append(backing_snapshot);
 
         // Add args after
         var arg_iter = store.iterNominalArgs(nominal_type);
@@ -539,7 +548,6 @@ pub const Store = struct {
         return SnapshotFunc{
             .args = args_range,
             .ret = deep_ret,
-            .needs_instantiation = func.needs_instantiation,
         };
     }
 

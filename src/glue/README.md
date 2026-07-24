@@ -117,6 +117,21 @@ cp /tmp/cglue-out/roc_platform_abi.h test/glue/fx_platform_cglue_expected.h
 
 Treat an unexpected diff as an emitter bug, not a regen trigger.
 
+## Host ABI Lock
+
+The templates restate the host ABI — the `RocStr`/`RocList`/`RocDec`
+layouts, the `RocHost` callback vtable, the extern runtime symbols, and the
+erased-callable payload — as text in their output languages, so the compiler
+cannot import those restatements. `zig build run-check-glue-abi` is the
+enforcement: it generates Zig glue for `test/fx/platform/main.roc` and
+compiles `test/glue/zig_abi_lock.zig` against both the generated file and the
+canonical `builtins` definitions, on native and wasm32 pointer widths.
+Template drift from `src/builtins/host_abi.zig`, `str.RocStr`,
+`list.RocList`, `dec.RocDec`, or `erased_callable` fails that step at compile
+time. The generated C and Rust files carry matching `offsetof`/`offset_of!`
+static assertions, which the C/Rust compile controls in the runtime matrix
+verify per target.
+
 ## ABI Risk Register and Roc Glue Runtime Controls
 
 Every risk in this section must be covered by at least one Roc glue test
@@ -173,8 +188,9 @@ language-specific.
 
 ## Release Files
 
-The checked-in glue specs under `src/glue/src/` use the source-tree platform at
-`../platform/main.roc`. Keep that form for local compiler development.
+The checked-in glue specs under `src/glue/src/` use `platform glue`, a
+compiler-owned platform embedded in the Roc compiler. Keep that form for local
+compiler development and releases.
 
 Nightly releases should use generated copies instead:
 
@@ -185,7 +201,6 @@ zig build build-glue-release -Dglue-release-tag=nightly-YYYY-Month-DD-SHORTSHA
 This writes `zig-out/glue-release/`:
 
 ```text
-package/<hash>.tar.zst
 glue/RustGlue.roc
 glue/ZigGlue.roc
 glue/CGlue.roc
@@ -193,14 +208,10 @@ glue/README.md
 glue/env
 ```
 
-The package archive is produced by running `roc bundle` in `src/glue/platform`
-with `main.roc` as the root file. The release helper only copies that archive
-and rewrites the release specs to point at its content-hash URL.
-
-Upload `package/<hash>.tar.zst` to the matching `roc-lang/nightlies` release.
 Include the generated `glue/` directory in every platform compiler archive for
-that same release. The generated specs reference the exact package URL, so
-downstream repos do not need a Roc source checkout.
+that same release. The generated specs rely on the compiler-owned glue platform
+embedded in that compiler build, so downstream repos do not need a Roc source
+checkout or a separate glue platform package.
 
 When `roc-lang/setup-roc` installs a nightly that contains `glue/`, it exports:
 
@@ -209,7 +220,6 @@ ROC_GLUE_DIR
 ROC_RUST_GLUE
 ROC_ZIG_GLUE
 ROC_C_GLUE
-ROC_GLUE_PLATFORM_URL
 ```
 
 Downstream CI can then run:

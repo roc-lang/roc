@@ -178,3 +178,15 @@ pub fn renderTypeHeader(
         try buf.append(gpa, ')');
     }
 }
+
+/// Render a type header (e.g. `Maybe(a)`) to a newly allocated Roc syntax string.
+pub fn renderTypeHeaderToString(
+    gpa: Allocator,
+    module_env: *const ModuleEnv,
+    header_idx: CIR.TypeHeader.Idx,
+) Allocator.Error![]u8 {
+    var buf = RenderBuffer.init();
+    errdefer buf.deinit(gpa);
+    try renderTypeHeader(&buf, gpa, module_env, header_idx);
+    return buf.toOwnedSlice(gpa);
+}

@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "A .B") (alias "X1"))
 		(s-import (raw "A .B .C") (alias "X2"))
@@ -50,11 +50,11 @@ import A
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "A")
+	(s-import (mod "A")
 		(exposes))
-	(s-import (module "A")
+	(s-import (mod "A")
 		(exposes))
-	(s-import (module "A")
+	(s-import (mod "A")
 		(exposes)))
 ~~~
 # TYPES

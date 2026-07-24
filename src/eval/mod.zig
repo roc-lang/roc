@@ -27,6 +27,8 @@ pub fn backendAvailable(backend_kind: EvalBackend) bool {
 
 /// Executable memory for running generated code (re-exported from backend module)
 pub const ExecutableMemory = backend.ExecutableMemory;
+/// Shared dynamic-library loader for LLVM-generated libraries.
+pub const DynLib = @import("dynlib.zig").DynLib;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 /// Utilities for loading compiled builtin modules
@@ -72,6 +74,7 @@ pub const interpreter = if (builtin.target.os.tag == .freestanding) struct {
             _: *const @import("lir").LirStore,
             _: *const @import("layout").Store,
             _: *const @import("builtins").host_abi.RocOps,
+            _: @import("builtins").float_bits.NanMode,
         ) error{BackendUnavailable}!@This() {
             return error.BackendUnavailable;
         }
@@ -121,7 +124,6 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("value.zig"));
-    std.testing.refAllDecls(@import("interpreter_values.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));

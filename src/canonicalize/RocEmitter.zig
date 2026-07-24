@@ -14,6 +14,7 @@ const builtins = @import("builtins");
 const parse = @import("parse");
 
 const i128h = builtins.compiler_rt_128;
+const RocDec = builtins.dec.RocDec;
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
@@ -282,14 +283,14 @@ fn emitExprFrame(
         .e_frac_f64 => |frac| try self.output.print(self.allocator, "{d}f64", .{frac.value}),
         .e_dec => |dec| {
             const value = dec.value.num;
-            const scale: i128 = 1_000_000_000_000_000_000;
+            const scale: i128 = RocDec.one_point_zero_i128;
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             try self.write(try self.formatI128(whole));
             if (frac_part != 0) {
                 try self.write(".");
                 const frac_str = try self.formatU128(frac_part);
-                var pad: usize = 18 - frac_str.len;
+                var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
                 while (pad > 0) : (pad -= 1) try self.write("0");
                 try self.write(frac_str);
             }
@@ -307,14 +308,14 @@ fn emitExprFrame(
                 try self.output.print(self.allocator, "{}.{}", .{ whole, frac_part });
             }
         },
-        .e_num_from_numeral => try self.emitRecordedNumeral(expr_idx, null),
+        .e_num_from_numeral => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), null),
         .e_typed_int => |typed| {
             try self.emitIntValue(typed.value);
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
         .e_typed_frac => |typed| {
             const value = typed.value.toI128();
-            const scale: i128 = 1_000_000_000_000_000_000;
+            const scale: i128 = RocDec.one_point_zero_i128;
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             if (frac_part == 0) {
@@ -324,7 +325,7 @@ fn emitExprFrame(
             }
             try self.output.print(self.allocator, ".{s}", .{self.module_env.getIdent(typed.type_name)});
         },
-        .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(expr_idx, typed.type_name),
+        .e_typed_num_from_numeral => |typed| try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(expr_idx), typed.type_name),
         .e_str_segment => |seg| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(seg.literal)}),
         .e_bytes_literal => |bytes| try self.output.print(self.allocator, "<bytes:{d}>", .{self.module_env.common.getString(bytes.literal).len}),
         .e_str => |str| {
@@ -544,6 +545,7 @@ fn emitExprFrame(
         },
         .e_ellipsis => try self.write("..."),
         .e_anno_only => try self.write("<anno_only>"),
+        .e_derived_method => try self.write("<derived_method>"),
         .e_return => |ret| {
             try frames.append(allocator, .{ .expr = ret.expr });
             try frames.append(allocator, .{ .write = "return " });
@@ -606,6 +608,7 @@ fn emitPatternFrame(
         .assign => |ident| try self.emitIdent(self.module_env.getIdent(ident.ident)),
         .underscore => try self.write("_"),
         .num_literal => |num| try self.emitIntValue(num.value),
+        .num_from_numeral_literal => try self.emitRecordedNumeral(ModuleEnv.nodeIdxFrom(pattern_idx), null),
         .str_literal => |str| try self.output.print(self.allocator, "\"{s}\"", .{self.module_env.common.getString(str.literal)}),
         .str_interpolation => |str| {
             try self.write("\"");
@@ -695,14 +698,14 @@ fn emitPatternFrame(
         },
         .dec_literal => |dec| {
             const value = dec.value.num;
-            const scale: i128 = 1_000_000_000_000_000_000;
+            const scale: i128 = RocDec.one_point_zero_i128;
             const whole = i128h.divTrunc_i128(value, scale);
             const frac_part = i128h.rem_u128(@abs(value), @as(u128, @intCast(scale)));
             try self.write(try self.formatI128(whole));
             if (frac_part != 0) {
                 try self.write(".");
                 const frac_str = try self.formatU128(frac_part);
-                var pad: usize = 18 - frac_str.len;
+                var pad: usize = @as(usize, RocDec.decimal_places) - frac_str.len;
                 while (pad > 0) : (pad -= 1) try self.write("0");
                 try self.write(frac_str);
             }
@@ -785,6 +788,8 @@ fn binopOpToToken(op: Expr.Binop.Op) parse.tokenize.Token.Tag {
         .div_trunc => .OpDoubleSlash,
         .@"and" => .OpAnd,
         .@"or" => .OpOr,
+        .range_exclusive => .OpDoubleDotLessThan,
+        .range_inclusive => .OpDoubleDotEquals,
     };
 }
 
@@ -810,12 +815,12 @@ comptime {
 
 const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
 
-fn emitRecordedNumeral(self: *Self, expr_idx: Expr.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
-    const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx)) orelse {
-        std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(expr_idx)});
+fn emitRecordedNumeral(self: *Self, node_idx: CIR.Node.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
+    const literal = self.module_env.numeralLiteralForNode(node_idx) orelse {
+        std.debug.panic("missing recorded numeral for node {}", .{@intFromEnum(node_idx)});
     };
     if (!literal.isMaterialized()) {
-        std.debug.panic("cannot emit an unmaterialized numeral for expression {}", .{@intFromEnum(expr_idx)});
+        std.debug.panic("cannot emit an unmaterialized numeral for node {}", .{@intFromEnum(node_idx)});
     }
 
     if (literal.isNegative()) {
@@ -983,70 +988,7 @@ fn binopToStr(op: Expr.Binop.Op) []const u8 {
         .ne => "!=",
         .@"and" => "and",
         .@"or" => "or",
+        .range_exclusive => "..<",
+        .range_inclusive => "..=",
     };
-}
-
-// Tests
-test "emit simple integer" {
-    const allocator = std.testing.allocator;
-
-    // Create a minimal test environment
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "42");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var emitter = Self.init(allocator, module_env);
-    defer emitter.deinit();
-
-    // Create a simple integer expression
-    const int_value = CIR.IntValue{
-        .bytes = @bitCast(@as(i128, 42)),
-        .kind = .i128,
-    };
-    const expr_idx = try module_env.store.addExpr(.{
-        .e_num = .{ .value = int_value, .kind = .i64 },
-    }, base.Region.zero());
-
-    try emitter.emitExpr(expr_idx);
-    try std.testing.expectEqualStrings("42", emitter.getOutput());
-}
-
-test "emit lambda expression" {
-    const allocator = std.testing.allocator;
-
-    const module_env = try allocator.create(ModuleEnv);
-    module_env.* = try ModuleEnv.init(allocator, "|x| x");
-    defer {
-        module_env.deinit();
-        allocator.destroy(module_env);
-    }
-
-    var emitter = Self.init(allocator, module_env);
-    defer emitter.deinit();
-
-    // Create pattern for 'x'
-    const x_ident = try module_env.insertIdent(base.Ident.for_text("x"));
-    const x_pattern_idx = try module_env.store.addPattern(.{
-        .assign = .{ .ident = x_ident },
-    }, base.Region.zero());
-
-    // Create lookup expression for body
-    const body_idx = try module_env.store.addExpr(.{
-        .e_lookup_local = .{ .pattern_idx = x_pattern_idx },
-    }, base.Region.zero());
-
-    // Create lambda expression using scratch system
-    const start = module_env.store.scratchPatternTop();
-    try module_env.store.addScratchPattern(x_pattern_idx);
-    const args_span = try module_env.store.patternSpanFrom(start);
-
-    const lambda_idx = try module_env.store.addExpr(.{
-        .e_lambda = .{ .args = args_span, .body = body_idx },
-    }, base.Region.zero());
-
-    try emitter.emitExpr(lambda_idx);
-    try std.testing.expectEqualStrings("|x| x", emitter.getOutput());
 }

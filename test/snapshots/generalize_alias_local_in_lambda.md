@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "id"))
@@ -86,11 +86,11 @@ main = |_y| {
 						(p-assign (ident "id"))))
 				(e-tuple
 					(elems
-						(e-call (constraint-fn-var 67)
+						(e-call (constraint-fn-var 203)
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-num (value "1")))
-						(e-call (constraint-fn-var 86)
+						(e-call (constraint-fn-var 214)
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-string

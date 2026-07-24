@@ -56,7 +56,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "func"))
@@ -124,7 +124,7 @@ NO CHANGE
 						(e-lambda
 							(args
 								(p-assign (ident "a")))
-							(e-dispatch-call (method "plus") (constraint-fn-var 49)
+							(e-dispatch-call (method "plus") (constraint-fn-var 208)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "a"))))
@@ -139,27 +139,27 @@ NO CHANGE
 						(e-lambda
 							(args
 								(p-assign (ident "b")))
-							(e-dispatch-call (method "plus") (constraint-fn-var 51)
+							(e-dispatch-call (method "plus") (constraint-fn-var 210)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "b"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "y"))))))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 129)
+				(e-dispatch-call (method "plus") (constraint-fn-var 236)
 					(receiver
-						(e-call (constraint-fn-var 90)
+						(e-call (constraint-fn-var 223)
 							(e-lookup-local
 								(p-assign (ident "add_x")))
 							(e-num (value "5"))))
 					(args
-						(e-call (constraint-fn-var 128)
+						(e-call (constraint-fn-var 235)
 							(e-lookup-local
 								(p-assign (ident "add_y")))
 							(e-num (value "5"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 383)
+		(e-call (constraint-fn-var 302)
 			(e-lookup-local
 				(p-assign (ident "func")))
 			(e-num (value "10"))

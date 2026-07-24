@@ -52,6 +52,7 @@ packages can define and require their own methods with `where` clauses.
 | `to_hash : T, Hasher -> Hasher` | `Dict`, `Set`, and hash-based APIs | Values of the type should participate in hashing. |
 | `plus`, `minus`, `times`, `div_by`, `div_trunc_by`, `rem_by` | `+`, `-`, `*`, `/`, `//`, `%` | The type has arithmetic-like operations. |
 | `is_lt`, `is_lte`, `is_gt`, `is_gte` | `<`, `<=`, `>`, `>=` | The type has an ordering. |
+| `range_exclusive : T, T -> Iter(T)`, `range_inclusive : T, T -> Iter(T)` | `..<`, `..=` | The type supports range syntax. |
 | `negate`, `not` | Unary `-`, unary `!` | The type has a unary negation or complement operation. |
 | `from_numeral : Num.Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals with target type `T` | Plain numeric literal syntax should construct the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | Quoted string literals with target type `T` | Plain quoted literal syntax should construct the type. |
@@ -60,6 +61,45 @@ packages can define and require their own methods with `where` clauses.
 | `next` | `for` loop iteration steps | Usually provided by `Iter`; collection authors usually implement `iter`. |
 | `parser_for : encoding -> (state -> Try({ value : T, rest : state }, err))` | Generic parser APIs such as JSON parsing | A format should be able to parse the type. |
 | `encoder_for : encoding -> (T, state -> Try(state, err))` | Generic encoder APIs such as JSON encoding | A format should be able to encode the type. |
+| `map` | Mapping a selected payload in an eligible tag union | The type should support a pure payload transformation. |
+| `map!` | Mapping a selected payload in an eligible tag union | The type should support an effectful payload transformation. |
+
+### Compiler-Derived Methods
+
+Roc can derive implementations of `is_eq`, `to_hash`, `parser_for`,
+`encoder_for`, `map`, and `map!`. Structural types receive each derived method
+automatically when their shape supports it. A nominal or opaque type must opt in
+to each desired implementation by declaring the associated method with `_` as
+its annotation:
+
+```roc
+Model := { value : Str }.{
+    is_eq : _
+    to_hash : _
+    parser_for : _
+    encoder_for : _
+}
+```
+
+Here, `_` asks the compiler to infer the method's type and synthesize its
+implementation. It is only recognized for these six associated method names;
+other declarations without bodies are errors unless they are host-provided
+platform declarations. Derived method opt-ins behave the same in application,
+package, and platform modules.
+
+Providing a method body defines an ordinary custom implementation instead of
+requesting derivation. For example, a type can define custom equality while
+still deriving its hash and codec methods.
+
+Derived `map` and `map!` apply to eligible tag unions with one selected direct
+payload. `map` takes a pure transformation, while `map!` takes an effectful one:
+
+```roc
+Maybe(a) := [Just(a), Nothing].{
+    map : _
+    map! : _
+}
+```
 
 ### `to_inspect`
 
@@ -174,6 +214,29 @@ must have the same type.
 | `<=` | `is_lte` |
 | `>` | `is_gt` |
 | `>=` | `is_gte` |
+
+Range operators dispatch to methods whose result is an `Iter` of the operand
+type. Both operands must have the same type.
+
+| Operator | Method |
+| --- | --- |
+| `..<` | `range_exclusive` |
+| `..=` | `range_inclusive` |
+
+All the builtin number types have these methods, and a custom type can support
+range syntax by defining them:
+
+```roc
+PageNum := { num : U32 }.{
+    range_exclusive : PageNum, PageNum -> Iter(PageNum)
+    range_exclusive = |start, end|
+        Iter.map(start.num..<end.num, |num| PageNum.{ num })
+}
+
+for page in first_page..<last_page {
+    render(page)
+}
+```
 
 Unary operators dispatch to methods whose argument and return type are the same:
 
@@ -323,3 +386,11 @@ type that fits.
 If committing a default narrows a function's inferred type, the compiler
 emits a `LITERAL DEFAULTED` warning. To pick a different type, add a type
 annotation or a suffix (`5.U64`).
+
+## Where Clauses
+
+TODO
+
+## Aliases
+
+TODO

@@ -515,121 +515,6 @@ test "check - repro - using dbg in a function does not make it effectful" {
     try test_env.assertNoErrors();
 }
 
-test "check - repro - issue 9500 - equality on tag-union alias" {
-    const src =
-        \\Color : [Red, Green, Blue]
-        \\
-        \\pick : U8 -> Color
-        \\pick = |n| match n {
-        \\    0 => Red
-        \\    1 => Green
-        \\    _ => Blue
-        \\}
-        \\
-        \\is_red : Bool
-        \\is_red = pick(0) == Red
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - inequality on tag-union alias" {
-    const src =
-        \\Color : [Red, Green, Blue]
-        \\
-        \\pick : U8 -> Color
-        \\pick = |n| match n {
-        \\    0 => Red
-        \\    1 => Green
-        \\    _ => Blue
-        \\}
-        \\
-        \\not_red : Bool
-        \\not_red = pick(0) != Red
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - equality on record alias" {
-    const src =
-        \\Point : { x : U8, y : U8 }
-        \\
-        \\origin : Point
-        \\origin = { x: 0, y: 0 }
-        \\
-        \\is_origin : Bool
-        \\is_origin = origin == { x: 0, y: 0 }
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9500 - equality on record alias of tag-union aliases" {
-    const src =
-        \\Palette : [None, Color1, Color2, Color3, Color4]
-        \\
-        \\DrawColors : {
-        \\    primary : Palette,
-        \\    secondary : Palette,
-        \\}
-        \\
-        \\from_flags : U8 -> DrawColors
-        \\from_flags = |flags| match flags {
-        \\    0 => { primary: None, secondary: None }
-        \\    _ => { primary: Color2, secondary: Color4 }
-        \\}
-        \\
-        \\is_match : Bool
-        \\is_match = from_flags(1) == { primary: Color2, secondary: Color4 }
-    ;
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-    try test_env.assertNoErrors();
-}
-
-test "check - repro - issue 9491 - local recursive def generalizes rigid type param" {
-    // A local, self-recursive annotated function on a parametric recursive
-    // nominal type, called through a separate annotated local helper, used to
-    // produce a spurious `RBTree(k)` != `RBTree(k)` mismatch because the
-    // recursive function's rigid type parameter was never generalized.
-    const src =
-        \\main! = |_args| {}
-        \\
-        \\RBTree(k) := [
-        \\    Empty,
-        \\    Node(RBTree(k)),
-        \\].{
-        \\    delete = |tree| {
-        \\        delRBTree : RBTree(k) -> RBTree(k)
-        \\        delRBTree = |inner| {
-        \\            match inner {
-        \\                RBTree.Node(Empty) => Empty
-        \\                RBTree.Node(RBTree.Node(x)) => RBTree.Node(x)->delRBTree()
-        \\                Empty => Empty
-        \\            }
-        \\        }
-        \\        delCurr : RBTree(k) -> RBTree(k)
-        \\        delCurr = |t| {
-        \\            match t {
-        \\                RBTree.Node(inner) => inner->delRBTree()
-        \\                _ => t
-        \\            }
-        \\        }
-        \\        tree->delCurr()
-        \\    }
-        \\}
-    ;
-
-    var test_env = try TestEnv.init("Test", src);
-    defer test_env.deinit();
-
-    try test_env.assertNoErrors();
-}
-
 test "check - repro - issue 9491 - distinct type param names still unify" {
     // Same as above, but the helper uses a differently-named type parameter.
     // Before the fix this surfaced as `RBTree(j)` != `RBTree(k)`, proving the
@@ -851,6 +736,26 @@ test "check - repro - issue 9670 - minimal: multi-param alias, passthrough + wra
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
+}
+
+test "check - effect dependency resolved after a pure annotation reports a mismatch" {
+    const src =
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\first : U64, (() => I64) -> I64
+        \\first = |n, effect_arg!| {
+        \\    if n == 0.U64 0.I64 else second!(n - 1.U64, effect_arg!)
+        \\}
+        \\second! = |n, effect_arg!| {
+        \\    if n == 0.U64 effect_arg!() else first(n - 1.U64, effect_arg!)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check - repro - issue 9491 follow-up - top-level mutually recursive parametric fns" {

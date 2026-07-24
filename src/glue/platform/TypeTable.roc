@@ -1,6 +1,7 @@
 import AbiLayout exposing [AbiLayout]
 import HostRcPlan exposing [HostRcPlan]
 import RecordField exposing [RecordField]
+import RecordRepr exposing [RecordRepr]
 import TagUnionRepr exposing [TagUnionRepr]
 import TypeInfo exposing [TypeInfo]
 import TypeRepr exposing [TypeRepr]
@@ -132,21 +133,132 @@ TypeTable := { entries : List(TypeInfo) }.{
 	tag_union_has_payload : TagUnionRepr -> Bool
 	tag_union_has_payload = |tu| !(List.all(tu.tags, |tag| List.is_empty(tag.payload)))
 
+	## Stable structural token for a type, independent of type-table entry
+	## order. Named types (record / tag union / unknown) contribute their name
+	## and terminate the recursion (a recursive shape routes through a named
+	## nominal, and anonymous records already carry a structural `__AnonStruct_`
+	## name assigned by the compiler); box and list recurse into their element;
+	## primitives contribute a fixed token. This mirrors the compiler-side
+	## `hashStructuralId` used to name anonymous structs.
+	structural_token : TypeTable, U64 -> Str
+	structural_token = |table, type_id|
+		match table.get(type_id) {
+			RocBool => "bool"
+			RocBox(inner) => Str.concat("box:", table.structural_token(inner))
+			RocDec => "dec"
+			RocF32 => "f32"
+			RocF64 => "f64"
+			RocFunction(_) => "fn"
+			RocI128 => "i128"
+			RocI16 => "i16"
+			RocI32 => "i32"
+			RocI64 => "i64"
+			RocI8 => "i8"
+			RocList(elem) => Str.concat("list:", table.structural_token(elem))
+			RocRecord(rec) => Str.concat("rec:", rec.name)
+			RocStr => "str"
+			RocTagUnion(tu) => Str.concat("tu:", tu.name)
+			RocU128 => "u128"
+			RocU16 => "u16"
+			RocU32 => "u32"
+			RocU64 => "u64"
+			RocU8 => "u8"
+			RocUnit => "unit"
+			RocUnknown(s) => Str.concat("unk:", s)
+		}
+
+	## Stable structural signature of a tag union: its ABI size and alignment
+	## plus each tag's name and payload shapes. Two same-named tag-union entries
+	## with equal signatures are the same emitted type (glue renders them
+	## identically, and the emitter deduplicates them by name); unequal
+	## signatures are genuinely distinct shapes that need disambiguation.
+	tag_union_signature : TypeTable, AbiLayout, TagUnionRepr -> Str
+	tag_union_signature = |table, abi_layout, tu| {
+		var $sig = "${U64.to_str(abi_layout.size64)}/${U64.to_str(abi_layout.alignment64)}/${U64.to_str(abi_layout.size32)}/${U64.to_str(abi_layout.alignment32)}"
+
+		for tag in tu.tags {
+			$sig = Str.concat($sig, "|${tag.name}(")
+			for payload_id in tag.payload {
+				$sig = Str.concat($sig, Str.concat(table.structural_token(payload_id), ","))
+			}
+			$sig = Str.concat($sig, ")")
+		}
+
+		$sig
+	}
+
+	## Names of tag unions that need per-entry disambiguation: a name qualifies
+	## only when two or more entries share it with genuinely distinct structural
+	## signatures. Entries that merely repeat an identical shape are the same
+	## emitted type and collapse to the bare name, so they are not reported.
 	duplicate_tag_union_names : TypeTable -> List(Str)
 	duplicate_tag_union_names = |table| {
-		var $seen_names = []
+		var $seen = []
 		var $duplicates = []
 
 		for entry in table.entries() {
 			match entry.repr {
 				RocTagUnion(tu) =>
 					if List.len(tu.tags) >= 2 and tu.name != "" {
-						if List.contains($seen_names, tu.name) {
+						sig = table.tag_union_signature(entry.layout, tu)
+						conflicts = List.any($seen, |e| e.name == tu.name and e.sig != sig)
+						if conflicts {
 							if !(List.contains($duplicates, tu.name)) {
 								$duplicates = $duplicates.append(tu.name)
 							}
-						} else {
-							$seen_names = $seen_names.append(tu.name)
+						}
+						already = List.any($seen, |e| e.name == tu.name and e.sig == sig)
+						if !already {
+							$seen = $seen.append({ name: tu.name, sig: sig })
+						}
+					}
+				_ => {}
+			}
+		}
+
+		$duplicates
+	}
+
+	## Stable structural signature of a record: its ABI size and alignment plus
+	## each field's name and shape. Same-named record entries with equal
+	## signatures are the same emitted type (the emitter deduplicates them by
+	## name); unequal signatures are genuinely distinct shapes needing
+	## disambiguation. Mirrors `tag_union_signature`.
+	record_signature : TypeTable, AbiLayout, RecordRepr -> Str
+	record_signature = |table, abi_layout, rec| {
+		var $sig = "${U64.to_str(abi_layout.size64)}/${U64.to_str(abi_layout.alignment64)}/${U64.to_str(abi_layout.size32)}/${U64.to_str(abi_layout.alignment32)}"
+
+		for field in rec.fields {
+			$sig = Str.concat($sig, "|${field.name}:${table.structural_token(field.type_id)}")
+		}
+
+		$sig
+	}
+
+	## Names of records that need per-entry disambiguation: a name qualifies
+	## only when two or more entries share it with genuinely distinct structural
+	## signatures. Entries that merely repeat an identical shape are the same
+	## emitted type and collapse to the bare name, so they are not reported.
+	## Mirrors `duplicate_tag_union_names`.
+	duplicate_record_names : TypeTable -> List(Str)
+	duplicate_record_names = |table| {
+		var $seen = []
+		var $duplicates = []
+
+		for entry in table.entries() {
+			match entry.repr {
+				RocRecord(rec) =>
+					if rec.name != "" {
+						sig = table.record_signature(entry.layout, rec)
+						conflicts = List.any($seen, |e| e.name == rec.name and e.sig != sig)
+						if conflicts {
+							if !(List.contains($duplicates, rec.name)) {
+								$duplicates = $duplicates.append(rec.name)
+							}
+						}
+						already = List.any($seen, |e| e.name == rec.name and e.sig == sig)
+						if !already {
+							$seen = $seen.append({ name: rec.name, sig: sig })
 						}
 					}
 				_ => {}

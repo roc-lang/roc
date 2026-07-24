@@ -16,6 +16,8 @@ const embedded_lld = @import("embedded_lld");
 const llvm_embedded = @import("llvm_embedded");
 const collections = @import("collections");
 const roc_target = @import("roc_target");
+const builtins = @import("builtins");
+const builtin_registry = builtins.builtin_registry;
 
 const Allocator = std.mem.Allocator;
 
@@ -120,9 +122,11 @@ pub const CompileOptions = struct {
     /// builtin bitcode payload before retargeting the merged LLVM module.
     target_ptr_width_bits: u8,
     /// Treat the target as freestanding for LLVM object emission: optimization
-    /// cannot assume target library functions, and memory intrinsics are lowered
-    /// to explicit loops before codegen.
+    /// cannot assume target library functions.
     no_target_libcalls: bool = false,
+    /// Lower LLVM memory intrinsics to explicit loops before codegen. Callers set
+    /// this for targets that cannot use libcalls or native memory operations.
+    lower_memory_intrinsics_to_loops: bool = false,
 };
 
 fn valueName(value: *bindings.Value) []const u8 {
@@ -173,97 +177,10 @@ fn recordModuleDeclarations(allocator: Allocator, module: *bindings.Module, decl
     }
 }
 
-const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
-    .{ "roc__num_add_with_overflow_i128", {} },
-    .{ "roc__num_mul_with_overflow_i16", {} },
-    .{ "roc__num_mul_with_overflow_i32", {} },
-    .{ "roc__num_mul_with_overflow_i64", {} },
-    .{ "roc__num_mul_with_overflow_i8", {} },
-    .{ "roc__num_sub_with_overflow_i128", {} },
-    .{ "roc_builtins_num_mul_with_overflow_i128", {} },
-    .{ "roc_builtins_num_mul_with_overflow_u128", {} },
-    .{ "roc_builtins_allocate_with_refcount", {} },
-    .{ "roc_builtins_box_decref_with", {} },
-    .{ "roc_builtins_box_decref_with_single_thread", {} },
-    .{ "roc_builtins_box_free_with", {} },
-    .{ "roc_builtins_dbg_str", {} },
-    .{ "roc_builtins_expect_err_str", {} },
-    .{ "roc_builtins_decref_data_ptr", {} },
-    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
-    .{ "roc_builtins_erased_callable_decref", {} },
-    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
-    .{ "roc_builtins_erased_callable_free", {} },
-    .{ "roc_builtins_erased_callable_incref", {} },
-    .{ "roc_builtins_free_data_ptr", {} },
-    .{ "roc_builtins_i16_mod_by", {} },
-    .{ "roc_builtins_i32_mod_by", {} },
-    .{ "roc_builtins_i64_mod_by", {} },
-    .{ "roc_builtins_i8_mod_by", {} },
-    .{ "roc_builtins_incref_data_ptr", {} },
-    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
-    .{ "roc_builtins_int_from_str", {} },
-    .{ "roc_builtins_int_to_str", {} },
-    .{ "roc_builtins_list_append_unsafe", {} },
-    .{ "roc_builtins_list_concat", {} },
-    .{ "roc_builtins_list_decref_flat_list", {} },
-    .{ "roc_builtins_list_decref_str", {} },
-    .{ "roc_builtins_list_decref_with", {} },
-    .{ "roc_builtins_list_decref_with_single_thread", {} },
-    .{ "roc_builtins_list_drop_at", {} },
-    .{ "roc_builtins_list_eq", {} },
-    .{ "roc_builtins_list_free_flat_list", {} },
-    .{ "roc_builtins_list_free_with", {} },
-    .{ "roc_builtins_list_incref", {} },
-    .{ "roc_builtins_list_incref_single_thread", {} },
-    .{ "roc_builtins_list_list_eq", {} },
-    .{ "roc_builtins_list_prepend", {} },
-    .{ "roc_builtins_list_release_excess_capacity", {} },
-    .{ "roc_builtins_list_replace", {} },
-    .{ "roc_builtins_list_set", {} },
-    .{ "roc_builtins_list_reserve", {} },
-    .{ "roc_builtins_list_reverse", {} },
-    .{ "roc_builtins_list_str_eq", {} },
-    .{ "roc_builtins_list_sublist", {} },
-    .{ "roc_builtins_list_swap", {} },
-    .{ "roc_builtins_list_with_capacity", {} },
-    .{ "roc_builtins_roc_crashed", {} },
-    .{ "roc_builtins_roc_expect_failed", {} },
-    .{ "roc_builtins_str_caseless_ascii_equals", {} },
-    .{ "roc_builtins_str_concat", {} },
-    .{ "roc_builtins_str_contains", {} },
-    .{ "roc_builtins_str_count_utf8_bytes", {} },
-    .{ "roc_builtins_str_drop_prefix", {} },
-    .{ "roc_builtins_str_drop_prefix_caseless_ascii", {} },
-    .{ "roc_builtins_str_drop_suffix", {} },
-    .{ "roc_builtins_str_ends_with", {} },
-    .{ "roc_builtins_str_equal", {} },
-    .{ "roc_builtins_str_escape_and_quote", {} },
-    .{ "roc_builtins_str_from_literal", {} },
-    .{ "roc_builtins_str_from_utf8", {} },
-    .{ "roc_builtins_str_from_utf8_lossy", {} },
-    .{ "roc_builtins_str_from_utf8_parts", {} },
-    .{ "roc_builtins_str_from_utf8_result", {} },
-    .{ "roc_builtins_str_join_with", {} },
-    .{ "roc_builtins_str_release_excess_capacity", {} },
-    .{ "roc_builtins_str_repeat", {} },
-    .{ "roc_builtins_str_reserve", {} },
-    .{ "roc_builtins_str_split", {} },
-    .{ "roc_builtins_str_starts_with", {} },
-    .{ "roc_builtins_str_to_utf8", {} },
-    .{ "roc_builtins_str_trim", {} },
-    .{ "roc_builtins_str_trim_end", {} },
-    .{ "roc_builtins_str_trim_start", {} },
-    .{ "roc_builtins_str_with_ascii_lowercased", {} },
-    .{ "roc_builtins_str_with_ascii_uppercased", {} },
-    .{ "roc_builtins_str_with_capacity", {} },
-    .{ "roc_builtins_u16_mod_by", {} },
-    .{ "roc_builtins_u32_mod_by", {} },
-    .{ "roc_builtins_u64_mod_by", {} },
-    .{ "roc_builtins_u8_mod_by", {} },
-});
+const core_builtin_roots = builtin_registry.core_root_symbols;
 
 fn isBuiltinRoot(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "roc_builtins_") or std.mem.startsWith(u8, name, "roc__num_");
+    return std.mem.startsWith(u8, name, builtin_registry.symbol_prefix) or std.mem.startsWith(u8, name, "roc__num_");
 }
 
 fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
@@ -322,10 +239,10 @@ fn cleanMergedBuiltinDefinitions(module: *bindings.Module, app_defs: *const std.
     }
 }
 
-/// `LLVMProtectedVisibility`: the symbol stays exported (so the harness can look
-/// up entry points and `roc_expect_err_region`) but is non-preemptible, so
-/// intra-image references compile to direct PC-relative accesses instead of
-/// GOT/PLT slots needing a runtime relocation.
+/// `LLVMProtectedVisibility`: the symbol stays exported so the harness can look
+/// up entry points, but is non-preemptible, so intra-image references compile to
+/// direct PC-relative accesses instead of GOT/PLT slots needing a runtime
+/// relocation.
 const llvm_protected_visibility: c_int = 2;
 
 /// Make every definition in the merged module non-preemptible so the in-process
@@ -404,14 +321,50 @@ fn emitMergedBitcodeToObjectFile(
     options: CompileOptions,
     output_path: [:0]const u8,
 ) Error!void {
+    try emitMergedBitcodeModulesToObjectFile(allocator, io, &.{bitcode}, options, output_path);
+}
+
+fn parseBitcodeModule(
+    context: *bindings.Context,
+    bitcode: []const u32,
+    name: [*:0]const u8,
+) Error!*bindings.Module {
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
+    const mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+        bitcode_bytes.ptr,
+        bitcode_bytes.len,
+        name,
+        bindings.Bool.False,
+    );
+
+    var module: *bindings.Module = undefined;
+    if (context.parseBitcodeInContext2(mem_buf, &module).toBool()) {
+        mem_buf.dispose();
+        return Error.BitcodeParseError;
+    }
+    // Note: mem_buf is consumed by parseBitcodeInContext2
+    return module;
+}
+
+fn emitMergedBitcodeModulesToObjectFile(
+    allocator: Allocator,
+    io: std.Io,
+    bitcodes: []const []const u32,
+    options: CompileOptions,
+    output_path: [:0]const u8,
+) Error!void {
+    if (bitcodes.len == 0) return Error.CompilationFailed;
+
     if (comptime build_options.llvm_keep_bitcode.len != 0) {
-        std.Io.Dir.cwd().writeFile(io, .{
-            .sub_path = build_options.llvm_keep_bitcode,
-            .data = bitcode_bytes,
-        }) catch {};
+        if (bitcodes.len == 1) {
+            const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcodes[0].ptr))[0 .. bitcodes[0].len * 4];
+            std.Io.Dir.cwd().writeFile(io, .{
+                .sub_path = build_options.llvm_keep_bitcode,
+                .data = bitcode_bytes,
+            }) catch {};
+        }
     }
 
     // Initialize all targets
@@ -421,22 +374,18 @@ fn emitMergedBitcodeToObjectFile(
     const context = bindings.Context.create();
     defer context.dispose();
 
-    // Create memory buffer from bitcode
-    const mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
-        bitcode_bytes.ptr,
-        bitcode_bytes.len,
-        "roc_bitcode",
-        bindings.Bool.False,
-    );
-
-    // Parse bitcode into module
-    var module: *bindings.Module = undefined;
-    if (context.parseBitcodeInContext2(mem_buf, &module).toBool()) {
-        mem_buf.dispose();
-        return Error.BitcodeParseError;
-    }
+    var module = try parseBitcodeModule(context, bitcodes[0], "roc_bitcode_0");
     defer module.dispose();
-    // Note: mem_buf is consumed by parseBitcodeInContext2
+
+    for (bitcodes[1..], 1..) |bitcode, index| {
+        var name_buf: [64]u8 = undefined;
+        const name = std.fmt.bufPrintZ(&name_buf, "roc_bitcode_{d}", .{index}) catch return Error.OutOfMemory;
+        const next_module = try parseBitcodeModule(context, bitcode, name.ptr);
+        if (module.link(next_module).toBool()) {
+            return Error.ModuleLinkFailed;
+        }
+        // Note: next_module is now invalid - do NOT dispose it.
+    }
 
     const triple, const dispose_triple = blk: {
         if (options.use_module_target_triple) {
@@ -582,6 +531,7 @@ fn emitMergedBitcodeToObjectFile(
         .bitcode_filename = null,
         .coverage = default_coverage,
         .no_target_libcalls = options.no_target_libcalls,
+        .lower_memory_intrinsics_to_loops = options.lower_memory_intrinsics_to_loops,
     };
 
     // Emit merged module to object file
@@ -624,6 +574,14 @@ pub fn compileToObject(allocator: Allocator, io: std.Io, bitcode: []const u32, o
 /// Compile LLVM bitcode to a native shared library and return its path.
 /// Caller owns the returned path and is responsible for deleting the file.
 pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const u32, options: CompileOptions) Error![:0]const u8 {
+    return compileBitcodeModulesToSharedLibrary(allocator, io, &.{bitcode}, options);
+}
+
+/// Compile LLVM bitcode modules to one native shared library and return its path.
+/// The modules are linked together before Roc builtins are merged, so the final
+/// native link sees one object and one copy of the builtin definitions.
+/// Caller owns the returned path and is responsible for deleting the file.
+pub fn compileBitcodeModulesToSharedLibrary(allocator: Allocator, io: std.Io, bitcodes: []const []const u32, options: CompileOptions) Error![:0]const u8 {
     const object_path = createTempPath(allocator, io, objectExtension()) catch return Error.TempFileError;
     defer {
         std.Io.Dir.cwd().deleteFile(io, std.mem.sliceTo(object_path, 0)) catch {};
@@ -643,8 +601,9 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
         .macos, .windows => false,
         else => true,
     };
+    pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
-    try emitMergedBitcodeToObjectFile(allocator, io, bitcode, pic_options, object_path);
+    try emitMergedBitcodeModulesToObjectFile(allocator, io, bitcodes, pic_options, object_path);
 
     if (comptime build_options.llvm_keep_object.len != 0) {
         std.Io.Dir.cwd().copyFile(
@@ -657,6 +616,7 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     }
 
     try linkSharedLibrary(allocator, io, object_path, shared_lib_path);
+    recordSharedLibraryLinkForTest(allocator, io);
 
     if (comptime build_options.llvm_keep_dylib.len != 0) {
         std.Io.Dir.cwd().copyFile(
@@ -669,6 +629,29 @@ pub fn compileToSharedLibrary(allocator: Allocator, io: std.Io, bitcode: []const
     }
 
     return shared_lib_path;
+}
+
+fn recordSharedLibraryLinkForTest(allocator: Allocator, io: std.Io) void {
+    const path_key = allocator.dupeZ(u8, "ROC_TEST_LLVM_SHARED_LINK_COUNT_FILE") catch return;
+    defer allocator.free(path_key);
+
+    const path_z = std.c.getenv(path_key) orelse return;
+    const path = allocator.dupe(u8, path_z[0..std.mem.len(path_z)]) catch return;
+    defer allocator.free(path);
+
+    const existing_owned = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return,
+    };
+    defer if (existing_owned) |bytes| allocator.free(bytes);
+    const existing = existing_owned orelse "";
+
+    var contents = std.ArrayList(u8).empty;
+    defer contents.deinit(allocator);
+    contents.appendSlice(allocator, existing) catch return;
+    contents.appendSlice(allocator, "1\n") catch return;
+
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = contents.items }) catch {};
 }
 
 fn linkSharedLibrary(
@@ -702,13 +685,11 @@ fn linkSharedLibrary(
             try args.append(allocator, "-dylib");
             try args.append(allocator, "-o");
             try args.append(allocator, std.mem.sliceTo(shared_lib_path, 0));
-            try args.append(allocator, "-w");
+            if (!build_options.linker_warnings) {
+                try args.append(allocator, "-w");
+            }
             try args.append(allocator, "-arch");
-            try args.append(allocator, switch (builtin.cpu.arch) {
-                .aarch64 => "arm64",
-                .x86_64 => "x86_64",
-                else => return Error.LinkFailed,
-            });
+            try args.append(allocator, roc_target.machoArchName(builtin.cpu.arch) catch return Error.LinkFailed);
             try args.append(allocator, "-platform_version");
             try args.append(allocator, "macos");
             try args.append(allocator, roc_target.macos_deployment.linker_version);

@@ -71,6 +71,7 @@ pub const DownloadError = error{
     NoHashInUrl,
     NetworkError,
     FileError,
+    InvalidProxyUrl,
 } || unbundle.UnbundleError || std.mem.Allocator.Error;
 
 pub const Version = base.url.Version;
@@ -82,16 +83,10 @@ pub const parseUrlPath = base.url.parseUrlPath;
 /// Parse URL and validate it meets our security requirements.
 /// Returns the parsed hash and optional version from the URL if valid.
 pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
-    // Check for https:// prefix
-    if (std.mem.startsWith(u8, url, "https://")) {
-        // This is fine, extract hash from last segment
-    } else if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or std.mem.startsWith(u8, url, "http://127.0.0.1/")) {
-        // This is allowed for local testing (IPv4 loopback)
-    } else if (std.mem.startsWith(u8, url, "http://[::1]:") or std.mem.startsWith(u8, url, "http://[::1]/")) {
-        // This is allowed for local testing (IPv6 loopback)
-    } else if (std.mem.startsWith(u8, url, "http://localhost:") or std.mem.startsWith(u8, url, "http://localhost/")) {
-        // This is allowed but will require verification that localhost resolves to loopback
-    } else {
+    // The shared allowlist gate: https anywhere, or http only to loopback
+    // hosts. A `localhost` URL is additionally verified to resolve to a
+    // loopback address in `downloadToFile` before any request is made.
+    if (!base.url.isSafeUrl(url)) {
         return error.InvalidUrl;
     }
 
@@ -190,9 +185,17 @@ fn downloadToFile(
     filename_prefix: []const u8,
     filename_out: []u8,
 ) DownloadError![]const u8 {
+    // Proxy configuration must outlive the client, so its arena is declared first.
+    var proxy_arena = std.heap.ArenaAllocator.init(allocator.*);
+    defer proxy_arena.deinit();
+
     // Create HTTP client
     var client = std.http.Client{ .allocator = allocator.*, .io = io };
     defer client.deinit();
+
+    // Honor the standard proxy environment variables so downloads work in
+    // proxied/network-restricted environments (same variables `zig fetch` uses).
+    try initProxiesFromEnv(&client, proxy_arena.allocator());
 
     // Parse the URL
     const uri = std.Uri.parse(url) catch return error.InvalidUrl;
@@ -261,6 +264,27 @@ fn downloadToFile(
 
     // Exhausted all retries (extremely unlikely with 16-char random suffix)
     return error.FileError;
+}
+
+/// Populate the client's proxy configuration from the standard proxy
+/// environment variables (http_proxy/HTTP_PROXY, https_proxy/HTTPS_PROXY,
+/// all_proxy/ALL_PROXY). `arena` owns the proxy allocations and must outlive
+/// `client`.
+fn initProxiesFromEnv(client: *std.http.Client, arena: Allocator) DownloadError!void {
+    var environ_map = std.process.Environ.Map.init(arena);
+    const proxy_env_vars = [_][:0]const u8{
+        "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY",
+    };
+    for (proxy_env_vars) |name| {
+        const value = std.c.getenv(name.ptr) orelse continue;
+        const value_slice = std.mem.span(value);
+        if (value_slice.len == 0) continue;
+        environ_map.put(name, value_slice) catch return error.OutOfMemory;
+    }
+    client.initDefaultProxies(arena, &environ_map) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidProxyUrl,
+    };
 }
 
 /// Download and extract a bundled tar.zst file to memory buffers.

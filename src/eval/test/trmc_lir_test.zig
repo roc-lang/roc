@@ -56,11 +56,16 @@ const ProcBuilder = struct {
 };
 
 fn lowLevelStmt(store: *LirStore, target: LocalId, op: LowLevel, args: []const LocalId, next: CFStmtId) TrmcLirTestError!CFStmtId {
+    return try lowLevelStmtWithUnique(store, target, op, args, 0, next);
+}
+
+fn lowLevelStmtWithUnique(store: *LirStore, target: LocalId, op: LowLevel, args: []const LocalId, unique_args: u64, next: CFStmtId) TrmcLirTestError!CFStmtId {
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
         .rc_effect = op.rcEffect(),
         .args = try store.addLocalSpan(args),
+        .unique_args = unique_args,
         .next = next,
     } });
 }
@@ -75,7 +80,7 @@ fn freshJoinPointId(next: *u32) LIR.JoinPointId {
 }
 
 fn runProcU64(allocator: Allocator, store: *const LirStore, layouts: *const layout.Store, proc: LIR.LirProcSpecId, runtime_env: *RuntimeHostEnv) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const result = try interp.eval(.{ .proc_id = proc, .arg_layouts = &.{} });
     return result.value.read(u64);
@@ -163,6 +168,123 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
 
     try std.testing.expectEqual(@as(u64, 7), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
     try std.testing.expectEqual(@as(u32, 1), runtime_env.allocationCallCount());
+    try runtime_env.checkForLeaks();
+}
+
+test "box_prepare_update reuses a statically unique box" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    const box_u64 = try layouts.insertBox(.u64);
+    const ptr_u64 = try layouts.insertPtr(.u64);
+
+    var b = ProcBuilder.init(&store);
+    defer b.deinit(allocator);
+    const initial = try b.addLocal(allocator, .u64);
+    const replacement = try b.addLocal(allocator, .u64);
+    const boxed = try b.addLocal(allocator, box_u64);
+    const prepared = try b.addLocal(allocator, box_u64);
+    const p = try b.addLocal(allocator, ptr_u64);
+    const st = try b.addLocal(allocator, .zst);
+    const loaded = try b.addLocal(allocator, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = loaded } });
+    const drop_prepared = try store.addCFStmt(.{ .decref = .{
+        .value = prepared,
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .next = ret,
+    } });
+    const load = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, drop_prepared);
+    const store_replacement = try lowLevelStmt(&store, st, .ptr_store, &.{ p, replacement }, load);
+    const replacement_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = replacement,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
+        .next = store_replacement,
+    } });
+    const cast = try lowLevelStmt(&store, p, .ptr_cast, &.{prepared}, replacement_lit);
+    const prepare = try lowLevelStmtWithUnique(&store, prepared, .box_prepare_update, &.{boxed}, 1, cast);
+    const box_initial = try lowLevelStmt(&store, boxed, .box_box, &.{initial}, prepare);
+    const initial_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = initial,
+        .value = .{ .i64_literal = .{ .value = 5, .layout_idx = .u64 } },
+        .next = box_initial,
+    } });
+    const proc = try b.finishProc(&.{}, initial_lit, .u64);
+
+    try std.testing.expectEqual(@as(u64, 7), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
+    try std.testing.expectEqual(@as(u32, 1), runtime_env.allocationCallCount());
+    try runtime_env.checkForLeaks();
+}
+
+test "box_prepare_update copies a shared box and leaves the original unchanged" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    var runtime_env = RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+
+    const box_u64 = try layouts.insertBox(.u64);
+    const ptr_u64 = try layouts.insertPtr(.u64);
+
+    var b = ProcBuilder.init(&store);
+    defer b.deinit(allocator);
+    const initial = try b.addLocal(allocator, .u64);
+    const replacement = try b.addLocal(allocator, .u64);
+    const boxed = try b.addLocal(allocator, box_u64);
+    const prepared = try b.addLocal(allocator, box_u64);
+    const old_p = try b.addLocal(allocator, ptr_u64);
+    const new_p = try b.addLocal(allocator, ptr_u64);
+    const st = try b.addLocal(allocator, .zst);
+    const old_value = try b.addLocal(allocator, .u64);
+    const new_value = try b.addLocal(allocator, .u64);
+    const sum = try b.addLocal(allocator, .u64);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } });
+    const drop_boxed = try store.addCFStmt(.{ .decref = .{
+        .value = boxed,
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .next = ret,
+    } });
+    const drop_prepared = try store.addCFStmt(.{ .decref = .{
+        .value = prepared,
+        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .next = drop_boxed,
+    } });
+    const add = try lowLevelStmt(&store, sum, .num_plus, &.{ old_value, new_value }, drop_prepared);
+    const load_new = try lowLevelStmt(&store, new_value, .ptr_load, &.{new_p}, add);
+    const load_old = try lowLevelStmt(&store, old_value, .ptr_load, &.{old_p}, load_new);
+    const store_replacement = try lowLevelStmt(&store, st, .ptr_store, &.{ new_p, replacement }, load_old);
+    const replacement_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = replacement,
+        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } },
+        .next = store_replacement,
+    } });
+    const cast_new = try lowLevelStmt(&store, new_p, .ptr_cast, &.{prepared}, replacement_lit);
+    const cast_old = try lowLevelStmt(&store, old_p, .ptr_cast, &.{boxed}, cast_new);
+    const prepare = try lowLevelStmt(&store, prepared, .box_prepare_update, &.{boxed}, cast_old);
+    const incref_boxed = try store.addCFStmt(.{ .incref = .{
+        .value = boxed,
+        .rc = .{ .concrete = .{ .op = .incref, .layout_idx = box_u64 } },
+        .count = 1,
+        .next = prepare,
+    } });
+    const box_initial = try lowLevelStmt(&store, boxed, .box_box, &.{initial}, incref_boxed);
+    const initial_lit = try store.addCFStmt(.{ .assign_literal = .{
+        .target = initial,
+        .value = .{ .i64_literal = .{ .value = 5, .layout_idx = .u64 } },
+        .next = box_initial,
+    } });
+    const proc = try b.finishProc(&.{}, initial_lit, .u64);
+
+    try std.testing.expectEqual(@as(u64, 12), try runProcU64(allocator, &store, &layouts, proc, &runtime_env));
+    try std.testing.expectEqual(@as(u32, 2), runtime_env.allocationCallCount());
     try runtime_env.checkForLeaks();
 }
 
@@ -423,7 +545,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_match);
                 try work.append(allocator, s.on_miss);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
                 try work.append(allocator, s.next);
             },
         }
@@ -439,7 +561,7 @@ fn runProcU64Args(
     runtime_env: *RuntimeHostEnv,
     args: []const u64,
 ) TrmcLirTestError!u64 {
-    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, store, layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     const arg_layouts = [_]layout.Idx{.u64} ** 4;
     var packed_args: [4]u64 = undefined;
@@ -473,7 +595,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 
     try lir.Arc.insert(&store, &layouts, .{});
 
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     for ([_]u64{ 0, 1, 3 }) |n| {
         var arg = n;
@@ -505,7 +627,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         const repeat = try buildRepeatProc(allocator, &b, &store, peano);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         try std.testing.expectError(error.Crash, interp.eval(.{
@@ -531,7 +653,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
         try lir.Trmc.run(&store, &layouts);
         try lir.Arc.insert(&store, &layouts, .{});
 
-        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+        var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
         defer interp.deinit();
         var arg: u64 = 2000;
         const result = try interp.eval(.{
@@ -875,7 +997,7 @@ test "mixed construct and plain-tail branches both become jumps" {
 
     // Depth 2000 makes 2000 recursive calls (1000 S nodes): both rewritten
     // branches must loop for this to survive the 1024-frame cap.
-    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops());
+    var interp = try eval.Interpreter.init(allocator, &store, &layouts, runtime_env.get_ops(), .preserve);
     defer interp.deinit();
     var arg: u64 = 2000;
     const result = try interp.eval(.{

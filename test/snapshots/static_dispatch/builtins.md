@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=Static dispatch to builtin-provided methods
 type=file
 ~~~
 # SOURCE
@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "main!"))

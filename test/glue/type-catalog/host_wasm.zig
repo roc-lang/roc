@@ -86,7 +86,7 @@ export fn roc_crashed(_: [*]const u8, _: usize) callconv(.c) void {
     fail("roc_crashed", .{});
 }
 
-export fn roc_catalog_roundtrip(arg0: abi.EmptyOrPairOrPayloadOrRecursiveType0) callconv(.c) abi.EmptyOrPairOrPayloadOrRecursiveType0 {
+export fn roc_catalog_roundtrip(arg0: abi.EmptyOrPairOrPayloadOrRecursive) callconv(.c) abi.EmptyOrPairOrPayloadOrRecursive {
     return arg0;
 }
 export fn roc_catalog_single_no_payload() callconv(.c) *anyopaque {

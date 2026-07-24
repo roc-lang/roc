@@ -45,14 +45,14 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "h")
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "a") (name "describe")
+				(method (mod-of "a") (name "describe")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -70,7 +70,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "a") (name "describe")
+				(method (mod-of "a") (name "describe")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -87,7 +87,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "a") (name "describe")
+				(method (mod-of "a") (name "describe")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -157,7 +157,7 @@ main = f(Named.N("ok"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "describe") (constraint-fn-var 177)
+			(e-dispatch-call (method "describe") (constraint-fn-var 284)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -176,7 +176,7 @@ main = f(Named.N("ok"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 199)
+			(e-call (constraint-fn-var 298)
 				(e-lookup-local
 					(p-assign (ident "h")))
 				(e-lookup-local
@@ -195,7 +195,7 @@ main = f(Named.N("ok"))
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 220)
+			(e-call (constraint-fn-var 311)
 				(e-lookup-local
 					(p-assign (ident "g")))
 				(e-lookup-local
@@ -223,7 +223,7 @@ main = f(Named.N("ok"))
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 305)
+		(e-call (constraint-fn-var 354)
 			(e-lookup-local
 				(p-assign (ident "f")))
 			(e-nominal (nominal "Named")

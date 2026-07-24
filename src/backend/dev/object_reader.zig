@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
-const dev_wrappers = builtins.dev_wrappers;
 
 /// Errors that can occur during object file parsing.
 pub const Error = error{
@@ -826,125 +825,29 @@ fn dlsymLookup(name: []const u8) ?usize {
     }
 }
 
+/// Resolve a builtin symbol to its in-process wrapper address. Every
+/// registry member resolves; the table is the registry itself, so a builtin
+/// added there is automatically resolvable here.
 fn resolveBuiltinWrapper(name: []const u8) ?usize {
+    const registry = builtins.builtin_registry;
+    if (std.mem.startsWith(u8, name, registry.symbol_prefix)) {
+        const suffix = name[registry.symbol_prefix.len..];
+        if (std.meta.stringToEnum(registry.BuiltinFn, suffix)) |f| return f.wrapperAddress();
+        return null;
+    }
+
+    // Refcount helpers emitted under bare (unprefixed) names.
     const utils = builtins.utils;
-    const entries = [_]struct { name: []const u8, addr: usize }{
+    const bare_entries = [_]struct { name: []const u8, addr: usize }{
         .{ .name = "incref_data_ptr", .addr = @intFromPtr(&utils.increfDataPtrC) },
         .{ .name = "decref_data_ptr", .addr = @intFromPtr(&utils.decrefDataPtrC) },
         .{ .name = "free_data_ptr", .addr = @intFromPtr(&utils.freeDataPtrC) },
         .{ .name = "incref_rc_ptr", .addr = @intFromPtr(&utils.increfRcPtrC) },
         .{ .name = "decref_rc_ptr", .addr = @intFromPtr(&utils.decrefRcPtrC) },
-        .{ .name = "roc_builtins_str_to_utf8", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_to_utf8) },
-        .{ .name = "roc_builtins_str_concat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_concat) },
-        .{ .name = "roc_builtins_str_contains", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_contains) },
-        .{ .name = "roc_builtins_str_starts_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_starts_with) },
-        .{ .name = "roc_builtins_str_ends_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_ends_with) },
-        .{ .name = "roc_builtins_str_equal", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_equal) },
-        .{ .name = "roc_builtins_str_count_utf8_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_count_utf8_bytes) },
-        .{ .name = "roc_builtins_str_find_first", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_find_first) },
-        .{ .name = "roc_builtins_str_drop_prefix_caseless_ascii", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_drop_prefix_caseless_ascii) },
-        .{ .name = "roc_builtins_str_caseless_ascii_equals", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_caseless_ascii_equals) },
-        .{ .name = "roc_builtins_str_repeat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_repeat) },
-        .{ .name = "roc_builtins_str_trim", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim) },
-        .{ .name = "roc_builtins_str_trim_start", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim_start) },
-        .{ .name = "roc_builtins_str_trim_end", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_trim_end) },
-        .{ .name = "roc_builtins_str_split", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_split) },
-        .{ .name = "roc_builtins_str_join_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_join_with) },
-        .{ .name = "roc_builtins_str_reserve", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_reserve) },
-        .{ .name = "roc_builtins_str_release_excess_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_release_excess_capacity) },
-        .{ .name = "roc_builtins_str_with_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_with_capacity) },
-        .{ .name = "roc_builtins_str_drop_prefix", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_drop_prefix) },
-        .{ .name = "roc_builtins_str_drop_suffix", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_drop_suffix) },
-        .{ .name = "roc_builtins_str_with_ascii_lowercased", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_with_ascii_lowercased) },
-        .{ .name = "roc_builtins_str_with_ascii_uppercased", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_with_ascii_uppercased) },
-        .{ .name = "roc_builtins_str_from_utf8_lossy", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_from_utf8_lossy) },
-        .{ .name = "roc_builtins_str_escape_and_quote", .addr = @intFromPtr(&dev_wrappers.roc_builtins_str_escape_and_quote) },
-        .{ .name = "roc_builtins_dbg_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dbg_str) },
-        .{ .name = "roc_builtins_expect_err_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_expect_err_str) },
-        .{ .name = "roc_builtins_list_with_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_with_capacity) },
-        .{ .name = "roc_builtins_list_append_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_append_unsafe) },
-        .{ .name = "roc_builtins_list_concat", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_concat) },
-        .{ .name = "roc_builtins_list_prepend", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_prepend) },
-        .{ .name = "roc_builtins_list_sublist", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_sublist) },
-        .{ .name = "roc_builtins_list_reverse", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_reverse) },
-        .{ .name = "roc_builtins_list_drop_at", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_drop_at) },
-        .{ .name = "roc_builtins_list_replace", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_replace) },
-        .{ .name = "roc_builtins_list_set", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_set) },
-        .{ .name = "roc_builtins_list_reserve", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_reserve) },
-        .{ .name = "roc_builtins_list_release_excess_capacity", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_release_excess_capacity) },
-        .{ .name = "roc_builtins_list_decref_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_str) },
-        .{ .name = "roc_builtins_list_incref_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_incref_single_thread) },
-        .{ .name = "roc_builtins_list_decref_flat_list", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_flat_list) },
-        .{ .name = "roc_builtins_list_decref_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with) },
-        .{ .name = "roc_builtins_list_decref_with_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_decref_with_single_thread) },
-        .{ .name = "roc_builtins_list_free_flat_list", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_free_flat_list) },
-        .{ .name = "roc_builtins_list_free_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_list_free_with) },
-        .{ .name = "roc_builtins_box_decref_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with) },
-        .{ .name = "roc_builtins_box_decref_with_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_decref_with_single_thread) },
-        .{ .name = "roc_builtins_box_free_with", .addr = @intFromPtr(&dev_wrappers.roc_builtins_box_free_with) },
-        .{ .name = "roc_builtins_erased_callable_incref", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_incref) },
-        .{ .name = "roc_builtins_erased_callable_decref", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref) },
-        .{ .name = "roc_builtins_erased_callable_decref_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_decref_single_thread) },
-        .{ .name = "roc_builtins_erased_callable_free", .addr = @intFromPtr(&dev_wrappers.roc_builtins_erased_callable_free) },
-        .{ .name = "roc_builtins_allocate_with_refcount", .addr = @intFromPtr(&dev_wrappers.roc_builtins_allocate_with_refcount) },
-        .{ .name = "roc_builtins_incref_data_ptr", .addr = @intFromPtr(&dev_wrappers.roc_builtins_incref_data_ptr) },
-        .{ .name = "roc_builtins_incref_data_ptr_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_incref_data_ptr_single_thread) },
-        .{ .name = "roc_builtins_decref_data_ptr", .addr = @intFromPtr(&dev_wrappers.roc_builtins_decref_data_ptr) },
-        .{ .name = "roc_builtins_decref_data_ptr_single_thread", .addr = @intFromPtr(&dev_wrappers.roc_builtins_decref_data_ptr_single_thread) },
-        .{ .name = "roc_builtins_free_data_ptr", .addr = @intFromPtr(&dev_wrappers.roc_builtins_free_data_ptr) },
-        .{ .name = "roc_builtins_dec_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_str) },
-        .{ .name = "roc_builtins_dec_to_i64_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_i64_trunc) },
-        .{ .name = "roc_builtins_i64_to_dec", .addr = @intFromPtr(&dev_wrappers.roc_builtins_i64_to_dec) },
-        .{ .name = "roc_builtins_u64_to_dec", .addr = @intFromPtr(&dev_wrappers.roc_builtins_u64_to_dec) },
-        .{ .name = "roc_builtins_dec_to_f64", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f64) },
-        .{ .name = "roc_builtins_i128_to_f64", .addr = @intFromPtr(&dev_wrappers.roc_builtins_i128_to_f64) },
-        .{ .name = "roc_builtins_u128_to_f64", .addr = @intFromPtr(&dev_wrappers.roc_builtins_u128_to_f64) },
-        .{ .name = "roc_builtins_f64_to_i128_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_i128_trunc) },
-        .{ .name = "roc_builtins_f64_to_u128_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_u128_trunc) },
-        .{ .name = "roc_builtins_i128_try_convert", .addr = @intFromPtr(&dev_wrappers.roc_builtins_i128_try_convert) },
-        .{ .name = "roc_builtins_u128_try_convert", .addr = @intFromPtr(&dev_wrappers.roc_builtins_u128_try_convert) },
-        .{ .name = "roc_builtins_int_try_signed", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_try_signed) },
-        .{ .name = "roc_builtins_int_try_unsigned", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_try_unsigned) },
-        .{ .name = "roc_builtins_dec_to_int_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_int_try_unsafe) },
-        .{ .name = "roc_builtins_f64_to_int_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_int_try_unsafe) },
-        .{ .name = "roc_builtins_dec_to_f32_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_to_f32_try_unsafe) },
-        .{ .name = "roc_builtins_f64_to_f32_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_f64_to_f32_try_unsafe) },
-        .{ .name = "roc_builtins_i128_to_dec_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_i128_to_dec_try_unsafe) },
-        .{ .name = "roc_builtins_u128_to_dec_try_unsafe", .addr = @intFromPtr(&dev_wrappers.roc_builtins_u128_to_dec_try_unsafe) },
-        .{ .name = "roc_builtins_dec_mul", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul) },
-        .{ .name = "roc_builtins_dec_mul_saturated", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_mul_saturated) },
-        .{ .name = "roc_builtins_dec_div", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div) },
-        .{ .name = "roc_builtins_dec_div_trunc", .addr = @intFromPtr(&dev_wrappers.roc_builtins_dec_div_trunc) },
-        .{ .name = "roc_builtins_num_div_trunc_u128", .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_div_trunc_u128) },
-        .{ .name = "roc_builtins_num_div_trunc_i128", .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_div_trunc_i128) },
-        .{ .name = "roc_builtins_num_rem_trunc_u128", .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_u128) },
-        .{ .name = "roc_builtins_num_rem_trunc_i128", .addr = @intFromPtr(&dev_wrappers.roc_builtins_num_rem_trunc_i128) },
-        .{ .name = "roc_builtins_int_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_to_str) },
-        .{ .name = "roc_builtins_float_to_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_to_str) },
-        .{ .name = "roc_builtins_float_floor", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_floor) },
-        .{ .name = "roc_builtins_float_ceiling", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_ceiling) },
-        .{ .name = "roc_builtins_float_pow", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_pow) },
-        .{ .name = "roc_builtins_float_sin", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_sin) },
-        .{ .name = "roc_builtins_float_cos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_cos) },
-        .{ .name = "roc_builtins_float_tan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_tan) },
-        .{ .name = "roc_builtins_float_asin", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_asin) },
-        .{ .name = "roc_builtins_float_acos", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_acos) },
-        .{ .name = "roc_builtins_float_atan", .addr = @intFromPtr(&dev_wrappers.roc_builtins_float_atan) },
-        .{ .name = "roc_builtins_int_from_str", .addr = @intFromPtr(&dev_wrappers.roc_builtins_int_from_str) },
-        .{ .name = "roc_builtins_crypto_sha256_hash_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hash_bytes) },
-        .{ .name = "roc_builtins_crypto_sha256_hasher_empty", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_empty) },
-        .{ .name = "roc_builtins_crypto_sha256_hasher_write", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_write) },
-        .{ .name = "roc_builtins_crypto_sha256_hasher_finish", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_sha256_hasher_finish) },
-        .{ .name = "roc_builtins_crypto_blake3_hash_bytes", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hash_bytes) },
-        .{ .name = "roc_builtins_crypto_blake3_hasher_empty", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_empty) },
-        .{ .name = "roc_builtins_crypto_blake3_hasher_write", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_write) },
-        .{ .name = "roc_builtins_crypto_blake3_hasher_finish", .addr = @intFromPtr(&dev_wrappers.roc_builtins_crypto_blake3_hasher_finish) },
     };
-
-    inline for (entries) |entry| {
+    inline for (bare_entries) |entry| {
         if (std.mem.eql(u8, name, entry.name)) return entry.addr;
     }
-
     return null;
 }
 
@@ -1064,22 +967,22 @@ fn getSectionName(strtab: []const u8, name_idx: u32) []const u8 {
 // Tests
 //
 
-test "resolve float rounding wrappers" {
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_floor), resolveBuiltinWrapper("roc_builtins_float_floor").?);
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_ceiling), resolveBuiltinWrapper("roc_builtins_float_ceiling").?);
+test "JIT resolution covers every registry builtin" {
+    const registry = builtins.builtin_registry;
+    inline for (comptime std.enums.values(registry.BuiltinFn)) |f| {
+        try std.testing.expectEqual(f.wrapperAddress(), resolveBuiltinWrapper(f.symbolName()).?);
+    }
 }
 
-test "resolve float pow wrapper" {
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_pow), resolveBuiltinWrapper("roc_builtins_float_pow").?);
+test "non-registry symbols are not resolved as builtins" {
+    const registry = builtins.builtin_registry;
+    try std.testing.expectEqual(@as(?usize, null), resolveBuiltinWrapper(registry.symbol_prefix ++ "no_such_builtin"));
+    try std.testing.expectEqual(@as(?usize, null), resolveBuiltinWrapper(registry.symbol_prefix));
 }
 
-test "resolve float trig wrappers" {
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_sin), resolveBuiltinWrapper("roc_builtins_float_sin").?);
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_cos), resolveBuiltinWrapper("roc_builtins_float_cos").?);
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_tan), resolveBuiltinWrapper("roc_builtins_float_tan").?);
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_asin), resolveBuiltinWrapper("roc_builtins_float_asin").?);
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_acos), resolveBuiltinWrapper("roc_builtins_float_acos").?);
-    try std.testing.expectEqual(@intFromPtr(&dev_wrappers.roc_builtins_float_atan), resolveBuiltinWrapper("roc_builtins_float_atan").?);
+test "bare refcount helper names resolve to utils" {
+    try std.testing.expectEqual(@intFromPtr(&builtins.utils.increfDataPtrC), resolveBuiltinWrapper("incref_data_ptr").?);
+    try std.testing.expectEqual(@intFromPtr(&builtins.utils.decrefRcPtrC), resolveBuiltinWrapper("decref_rc_ptr").?);
 }
 
 test "detect ELF magic" {

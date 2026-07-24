@@ -31,6 +31,7 @@ const shim_io = @import("shim_io");
 const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
+const host_alloc = @import("host_alloc");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
 
@@ -373,7 +374,7 @@ const RocAllocation = struct {
 
 /// Host environment - contains DebugAllocator for leak detection
 const HostEnv = struct {
-    gpa: std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false }),
+    gpa: std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }),
     test_state: TestState,
     std_io: std.Io,
     /// Track Roc allocations for cleanup on test failure
@@ -391,106 +392,31 @@ const HostEnv = struct {
 /// `ops.env`). Set wherever `RocOps.env` is set.
 var g_roc_ops: ?*builtins.host_abi.RocOps = null;
 
-/// Roc allocation function with size-tracking metadata
+/// Roc allocation function: shared size-tracking scheme plus live-allocation
+/// bookkeeping so the host can report leaks and clean up on test failure.
 fn rocAllocFn(ops: *builtins.host_abi.RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    // Debug check: verify env is properly aligned for HostEnv
-    const env_addr = @intFromPtr(ops.env);
-    if (env_addr % @alignOf(HostEnv) != 0) {
-        std.debug.panic("rocAllocFn: env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
-    }
-
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const allocator = host.gpa.allocator();
 
-    // The allocation must be at least 8-byte aligned because:
-    // 1. The refcount (isize/usize) is stored before the data and needs proper alignment
-    // 2. The builtins code casts data pointers to [*]isize for refcount access
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-
-    // Calculate additional bytes needed to store the size
-    const size_storage_bytes = @max(alignment, @alignOf(usize));
-    const total_size = length + size_storage_bytes;
-
-    // Allocate memory including space for size metadata
-    const result = allocator.rawAlloc(total_size, align_enum, @returnAddress());
-
-    const base_ptr = result orelse {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "\x1b[31mHost error:\x1b[0m allocation failed for size={d} align={d}\n", .{
-            total_size,
-            alignment,
-        }) catch "\x1b[31mHost error:\x1b[0m allocation failed, out of memory\n";
-        std.debug.print("{s}", .{msg});
-        std.process.exit(1);
-    };
-
-    // Debug check: verify the allocator returned properly aligned memory
-    const base_addr = @intFromPtr(base_ptr);
-    if (base_addr % min_alignment != 0) {
-        @panic("Host allocator returned misaligned memory in rocAllocFn");
-    }
-
-    // Store the total size (including metadata) right before the user data
-    const size_ptr: *usize = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes - @sizeOf(usize));
-    size_ptr.* = total_size;
-
-    // Pointer to the user data (after the size metadata)
-    const answer: *anyopaque = @ptrFromInt(@intFromPtr(base_ptr) + size_storage_bytes);
-
-    // Debug check: verify the returned pointer is also properly aligned
-    const answer_addr = @intFromPtr(answer);
-    if (answer_addr % alignment != 0) {
-        @panic("Host allocator returned misaligned answer in rocAllocFn");
-    }
+    const answer = host_alloc.alloc(host.gpa.allocator(), length, alignment) orelse
+        host_alloc.allocFailed();
 
     // Track this allocation for cleanup on test failure
     host.roc_allocations.append(host.gpa.allocator(), .{
-        .ptr = base_ptr,
-        .total_size = total_size,
-        .alignment = align_enum,
+        .ptr = host_alloc.basePtr(answer, alignment),
+        .total_size = host_alloc.storedTotalSize(answer),
+        .alignment = host_alloc.backingAlignment(alignment),
     }) catch {};
     host.alloc_count += 1;
-
-    if (trace_refcount) {
-        std.debug.print("[ALLOC] ptr=0x{x} size={d} align={d}\n", .{ answer_addr, length, alignment });
-    }
 
     return answer;
 }
 
 /// Roc deallocation function with size-tracking metadata
 fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    // Debug check: verify env is properly aligned for HostEnv
-    const env_addr = @intFromPtr(ops.env);
-    if (env_addr % @alignOf(HostEnv) != 0) {
-        std.debug.panic("[rocDeallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
-    }
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const allocator = host.gpa.allocator();
-
-    // Use same minimum alignment as alloc
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-
-    // Calculate where the size metadata is stored
-    const size_storage_bytes = @max(alignment, @alignOf(usize));
-    const size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
-    const total_size = size_ptr.*;
-
-    if (trace_refcount) {
-        std.debug.print("[DEALLOC] ptr=0x{x} align={d} total_size={d} size_storage={d}\n", .{
-            @intFromPtr(ptr),
-            alignment,
-            total_size,
-            size_storage_bytes,
-        });
-    }
-
-    // Calculate the base pointer (start of actual allocation)
-    const base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
 
     // Remove from tracking list
+    const base_ptr = host_alloc.basePtr(ptr, alignment);
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == base_ptr) {
             _ = host.roc_allocations.swapRemove(i);
@@ -499,81 +425,30 @@ fn rocDeallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, alignment: usiz
     }
     host.dealloc_count += 1;
 
-    // Free the memory (including the size metadata)
-    const slice = @as([*]u8, @ptrCast(base_ptr))[0..total_size];
-    allocator.rawFree(slice, align_enum, @returnAddress());
+    host_alloc.dealloc(host.gpa.allocator(), ptr, alignment);
 }
 
 /// Roc reallocation function with size-tracking metadata
 fn rocReallocFn(ops: *builtins.host_abi.RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    // Debug check: verify env is properly aligned for HostEnv
-    const env_addr = @intFromPtr(ops.env);
-    if (env_addr % @alignOf(HostEnv) != 0) {
-        std.debug.panic("[rocReallocFn] env=0x{x} not aligned to {} bytes", .{ env_addr, @alignOf(HostEnv) });
-    }
     const host: *HostEnv = @ptrCast(@alignCast(ops.env));
-    const allocator = host.gpa.allocator();
 
-    // Use same minimum alignment as alloc
-    const min_alignment: usize = @max(alignment, @alignOf(usize));
-    const align_enum = std.mem.Alignment.fromByteUnits(min_alignment);
-
-    // Calculate where the size metadata is stored for the old allocation
-    const size_storage_bytes = @max(alignment, @alignOf(usize));
-    const old_size_ptr: *const usize = @ptrFromInt(@intFromPtr(ptr) - @sizeOf(usize));
-
-    // Read the old total size from metadata
-    const old_total_size = old_size_ptr.*;
-
-    // Calculate the old base pointer (start of actual allocation)
-    const old_base_ptr: [*]u8 = @ptrFromInt(@intFromPtr(ptr) - size_storage_bytes);
-
-    // Calculate new total size needed
-    const new_total_size = new_length + size_storage_bytes;
-
-    // Free old memory and allocate new with proper alignment
-    // This is necessary because Zig's realloc infers alignment from slice type ([]u8 = alignment 1)
-    // which could cause the new allocation to be misaligned
-    const old_slice = @as([*]u8, @ptrCast(old_base_ptr))[0..old_total_size];
-
-    // Allocate new memory with proper alignment
-    const new_ptr = allocator.rawAlloc(new_total_size, align_enum, @returnAddress()) orelse {
-        std.debug.print("{s}", .{"\x1b[31mHost error:\x1b[0m reallocation failed, out of memory\n"});
-        std.process.exit(1);
-    };
-
-    // Copy old data to new location
-    const copy_size = @min(old_total_size, new_total_size);
-    @memcpy(new_ptr[0..copy_size], old_slice[0..copy_size]);
-
-    // Update tracking: remove old allocation, add new one
+    // Update tracking: remove the old allocation, add the new one
+    const old_base_ptr = host_alloc.basePtr(ptr, alignment);
     for (host.roc_allocations.items, 0..) |alloc, i| {
         if (alloc.ptr == old_base_ptr) {
             _ = host.roc_allocations.swapRemove(i);
             break;
         }
     }
+
+    const answer = host_alloc.realloc(host.gpa.allocator(), ptr, new_length, alignment) orelse
+        host_alloc.allocFailed();
+
     host.roc_allocations.append(host.gpa.allocator(), .{
-        .ptr = new_ptr,
-        .total_size = new_total_size,
-        .alignment = align_enum,
+        .ptr = host_alloc.basePtr(answer, alignment),
+        .total_size = host_alloc.storedTotalSize(answer),
+        .alignment = host_alloc.backingAlignment(alignment),
     }) catch {};
-
-    // Free old memory
-    allocator.rawFree(old_slice, align_enum, @returnAddress());
-
-    const new_slice = new_ptr[0..new_total_size];
-
-    // Store the new total size in the metadata
-    const new_size_ptr: *usize = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes - @sizeOf(usize));
-    new_size_ptr.* = new_total_size;
-
-    // Pointer to the user data (after the size metadata)
-    const answer: *anyopaque = @ptrFromInt(@intFromPtr(new_slice.ptr) + size_storage_bytes);
-
-    if (trace_refcount) {
-        std.debug.print("[REALLOC] old=0x{x} new=0x{x} new_size={d}\n", .{ @intFromPtr(old_base_ptr) + size_storage_bytes, @intFromPtr(answer), new_length });
-    }
 
     return answer;
 }
@@ -1386,36 +1261,11 @@ comptime {
     @export(&hostedStdinLine, .{ .name = "roc_stdin_line", .visibility = .hidden });
     @export(&hostedStdoutLine, .{ .name = "roc_stdout_line", .visibility = .hidden });
 
-    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
-    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
-    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
-    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
-    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
-    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+    host_alloc.exportRuntimeSymbols(getOps, .{});
 }
 
-fn hostAlloc(length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return rocAllocFn(g_roc_ops.?, length, alignment);
-}
-
-fn hostDealloc(ptr: *anyopaque, alignment: usize) callconv(.c) void {
-    rocDeallocFn(g_roc_ops.?, ptr, alignment);
-}
-
-fn hostRealloc(ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
-    return rocReallocFn(g_roc_ops.?, ptr, new_length, alignment);
-}
-
-fn hostDbg(bytes: [*]const u8, len: usize) callconv(.c) void {
-    rocDbgFn(g_roc_ops.?, bytes, len);
-}
-
-fn hostExpectFailed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    rocExpectFailedFn(g_roc_ops.?, bytes, len);
-}
-
-fn hostCrashed(bytes: [*]const u8, len: usize) callconv(.c) void {
-    rocCrashedFn(g_roc_ops.?, bytes, len);
+fn getOps() *builtins.host_abi.RocOps {
+    return g_roc_ops.?;
 }
 
 /// Platform host entrypoint
@@ -1430,7 +1280,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
     }
 
     var host_env = HostEnv{
-        .gpa = std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false }){},
+        .gpa = std.heap.DebugAllocator(.{ .safety = true, .thread_safe = false, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){},
         .test_state = TestState.init(),
         .std_io = shim_io.io(),
     };
@@ -1500,6 +1350,7 @@ fn platform_main(test_spec: ?[]const u8, test_verbose: bool) (Allocator.Error ||
                 \\  This is internal to Roc's compiler/runtime, not application code.
                 \\
             });
+            std.debug.print("{s}", .{build_options.debug_gpa_leak_hint});
         }
     }
 

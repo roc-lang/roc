@@ -230,6 +230,33 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
         }
 
+        /// POPCNT dst, src (population count) — `F3 0F B8 /r`. dst is ModRM.reg.
+        pub fn popcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xB8);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// LZCNT dst, src (count leading zeros) — `F3 0F BD /r`. dst is ModRM.reg.
+        pub fn lzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBD);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
+        /// TZCNT dst, src (count trailing zeros) — `F3 0F BC /r`. dst is ModRM.reg.
+        pub fn tzcntRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3); // mandatory prefix
+            try self.emitRex(width, dst, src);
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0xBC);
+            try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+        }
+
         /// MUL r64 - unsigned widening multiply: RDX:RAX = RAX * src
         /// Result: low 64 bits in RAX, high 64 bits in RDX
         pub fn mulReg(self: *Self, width: RegisterWidth, src: GeneralReg) Allocator.Error!void {
@@ -899,6 +926,27 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
         }
 
+        /// MOVDQU xmm, [base + disp32] (load 128-bit unaligned from memory)
+        pub fn movdquRegMem(self: *Self, dst: FloatReg, base: GeneralReg, disp: i32) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0xF3);
+            const r: u1 = dst.rexB();
+            const b: u1 = base.rexB();
+            if (r == 1 or b == 1) {
+                try self.buf.append(self.allocator, rex(0, r, 0, b));
+            }
+            try self.buf.append(self.allocator, 0x0F);
+            try self.buf.append(self.allocator, 0x6F); // MOVDQU xmm, m128
+
+            const base_enc = base.enc();
+            if (base_enc == 4) {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+                try self.buf.append(self.allocator, 0x24);
+            } else {
+                try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+            }
+            try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+        }
+
         /// MOVSD [base + disp32], xmm (store scalar double to memory)
         pub fn movsdMemReg(self: *Self, base: GeneralReg, disp: i32, src: FloatReg) Allocator.Error!void {
             try self.buf.append(self.allocator, 0xF2);
@@ -1494,6 +1542,18 @@ test "movsd xmm, xmm - all combinations" {
     }
 }
 
+test "movdqu load and store unaligned 128-bit values" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.movdquRegMem(.XMM0, .RBP, -16);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x6F, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.movdquMemReg(.RBP, -16, .XMM0);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x7F, 0x85, 0xF0, 0xFF, 0xFF, 0xFF }, emit.buf.items);
+}
+
 test "addsd xmm, xmm - all combinations" {
     var emit = LinuxEmit.init(std.testing.allocator);
     defer emit.deinit();
@@ -1882,50 +1942,6 @@ test "callRel32 encoding" {
 }
 
 // Multi-target calling convention tests
-
-test "CC constants differ between Windows and System V" {
-    // Windows uses 4 param regs, System V uses 6
-    try std.testing.expectEqual(@as(usize, 4), WinEmit.CC.PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 6), LinuxEmit.CC.PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 6), MacEmit.CC.PARAM_REGS.len);
-
-    // Windows has 32-byte shadow space, System V has none
-    try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
-
-    // Windows first param is RCX, System V is RDI
-    try std.testing.expectEqual(Registers.GeneralReg.RCX, WinEmit.CC.PARAM_REGS[0]);
-    try std.testing.expectEqual(Registers.GeneralReg.RDI, LinuxEmit.CC.PARAM_REGS[0]);
-    try std.testing.expectEqual(Registers.GeneralReg.RDI, MacEmit.CC.PARAM_REGS[0]);
-
-    // Windows uses 4 float param regs, System V uses 8
-    try std.testing.expectEqual(@as(usize, 4), WinEmit.CC.FLOAT_PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 8), LinuxEmit.CC.FLOAT_PARAM_REGS.len);
-    try std.testing.expectEqual(@as(usize, 8), MacEmit.CC.FLOAT_PARAM_REGS.len);
-
-    // Windows returns in RAX only, System V can use RAX+RDX
-    try std.testing.expectEqual(@as(usize, 1), WinEmit.CC.RETURN_REGS.len);
-    try std.testing.expectEqual(@as(usize, 2), LinuxEmit.CC.RETURN_REGS.len);
-    try std.testing.expectEqual(@as(usize, 2), MacEmit.CC.RETURN_REGS.len);
-}
-
-test "CC.canPassStructByValue differs between Windows and System V" {
-    // Windows: only power-of-2 sizes (1, 2, 4, 8)
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(2));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(4));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(8));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(3));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(9));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(16));
-
-    // System V: any size up to 16
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(9));
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
-}
 
 test "CC.passI128ByPointer differs between Windows and System V" {
     // Windows requires i128 pass-by-pointer

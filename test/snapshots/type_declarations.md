@@ -17,14 +17,14 @@ SomeFunc(a) : Maybe(a), a -> Maybe(a)
 
 MyType : U64
 
-MyType2 : Module.Thingy
+MyType2 : Mod.Thingy
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_declarations.md:3:8:3:11
 UNDECLARED TYPE - type_declarations.md:3:13:3:16
 UNDECLARED TYPE - type_declarations.md:5:19:5:21
 UNDECLARED TYPE - type_declarations.md:5:32:5:41
-MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
+MOD NOT IMPORTED - type_declarations.md:13:11:13:21
 # PROBLEMS
 
 ┌─────────────────┐
@@ -68,11 +68,11 @@ MODULE NOT IMPORTED - type_declarations.md:13:11:13:24
 
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `Module` imported ──┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `Mod` imported ─────┐
 └┬────────────────────┘  into this Roc file.                                  │
  │                                                                            │
- │  MyType2 : Module.Thingy                                                   │
- │            ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                   │
+ │  MyType2 : Mod.Thingy                                                      │
+ │            ‾‾‾‾‾‾‾‾‾‾                                                      │
  └──────────────────────────────────────────────── type_declarations.md:13:11 ┘
 
 
@@ -90,7 +90,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Map")
@@ -153,7 +153,7 @@ EndOfFile,
 		(s-type-decl
 			(header (name "MyType2")
 				(args))
-			(ty (name "Module.Thingy")))))
+			(ty (name "Mod.Thingy")))))
 ~~~
 # FORMATTED
 ~~~roc

@@ -200,6 +200,20 @@ test "hoist roots selected for direct closed static dispatch function body" {
     try expectExprTag(&test_env, roots[0].expr, .e_dispatch_call);
 }
 
+test "hoist roots are not selected for static dispatch requiring where evidence" {
+    var test_env = try TestEnv.init("Test",
+        \\f : a -> _ where [a.f : {}]
+        \\f = |_| {
+        \\    A : a
+        \\    A.f
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
 test "hoist roots are not selected for ordinary call with runtime argument" {
     var test_env = try TestEnv.init("Test",
         \\add_one = |n| n + 1.I64
@@ -854,6 +868,7 @@ fn countMatchExprRoots(test_env: *const TestEnv) usize {
             .e_runtime_error,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_crash,
             .e_closure,
             .e_lambda,
@@ -1000,25 +1015,6 @@ test "hoist roots with non-concrete compile-time types are pruned" {
 }
 
 test "hoist arbitrary block roots with non-concrete internal locals are pruned" {
-    var test_env = try TestEnv.init("Test",
-        \\main = |arg| {
-        \\    _ = [
-        \\        {
-        \\            x = []
-        \\            List.len(x).to_i64_wrap()
-        \\        },
-        \\        arg,
-        \\    ]
-        \\    arg
-        \\}
-    );
-    defer test_env.deinit();
-
-    try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
-}
-
-test "hoist exact non-concrete internal local repro roots are pruned" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    _ = [
@@ -1228,6 +1224,109 @@ test "hoist roots are not selected for effectful static dispatch calls" {
         \\    {}
         \\}
     );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected when an effectful function argument is called" {
+    // Repro for https://github.com/roc-lang/roc/issues/10154
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\call! = |effect_arg!| effect_arg!()
+        \\
+        \\main! = |runtime| {
+        \\    value = call!(effect!)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots remain selectable when a pure function argument is called" {
+    var test_env = try TestEnv.init("Test",
+        \\pure : () -> I64
+        \\pure = || 42.I64
+        \\
+        \\call! = |function| function()
+        \\
+        \\main! = |runtime| {
+        \\    value = call!(pure)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots are not selected through transitive function effect dependencies" {
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\call_once! = |effect_arg!| effect_arg!()
+        \\call_transitively! = |effect_arg!| call_once!(effect_arg!)
+        \\
+        \\main! = |runtime| {
+        \\    value = call_transitively!(effect!)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots resolve function effect dependencies through a recursive group" {
+    var test_env = try TestEnv.init("Test",
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\first! = |n, effect_arg!| {
+        \\    if n == 0.U64 effect_arg!() else second!(n - 1.U64, effect_arg!)
+        \\}
+        \\second! = |n, effect_arg!| {
+        \\    if n == 0.U64 0.I64 else first!(n - 1.U64, effect_arg!)
+        \\}
+        \\
+        \\main! = |runtime| {
+        \\    value = second!(1.U64, effect!)
+        \\    value + runtime
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "hoist roots preserve function effect dependencies across modules" {
+    var helper_env = try TestEnv.init("Helper",
+        \\call! = |effect_arg!| effect_arg!()
+    );
+    defer helper_env.deinit();
+    try helper_env.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import Helper
+        \\
+        \\effect! : () => I64
+        \\effect! = || 42.I64
+        \\
+        \\main! = |runtime| {
+        \\    value = Helper.call!(effect!)
+        \\    value + runtime
+        \\}
+    , "Helper", &helper_env);
     defer test_env.deinit();
 
     try test_env.assertNoErrors();

@@ -16,7 +16,8 @@
 //! proc for dictionary dispatch (`roc_boxy_register_proc`).
 //!
 //! Dictionary callee ABI: a registered `BoxyProcFn` receives the active
-//! `RocOps`, then the fully adapted argument list as an array of value
+//! `RocOps`, the explicit in-process test invocation context (null outside
+//! in-process test execution), then the fully adapted argument list as an array of value
 //! pointers (explicit args first, then hidden descriptor pointers, then nested
 //! dictionary pointers, each passed as a pointer to a pointer-sized slot;
 //! zero-sized arguments pass null), writes its result bytes through `ret` in
@@ -30,6 +31,7 @@ const lir = @import("lir");
 const builtins = @import("builtins");
 const lir_value = @import("value.zig");
 const boxy_runtime = @import("boxy_runtime.zig");
+const BoxyBuiltinFn = @import("backend").LirCodeGenMod.BoxyBuiltinFn;
 
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
@@ -44,6 +46,20 @@ const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 const BoxyDict = LirProgram.BoxyDict;
 const RocList = builtins.list.RocList;
 
+/// Native addresses of all Boxy C-ABI wrappers, indexed by `BoxyBuiltinFn`.
+pub const BoxyNativeFnTable = @import("backend").LirCodeGenMod.BoxyNativeFnTable;
+
+/// Build the explicit function table consumed by in-process machine code.
+pub fn nativeFnTable() BoxyNativeFnTable {
+    var table: BoxyNativeFnTable = undefined;
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
+        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        const name = comptime boxy_fn.symbolName();
+        table[field.value] = @intFromPtr(&@field(@This(), name));
+    }
+    return table;
+}
+
 /// Native callee for one dictionary worker proc. `ops` threads the active
 /// `RocOps`; `args` points at one pointer per explicit argument, each
 /// addressing that argument's bytes in its own layout; `ret` receives the
@@ -51,6 +67,7 @@ const RocList = builtins.list.RocList;
 /// worker produces none).
 pub const BoxyProcFn = *const fn (
     ops: *RocOps,
+    test_context: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
@@ -215,6 +232,18 @@ fn createRuntime(
     return g;
 }
 
+/// Create a boxy runtime from live stores without installing a process-global
+/// default. Callers select it for the current thread with `swapActiveRuntime`.
+pub fn createRuntimeFromStores(
+    gpa: Allocator,
+    store: *const LirStore,
+    layout_store: *const layout_mod.Store,
+    tables: BoxyTables,
+    roc_ops: *RocOps,
+) error{OutOfMemory}!*GlobalBoxyRuntime {
+    return createRuntime(gpa, store, layout_store, tables, roc_ops);
+}
+
 /// Initialize the process-global boxy runtime from live stores. `store`,
 /// `layout_store`, the table slices, and `roc_ops` must outlive the global.
 pub fn initGlobal(
@@ -313,6 +342,7 @@ pub fn deinitGlobal() void {
 /// arena, and RC plans come uncached from the layout store.
 const AbiHooks = struct {
     g: *GlobalBoxyRuntime,
+    test_context: ?*anyopaque,
 
     pub fn resolveDescRef(self: AbiHooks, desc_ref: LIR.BoxyDescRef) Error!*const BoxyTypeDesc {
         return switch (desc_ref) {
@@ -381,6 +411,7 @@ const AbiHooks = struct {
         var ret_desc: ?*const anyopaque = null;
         registered.callee(
             self.g.runtime.roc_ops,
+            self.test_context,
             arg_ptrs.ptr,
             if (ret_size == 0) null else @ptrCast(ret_value.ptr),
             &ret_desc,
@@ -455,7 +486,11 @@ const AbiHooks = struct {
 };
 
 fn hooks(g: *GlobalBoxyRuntime) AbiHooks {
-    return .{ .g = g };
+    return .{ .g = g, .test_context = null };
+}
+
+fn hooksWithTestContext(g: *GlobalBoxyRuntime, test_context: ?*anyopaque) AbiHooks {
+    return .{ .g = g, .test_context = test_context };
 }
 
 fn enter(g: *GlobalBoxyRuntime) void {
@@ -843,6 +878,8 @@ fn prepareErasedInvocationArgs(
 /// layout, the callable writes the caller's buffer directly.
 pub fn roc_boxy_call_erased(
     ops: *RocOps,
+    test_context: ?*anyopaque,
+    in_process: bool,
     fn_ptr: ?*const anyopaque,
     ret: ?[*]u8,
     args: ?[*]const u8,
@@ -901,7 +938,7 @@ pub fn roc_boxy_call_erased(
     );
     if (actual.?.ret_layout == expected and result_desc == null) {
         var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-        callable(g.runtime.roc_ops, ret, invocation_args, invocation_capture, &returned_desc);
+        callRegisteredErased(raw, in_process, test_context, g.runtime.roc_ops, ret, invocation_args, invocation_capture, &returned_desc);
         out_desc.* = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
         return;
     }
@@ -910,7 +947,7 @@ pub fn roc_boxy_call_erased(
     const actual_size = g.runtime.helper.sizeOf(actual_layout);
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
-    callable(g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, &returned_desc);
+    callRegisteredErased(raw, in_process, test_context, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, &returned_desc);
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
@@ -922,6 +959,34 @@ pub fn roc_boxy_call_erased(
     ) catch abiCrash(g, "erased call result materialization");
     writeResult(g, ret, materialized.value, expected);
     out_desc.* = materialized.desc;
+}
+
+const InProcessErasedCallableFn = *const fn (
+    ops: *RocOps,
+    test_context: ?*anyopaque,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+    out_desc: *?*const anyopaque,
+) callconv(.c) void;
+
+fn callRegisteredErased(
+    raw: *const anyopaque,
+    in_process: bool,
+    test_context: ?*anyopaque,
+    ops: *RocOps,
+    ret: ?[*]u8,
+    args: ?[*]const u8,
+    capture: ?[*]u8,
+    out_desc: *?*const anyopaque,
+) void {
+    if (in_process) {
+        const callable: InProcessErasedCallableFn = @ptrCast(@alignCast(raw));
+        callable(ops, test_context, ret, args, capture, out_desc);
+    } else {
+        const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(raw));
+        callable(ops, ret, args, capture, out_desc);
+    }
 }
 
 /// Box a payload into dynamic storage. Writes the boxed value through `out`
@@ -1103,6 +1168,7 @@ pub fn roc_boxy_eq(
 /// resulting `RocStr` through `out`.
 pub fn roc_boxy_inspect(
     out: ?[*]u8,
+    test_context: ?*anyopaque,
     source: ?[*]const u8,
     source_layout: u32,
     desc: *const BoxyTypeDesc,
@@ -1120,7 +1186,7 @@ pub fn roc_boxy_inspect(
 
     var bytes = std.ArrayList(u8).empty;
     g.runtime.appendBoxyInspect(
-        hooks(g),
+        hooksWithTestContext(g, test_context),
         &bytes,
         valueAt(source),
         layoutIdx(source_layout),
@@ -1810,6 +1876,7 @@ pub fn roc_boxy_dynamic_frac_literal_ref(
 pub fn roc_boxy_call_dict(
     out: ?[*]u8,
     out_desc: *?*const BoxyTypeDesc,
+    test_context: ?*anyopaque,
     dict: *const BoxyDict,
     method_slot: u32,
     method: u32,
@@ -1889,6 +1956,7 @@ pub fn roc_boxy_call_dict(
             var ret_desc: ?*const anyopaque = null;
             registered.callee(
                 g.runtime.roc_ops,
+                test_context,
                 arg_ptrs.ptr,
                 if (ret_size == 0) null else @ptrCast(ret_value.ptr),
                 &ret_desc,

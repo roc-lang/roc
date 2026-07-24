@@ -29,6 +29,49 @@ pub const macos_deployment = struct {
     }
 };
 
+/// Errors returned when a target cannot be expressed for a Mach-O link.
+pub const MachoArchError = error{
+    /// The CPU architecture is not one Mach-O links support in this compiler.
+    UnsupportedMachoArch,
+};
+
+/// The Mach-O `-arch` name (`ld64.lld`'s spelling) for a CPU architecture.
+///
+/// Returns `error.UnsupportedMachoArch` for any architecture Roc does not link
+/// as Mach-O, so an unexpected arch fails loudly instead of being silently
+/// linked as the wrong architecture.
+pub fn machoArchName(arch: std.Target.Cpu.Arch) MachoArchError![]const u8 {
+    return switch (arch) {
+        .aarch64 => "arm64",
+        .x86_64 => "x86_64",
+        else => error.UnsupportedMachoArch,
+    };
+}
+
+/// Dynamic-linker (`ld.so`) soname filenames, one authority for the bare
+/// filenames used both by `RocTarget.getDynamicLinkerPath` (which prefixes them
+/// with a known absolute directory) and by `cli/libc_finder.zig` (which probes
+/// the real filesystem for them). Only the filenames live here; absolute search
+/// directories stay with the code that owns them.
+pub const ld_so = struct {
+    /// glibc ld.so soname for x86_64.
+    pub const glibc_x86_64 = "ld-linux-x86-64.so.2";
+    /// glibc ld.so soname for aarch64.
+    pub const glibc_aarch64 = "ld-linux-aarch64.so.1";
+    /// glibc ld.so soname for 32-bit hard-float ARM.
+    pub const glibc_arm = "ld-linux-armhf.so.3";
+    /// glibc ld.so soname for 32-bit x86.
+    pub const glibc_x86 = "ld-linux.so.2";
+    /// musl ld.so soname for x86_64.
+    pub const musl_x86_64 = "ld-musl-x86_64.so.1";
+    /// musl ld.so soname for aarch64.
+    pub const musl_aarch64 = "ld-musl-aarch64.so.1";
+    /// musl ld.so soname for 32-bit ARM.
+    pub const musl_arm = "ld-musl-arm.so.1";
+    /// musl ld.so soname for 32-bit x86.
+    pub const musl_x86 = "ld-musl-i386.so.1";
+};
+
 /// Roc's simplified target representation.
 /// Maps to specific OS/arch/ABI combinations for cross-compilation.
 pub const RocTarget = enum {
@@ -275,13 +318,13 @@ pub const RocTarget = enum {
     pub fn getDynamicLinkerPath(self: RocTarget) error{ StaticLinkingTarget, WindowsTarget, NoKnownLinkerPath, WebAssemblyTarget }![]const u8 {
         return switch (self) {
             // x64 glibc targets
-            .x64glibc, .x64linux => "/lib64/ld-linux-x86-64.so.2",
+            .x64glibc, .x64linux => "/lib64/" ++ ld_so.glibc_x86_64,
 
             // arm64 glibc targets
-            .arm64glibc, .arm64linux => "/lib/ld-linux-aarch64.so.1",
+            .arm64glibc, .arm64linux => "/lib/" ++ ld_so.glibc_aarch64,
 
             // arm32 glibc targets
-            .arm32linux => "/lib/ld-linux-armhf.so.3",
+            .arm32linux => "/lib/" ++ ld_so.glibc_arm,
 
             // Static linking targets don't need dynamic linker
             .x64musl, .arm64musl, .arm32musl => return error.StaticLinkingTarget,

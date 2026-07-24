@@ -4,17 +4,23 @@
 //! - Primitives that fit in a wasm value type are returned directly
 //! - Composites (i128, Dec, Str, List, records) use linear memory
 //!
-//! Size and alignment of composite layouts are computed iteratively (via
-//! `wasmSizeAlign`) using an explicit work stack, so deeply nested types never
-//! grow the native call stack.
+//! This module only performs the wasm-specific classification (which layouts map
+//! to a wasm value type versus linear memory). Every concrete size, offset,
+//! alignment, and discriminant width is read from `layout.Store` at the wasm32
+//! pointer width (`.u32`), which is the single source of truth shared with the
+//! dev and LLVM backends.
 
-const std = @import("std");
+const base = @import("base");
 const layout = @import("layout");
 const WasmModule = @import("WasmModule.zig");
 const ValType = WasmModule.ValType;
 
-/// Errors returned while computing wasm layout sizes (only out-of-memory, when
-/// an unusually deep type spills the inline work-stack buffer onto the heap).
+/// The pointer width wasm codegen targets. wasm32 uses 32-bit pointers, so every
+/// store query in this module is made at this width.
+const wasm_target: base.target.TargetUsize = .u32;
+
+/// Error set for the fallible wasm layout query API, keeping these queries
+/// uniform with the rest of wasm codegen's fallible layout accessors.
 pub const Error = error{OutOfMemory};
 
 /// How a Roc value is represented in wasm
@@ -23,12 +29,6 @@ pub const WasmRepr = union(enum) {
     primitive: ValType,
     /// Value lives in linear memory (returned as i32 pointer)
     stack_memory: u32, // size in bytes
-};
-
-/// Size and alignment of a layout in wasm linear memory (bytes).
-const SizeAlign = struct {
-    size: u32,
-    alignment: u32,
 };
 
 /// Map a layout.Idx to its wasm representation.
@@ -79,7 +79,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
                 }
                 const repr: WasmRepr = switch (l.tag) {
                     .scalar => .{ .primitive = scalarValType(l) },
-                    .struct_ => .{ .stack_memory = try structSizeWasm(ls, l.getStruct().idx) },
+                    .struct_ => .{ .stack_memory = ls.sizeAt(l, wasm_target) },
                     .tag_union => blk: {
                         const tu_layout = try tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
                         // Discriminant-only tag unions (enums, disc_offset == 0) with size ≤ 4
@@ -91,7 +91,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
                     },
                     .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
                     .box, .box_of_zst, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
-                    .list, .list_of_zst => .{ .stack_memory = 12 }, // RocList
+                    .list, .list_of_zst => .{ .stack_memory = ls.sizeAt(l, wasm_target) }, // RocList
                     .closure => unreachable, // handled above
                 };
                 if (outer_closure) |outer| {
@@ -106,221 +106,30 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store) Error!
     }
 }
 
-/// Public struct `TagUnionWasmLayout`.
+/// wasm-level size, discriminant offset, and discriminant width of a tag union,
+/// all read from the layout store at the wasm32 pointer width.
 pub const TagUnionWasmLayout = struct {
     size: u32,
     discriminant_offset: u32,
     discriminant_size: u8,
-    alignment: u32,
 };
 
-/// Public function `structSizeWithStore`.
+/// wasm32 byte size of a struct, read from the layout store's committed size.
 pub fn structSizeWithStore(struct_idx: layout.StructIdx, ls: *const layout.Store) Error!u32 {
-    return structSizeWasm(ls, struct_idx);
+    return ls.getStructSizeAt(struct_idx, wasm_target);
 }
 
-/// Public function `structAlignWithStore`.
-pub fn structAlignWithStore(struct_idx: layout.StructIdx, ls: *const layout.Store) Error!u32 {
-    return structAlignWasm(ls, struct_idx);
+/// wasm32 byte alignment of a layout, read from its committed alignment class.
+pub fn layoutAlignWasm(l: layout.Layout) u32 {
+    return @intCast(l.alignment(wasm_target).toByteUnits());
 }
 
-/// Public function `tagUnionLayoutWithStore`.
+/// wasm32 size/discriminant metrics of a tag union, all read from the store.
 pub fn tagUnionLayoutWithStore(tu_idx: layout.TagUnionIdx, ls: *const layout.Store) Error!TagUnionWasmLayout {
-    const tu_data = ls.getTagUnionData(tu_idx);
-    const variants = ls.getTagUnionVariants(tu_data);
-
-    var max_payload_size: u32 = 0;
-    var max_payload_align: u32 = 1;
-    for (0..variants.len) |i| {
-        const payload_layout = variants.get(i).payload_layout;
-        const payload = try wasmSizeAlign(payload_layout, ls);
-        if (payload.size > max_payload_size) max_payload_size = payload.size;
-        if (payload.alignment > max_payload_align) max_payload_align = payload.alignment;
-    }
-
-    const discriminant_size: u8 = tagUnionDiscriminantSize(variants.len);
-    const disc_align = layout.TagUnionData.alignmentForDiscriminantSize(discriminant_size);
-    const disc_align_bytes: u32 = @intCast(disc_align.toByteUnits());
-    const discriminant_offset: u32 = alignUp(max_payload_size, disc_align_bytes);
-    const tag_union_alignment: u32 = if (max_payload_align > disc_align_bytes) max_payload_align else disc_align_bytes;
-    const total_size: u32 = alignUp(discriminant_offset + discriminant_size, tag_union_alignment);
-
     return .{
-        .size = total_size,
-        .discriminant_offset = discriminant_offset,
-        .discriminant_size = discriminant_size,
-        .alignment = tag_union_alignment,
-    };
-}
-
-fn structAlignWasm(ls: *const layout.Store, struct_idx: layout.StructIdx) Error!u32 {
-    const sd = ls.getStructData(struct_idx);
-    const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
-    var max_align: u32 = 1;
-    for (0..sorted_fields.len) |i| {
-        const field = sorted_fields.get(i);
-        // Padding spacers are alignment 1 and never inflate the struct's alignment.
-        if (field.is_padding) continue;
-        const field_align = (try wasmSizeAlign(field.layout, ls)).alignment;
-        if (field_align > max_align) max_align = field_align;
-    }
-    return max_align;
-}
-
-fn structSizeWasm(ls: *const layout.Store, struct_idx: layout.StructIdx) Error!u32 {
-    const sd = ls.getStructData(struct_idx);
-    const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
-    var offset: u32 = 0;
-    var max_align: u32 = 1;
-    for (0..sorted_fields.len) |i| {
-        const field = sorted_fields.get(i);
-        const field_sa = try wasmSizeAlign(field.layout, ls);
-        // Padding spacers are alignment 1 (their value layout's alignment is ignored).
-        const field_align: u32 = if (field.is_padding) 1 else field_sa.alignment;
-        if (field_align > max_align) max_align = field_align;
-        offset = alignUp(offset, field_align);
-        offset += field_sa.size;
-    }
-    return alignUp(offset, max_align);
-}
-
-/// Compute the wasm linear-memory size and alignment of a layout. Walks nested
-/// records/tag-union payloads/closures with an explicit work stack (post-order)
-/// instead of recursion. Boxes are pointers, which is where recursive types
-/// bottom out, so the traversal always terminates.
-fn wasmSizeAlign(root_idx: layout.Idx, ls: *const layout.Store) Error!SizeAlign {
-    const Item = union(enum) {
-        enter: layout.Idx,
-        combine_struct: layout.StructIdx,
-        combine_tag: u32,
-    };
-
-    var work_sfa = std.heap.stackFallback(64 * @sizeOf(Item), ls.allocator);
-    const wa = work_sfa.get();
-    var work = std.ArrayList(Item).empty;
-    defer work.deinit(wa);
-
-    var res_sfa = std.heap.stackFallback(64 * @sizeOf(SizeAlign), ls.allocator);
-    const ra = res_sfa.get();
-    var results = std.ArrayList(SizeAlign).empty;
-    defer results.deinit(ra);
-
-    try work.append(wa, .{ .enter = root_idx });
-    while (work.pop()) |item| switch (item) {
-        .enter => |idx| {
-            const l = ls.getLayout(idx);
-            switch (l.tag) {
-                .zst => try results.append(ra, .{ .size = 0, .alignment = 1 }),
-                .scalar => try results.append(ra, scalarSizeAlign(l)),
-                .list, .list_of_zst => try results.append(ra, .{ .size = 12, .alignment = 4 }),
-                .box, .box_of_zst, .erased_callable, .ptr => try results.append(ra, .{ .size = 4, .alignment = 4 }),
-                .closure => {
-                    const sa = ls.layoutSizeAlign(l);
-                    try results.append(ra, .{ .size = sa.size, .alignment = @intCast(sa.alignment.toByteUnits()) });
-                },
-                .struct_ => {
-                    const sd = ls.getStructData(l.getStruct().idx);
-                    const fields = ls.struct_fields.sliceRange(sd.getFields());
-                    try work.append(wa, .{ .combine_struct = l.getStruct().idx });
-                    var i: usize = fields.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try work.append(wa, .{ .enter = fields.get(i).layout });
-                    }
-                },
-                .tag_union => {
-                    const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
-                    const variants = ls.getTagUnionVariants(tu_data);
-                    try work.append(wa, .{ .combine_tag = @intCast(variants.len) });
-                    var i: usize = variants.len;
-                    while (i > 0) {
-                        i -= 1;
-                        try work.append(wa, .{ .enter = variants.get(i).payload_layout });
-                    }
-                },
-            }
-        },
-        .combine_struct => |struct_idx| {
-            const sd = ls.getStructData(struct_idx);
-            const fields = ls.struct_fields.sliceRange(sd.getFields());
-            const field_count: u32 = @intCast(fields.len);
-            const base = results.items.len - field_count;
-            var offset: u32 = 0;
-            var max_align: u32 = 1;
-            for (results.items[base..], 0..) |field_sa, fi| {
-                // Padding spacers are alignment 1 and never inflate the struct's alignment.
-                const field_align: u32 = if (fields.get(fi).is_padding) 1 else field_sa.alignment;
-                if (field_align > max_align) max_align = field_align;
-                offset = alignUp(offset, field_align);
-                offset += field_sa.size;
-            }
-            const size = alignUp(offset, max_align);
-            results.shrinkRetainingCapacity(base);
-            try results.append(ra, .{ .size = size, .alignment = max_align });
-        },
-        .combine_tag => |variant_count| {
-            const base = results.items.len - variant_count;
-            var max_payload_size: u32 = 0;
-            var max_payload_align: u32 = 1;
-            for (results.items[base..]) |payload| {
-                if (payload.size > max_payload_size) max_payload_size = payload.size;
-                if (payload.alignment > max_payload_align) max_payload_align = payload.alignment;
-            }
-            const discriminant_size: u8 = tagUnionDiscriminantSize(variant_count);
-            const disc_align = layout.TagUnionData.alignmentForDiscriminantSize(discriminant_size);
-            const disc_align_bytes: u32 = @intCast(disc_align.toByteUnits());
-            const discriminant_offset: u32 = alignUp(max_payload_size, disc_align_bytes);
-            const tag_union_alignment: u32 = if (max_payload_align > disc_align_bytes) max_payload_align else disc_align_bytes;
-            const total_size: u32 = alignUp(discriminant_offset + discriminant_size, tag_union_alignment);
-            results.shrinkRetainingCapacity(base);
-            try results.append(ra, .{ .size = total_size, .alignment = tag_union_alignment });
-        },
-    };
-
-    return results.items[0];
-}
-
-fn tagUnionDiscriminantSize(variant_count: usize) u8 {
-    return if (variant_count <= 1)
-        0
-    else if (variant_count <= 256)
-        1
-    else if (variant_count <= 65536)
-        2
-    else if (variant_count <= (1 << 32))
-        4
-    else
-        8;
-}
-
-fn alignUp(value: u32, alignment: u32) u32 {
-    if (alignment <= 1) return value;
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
-/// Extract the wasm linear-memory size and alignment of a scalar Layout.
-fn scalarSizeAlign(l: layout.Layout) SizeAlign {
-    return switch (l.getScalar().tag) {
-        .str => .{ .size = 12, .alignment = 4 },
-        .opaque_ptr => .{ .size = 4, .alignment = 4 },
-        .int => .{
-            .size = switch (l.getScalar().getInt()) {
-                .u8, .i8 => 1,
-                .u16, .i16 => 2,
-                .u32, .i32 => 4,
-                .u64, .i64 => 8,
-                .u128, .i128 => 16,
-            },
-            .alignment = @intCast(l.getScalar().getInt().alignment().toByteUnits()),
-        },
-        .frac => .{
-            .size = switch (l.getScalar().getFrac()) {
-                .f32 => 4,
-                .f64 => 8,
-                .dec => 16,
-            },
-            .alignment = @intCast(l.getScalar().getFrac().alignment().toByteUnits()),
-        },
+        .size = ls.getTagUnionSizeAt(tu_idx, wasm_target),
+        .discriminant_offset = ls.getTagUnionDiscriminantOffsetAt(tu_idx, wasm_target),
+        .discriminant_size = ls.getTagUnionDiscriminantSize(tu_idx),
     };
 }
 

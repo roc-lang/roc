@@ -31,14 +31,14 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "function")
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "a") (name "to_str")
+				(method (mod-of "a") (name "to_str")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -83,7 +83,7 @@ _ = function(value)
 			(args
 				(p-assign (ident "convertible")))
 			(e-block
-				(e-dispatch-call (method "to_str") (constraint-fn-var 70)
+				(e-dispatch-call (method "to_str") (constraint-fn-var 213)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "convertible"))))
@@ -103,7 +103,7 @@ _ = function(value)
 			(e-literal (string "my string"))))
 	(d-let
 		(p-underscore)
-		(e-call (constraint-fn-var 91)
+		(e-call (constraint-fn-var 226)
 			(e-lookup-local
 				(p-assign (ident "function")))
 			(e-lookup-local

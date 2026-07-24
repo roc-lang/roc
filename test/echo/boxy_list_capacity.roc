@@ -8,6 +8,6 @@ main! = |_args| {
 	base = List.reserve([1, 2, 3], 8)
 	through = identity(base)
 	grown = through.append(4).append(5)
-	echo!(Str.join_with(grown.map(|n| n.to_str()), ","))
+	echo!("${Str.join_with(grown.map(|n| n.to_str()), ",")}\n")
 	Ok({})
 }

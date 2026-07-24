@@ -213,13 +213,14 @@ fn compileWithCodeGen(
     defer static_strings.deinit();
 
     // Initialize the code generator
-    var codegen = CodeGen.init(
+    var codegen = CodeGen.initWithBoxyMetadata(
         allocator,
         lir_store,
         layout_store,
         static_strings.entries,
         erased_arg_desc_offsets,
         erased_arg_desc_params,
+        .preserve,
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
 
@@ -227,10 +228,16 @@ fn compileWithCodeGen(
     codegen.generation_mode = .object_file;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
 
+    const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch {
+        return CompilationError.OutOfMemory;
+    };
+    defer allocator.free(static_rc_helpers);
+
     // Compile all procedures first
     if (proc_specs.len > 0) {
         codegen.compileAllProcSpecs(proc_specs) catch return CompilationError.OutOfMemory;
     }
+    codegen.compileStaticDataRcHelpers(static_rc_helpers) catch return CompilationError.OutOfMemory;
 
     // Track symbols for object file generation
     var symbols = std.ArrayList(ObjectWriter.Symbol).empty;
@@ -270,6 +277,7 @@ fn compileWithCodeGen(
     }
     for (proc_specs, 0..) |_, i| {
         const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
+        if (proc_specs[i].is_static_initializer) continue;
         const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
             if (builtin.mode == .Debug) {
                 std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
@@ -301,6 +309,38 @@ fn compileWithCodeGen(
             .code_start = proc_symbol.code_start,
             .code_size = proc_symbol.code_end - proc_symbol.code_start,
             .loc = lir_store.procLoc(proc_id),
+        }) catch return CompilationError.OutOfMemory;
+    }
+    for (static_rc_helpers) |helper_key| {
+        const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
+            if (builtin.mode == .Debug) {
+                std.debug.panic(
+                    "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
+                    .{helper_key.encode()},
+                );
+            }
+            unreachable;
+        };
+        const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, helper_key) catch return CompilationError.OutOfMemory;
+        owned_proc_symbol_names.append(allocator, symbol_name) catch {
+            allocator.free(symbol_name);
+            return CompilationError.OutOfMemory;
+        };
+        symbols.append(allocator, .{
+            .name = symbol_name,
+            .offset = helper.start_offset,
+            .size = helper.end_offset - helper.start_offset,
+            .is_global = true,
+            .is_function = true,
+            .is_external = false,
+            .is_hidden = true,
+            .section = .text,
+            .prologue_size = helper.prologue_size,
+            .stack_alloc = helper.stack_alloc,
+            .frame_size = helper.frame_size,
+            .callee_saved_mask = helper.callee_saved_mask,
+            .epilogue_offset = helper.epilogue_offset,
+            .uses_frame_pointer = helper.uses_frame_pointer,
         }) catch return CompilationError.OutOfMemory;
     }
     for (static_data_symbols.items) |sym| {
@@ -500,6 +540,7 @@ fn appendStaticDataExport(
         .is_global = data_export.is_global,
         .is_function = false,
         .is_external = false,
+        .is_hidden = !data_export.is_exported,
         .section = .rodata,
     }) catch {
         return CompilationError.OutOfMemory;

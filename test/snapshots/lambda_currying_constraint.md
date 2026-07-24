@@ -55,7 +55,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "makeAdder")
 			(ty-fn
@@ -142,7 +142,7 @@ NO CHANGE
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "curriedAdd"))
-		(e-call (constraint-fn-var 153)
+		(e-call (constraint-fn-var 265)
 			(e-lookup-local
 				(p-assign (ident "makeAdder")))
 			(e-num (value "5")))
@@ -156,10 +156,10 @@ NO CHANGE
 			(args
 				(p-assign (ident "f"))
 				(p-assign (ident "x")))
-			(e-call (constraint-fn-var 229)
+			(e-call (constraint-fn-var 285)
 				(e-lookup-local
 					(p-assign (ident "f")))
-				(e-call (constraint-fn-var 228)
+				(e-call (constraint-fn-var 284)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -177,13 +177,13 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 280)
+			(e-call (constraint-fn-var 302)
 				(e-lookup-local
 					(p-assign (ident "applyTwice")))
 				(e-lambda
 					(args
 						(p-assign (ident "x")))
-					(e-dispatch-call (method "plus") (constraint-fn-var 278)
+					(e-dispatch-call (method "plus") (constraint-fn-var 300)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

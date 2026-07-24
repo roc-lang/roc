@@ -152,7 +152,7 @@ EXPECTED TYPE SEPARATOR - fuzz_crash_021.md:3:1:3:5
 
     I found `Pair` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 # TOKENS
 ~~~zig
@@ -163,7 +163,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))

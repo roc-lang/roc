@@ -21,7 +21,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "process")
 			(ty-fn
@@ -29,11 +29,11 @@ EndOfFile,
 				(ty-var (raw "b"))
 				(ty-var (raw "c")))
 			(where
-				(method (module-of "a") (name "convert")
+				(method (mod-of "a") (name "convert")
 					(args
 						(ty-var (raw "a")))
 					(ty-var (raw "c")))
-				(method (module-of "b") (name "transform")
+				(method (mod-of "b") (name "transform")
 					(args
 						(ty-var (raw "b")))
 					(ty-var (raw "c")))))

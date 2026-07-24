@@ -12,7 +12,7 @@ describe = |maybe| match maybe {
 }
 
 main! = |_args| {
-	echo!(describe(wrap({})))
-	echo!(describe(None))
+	echo!("${describe(wrap({}))}\n")
+	echo!("${describe(None)}\n")
 	Ok({})
 }

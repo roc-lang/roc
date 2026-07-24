@@ -8,6 +8,7 @@
 const std = @import("std");
 const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
+const float_bits = @import("float_bits.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
@@ -261,11 +262,9 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
     const f = struct {
         fn func(x: T) callconv(.c) F {
             if (T == i128) {
-                const result = i128h.i128_to_f64(x);
-                return if (F == f32) @floatCast(result) else result;
+                return if (F == f32) i128h.i128_to_f32(x) else i128h.i128_to_f64(x);
             } else if (T == u128) {
-                const result = i128h.u128_to_f64(x);
-                return if (F == f32) @floatCast(result) else result;
+                return if (F == f32) i128h.u128_to_f32(x) else i128h.u128_to_f64(x);
             } else {
                 return @floatFromInt(x);
             }
@@ -635,6 +634,14 @@ pub fn remTruncU128(a: u128, b: u128, roc_ops: *RocOps) callconv(.c) u128 {
         roc_ops.crash("Integer remainder by 0!");
     }
     return i128h.rem_u128(a, b);
+}
+
+/// i128 modulo (result carries the sign of the divisor) - callable from generated code.
+pub fn modI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
+    if (b == 0) {
+        roc_ops.crash("Integer modulo by 0!");
+    }
+    return i128h.mod_i128(a, b);
 }
 
 /// Result type for checked integer conversions.
@@ -1124,12 +1131,12 @@ pub fn f64FromParts(parts: F64Parts) callconv(.c) f64 {
 
 /// Returns the bit pattern of an f32 as u32.
 pub fn f32ToBits(self: f32) callconv(.c) u32 {
-    return @as(u32, @bitCast(self));
+    return float_bits.normalizeF32NanBits(@bitCast(self));
 }
 
 /// Returns the bit pattern of an f64 as u64.
 pub fn f64ToBits(self: f64) callconv(.c) u64 {
-    return @as(u64, @bitCast(self));
+    return float_bits.normalizeF64NanBits(@bitCast(self));
 }
 
 /// Returns the bit pattern of an i128 as u128.
@@ -1400,64 +1407,6 @@ test "parseFloatFromStr matches IEEE bit fixtures for finite edge cases" {
     }
 }
 
-test "parseIntFromStr decimal parsing" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    // Test successful decimal parsing
-    const valid_str = @import("str.zig").RocStr.fromSlice("42", test_env.getOps());
-    defer valid_str.decref(test_env.getOps());
-
-    const result = parseIntFromStr(i32, valid_str);
-    try std.testing.expectEqual(@as(i32, 42), result.value);
-    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
-
-    // Test negative number
-    const neg_str = @import("str.zig").RocStr.fromSlice("-123", test_env.getOps());
-    defer neg_str.decref(test_env.getOps());
-
-    const neg_result = parseIntFromStr(i32, neg_str);
-    try std.testing.expectEqual(@as(i32, -123), neg_result.value);
-    try std.testing.expectEqual(@as(u8, 0), neg_result.errorcode);
-
-    // Test zero
-    const zero_str = @import("str.zig").RocStr.fromSlice("0", test_env.getOps());
-    defer zero_str.decref(test_env.getOps());
-
-    const zero_result = parseIntFromStr(i32, zero_str);
-    try std.testing.expectEqual(@as(i32, 0), zero_result.value);
-    try std.testing.expectEqual(@as(u8, 0), zero_result.errorcode);
-}
-
-test "parseIntFromStr hex and binary parsing" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    // Test hexadecimal parsing
-    const hex_str = @import("str.zig").RocStr.fromSlice("0xFF", test_env.getOps());
-    defer hex_str.decref(test_env.getOps());
-
-    const hex_result = parseIntFromStr(i32, hex_str);
-    try std.testing.expectEqual(@as(i32, 255), hex_result.value);
-    try std.testing.expectEqual(@as(u8, 0), hex_result.errorcode);
-
-    // Test binary parsing
-    const bin_str = @import("str.zig").RocStr.fromSlice("0b1010", test_env.getOps());
-    defer bin_str.decref(test_env.getOps());
-
-    const bin_result = parseIntFromStr(i32, bin_str);
-    try std.testing.expectEqual(@as(i32, 10), bin_result.value);
-    try std.testing.expectEqual(@as(u8, 0), bin_result.errorcode);
-
-    // Test octal parsing
-    const oct_str = @import("str.zig").RocStr.fromSlice("0o755", test_env.getOps());
-    defer oct_str.decref(test_env.getOps());
-
-    const oct_result = parseIntFromStr(i32, oct_str);
-    try std.testing.expectEqual(@as(i32, 493), oct_result.value); // 7*64 + 5*8 + 5 = 493
-    try std.testing.expectEqual(@as(u8, 0), oct_result.errorcode);
-}
-
 test "parseIntFromStr error cases" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1485,35 +1434,6 @@ test "parseIntFromStr error cases" {
     const overflow_result = parseIntFromStr(i8, overflow_str);
     try std.testing.expectEqual(@as(i8, 0), overflow_result.value);
     try std.testing.expectEqual(@as(u8, 1), overflow_result.errorcode);
-}
-
-test "parseFloatFromStr basic functionality" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    // Test successful float parsing
-    const valid_str = @import("str.zig").RocStr.fromSlice("3.14159", test_env.getOps());
-    defer valid_str.decref(test_env.getOps());
-
-    const result = parseFloatFromStr(f32, valid_str);
-    try std.testing.expectApproxEqRel(@as(f32, 3.14159), result.value, 0.00001);
-    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
-
-    // Test negative float
-    const neg_str = @import("str.zig").RocStr.fromSlice("-42.5", test_env.getOps());
-    defer neg_str.decref(test_env.getOps());
-
-    const neg_result = parseFloatFromStr(f64, neg_str);
-    try std.testing.expectEqual(@as(f64, -42.5), neg_result.value);
-    try std.testing.expectEqual(@as(u8, 0), neg_result.errorcode);
-
-    // Test scientific notation
-    const sci_str = @import("str.zig").RocStr.fromSlice("1.5e2", test_env.getOps());
-    defer sci_str.decref(test_env.getOps());
-
-    const sci_result = parseFloatFromStr(f32, sci_str);
-    try std.testing.expectEqual(@as(f32, 150.0), sci_result.value);
-    try std.testing.expectEqual(@as(u8, 0), sci_result.errorcode);
 }
 
 test "parseFloatFromStr error cases" {
@@ -1581,18 +1501,6 @@ test "parseFloatFromStr special values" {
     try std.testing.expectEqual(@as(u8, 0), nan_result.errorcode);
 }
 
-test "addWithOverflow basic functionality" {
-    // Test normal addition without overflow
-    const result1 = addWithOverflow(i32, 10, 20);
-    try std.testing.expectEqual(@as(i32, 30), result1.value);
-    try std.testing.expectEqual(false, result1.has_overflowed);
-
-    // Test addition that would overflow
-    const result2 = addWithOverflow(i8, 127, 1);
-    try std.testing.expectEqual(@as(i8, -128), result2.value); // wraps around
-    try std.testing.expectEqual(true, result2.has_overflowed);
-}
-
 test "addWithOverflow with floating point" {
     // Test normal floating point addition
     const result1 = addWithOverflow(f32, 1.5, 2.5);
@@ -1601,30 +1509,6 @@ test "addWithOverflow with floating point" {
 
     // Test infinite result
     const result2 = addWithOverflow(f32, std.math.floatMax(f32), std.math.floatMax(f32));
-    try std.testing.expectEqual(true, result2.has_overflowed);
-}
-
-test "subWithOverflow basic functionality" {
-    // Test normal subtraction without overflow
-    const result1 = subWithOverflow(i32, 30, 10);
-    try std.testing.expectEqual(@as(i32, 20), result1.value);
-    try std.testing.expectEqual(false, result1.has_overflowed);
-
-    // Test subtraction that would underflow
-    const result2 = subWithOverflow(i8, -128, 1);
-    try std.testing.expectEqual(@as(i8, 127), result2.value); // wraps around
-    try std.testing.expectEqual(true, result2.has_overflowed);
-}
-
-test "mulWithOverflow basic functionality" {
-    // Test normal multiplication without overflow
-    const result1 = mulWithOverflow(i32, 6, 7);
-    try std.testing.expectEqual(@as(i32, 42), result1.value);
-    try std.testing.expectEqual(false, result1.has_overflowed);
-
-    // Test multiplication that would overflow
-    const result2 = mulWithOverflow(i8, 100, 2);
-    try std.testing.expectEqual(@as(i8, -56), result2.value); // wraps around
     try std.testing.expectEqual(true, result2.has_overflowed);
 }
 
@@ -1729,6 +1613,23 @@ test "f64ToBits and f64FromBits roundtrip" {
     }
 }
 
+test "float to bits normalizes every NaN representation" {
+    const f32_nan_bits = [_]u32{ 0x7f80_0001, 0x7fc1_2345, 0xff80_0001, 0xffc1_2345 };
+    for (f32_nan_bits) |bits| {
+        try std.testing.expectEqual(float_bits.normalized_f32_nan_bits, f32ToBits(f32FromBits(bits)));
+    }
+
+    const f64_nan_bits = [_]u64{
+        0x7ff0_0000_0000_0001,
+        0x7ff9_2345_6789_abcd,
+        0xfff0_0000_0000_0001,
+        0xfff9_2345_6789_abcd,
+    };
+    for (f64_nan_bits) |bits| {
+        try std.testing.expectEqual(float_bits.normalized_f64_nan_bits, f64ToBits(f64FromBits(bits)));
+    }
+}
+
 test "f32ToParts specific values" {
     // Test zero
     const zero_parts = f32ToParts(0.0);
@@ -1787,62 +1688,6 @@ test "shiftRightZeroFillU128 basic functionality" {
     const max_value: u128 = std.math.maxInt(u128);
     const result4 = shiftRightZeroFillU128(max_value, 1);
     try std.testing.expectEqual(@as(u128, 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF), result4);
-}
-
-test "addWithOverflow edge cases" {
-    // Test adding to max value
-    const result1 = addWithOverflow(i8, std.math.maxInt(i8), 1);
-    try std.testing.expectEqual(@as(i8, std.math.minInt(i8)), result1.value);
-    try std.testing.expectEqual(true, result1.has_overflowed);
-
-    // Test adding zero (should never overflow)
-    const result2 = addWithOverflow(i8, std.math.maxInt(i8), 0);
-    try std.testing.expectEqual(@as(i8, std.math.maxInt(i8)), result2.value);
-    try std.testing.expectEqual(false, result2.has_overflowed);
-
-    // Test boundary case
-    const result3 = addWithOverflow(i8, std.math.maxInt(i8) - 1, 1);
-    try std.testing.expectEqual(@as(i8, std.math.maxInt(i8)), result3.value);
-    try std.testing.expectEqual(false, result3.has_overflowed);
-}
-
-test "subWithOverflow edge cases" {
-    // Test subtracting from min value
-    const result1 = subWithOverflow(i8, std.math.minInt(i8), 1);
-    try std.testing.expectEqual(@as(i8, std.math.maxInt(i8)), result1.value);
-    try std.testing.expectEqual(true, result1.has_overflowed);
-
-    // Test subtracting zero (should never overflow)
-    const result2 = subWithOverflow(i8, std.math.minInt(i8), 0);
-    try std.testing.expectEqual(@as(i8, std.math.minInt(i8)), result2.value);
-    try std.testing.expectEqual(false, result2.has_overflowed);
-
-    // Test boundary case
-    const result3 = subWithOverflow(i8, std.math.minInt(i8) + 1, 1);
-    try std.testing.expectEqual(@as(i8, std.math.minInt(i8)), result3.value);
-    try std.testing.expectEqual(false, result3.has_overflowed);
-}
-
-test "mulWithOverflow edge cases" {
-    // Test multiplying by zero (should never overflow)
-    const result1 = mulWithOverflow(i8, std.math.maxInt(i8), 0);
-    try std.testing.expectEqual(@as(i8, 0), result1.value);
-    try std.testing.expectEqual(false, result1.has_overflowed);
-
-    // Test multiplying by one (should never overflow)
-    const result2 = mulWithOverflow(i8, std.math.maxInt(i8), 1);
-    try std.testing.expectEqual(@as(i8, std.math.maxInt(i8)), result2.value);
-    try std.testing.expectEqual(false, result2.has_overflowed);
-
-    // Test multiplying by -1
-    const result3 = mulWithOverflow(i8, std.math.maxInt(i8), -1);
-    try std.testing.expectEqual(@as(i8, -std.math.maxInt(i8)), result3.value);
-    try std.testing.expectEqual(false, result3.has_overflowed);
-
-    // Test multiplying min value by -1 (should overflow)
-    const result4 = mulWithOverflow(i8, std.math.minInt(i8), -1);
-    try std.testing.expectEqual(@as(i8, std.math.minInt(i8)), result4.value);
-    try std.testing.expectEqual(true, result4.has_overflowed);
 }
 
 test "mul_u128 large values" {

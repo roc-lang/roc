@@ -924,11 +924,6 @@ fn buildReplModuleSource(
     var source_writer: std.Io.Writer.Allocating = .init(allocator);
     errdefer source_writer.deinit();
 
-    // REPL snippets are evaluated as an internal module. Without an explicit
-    // header, production validation treats the synthetic source as a type
-    // module/default-app candidate and rejects ordinary REPL definitions like
-    // `x = 42`.
-    try source_writer.writer.writeAll("module []\n\n");
     try writeDefinitionsWithReplacement(&source_writer.writer, session, replacement, replacement_source);
     if (main_expr) |expr| {
         try source_writer.writer.print("main = {s}\n", .{expr});
@@ -1032,7 +1027,7 @@ fn hasBlockingReports(reports: std.array_list.Managed(reporting.Report)) bool {
 }
 
 fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
-    var data = try compileSource(source, "main");
+    var data = try compileSourceWithValidation(source, "main", .explicit_roots);
     errdefer data.deinit();
 
     if (hasBlockingReports(data.tokenize_reports) or
@@ -1056,7 +1051,7 @@ fn replaceCompilerData(new_data: CompilerStageData) void {
 }
 
 fn replaceCompilerDataFromReplSource(source: []const u8) PlaygroundCompileError!void {
-    replaceCompilerData(try compileSource(source, "main"));
+    replaceCompilerData(try compileSourceWithValidation(source, "main", .explicit_roots));
 }
 
 fn writeReplStaticError(response_buffer: []u8, message: []const u8, stage: ReplErrorStage) ResponseWriteError!void {
@@ -1187,6 +1182,15 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
 fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileError!CompilerStageData {
+    return compileSourceWithValidation(source, module_name, .checking);
+}
+
+const SourceValidationMode = enum {
+    checking,
+    explicit_roots,
+};
+
+fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: SourceValidationMode) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1376,10 +1380,16 @@ fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileE
         return err;
     };
 
-    czer.validateForChecking() catch |err| {
-        logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-        return err;
-    };
+    switch (validation_mode) {
+        .checking => czer.validateForChecking() catch |err| {
+            logDebug("compileSource: validateForChecking failed: {}\n", .{err});
+            return err;
+        },
+        .explicit_roots => czer.validateForExplicitRoots() catch |err| {
+            logDebug("compileSource: validateForExplicitRoots failed: {}\n", .{err});
+            return err;
+        },
+    }
     logDebug("compileSource: Canonicalization complete\n", .{});
 
     // Copy the modified AST back into the main result to ensure state consistency
@@ -1870,6 +1880,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
         &lowered.lir_result.layouts,
         eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         runtime_env.get_ops(),
+        .preserve,
     );
     defer interpreter.deinit();
 

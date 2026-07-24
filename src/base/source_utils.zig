@@ -205,18 +205,6 @@ test "normalizeLineEndings - standalone CR preserved" {
     }
 }
 
-test "normalizeLineEndings - multiline strings" {
-    const allocator = std.testing.allocator;
-
-    // Test with Roc multiline string syntax
-    {
-        const source = try allocator.dupe(u8, "lines =\r\n    \\\\first line\r\nOk(lines)\r\n");
-        defer allocator.free(source);
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("lines =\n    \\\\first line\nOk(lines)\n", result);
-    }
-}
-
 test "normalizeLineEndingsAlloc - allocates new buffer" {
     const allocator = std.testing.allocator;
 

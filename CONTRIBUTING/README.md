@@ -65,6 +65,19 @@ first builds the inputs behind `build-ci`, then runs the leaf `run-check-*` and
 `run-test-*` jobs with separate logs and report entries. It actually runs the
 tests; it does not just build them.
 
+### Test prerequisites
+
+The `run-test-cli` job includes the glue test suite, which compiles generated
+Rust glue for the `wasm32` target. Install a Rust toolchain (via [rustup]) with
+the WebAssembly target so those cases can build:
+
+```sh
+rustup target add wasm32-unknown-unknown
+```
+
+Without it, the glue cases fail with `error[E0463]: can't find crate for std`
+(`the wasm32-unknown-unknown target may not be installed`).
+
 After each run, MiniCI writes a report directory:
 
 - `zig-out/minici/index.html` is a static dashboard you can open directly in a
@@ -157,5 +170,6 @@ If you already pushed unsigned commits, you may have to do a force push with `gi
 Feel free to open an issue if you think this document can be improved!
 
 [roc-zulip]: https://roc.zulipchat.com
+[rustup]: https://rustup.rs
 [good-first-issues]: https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22
 [project-ideas]: https://docs.google.com/document/d/1mMaxIi7vxyUyNAUCs98d68jYj6C9Fpq4JIZRU735Kwg/edit?usp=sharing

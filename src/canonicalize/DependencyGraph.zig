@@ -663,6 +663,7 @@ const DemandAnalyzer = struct {
             .e_zero_argument_tag,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_hosted_lambda,
             .e_lookup_external,
             .e_lookup_required,
@@ -741,6 +742,7 @@ const DemandAnalyzer = struct {
                 },
                 .assign,
                 .num_literal,
+                .num_from_numeral_literal,
                 .small_dec_literal,
                 .dec_literal,
                 .frac_f32_literal,
@@ -831,7 +833,7 @@ pub fn getTopLevelConstants(
         const expr = cir.store.getExpr(def.expr);
 
         const is_constant = switch (expr) {
-            .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda => false,
+            .e_lambda, .e_closure, .e_anno_only, .e_derived_method, .e_hosted_lambda => false,
             else => true,
         };
 
@@ -1081,6 +1083,7 @@ fn collectNameReferences(
             .e_zero_argument_tag,
             .e_ellipsis,
             .e_anno_only,
+            .e_derived_method,
             .e_hosted_lambda,
             .e_lookup_external,
             .e_lookup_required,

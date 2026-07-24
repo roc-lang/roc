@@ -18,6 +18,9 @@ pub const ConstStrDataId = enum(u32) { _ };
 /// Identifier for a stored monomorphic type used by checked constants.
 pub const ConstTypeId = enum(u32) { _ };
 
+/// `(start, len)` range into one of `ConstStore`'s flat side pools (transform B).
+pub const ConstRange = extern struct { start: u32 = 0, len: u32 = 0 };
+
 /// Scalar value stored by compile-time evaluation.
 pub const ConstScalar = union(enum) {
     i8: i8,
@@ -41,26 +44,10 @@ pub const ConstScalar = union(enum) {
 /// generated (a compiler-synthesized capturable local, minted during CTFE).
 pub const CaptureId = checked_ids.CaptureId;
 
-/// Primitive type stored at the ConstStore boundary. This mirrors
-/// `CheckedPrimitive` without importing `checked_artifact.zig`, which owns the
-/// full checked artifact and itself imports this file.
-pub const Primitive = enum {
-    bool,
-    str,
-    u8,
-    i8,
-    u16,
-    i16,
-    u32,
-    i32,
-    u64,
-    i64,
-    u128,
-    i128,
-    f32,
-    f64,
-    dec,
-};
+/// Primitive type stored at the ConstStore boundary. Aliased to the checked
+/// artifact's `CheckedPrimitive` so the two cannot drift; Zig permits the
+/// circular file import (`checked_artifact.zig` itself imports this file).
+pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
 
 /// Named type definition owner for stored monomorphic type evidence.
 pub const TypeDef = struct {
@@ -72,6 +59,38 @@ pub const TypeDef = struct {
     /// Declaring statement: within-module discriminator for same-named
     /// block-local declarations.
     source_decl: ?u32 = null,
+    /// Compiler-generated specialization identity for internal nominals minted
+    /// after checking while preserving the public declaration identity.
+    generated: ?names.TypeDigest = null,
+    iterator_representation: IteratorRepresentation = .none,
+    iterator_kind: IteratorKind = .none,
+    iterator_depth: u8 = 0,
+};
+
+/// Target-independent Monotype iterator tier preserved across constant storage.
+pub const IteratorRepresentation = enum(u8) {
+    none,
+    minted,
+    forced_dynamic,
+};
+
+/// Producer or adapter that minted a stored iterator representation.
+pub const IteratorKind = enum(u8) {
+    none,
+    custom,
+    list,
+    str,
+    single,
+    range_exclusive,
+    range_inclusive,
+    map,
+    keep_if,
+    drop_if,
+    take_first,
+    drop_first,
+    concat,
+    append,
+    forced_dynamic,
 };
 
 /// How much of a stored named type's backing type later stages may inspect.
@@ -112,7 +131,7 @@ pub const TypeDeclaredField = union(enum) {
     padding: ConstTypeId,
 };
 
-/// Monomorphic type evidence stored with compile-time function captures.
+/// Monomorphic type evidence stored for compile-time roots and function captures.
 pub const ConstType = union(enum) {
     primitive: Primitive,
     named: struct {
@@ -144,12 +163,37 @@ pub const ConstCapture = struct {
     value: ConstNodeId,
 };
 
+/// Nested evidence carried by a concrete dispatch target. Checked source edges
+/// publish resolved nested vectors; compiler-generated structural edges retain
+/// their explicit request to synthesize at the target consumption site.
+pub const ConstNestedEvidence = union(enum) {
+    resolved: ConstRange,
+    synthesize,
+};
+
+/// Target-independent dispatch evidence stored with compile-time function
+/// values. Concrete targets name their checked module by deep content identity;
+/// every range indexes the owning store's `evidence_pool`.
+pub const ConstEvidence = union(enum) {
+    target: struct {
+        module: names.CheckedModuleDigest,
+        method: static_dispatch.MethodTarget,
+        nested: ConstNestedEvidence,
+    },
+    structural: static_dispatch.StructuralDerivation,
+    unreachable_value,
+    checked_error,
+};
+
 /// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     captures: []const ConstCapture = &.{},
+    /// Evidence vectors ordered from the function body's innermost scope to
+    /// its lexical parents. Each range indexes `ConstStore.evidence_pool`.
+    evidence_chain: []const ConstRange = &.{},
 };
 
 /// Named type owner for a stored nominal constant.
@@ -166,6 +210,7 @@ pub const FnDef = union(enum) {
         owner: names.ProcTemplate,
         site: names.ProcSiteId,
         context_fn_key: names.TypeDigest,
+        local_proc_context_digest: ?names.TypeDigest = null,
     },
     local_hosted: names.ProcTemplate,
     imported_hosted: names.ProcTemplate,
@@ -213,9 +258,6 @@ pub const ConstValue = union(enum) {
     fn_value: ConstFnId,
 };
 
-/// `(start, len)` range into one of `ConstStore`'s flat side pools (transform B).
-pub const ConstRange = extern struct { start: u32 = 0, len: u32 = 0 };
-
 /// Internal, relocation-invariant (POD) form of `ConstValue`: variant slices are
 /// replaced by `ConstRange`s into the store's flat pools. The public `ConstValue`
 /// (with slices) is reconstructed on demand by `get`.
@@ -240,6 +282,7 @@ const StoredFn = struct {
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     captures: ConstRange = .{},
+    evidence_chain: ConstRange = .{},
 };
 
 /// Store of monomorphic type evidence attached to compile-time constants.
@@ -460,6 +503,10 @@ pub const ConstTypeStore = struct {
             .module = try translation.target.internModuleIdentity(translation.source.moduleIdentityBytes(def.module)),
             .type_name = try translation.target.internTypeName(translation.source.typeNameText(def.type_name)),
             .source_decl = def.source_decl,
+            .generated = def.generated,
+            .iterator_representation = def.iterator_representation,
+            .iterator_kind = def.iterator_kind,
+            .iterator_depth = def.iterator_depth,
         };
     }
 
@@ -503,10 +550,16 @@ pub const ConstStore = struct {
     node_pool: std.ArrayList(ConstNodeId),
     /// Flat pool of tag-name bytes.
     tag_name_pool: std.ArrayList(u8),
-    /// Monomorphic type evidence for function captures.
+    /// Monomorphic type evidence for roots and function captures.
     type_store: ConstTypeStore,
     /// Flat pool of function captures.
     capture_pool: std.ArrayList(ConstCapture),
+    /// Flat pool of target-independent dispatch evidence. Nested target ranges
+    /// index this same pool.
+    evidence_pool: std.ArrayList(ConstEvidence),
+    /// Flat pool of evidence-vector ranges. Stored functions point at a range
+    /// here to retain the full lexical evidence chain.
+    evidence_chain_pool: std.ArrayList(ConstRange),
     /// Flat pool of all string backing bytes; `str_views` indexes into it.
     str_backing: std.ArrayList(u8),
     /// `ConstStrDataId` -> range into `str_backing`.
@@ -524,6 +577,8 @@ pub const ConstStore = struct {
             .tag_name_pool = .empty,
             .type_store = ConstTypeStore.init(allocator),
             .capture_pool = .empty,
+            .evidence_pool = .empty,
+            .evidence_chain_pool = .empty,
             .str_backing = .empty,
             .str_views = .empty,
         };
@@ -584,13 +639,25 @@ pub const ConstStore = struct {
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         const id: ConstFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
+        const evidence_chain_range = try artifact_serialize.appendSpan(ConstRange, ConstRange, &self.evidence_chain_pool, self.allocator, fn_value.evidence_chain);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .captures = captures_range,
+            .evidence_chain = evidence_chain_range,
         });
         return id;
+    }
+
+    /// Append one already-relocated evidence vector. Nested ranges in `values`
+    /// must already index this store's `evidence_pool`.
+    pub fn appendEvidence(self: *ConstStore, values: []const ConstEvidence) Allocator.Error!ConstRange {
+        return artifact_serialize.appendSpan(ConstRange, ConstEvidence, &self.evidence_pool, self.allocator, values);
+    }
+
+    pub fn evidenceSlice(self: *const ConstStore, range: ConstRange) []const ConstEvidence {
+        return self.evidence_pool.items[range.start .. range.start + range.len];
     }
 
     pub fn addStrData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstStrDataId {
@@ -631,6 +698,7 @@ pub const ConstStore = struct {
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
+            .evidence_chain = self.evidence_chain_pool.items[stored.evidence_chain.start .. stored.evidence_chain.start + stored.evidence_chain.len],
         };
     }
 
@@ -652,12 +720,14 @@ pub const ConstStore = struct {
         tag_name_pool: artifact_serialize.SerializedSlice(u8) = .{},
         type_store: ConstTypeStore.Serialized = .{},
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
+        evidence_pool: artifact_serialize.SerializedSlice(ConstEvidence) = .{},
+        evidence_chain_pool: artifact_serialize.SerializedSlice(ConstRange) = .{},
         str_backing: artifact_serialize.SerializedSlice(u8) = .{},
         str_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 7 value/function side lists + 5 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 12);
+            // 9 value/function side lists + 5 nested type-store lists.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -708,6 +778,8 @@ pub const ConstStore = struct {
             self.node_pool.deinit(self.allocator);
             self.tag_name_pool.deinit(self.allocator);
             self.capture_pool.deinit(self.allocator);
+            self.evidence_pool.deinit(self.allocator);
+            self.evidence_chain_pool.deinit(self.allocator);
             self.str_backing.deinit(self.allocator);
             self.str_views.deinit(self.allocator);
         }
@@ -814,6 +886,18 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const caps = try gpa.dupe(ConstCapture, &.{.{ .id = CaptureId.fromBinder(@enumFromInt(1)), .ty = capture_ty, .value = a }});
     defer gpa.free(caps);
+    const nested_evidence = try store.appendEvidence(&.{.{ .structural = .hash }});
+    const evidence = try store.appendEvidence(&.{.{ .target = .{
+        .module = .{},
+        .method = .{
+            .module_idx = 4,
+            .def_idx = @enumFromInt(5),
+            .kind = .{ .structural = .parser },
+            .callable_ty = @enumFromInt(6),
+        },
+        .nested = .{ .resolved = nested_evidence },
+    } }});
+    const evidence_chain = [_]ConstRange{evidence};
     const fn_id = try store.appendFn(.{
         // Distinct non-zero ids: this test asserts captures round-trip; the fn_def
         // fields just need to survive, not be specific values.
@@ -821,6 +905,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .source_fn_ty = @enumFromInt(3),
         .source_fn_key = .{},
         .captures = caps,
+        .evidence_chain = &evidence_chain,
     });
 
     // Serialize → aligned buffer → deserialize.
@@ -856,6 +941,13 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(capture_ty, loaded_fn.captures[0].ty);
     try std.testing.expectEqual(ConstType{ .primitive = .u64 }, loaded.type_store.get(loaded_fn.captures[0].ty));
     try std.testing.expectEqual(a, loaded_fn.captures[0].value);
+    try std.testing.expectEqual(@as(usize, 1), loaded_fn.evidence_chain.len);
+    const loaded_evidence = loaded.evidenceSlice(loaded_fn.evidence_chain[0]);
+    try std.testing.expectEqual(@as(usize, 1), loaded_evidence.len);
+    const loaded_target = loaded_evidence[0].target;
+    try std.testing.expectEqual(@as(u32, 4), loaded_target.method.module_idx);
+    try std.testing.expectEqual(@as(usize, 1), loaded.evidenceSlice(loaded_target.nested.resolved).len);
+    try std.testing.expectEqual(static_dispatch.StructuralDerivation.hash, loaded.evidenceSlice(loaded_target.nested.resolved)[0].structural);
 }
 
 test "ConstStore.appendFn: no leak or double-free under allocation failure" {

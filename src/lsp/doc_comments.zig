@@ -8,6 +8,7 @@
 //! from the preserved source text using region information.
 
 const std = @import("std");
+const base = @import("base");
 const can = @import("can");
 const CIR = can.CIR;
 const NodeStore = can.NodeStore;
@@ -100,11 +101,7 @@ fn isTypeAnnotation(trimmed: []const u8) bool {
 
 /// Checks if a trimmed line is a doc comment (starts with ## but not ###)
 fn isDocCommentLine(trimmed: []const u8) bool {
-    if (trimmed.len < 2) return false;
-    if (trimmed[0] != '#' or trimmed[1] != '#') return false;
-    // Make sure it's not ### (section header)
-    if (trimmed.len >= 3 and trimmed[2] == '#') return false;
-    return true;
+    return base.doc_comment.isDocCommentLine(trimmed);
 }
 
 /// Checks if a line is a regular comment (single #) or section header (###)
@@ -121,15 +118,7 @@ fn isRegularComment(trimmed: []const u8) bool {
 
 /// Extracts the content from a doc comment line, stripping the ## prefix
 fn extractDocContent(line: []const u8) []const u8 {
-    // Skip the ## prefix
-    var start: usize = 2;
-
-    // Skip a single space after ## if present (standard formatting)
-    if (start < line.len and line[start] == ' ') {
-        start += 1;
-    }
-
-    return line[start..];
+    return base.doc_comment.stripPrefix(line);
 }
 
 /// Finds the start of the line containing the given position

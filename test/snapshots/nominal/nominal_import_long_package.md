@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Example of importing a nominal tag union from a module within a package, and renaming it using `as`
+description=Example of importing a nominal tag union from a mod within a package, and renaming it using `as`
 type=snippet
 ~~~
 # SOURCE
@@ -33,7 +33,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "design.Styles.Color")
 			(exposing
@@ -56,7 +56,7 @@ NO CHANGE
 		(e-not-implemented)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "design.Styles")
+	(s-import (mod "design.Styles")
 		(exposes
 			(exposed (name "Encoder") (alias "CE") (wildcard false)))))
 ~~~

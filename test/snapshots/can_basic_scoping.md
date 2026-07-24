@@ -55,7 +55,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -128,14 +128,14 @@ outerFunc = |_| {
 					(e-block
 						(s-let
 							(p-assign (ident "z"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 135)
+							(e-dispatch-call (method "plus") (constraint-fn-var 219)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
 								(args
 									(e-lookup-local
 										(p-assign (ident "y"))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 170)
+						(e-dispatch-call (method "plus") (constraint-fn-var 228)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "z"))))

@@ -1,11 +1,11 @@
 app [main!] { pf: platform "./platform/main.roc" }
 
-parse_direct_record : Str -> Try({ cache_control : Str, user_id : Str }, Json.ParseErr)
+parse_direct_record : Str -> Try({ cache_control : Str, user_id : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
 parse_direct_record = Json.parser_camel()
 
 main! : Str => U64
 main! = |json| {
-	result : Try({ cache_control : Str, user_id : Str }, Json.ParseErr)
+	result : Try({ cache_control : Str, user_id : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
 	result = parse_direct_record(json)
 
 	match result {

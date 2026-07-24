@@ -1521,6 +1521,19 @@ test "Repl - list literals" {
     try expectAllNative("List.len([\"hello\", \"world\", \"test\"])", "3");
 }
 
+test "Repl - dropping nested lists of refcounted strings is leak-free" {
+    // The string literals are long enough to force heap allocation (past the
+    // small-string window), so dropping these values must decref every inner
+    // string. The interpreter's list child-decref walk routes through
+    // `RocList.decrefElements`; running both the interpreter and dev backends
+    // under the leak-checking test allocator catches any divergence between the
+    // interpreted traversal and the compiled one as a leak or double-free.
+    const nested =
+        "[[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"], [\"cccccccccccccccccccccccccccccc\"]]";
+    try expectAllNative("List.len(" ++ nested ++ ")", "2");
+    try expectAllNative(nested, nested);
+}
+
 test "Repl - Json.to_str derives structural encoder_for for literals" {
     try expectAllNative("Json.to_str([1, 2, 3])", "\"[1.0,2.0,3.0]\"");
     try expectAllNative("Json.to_str({name: \"Bob\", age: 20})", "\"{\\\"age\\\":20.0,\\\"name\\\":\\\"Bob\\\"}\"");
@@ -1646,6 +1659,33 @@ test "Repl - invalid syntax preserves definitions" {
     const result = try repl.step("x");
     defer testing.allocator.free(result);
     try testing.expectEqualStrings("42.0", result);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10063: the annotated
+// function value should render without evaluating its constrained body.
+test "Repl - issue 10063 nested iterator where constraints" {
+    const steps = &[_][2][]const u8{
+        .{
+            "join : b -> List(a) where [b.iter : b -> Iter(item), item.iter : item -> Iter(a)]",
+            "",
+        },
+        .{
+            \\join = |list| {
+            \\    var $state = []
+            \\    for sublist in list {
+            \\        for i in sublist {
+            \\            $state = $state.append(i)
+            \\        }
+            \\    }
+            \\    $state
+            \\}
+            ,
+            "assigned `join`",
+        },
+        .{ "join", "<function>" },
+    };
+
+    try expectStateful(.interpreter, steps);
 }
 
 test "Repl - for loop over list" {

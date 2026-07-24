@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "parse_a")
 			(ty-fn
@@ -124,7 +124,7 @@ NO CHANGE
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 408)
+							(e-call (constraint-fn-var 342)
 								(e-lookup-local
 									(p-assign (ident "parse_a")))
 								(e-string
@@ -151,7 +151,7 @@ NO CHANGE
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 473)
+							(e-call (constraint-fn-var 383)
 								(e-lookup-local
 									(p-assign (ident "parse_b")))
 								(e-string

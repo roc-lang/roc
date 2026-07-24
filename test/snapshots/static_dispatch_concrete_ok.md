@@ -34,7 +34,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "conv"))
@@ -91,20 +91,20 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 46)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 206)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
 				(args))))
 	(d-let
 		(p-assign (ident "direct"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 83)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 215)
 			(receiver
 				(e-typed-int (value "5") (type "U8")))
 			(args)))
 	(d-let
 		(p-assign (ident "through_helper"))
-		(e-call (constraint-fn-var 138)
+		(e-call (constraint-fn-var 234)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -130,7 +130,7 @@ NO CHANGE
 				(p-assign (ident "x")))))
 	(d-let
 		(p-assign (ident "poly_no_dispatch"))
-		(e-call (constraint-fn-var 251)
+		(e-call (constraint-fn-var 271)
 			(e-lookup-local
 				(p-assign (ident "id")))
 			(e-string

@@ -13,12 +13,7 @@ Counter := [Mk(U64)].{
 
 ping = |c, k| c.step(k)
 
-# NOTE: check-only for now. Running (or compile-time evaluating) mutual
-# recursion through a where-clause dispatch trips a PRE-EXISTING postcheck
-# evidence bug ('specialization edges disagreed on dispatch evidence') that
-# reproduces identically on main before this project; type checking is the
-# part under test here. The `args` dependency keeps the recursion out of
-# compile-time evaluation.
+# The `args` dependency keeps the recursion out of compile-time evaluation.
 main! = |args| {
     result = ping(Counter.Mk(7), List.len(args) + 3)
     if result != 7 {

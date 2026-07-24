@@ -15,8 +15,6 @@ outer = |w, depth| {
     stepped + 0
 }
 
-# NOTE: check-only for now — see DispatchCyclePhantomMerge.roc (pre-existing
-# postcheck evidence bug on recursive dispatch, reproduces on main).
 main! = |args| {
     result = outer(Wrap.Mk(5), List.len(args) + 6)
     if result != 5 {

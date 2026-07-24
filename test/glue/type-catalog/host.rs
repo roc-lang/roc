@@ -152,7 +152,7 @@ pub extern "C" fn roc_crashed(_bytes: *const u8, _len: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_catalog_roundtrip(arg0: abi::EmptyOrPairOrPayloadOrRecursiveType0) -> abi::EmptyOrPairOrPayloadOrRecursiveType0 {
+pub extern "C" fn roc_catalog_roundtrip(arg0: abi::EmptyOrPairOrPayloadOrRecursive) -> abi::EmptyOrPairOrPayloadOrRecursive {
     arg0
 }
 

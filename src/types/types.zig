@@ -22,6 +22,7 @@
 const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
+const numeral_mod = @import("numeral.zig");
 
 const Ident = base.Ident;
 const ModuleIdentity = base.ModuleIdentity;
@@ -42,8 +43,13 @@ test {
     // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
     // so the `Origin` union dominates the struct. Provenance adds a raw expr index
     // (4B) plus a where-clause expect region (8B), both `maxInt`-sentinel packed.
-    try std.testing.expectEqual(64, @sizeOf(StaticDispatchConstraint));
-    try std.testing.expectEqual(16, @sizeOf(Func));
+    // The optional derived-map payload selection adds its tag, payload index,
+    // and optional discriminant without affecting type identity.
+    try std.testing.expectEqual(96, @sizeOf(StaticDispatchConstraint));
+    // Directed effect dependencies must survive type generalization,
+    // instantiation, and cross-module copying, so they live with the function
+    // payload rather than in checker-only side state.
+    try std.testing.expectEqual(20, @sizeOf(Func));
 }
 
 test "source declaration checked constructors enforce packed statement capacity" {
@@ -503,61 +509,6 @@ pub const Int = struct {
             return @enumFromInt(@intFromEnum(self) / 2);
         }
     };
-
-    /// The lowest number of bits that can represent the decimal value of an Int literal, *excluding* its sign.
-    /// (By design, the sign is stored separately in IntRequirements.)
-    pub const BitsNeeded = enum(u4) {
-        @"7" = 0, // 7-bit integers (that is, `I8` - which uses 1 bit for the sign) are the smallest we support
-        @"8" = 1,
-        @"9_to_15" = 2,
-        @"16" = 3,
-        @"17_to_31" = 4,
-        @"32" = 5,
-        @"33_to_63" = 6,
-        @"64" = 7,
-        @"65_to_127" = 8,
-        @"128" = 9,
-
-        /// Calculate the BitsNeeded for a given u128 value
-        pub fn fromValue(val: u128) BitsNeeded {
-            if (val == 0) return .@"7";
-
-            // Count leading zeros to determine how many bits are needed
-            const leading_zeros = @clz(val);
-            const bits_used = 128 - leading_zeros;
-
-            // Map bits used to our enum values
-            return switch (bits_used) {
-                0...7 => .@"7",
-                8 => .@"8",
-                9...15 => .@"9_to_15",
-                16 => .@"16",
-                17...31 => .@"17_to_31",
-                32 => .@"32",
-                33...63 => .@"33_to_63",
-                64 => .@"64",
-                65...127 => .@"65_to_127",
-                128 => .@"128",
-                else => unreachable,
-            };
-        }
-
-        /// Convert the BitsNeeded enum to the actual number of bits
-        pub fn toBits(self: BitsNeeded) u8 {
-            return switch (self) {
-                .@"7" => 7,
-                .@"8" => 8,
-                .@"9_to_15" => 9,
-                .@"16" => 16,
-                .@"17_to_31" => 17,
-                .@"32" => 32,
-                .@"33_to_63" => 33,
-                .@"64" => 64,
-                .@"65_to_127" => 65,
-                .@"128" => 128,
-            };
-        }
-    };
 };
 
 /// Floating-point types - used by layout.zig
@@ -582,112 +533,27 @@ pub const Frac = struct {
             return @enumFromInt(@intFromEnum(self));
         }
     };
-
-    /// The requirements of a particular Frac literal: which types can represent it in memory.
-    /// We don't bother tracking whether it can fit in F64, because:
-    /// - If it can fit in F32 without precision loss compared to F64, then it can definitely fit in F64 as well.
-    /// - If it can't fit in F32 or Dec, then clearly must have fit in F64, or else we would have errored out.
-    /// - If it can't fit in F32 but it can fit in Dec, then it can fit (with precision loss) in F64, which is fine.
-    ///
-    /// Examples:
-    ///
-    ///     3.14 - fits in f32, f64, and dec
-    ///     1e40 - fits only in f64 (exceeds f32's max of ~3.4e38, and is out of dec's range)
-    ///     0.1 - fits in f32, f64, and dec (though f32 and f64 use binary approximation)
-    ///     NaN - fits in f32 and f64, but not dec
-    ///     1.23456789012345 - may fit in f64 and dec, but not f32 (precision loss)
-    pub const Requirements = packed struct {
-        fits_in_f32: bool,
-        fits_in_dec: bool,
-    };
-};
-
-/// Requirements for integer literals - used by CIR.zig for type inference
-pub const IntRequirements = struct {
-    // Whether the literal was negative, and therefore only unifies with signed ints
-    sign_needed: bool,
-
-    // The lowest number of bits that can represent the decimal value of the Int literal *excluding* its sign.
-    bits_needed: u8,
-
-    // True if the literal is an exact power of two (e.g., 1, 2, 4, ..., 2^k) on a boundary of a signed int.
-    // This is crucial to allow the single negative boundary value −2^(N−1) when bits_needed == N.
-    // When unifying multiple literals, we AND this flag to remain conservative.
-    is_minimum_signed: bool,
-
-    pub fn init() @This() {
-        return .{
-            .sign_needed = false,
-            .bits_needed = 0,
-            .is_minimum_signed = false,
-        };
-    }
-
-    /// Unifies two IntRequirements, returning the most restrictive combination
-    pub fn unify(self: IntRequirements, other: IntRequirements) IntRequirements {
-        return IntRequirements{
-            .sign_needed = self.sign_needed or other.sign_needed,
-            .bits_needed = @max(self.bits_needed, other.bits_needed),
-            .is_minimum_signed = self.is_minimum_signed and other.is_minimum_signed,
-        };
-    }
-
-    /// Create Requirements from a u128 value and whether it's negated
-    pub fn fromIntLiteral(val: u128, is_negated: bool) IntRequirements {
-        const bits_need = Int.BitsNeeded.fromValue(val);
-        return IntRequirements{
-            .sign_needed = is_negated,
-            .bits_needed = bits_need.toBits(),
-            .is_minimum_signed = is_negated and IntRequirements.isMinimumSigned(val),
-        };
-    }
-
-    /// Check if a value is a minimum signed value.
-    /// These need special consideration
-    pub fn isMinimumSigned(val: u128) bool {
-        return switch (val) {
-            @as(u128, @intCast(std.math.maxInt(i8))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i16))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i32))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i64))) + 1 => true,
-            @as(u128, @intCast(std.math.maxInt(i128))) + 1 => true,
-            else => false,
-        };
-    }
-};
-
-/// Requirements for floating-point literals - used by CIR.zig for type inference
-pub const FracRequirements = struct {
-    fits_in_f32: bool,
-    fits_in_dec: bool,
-
-    pub fn init() @This() {
-        return .{ .fits_in_f32 = true, .fits_in_dec = true };
-    }
-
-    /// Unifies two FracRequirements, returning the intersection of capabilities
-    pub fn unify(self: FracRequirements, other: FracRequirements) FracRequirements {
-        return FracRequirements{
-            .fits_in_f32 = self.fits_in_f32 and other.fits_in_f32,
-            .fits_in_dec = self.fits_in_dec and other.fits_in_dec,
-        };
-    }
 };
 
 // nominal types //
 
-/// A nominal user-defined type
+/// A nominal type application in the value type graph: the declaration's
+/// identity plus the actual type arguments, and nothing else. The backing
+/// type lives exclusively in the declaration table (see `NominalDecl`); code
+/// that legitimately needs it instantiates the declaration's backing template
+/// with these args substituted for the declaration's formals.
 pub const NominalType = struct {
     pub const Source = NominalSource;
 
     ident: TypeIdent,
-    vars: Var.SafeList.NonEmptyRange,
+    /// The actual type arguments (may be empty).
+    args: Var.SafeList.Range,
     /// Env-local index of the declaring module's deep content identity in the
     /// owning module env's identity table (see `base.module_identity`).
     origin_module: ModuleIdentity.Idx,
-    /// Packed source-declaration and opacity bits. The statement index is a
-    /// decl LOCATOR for resolving method tables in the owning env — never
-    /// part of identity.
+    /// Packed source-declaration and opacity bits. Together with
+    /// `origin_module`, the statement is the declaration KEY for the
+    /// declaration table; it also locates method tables in the owning env.
     source: NominalSource,
 
     pub fn sourceDecl(self: NominalType) SourceDecl {
@@ -719,13 +585,80 @@ pub const NominalType = struct {
     }
 };
 
+/// A nominal type declaration: the single owner of the declaration's formal
+/// type parameters and backing template within one type store.
+///
+/// Declarations are keyed by (origin module identity, source declaration
+/// statement) in the store's declaration table (`Store.nominal_decls`). Local
+/// declarations are registered when the checker processes the declaration
+/// statement; imported declarations are copied into the destination store the
+/// first time a nominal application of theirs crosses the module boundary
+/// (see `copy_import.zig`), so every store is self-contained: any nominal
+/// application present in a store can resolve its declaration in that same
+/// store.
+pub const NominalDecl = struct {
+    /// Display name of the declaration. Never part of identity.
+    ident: TypeIdent,
+    /// Env-local index of the declaring module's deep content identity in the
+    /// owning module env's identity table (see `base.module_identity`).
+    origin_module: ModuleIdentity.Idx,
+    /// Packed statement locator plus opacity and builtin-origin bits — the
+    /// same bits nominal applications of this declaration carry. The
+    /// statement must be present: a declaration entry without a source
+    /// statement has no key and cannot be registered.
+    source: NominalType.Source,
+    /// The declaration's formal type parameters (rigid vars), in declaration
+    /// order. Instantiating the backing for a nominal application substitutes
+    /// the application's actual args for these, positionally.
+    formals: Var.SafeList.Range,
+    /// The declaration's backing template. It references `formals` and is
+    /// never unified against directly — backing access instantiates a copy
+    /// with actual args substituted for formals.
+    backing: Var,
+    /// Declaration flags, padding-free so serialized bytes are deterministic.
+    flags: Flags,
+
+    /// Declaration flags. Packed to a full u32 so `NominalDecl` has no
+    /// implicit padding bytes (the declaration table serializes raw).
+    pub const Flags = packed struct(u32) {
+        /// False once the declaration is known invalid (malformed backing or
+        /// invalid recursion). Applications of invalid declarations poison
+        /// to err.
+        valid: bool,
+        _unused: u31 = 0,
+    };
+
+    /// The statement index of this declaration in its origin module env.
+    pub fn statement(self: NominalDecl) u32 {
+        const source_decl = self.source.sourceDecl();
+        std.debug.assert(source_decl.present);
+        return source_decl.statement;
+    }
+
+    /// Whether this declaration is well-formed.
+    pub fn isValid(self: NominalDecl) bool {
+        return self.flags.valid;
+    }
+
+    /// A safe list of nominal declarations
+    pub const SafeList = MkSafeList(@This());
+    /// An index into a safe list of nominal declarations
+    pub const Idx = SafeList.Idx;
+};
+
 // functions //
 
 /// Represents a function
 pub const Func = struct {
     args: Var.SafeList.Range,
     ret: Var,
-    needs_instantiation: bool,
+    /// Function types whose effects flow into this function's effect.
+    ///
+    /// This is a directed dependency list, not type equality: an effectful
+    /// dependency makes this function effectful, while an independently
+    /// effectful caller does not make its dependencies effectful. The range is
+    /// empty for functions whose effect kind is already self-contained.
+    effect_deps: Var.SafeList.Range = Var.SafeList.Range.empty(),
 };
 
 // records //
@@ -829,106 +762,161 @@ pub const TwoTags = struct {
 
 // content //
 
-/// Information about a numeric literal for from_numeral constraint checking
+/// Value facts for a numeric literal, carried on its `from_numeral` dispatch
+/// constraint.
 ///
-/// Stores the parsed numeric value and metadata needed to validate conversion
-/// to a specific numeric type at compile-time.
+/// Derived once from the parser's exact digit facts (the module env's numeral
+/// table) — never from a pre-baked concrete value — so every stage that asks
+/// "does this literal fit type T?" reads the same precomputed answer from the
+/// same computation (src/types/numeral.zig). Conversions to concrete bits do
+/// not read this struct at all; they consume the exact digits directly at
+/// monotype lowering.
 pub const NumeralInfo = struct {
-    /// The parsed numeric value stored as raw bytes
-    /// For fractional literals, this is scaled by 10^18 (Dec representation)
-    bytes: [16]u8,
+    /// The digits with the decimal point removed (before·10^scale + after) as
+    /// a u128 magnitude, when they fit; meaningful only when `has_magnitude`.
+    /// This is value identity for canonical type keys, not a conversion
+    /// source.
+    magnitude: [16]u8,
 
-    /// Whether the original literal was stored as u128 (for large unsigned values)
-    is_u128: bool,
+    /// Whether `magnitude` holds the combined digits. False for literals
+    /// whose digits exceed u128 — their `fits` set is still exact.
+    has_magnitude: bool,
 
-    /// Whether the literal was negative
+    /// Count of decimal digits after the point (0 for integer literals).
+    scale: u32,
+
+    /// Which builtin numeric types can represent the exact value, computed
+    /// once by `numeral.computeFitSet` and intersected when two literal vars
+    /// unify.
+    fits: numeral_mod.FitSet,
+
+    /// Whether the literal had a leading minus sign.
     is_negative: bool,
 
-    /// Whether the literal had a decimal point
+    /// Whether the literal was written fractionally — with a decimal point or
+    /// nonzero fractional digits. `1e5` is not fractional; `3.0` is.
     is_fractional: bool,
 
-    /// Whether exact source digits can be represented by Dec.
-    /// Null means the literal was stored in a compact representation, or the
-    /// checker did not need exact Dec range facts for it.
-    fits_dec: ?bool,
+    /// Whether this literal had an explicit type suffix such as `12.U64`.
+    explicit_suffix: bool = false,
 
-    /// Representation requirements for fractional literals.
-    frac_requirements: ?FracRequirements = null,
-
-    /// Whether the literal's exact digits can be materialized as a `Num.Numeral`.
+    /// Whether the literal's exact digits were recorded and can be
+    /// materialized as a `Num.Numeral` (a custom type's `from_numeral` needs
+    /// the digit lists at runtime). False only for literals whose digit
+    /// expansion exceeds the recordable bound (e.g. `3e6000000000`); such a
+    /// literal also carries an empty `fits` set, since its exact value is
+    /// unknowable.
     can_materialize_numeral: bool,
 
     /// Source region for error reporting
     region: base.Region,
 
-    /// Whether this literal had an explicit type suffix such as `12.Str`.
-    explicit_suffix: bool = false,
-
-    /// Get the value as i128 (may overflow for large u128 values)
-    pub fn toI128(self: NumeralInfo) i128 {
-        return @bitCast(self.bytes);
-    }
-
-    /// Get the value as u128
-    pub fn toU128(self: NumeralInfo) u128 {
-        return @bitCast(self.bytes);
-    }
-
-    /// Create from an i128 value
-    pub fn fromI128(val: i128, is_negative: bool, is_fractional: bool, region: base.Region) NumeralInfo {
+    /// Build the constraint-carried facts from a literal's exact digits and
+    /// its precomputed fit set.
+    pub fn fromExact(exact: numeral_mod.Exact, fit_set: numeral_mod.FitSet, can_materialize_numeral: bool, region: base.Region) NumeralInfo {
+        const combined = if (can_materialize_numeral) combinedMagnitude(exact) else null;
         return .{
-            .bytes = @bitCast(val),
-            .is_u128 = false,
-            .is_negative = is_negative,
-            .is_fractional = is_fractional,
-            .fits_dec = null,
-            .frac_requirements = null,
-            .can_materialize_numeral = true,
-            .region = region,
-            .explicit_suffix = false,
-        };
-    }
-
-    /// Create from a u128 value
-    pub fn fromU128(val: u128, is_fractional: bool, region: base.Region) NumeralInfo {
-        return .{
-            .bytes = @bitCast(val),
-            .is_u128 = true,
-            .is_negative = false, // u128 values are never negative
-            .is_fractional = is_fractional,
-            .fits_dec = null,
-            .frac_requirements = null,
-            .can_materialize_numeral = true,
-            .region = region,
-            .explicit_suffix = false,
-        };
-    }
-
-    /// Create metadata for a literal whose exact digits are stored outside the
-    /// type store. Type checking only needs sign, fractional-ness, and region;
-    /// lowering consumes the recorded digit bytes.
-    pub fn fromExact(
-        is_negative: bool,
-        is_fractional: bool,
-        fits_dec: ?bool,
-        can_materialize_numeral: bool,
-        region: base.Region,
-    ) NumeralInfo {
-        return .{
-            .bytes = [_]u8{0} ** 16,
-            .is_u128 = false,
-            .is_negative = is_negative,
-            .is_fractional = is_fractional,
-            .fits_dec = fits_dec,
-            .frac_requirements = if (is_fractional and fits_dec != null)
-                .{ .fits_in_f32 = true, .fits_in_dec = fits_dec.? }
-            else
-                null,
+            .magnitude = @bitCast(combined orelse 0),
+            .has_magnitude = combined != null,
+            .scale = exact.scale,
+            .fits = fit_set,
+            .is_negative = exact.is_negative,
+            .is_fractional = exact.is_fractional,
             .can_materialize_numeral = can_materialize_numeral,
-            .region = region,
             .explicit_suffix = false,
+            .region = region,
         };
     }
+
+    /// The combined digit magnitude when meaningful.
+    pub fn magnitudeU128(self: NumeralInfo) ?u128 {
+        if (!self.has_magnitude) return null;
+        return @bitCast(self.magnitude);
+    }
+
+    /// Merge two literals' facts when their type variables unify: the merged
+    /// constraint must hold for both literals, so the fit sets intersect and
+    /// the syntactic flags union. The base (magnitude, scale, region, suffix)
+    /// comes from the side that refutes the canonical Dec default, if either
+    /// does, so diagnostics anchor at the offending literal.
+    pub fn merged(a: NumeralInfo, b: NumeralInfo) NumeralInfo {
+        var result = if (!a.fits.contains(.dec)) a else b;
+        result.fits = a.fits.intersectWith(b.fits);
+        result.is_negative = a.is_negative or b.is_negative;
+        result.is_fractional = a.is_fractional or b.is_fractional;
+        result.can_materialize_numeral = a.can_materialize_numeral and b.can_materialize_numeral;
+        return result;
+    }
+
+    /// Canonical key bytes for this literal's value facts, hashed into
+    /// checked type keys: the combined magnitude, scale, fit set, and
+    /// syntactic flags. Two literals with the same digit string hash the
+    /// same; literals whose digits exceed u128 hash by their fit set alone.
+    ///
+    /// Identity is the recorded digits, NOT the normalized value: `1.50`
+    /// records {magnitude 150, scale 2} and hashes differently from `1.5`'s
+    /// {15, 1}. This is deliberate — leading/trailing-zero spellings are
+    /// vanishingly rare in practice, so normalizing every literal's digits
+    /// at key time to deduplicate them would be a net perf loss. The only
+    /// cost of a missed match is a canonical-key/digest cache miss between
+    /// equal-valued spellings, never a wrong type or wrong bits.
+    pub fn keyBytes(self: NumeralInfo) [24]u8 {
+        var bytes: [24]u8 = undefined;
+        @memcpy(bytes[0..16], &self.magnitude);
+        std.mem.writeInt(u32, bytes[16..20], self.scale, .little);
+        std.mem.writeInt(u16, bytes[20..22], @as(u16, self.fits.bits.mask), .little);
+        bytes[22] = @as(u8, @intFromBool(self.has_magnitude)) |
+            (@as(u8, @intFromBool(self.is_negative)) << 1) |
+            (@as(u8, @intFromBool(self.is_fractional)) << 2);
+        bytes[23] = 0;
+        return bytes;
+    }
+
+    fn combinedMagnitude(exact: numeral_mod.Exact) ?u128 {
+        const before = numeral_mod.magnitudeU128(exact.before) orelse return null;
+        const after = numeral_mod.magnitudeU128(exact.after) orelse return null;
+        if (before == 0) return after;
+        var shifted = before;
+        var remaining = exact.scale;
+        while (remaining > 0) : (remaining -= 1) {
+            const product = @mulWithOverflow(shifted, 10);
+            if (product[1] != 0) return null;
+            shifted = product[0];
+        }
+        const sum = @addWithOverflow(shifted, after);
+        if (sum[1] != 0) return null;
+        return sum[0];
+    }
+
+    /// Test-only convenience: facts for an integer literal given as a value,
+    /// for unit tests that need a numeral constraint without parsing source.
+    pub fn testOnlyInt(value: u128, is_negative: bool, region: base.Region) NumeralInfo {
+        var bytes_be: [16]u8 = @bitCast(std.mem.nativeToBig(u128, value));
+        var start: usize = 0;
+        while (start < bytes_be.len and bytes_be[start] == 0) : (start += 1) {}
+        const exact = numeral_mod.Exact{
+            .before = bytes_be[start..],
+            .after = &.{},
+            .scale = 0,
+            .is_negative = is_negative,
+            .is_fractional = false,
+        };
+        // Integer fit computation never allocates.
+        var no_heap: [0]u8 = .{};
+        var fba = std.heap.FixedBufferAllocator.init(&no_heap);
+        const fit_set = numeral_mod.computeFitSet(fba.allocator(), exact) catch unreachable;
+        return fromExact(exact, fit_set, true, region);
+    }
+};
+
+/// Metadata for one expression embedded in a string interpolation.
+pub const InterpolationPartMetadata = struct {
+    var_: Var,
+    /// The interpolation use site's region. This remains stable when `var_` is
+    /// remapped to a fresh variable during instantiation or cross-module copy.
+    region: base.Region,
+
+    pub const SafeList = MkSafeList(@This());
 };
 
 /// Represents a static dispatch constraints on a variable
@@ -954,6 +942,15 @@ pub const StaticDispatchConstraint = struct {
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
+    /// The direct tag payload selected by checked derived `map`/`map!`.
+    /// This is checker-owned derivation metadata and, like `provenance`, does
+    /// not participate in type identity or constraint equality.
+    derived_map_plan: ?DerivedMapPlan = null,
+    /// Extra checking metadata for `from_interpolation`. This travels with the
+    /// constraint because the checker must re-check interpolated part types
+    /// after instantiation and cross-module copying. It is metadata, not type
+    /// identity: canonical type keys and constraint equivalence do not read it.
+    interpolation: InterpolationMetadata = .none,
 
     /// The introducing site of a static dispatch constraint. `intro_expr` is the
     /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored
@@ -1008,6 +1005,20 @@ pub const StaticDispatchConstraint = struct {
         };
     };
 
+    pub const InterpolationMetadata = struct {
+        expr_region: Provenance.OptRegion = Provenance.OptRegion.none,
+        item_var: Var = no_var,
+        interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
+
+        const no_var: Var = @enumFromInt(std.math.maxInt(u32));
+
+        pub const none = InterpolationMetadata{};
+
+        pub fn isPresent(self: InterpolationMetadata) bool {
+            return self.expr_region.get() != null;
+        }
+    };
+
     /// The kinds of literal that desugar to open literal-conversion constraints.
     /// Adding a variant makes every kind-keyed `switch` fail to compile until
     /// handled — the exhaustiveness *is* the checklist.
@@ -1035,14 +1046,18 @@ pub const StaticDispatchConstraint = struct {
         /// the source operator was `!=` rather than `==`.
         desugared_binop: struct { negated: bool },
         desugared_unaryop, // From uniary operator desugaring (e.g., !)
-        method_call, // From .method() syntax
+        method_call, // From `.method()` syntax
         /// From a where clause in a type annotation. `body_required` is true when
         /// the originating scheme's body provably forces this method: during the
         /// scheme's own check a body dispatch of this method matched and unified
         /// against this where-clause. It distinguishes a contract the
         /// implementation actually dispatches (so an unpinnable instantiated
         /// receiver is a genuine ambiguity) from a phantom contract the body never
-        /// uses (which stays a valid polymorphic signature).
+        /// uses (which stays a valid polymorphic signature). The bit rides the
+        /// constraint itself through instantiation and unification merges (see
+        /// unify.zig), including across module boundaries where the originating
+        /// scheme's body is not otherwise visible — module-local provenance like
+        /// `intro_expr` cannot substitute for it.
         where_clause: struct { body_required: bool = false },
         from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
 
@@ -1094,28 +1109,13 @@ pub const StaticDispatchConstraint = struct {
         const b_text = store.getText(b.fn_name);
         return std.mem.order(u8, a_text, b_text);
     }
+};
 
-    /// The literal kind a flex var defaults to when it carries `from_literal`
-    /// constraints, by fixed precedence: numeral > quote > interpolation. Single
-    /// source of truth for the tie-break used by the checker (`varLiteralKind`),
-    /// the canonical-key builder (`flexLiteralDefaultKind`), and the mono
-    /// default-phase scan (`numericDefaultPhaseForConstraints`) — they MUST agree,
-    /// or mirror-image programs get different keys/diagnostics.
-    pub fn dominantLiteralKind(constraints: []const StaticDispatchConstraint) ?LiteralKind {
-        var has_quote = false;
-        var has_interpolation = false;
-        for (constraints) |constraint| {
-            switch (constraint.origin) {
-                .from_literal => |lit| switch (lit) {
-                    .numeral => return .numeral,
-                    .quote => has_quote = true,
-                    .interpolation => has_interpolation = true,
-                },
-                else => {},
-            }
-        }
-        return if (has_quote) .quote else if (has_interpolation) .interpolation else null;
-    }
+/// Source-type identity for the payload slot selected by derived mapping.
+/// The checked artifact translates `tag_name` into its canonical tag name.
+pub const DerivedMapPlan = struct {
+    tag_name: Ident.Idx,
+    payload_index: u32,
 };
 
 /// Two record fields

@@ -44,10 +44,10 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "Counter")
     (package "app")
-    (kind type_module)
+    (kind type_mod)
     (entry
       (name "Counter")
       (kind nominal)
@@ -55,21 +55,21 @@ main_for_host = main
       (entry
         (name "new")
         (kind value)
-        (type (fn (record) (type-ref (module "app.Counter") (name "Counter"))))
+        (type (fn (record) (type-ref (mod "app.Counter") (name "Counter"))))
       )
       (entry
         (name "increment")
         (kind value)
-        (type (fn (type-ref (module "app.Counter") (name "Counter")) (type-ref (module "app.Counter") (name "Counter"))))
+        (type (fn (type-ref (mod "app.Counter") (name "Counter")) (type-ref (mod "app.Counter") (name "Counter"))))
       )
       (entry
         (name "value")
         (kind value)
-        (type (fn (type-ref (module "app.Counter") (name "Counter")) (type-ref (name "U64"))))
+        (type (fn (type-ref (mod "app.Counter") (name "Counter")) (type-ref (name "U64"))))
       )
     )
   )
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)

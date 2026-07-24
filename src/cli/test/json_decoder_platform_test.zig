@@ -39,6 +39,9 @@ const status_scores = [_]u64{ 11, 17 };
 const mode_values = [_][]const u8{ "Warm", "Cold" };
 const mode_scores = [_]u64{ 19, 23 };
 const top_level_string_value = "top-level-json";
+// Each check contributes its score to one summed total, so scores must be
+// unique: two checks with equal scores are indistinguishable when exactly one
+// of them fails.
 const empty_record_score: u64 = 29;
 const invalid_empty_record_score: u64 = 37;
 const pair_score: u64 = 31;
@@ -57,6 +60,7 @@ const invalid_unknown_array_scalar_score: u64 = 89;
 const invalid_u64_plus_score: u64 = 97;
 const invalid_u64_leading_zero_score: u64 = 101;
 const invalid_missing_tag_payload_score: u64 = 103;
+const escaped_string_score: u64 = 107;
 
 const optional_fields = [_]OptionalField{
     .{ .name = "explicit_optional", .value = "abc" },
@@ -104,12 +108,21 @@ test "JSON parsing platform derives structural parser without runtime allocation
         try std.fs.path.join(allocator, &.{ tmp_path, camel_direct_exe_name });
     defer allocator.free(camel_direct_output_path);
 
-    var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
-    defer env_map.deinit();
+    var env = try util.buildIsolatedTestEnvMap(io, allocator, null);
+    defer env.deinit(io, allocator);
 
     if (prebuilt_path == null) {
-        try buildRocApp(allocator, &env_map, target_name, output_path, "test/json-decoder/app.roc");
+        try buildRocApp(allocator, &env.env_map, target_name, output_path, "test/json-decoder/app.roc");
     }
+
+    try runJsonDecoderAndCheckOutput(allocator, output_path, "42", "42\n");
+    try runJsonDecoderAndCheckOutput(allocator, output_path, " \t42\r\n", "42\n");
+    try runJsonDecoderAndCheckOutput(
+        allocator,
+        output_path,
+        "                                                                42                                                                ",
+        "42\n",
+    );
 
     for (0..8) |case_index| {
         const mask: u8 = @intCast(case_index);
@@ -156,7 +169,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
     try runJsonDecoderAndCheckInvalidUtf8(allocator, output_path);
 
     if (camel_prebuilt_path == null) {
-        try buildRocApp(allocator, &env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
+        try buildRocApp(allocator, &env.env_map, target_name, camel_output_path, "test/json-decoder/camel_app.roc");
     }
     try expectBinaryOmits(allocator, camel_output_path, &.{ "cache_control", "first_value", "inner_value", "nested_record", "second_value", "user_id" });
     try runJsonDecoderAndCheckOutput(
@@ -167,7 +180,7 @@ test "JSON parsing platform derives structural parser without runtime allocation
     );
 
     if (camel_direct_prebuilt_path == null) {
-        try buildRocApp(allocator, &env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
+        try buildRocApp(allocator, &env.env_map, target_name, camel_direct_output_path, "test/json-decoder/camel_direct_app.roc");
     }
     try runJsonDecoderAndCheckOutput(
         allocator,
@@ -259,6 +272,11 @@ fn buildJson(
     try json.appendSlice(allocator, "{\n  \"");
     try json.appendSlice(allocator, long_unknown_key);
     try json.appendSlice(allocator, "\" : \"ignored\"");
+    // Include a number in a skipped field: skipping a scalar must not allocate,
+    // and only a document built at runtime can check that. The documents in
+    // app.roc are hardcoded, so the compiler parses them at build time and they
+    // never reach the allocation trap.
+    try json.appendSlice(allocator, ",\n  \"skipped_scalar\" : 12345");
     try json.appendSlice(allocator, ",\n  \"foo\" : \"");
     try json.appendSlice(allocator, required_foo_value);
     try json.appendSlice(allocator, "\"");
@@ -444,6 +462,7 @@ fn expectedJsonLength(optional_mask: u8, status_index: usize, mode_index: usize)
         invalid_u64_plus_score +
         invalid_u64_leading_zero_score +
         invalid_missing_tag_payload_score +
+        escaped_string_score +
         status_scores[status_index] +
         mode_scores[mode_index];
     for (optional_fields, 0..) |field, index| {

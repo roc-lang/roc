@@ -23,9 +23,9 @@ EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:12:12:17
 EXPECTED RECORD ACCESSOR - multi_qualified_import.md:12:17:12:22
 UNDECLARED TYPE - multi_qualified_import.md:3:16:3:23
 DOES NOT EXIST - multi_qualified_import.md:4:16:4:45
-MODULE NOT IMPORTED - multi_qualified_import.md:7:11:7:33
+MOD NOT IMPORTED - multi_qualified_import.md:7:11:7:33
 UNUSED VARIABLE - multi_qualified_import.md:8:12:8:19
-MODULE NOT IMPORTED - multi_qualified_import.md:11:8:11:34
+MOD NOT IMPORTED - multi_qualified_import.md:11:8:11:34
 UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 # PROBLEMS
 
@@ -47,7 +47,7 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 
     I found `.Core` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -68,7 +68,7 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 
     I found `.Utf8` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌─────────────────┐
@@ -93,7 +93,7 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `json.Core.Utf8` ───┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `json.Core.Utf8` ───┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  process : json.Core.Utf8.Encoder -> Str                                   │
@@ -115,7 +115,7 @@ UNRECOGNIZED SYNTAX - multi_qualified_import.md:12:8:12:38
 
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `json.Core.Utf8` ───┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `json.Core.Utf8` ───┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  data : json.Core.Utf8.EncodedData                                         │
@@ -148,7 +148,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Core.Utf8")
 			(exposing
@@ -219,7 +219,7 @@ data = .encode("hello")
 		(e-runtime-error (tag "expr_not_canonicalized"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "json.Core")
+	(s-import (mod "json.Core")
 		(exposes
 			(exposed (name "Encoder") (wildcard false)))))
 ~~~

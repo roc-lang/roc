@@ -8,9 +8,21 @@ type=expr
 999999999999999999999999999999
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - int_large.md:1:1:1:31
 # PROBLEMS
-NIL
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  999999999999999999999999999999                                            │
+ │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ └────────────────────────────────────────────────────────── int_large.md:1:1 ┘
+
+    The inferred type is:
+
+        Dec
+
 # TOKENS
 ~~~zig
 Int,
@@ -30,5 +42,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

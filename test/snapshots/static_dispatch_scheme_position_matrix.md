@@ -39,26 +39,9 @@ parse_show = |s| {
 roundtrip = parse_show("hi")
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 POLYMORPHIC VALUE - static_dispatch_scheme_position_matrix.md:22:1:22:13
 MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
 # PROBLEMS
-
-┌────────────────┐
-│ MISSING METHOD ├─ This `parse` method is being called on a value whose ─────┐
-└┬───────────────┘  type doesn't have that method.                            │
- │                                                                            │
- │  v = A.parse(s)                                                            │
- │      ‾‾‾‾‾‾‾‾‾‾                                                            │
- └──────────────────────────── static_dispatch_scheme_position_matrix.md:28:9 ┘
-
-    The value's type, which does not have a method named `parse`, is:
-
-        a
-
-    Hint: For this to work, the type would need to have a method named `parse`
-    associated with it in the type's declaration.
-
 
 ┌───────────────────┐
 │ POLYMORPHIC VALUE ├─ This top-level value still has an unresolved ──────────┐
@@ -119,14 +102,14 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "via_arg")
 			(ty-fn
 				(ty-var (raw "a"))
 				(ty (name "I128")))
 			(where
-				(method (module-of "a") (name "to_i128")
+				(method (mod-of "a") (name "to_i128")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "I128")))))
@@ -151,7 +134,7 @@ EndOfFile,
 					(ty-var (raw "a")))
 				(ty (name "I128")))
 			(where
-				(method (module-of "a") (name "to_i128")
+				(method (mod-of "a") (name "to_i128")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "I128")))))
@@ -187,7 +170,7 @@ EndOfFile,
 				(ty-record)
 				(ty-var (raw "a")))
 			(where
-				(method (module-of "a") (name "gen")
+				(method (mod-of "a") (name "gen")
 					(args
 						(ty-record))
 					(ty-var (raw "a")))))
@@ -215,11 +198,11 @@ EndOfFile,
 				(ty (name "Str"))
 				(ty (name "Str")))
 			(where
-				(method (module-of "a") (name "parse")
+				(method (mod-of "a") (name "parse")
 					(args
 						(ty (name "Str")))
 					(ty-var (raw "a")))
-				(method (module-of "a") (name "show")
+				(method (mod-of "a") (name "show")
 					(args
 						(ty-var (raw "a")))
 					(ty (name "Str")))))
@@ -295,7 +278,7 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 199)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 316)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -311,7 +294,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_arg"))
-		(e-call (constraint-fn-var 239)
+		(e-call (constraint-fn-var 328)
 			(e-lookup-local
 				(p-assign (ident "via_arg")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -335,7 +318,7 @@ roundtrip = parse_show("hi")
 												(p-assign (ident "x")))
 											(rest-at (index 1)))))
 								(value
-									(e-dispatch-call (method "to_i128") (constraint-fn-var 277)
+									(e-dispatch-call (method "to_i128") (constraint-fn-var 344)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -359,7 +342,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "I128") (builtin))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 426)
+		(e-call (constraint-fn-var 379)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -385,7 +368,7 @@ roundtrip = parse_show("hi")
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 457)
+		(e-call (constraint-fn-var 402)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))
@@ -394,7 +377,20 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "s")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-block
+				(s-type-var-alias (alias "A") (type-var "a")
+					(ty-rigid-var (name "a")))
+				(s-let
+					(p-assign (ident "v"))
+					(e-type-dispatch-call (method "parse") (type-dispatch-stmt 88) (constraint-fn-var 419)
+						(args
+							(e-lookup-local
+								(p-assign (ident "s"))))))
+				(e-dispatch-call (method "show") (constraint-fn-var 421)
+					(receiver
+						(e-lookup-local
+							(p-assign (ident "v"))))
+					(args))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -410,7 +406,7 @@ roundtrip = parse_show("hi")
 					(ty-lookup (name "Str") (builtin))))))
 	(d-let
 		(p-assign (ident "roundtrip"))
-		(e-call (constraint-fn-var 501)
+		(e-call (constraint-fn-var 431)
 			(e-lookup-local
 				(p-assign (ident "parse_show")))
 			(e-string

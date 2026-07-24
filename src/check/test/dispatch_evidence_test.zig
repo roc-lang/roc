@@ -11,7 +11,8 @@ const ModuleEnv = @import("can").ModuleEnv;
 const dispatch_evidence = @import("../dispatch_evidence.zig");
 const TestEnv = @import("./TestEnv.zig");
 
-const Var = @import("types").Var;
+const types = @import("types");
+const Var = types.Var;
 
 fn defVar(env: *const ModuleEnv, name: []const u8) error{TestUnexpectedResult}!Var {
     const idents = env.getIdentStoreConst();
@@ -50,6 +51,36 @@ fn enumerate(
     var scratch = dispatch_evidence.Scratch{};
     defer scratch.deinit(gpa);
     try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, out);
+}
+
+fn constrainedVar(env: *ModuleEnv, method_name: []const u8) std.mem.Allocator.Error!Var {
+    const unit_var = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const fn_args = try env.types.appendVars(&.{unit_var});
+    const fn_var = try env.types.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = fn_args,
+        .ret = unit_var,
+    } } });
+    const constraint = types.StaticDispatchConstraint{
+        .fn_name = try env.insertIdent(@import("base").Ident.for_text(method_name)),
+        .fn_var = fn_var,
+        .origin = .{ .where_clause = .{} },
+    };
+    const constraints = try env.types.appendStaticDispatchConstraints(&.{constraint});
+    return try env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = constraints,
+    } });
+}
+
+fn transparentAlias(env: *ModuleEnv, name: []const u8, backing: Var, args: []const Var) std.mem.Allocator.Error!Var {
+    const ident = try env.insertIdent(@import("base").Ident.for_text(name));
+    const content = try env.types.mkAlias(
+        .{ .ident_idx = ident },
+        backing,
+        args,
+        env.selfModuleIdentity(),
+    );
+    return try env.types.freshFromContent(content);
 }
 
 test "evidence params enumerate in signature order" {
@@ -94,7 +125,7 @@ test "evidence params reach vars bound only inside constraint fn types" {
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertDefType("helper", "a -> Str where [a.step : a -> b]");
+    try test_env.assertDefType("helper", "a -> Str where [a.step : a -> b, b.to_str : b -> Str]");
 
     const gpa = std.testing.allocator;
     const env = test_env.module_env;
@@ -102,15 +133,80 @@ test "evidence params reach vars bound only inside constraint fn types" {
     defer params.deinit(gpa);
     try enumerate(gpa, env, try defVar(env, "helper"), &params);
 
-    // `a` occurs in the signature and emits `step`. The checker currently does
-    // not attach `b.to_str` to the `b` bound inside `a.step`'s fn type (the
-    // type writer prints the scheme without it), so the enumeration — which
-    // does walk constraint fn types, exactly for vars like `b` — finds one
-    // param today. If the checker starts attaching clause-only-var
-    // constraints, this expectation grows to [step, to_str].
-    try std.testing.expectEqual(@as(usize, 1), params.items.len);
+    // `a` occurs in the signature and emits `step`; walking that constraint's
+    // function type reaches the constraint-only `b` and emits `to_str`.
+    try std.testing.expectEqual(@as(usize, 2), params.items.len);
     const idents = env.getIdentStoreConst();
     try std.testing.expectEqualStrings("step", idents.getText(params.items[0].constraint.fn_name));
+    try std.testing.expectEqualStrings("to_str", idents.getText(params.items[1].constraint.fn_name));
+}
+
+test "record-tail evidence path is normalized to its logical row field" {
+    var test_env = try TestEnv.init("Test", "");
+    defer test_env.deinit();
+
+    const gpa = std.testing.allocator;
+    const env = test_env.module_env;
+    const dispatcher = try constrainedVar(env, "inspect_tail");
+    const head_value = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const empty_tail = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const head_name = try env.insertIdent(@import("base").Ident.for_text("head"));
+    const tail_name = try env.insertIdent(@import("base").Ident.for_text("tail"));
+
+    const tail_fields = try env.types.appendRecordFields(&.{.{ .name = tail_name, .var_ = dispatcher }});
+    const tail_row = try env.types.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = tail_fields,
+        .ext = empty_tail,
+    } } });
+    const aliased_tail = try transparentAlias(env, "TailFields", tail_row, &.{dispatcher});
+    const head_fields = try env.types.appendRecordFields(&.{.{ .name = head_name, .var_ = head_value }});
+    const root = try env.types.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = head_fields,
+        .ext = aliased_tail,
+    } } });
+
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(gpa);
+    var scratch = dispatch_evidence.Scratch{};
+    defer scratch.deinit(gpa);
+    try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
+
+    try std.testing.expectEqual(@as(usize, 1), params.items.len);
+    try std.testing.expectEqual(@as(usize, 1), params.items[0].path.len);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), params.items[0].path[0].kind);
+    try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), params.items[0].path[0].data);
+}
+
+test "tag-tail evidence path is normalized to its logical tag payload" {
+    var test_env = try TestEnv.init("Test", "");
+    defer test_env.deinit();
+
+    const gpa = std.testing.allocator;
+    const env = test_env.module_env;
+    const dispatcher = try constrainedVar(env, "inspect_tail");
+    const head_value = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const empty_tail = try env.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const head_name = try env.insertIdent(@import("base").Ident.for_text("Head"));
+    const tail_name = try env.insertIdent(@import("base").Ident.for_text("Tail"));
+
+    const tail_tag = try env.types.mkTag(tail_name, &.{dispatcher});
+    const tail_row = try env.types.freshFromContent(try env.types.mkTagUnion(&.{tail_tag}, empty_tail));
+    const aliased_tail = try transparentAlias(env, "TailTags", tail_row, &.{dispatcher});
+    const head_tag = try env.types.mkTag(head_name, &.{head_value});
+    const root = try env.types.freshFromContent(try env.types.mkTagUnion(&.{head_tag}, aliased_tail));
+
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(gpa);
+    var scratch = dispatch_evidence.Scratch{};
+    defer scratch.deinit(gpa);
+    try dispatch_evidence.enumerateEvidenceParams(gpa, &env.types, root, &scratch, &params);
+
+    try std.testing.expectEqual(@as(usize, 1), params.items.len);
+    try std.testing.expectEqual(@as(usize, 2), params.items[0].path.len);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_tag), params.items[0].path[0].kind);
+    try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), params.items[0].path[0].data);
+    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_index), params.items[0].path[1].kind);
+    try std.testing.expectEqual(@as(u32, 0), params.items[0].path[1].data);
 }
 
 test "imported scheme copy enumerates the same param list as the defining module" {
@@ -157,11 +253,11 @@ test "imported scheme copy enumerates the same param list as the defining module
     );
 
     // Caller module's enumeration over the pristine scheme copy captured by
-    // the dispatch_target instantiation record.
+    // the dispatch_target scheme-use record.
     const env_b = test_env_b.module_env;
     var found_matching_record = false;
-    for (env_b.scheme_instantiations.items.items) |record| {
-        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeInstantiationRecord.Slot.dispatch_target)) continue;
+    for (env_b.scheme_uses.items.items) |record| {
+        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
 
         var params_b = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
         defer params_b.deinit(gpa);

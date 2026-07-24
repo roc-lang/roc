@@ -4,6 +4,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const target = @import("target.zig");
 const reporting = @import("reporting");
+const builtins = @import("builtins");
+const builtin_registry = builtins.builtin_registry;
+const BuiltinFn = builtin_registry.BuiltinFn;
 
 const Allocator = std.mem.Allocator;
 
@@ -54,6 +57,7 @@ pub const CompileConfig = struct {
     host_call_extern: bool = false, // Builtins reach the host via extern symbols (the symbol ABI)
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
+    lower_memory_intrinsics_to_loops: bool = false,
 
     /// Check if compiling for the current machine
     pub fn isNative(self: CompileConfig) bool {
@@ -126,6 +130,7 @@ const ZigLLVMEmitOptions = extern struct {
     bitcode_filename: ?[*:0]const u8,
     coverage: ZigLLVMCoverageOptions,
     no_target_libcalls: bool,
+    lower_memory_intrinsics_to_loops: bool,
 };
 
 // LLVM Code Generation Optimization Levels
@@ -226,97 +231,10 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_core_extern_bc: []const u8 = "";
 };
 
-const core_builtin_roots = std.StaticStringMap(void).initComptime(.{
-    .{ "roc__num_add_with_overflow_i128", {} },
-    .{ "roc__num_mul_with_overflow_i16", {} },
-    .{ "roc__num_mul_with_overflow_i32", {} },
-    .{ "roc__num_mul_with_overflow_i64", {} },
-    .{ "roc__num_mul_with_overflow_i8", {} },
-    .{ "roc__num_sub_with_overflow_i128", {} },
-    .{ "roc_builtins_num_mul_with_overflow_i128", {} },
-    .{ "roc_builtins_num_mul_with_overflow_u128", {} },
-    .{ "roc_builtins_allocate_with_refcount", {} },
-    .{ "roc_builtins_box_decref_with", {} },
-    .{ "roc_builtins_box_decref_with_single_thread", {} },
-    .{ "roc_builtins_box_free_with", {} },
-    .{ "roc_builtins_dbg_str", {} },
-    .{ "roc_builtins_expect_err_str", {} },
-    .{ "roc_builtins_decref_data_ptr", {} },
-    .{ "roc_builtins_decref_data_ptr_single_thread", {} },
-    .{ "roc_builtins_erased_callable_decref", {} },
-    .{ "roc_builtins_erased_callable_decref_single_thread", {} },
-    .{ "roc_builtins_erased_callable_free", {} },
-    .{ "roc_builtins_erased_callable_incref", {} },
-    .{ "roc_builtins_free_data_ptr", {} },
-    .{ "roc_builtins_i16_mod_by", {} },
-    .{ "roc_builtins_i32_mod_by", {} },
-    .{ "roc_builtins_i64_mod_by", {} },
-    .{ "roc_builtins_i8_mod_by", {} },
-    .{ "roc_builtins_incref_data_ptr", {} },
-    .{ "roc_builtins_incref_data_ptr_single_thread", {} },
-    .{ "roc_builtins_int_from_str", {} },
-    .{ "roc_builtins_int_to_str", {} },
-    .{ "roc_builtins_list_append_unsafe", {} },
-    .{ "roc_builtins_list_concat", {} },
-    .{ "roc_builtins_list_decref_flat_list", {} },
-    .{ "roc_builtins_list_decref_str", {} },
-    .{ "roc_builtins_list_decref_with", {} },
-    .{ "roc_builtins_list_decref_with_single_thread", {} },
-    .{ "roc_builtins_list_drop_at", {} },
-    .{ "roc_builtins_list_eq", {} },
-    .{ "roc_builtins_list_free_flat_list", {} },
-    .{ "roc_builtins_list_free_with", {} },
-    .{ "roc_builtins_list_incref", {} },
-    .{ "roc_builtins_list_incref_single_thread", {} },
-    .{ "roc_builtins_list_list_eq", {} },
-    .{ "roc_builtins_list_prepend", {} },
-    .{ "roc_builtins_list_release_excess_capacity", {} },
-    .{ "roc_builtins_list_replace", {} },
-    .{ "roc_builtins_list_set", {} },
-    .{ "roc_builtins_list_reserve", {} },
-    .{ "roc_builtins_list_reverse", {} },
-    .{ "roc_builtins_list_str_eq", {} },
-    .{ "roc_builtins_list_sublist", {} },
-    .{ "roc_builtins_list_swap", {} },
-    .{ "roc_builtins_list_with_capacity", {} },
-    .{ "roc_builtins_roc_crashed", {} },
-    .{ "roc_builtins_roc_expect_failed", {} },
-    .{ "roc_builtins_str_caseless_ascii_equals", {} },
-    .{ "roc_builtins_str_concat", {} },
-    .{ "roc_builtins_str_contains", {} },
-    .{ "roc_builtins_str_count_utf8_bytes", {} },
-    .{ "roc_builtins_str_drop_prefix", {} },
-    .{ "roc_builtins_str_drop_prefix_caseless_ascii", {} },
-    .{ "roc_builtins_str_drop_suffix", {} },
-    .{ "roc_builtins_str_ends_with", {} },
-    .{ "roc_builtins_str_equal", {} },
-    .{ "roc_builtins_str_escape_and_quote", {} },
-    .{ "roc_builtins_str_from_literal", {} },
-    .{ "roc_builtins_str_from_utf8", {} },
-    .{ "roc_builtins_str_from_utf8_lossy", {} },
-    .{ "roc_builtins_str_from_utf8_parts", {} },
-    .{ "roc_builtins_str_from_utf8_result", {} },
-    .{ "roc_builtins_str_join_with", {} },
-    .{ "roc_builtins_str_release_excess_capacity", {} },
-    .{ "roc_builtins_str_repeat", {} },
-    .{ "roc_builtins_str_reserve", {} },
-    .{ "roc_builtins_str_split", {} },
-    .{ "roc_builtins_str_starts_with", {} },
-    .{ "roc_builtins_str_to_utf8", {} },
-    .{ "roc_builtins_str_trim", {} },
-    .{ "roc_builtins_str_trim_end", {} },
-    .{ "roc_builtins_str_trim_start", {} },
-    .{ "roc_builtins_str_with_ascii_lowercased", {} },
-    .{ "roc_builtins_str_with_ascii_uppercased", {} },
-    .{ "roc_builtins_str_with_capacity", {} },
-    .{ "roc_builtins_u16_mod_by", {} },
-    .{ "roc_builtins_u32_mod_by", {} },
-    .{ "roc_builtins_u64_mod_by", {} },
-    .{ "roc_builtins_u8_mod_by", {} },
-});
+const core_builtin_roots = builtin_registry.core_root_symbols;
 
 fn isBuiltinRoot(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "roc_builtins_") or std.mem.startsWith(u8, name, "roc__num_");
+    return std.mem.startsWith(u8, name, builtin_registry.symbol_prefix) or std.mem.startsWith(u8, name, "roc__num_");
 }
 
 fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
@@ -344,20 +262,30 @@ fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void
 }
 
 test "core builtin roots include common LLVM declarations" {
-    const common_roots = [_][]const u8{
-        "roc_builtins_int_to_str",
-        "roc_builtins_int_from_str",
-        "roc_builtins_list_incref_single_thread",
-        "roc_builtins_list_decref_with_single_thread",
-        "roc_builtins_incref_data_ptr_single_thread",
-        "roc_builtins_decref_data_ptr_single_thread",
-        "roc_builtins_box_decref_with_single_thread",
-        "roc_builtins_erased_callable_decref_single_thread",
+    const common_roots = [_][:0]const u8{
+        BuiltinFn.int_to_str.symbolName(),
+        BuiltinFn.int_from_str.symbolName(),
+        BuiltinFn.list_concat.symbolName(),
+        BuiltinFn.list_incref_single_thread.symbolName(),
+        BuiltinFn.list_decref_with_single_thread.symbolName(),
+        BuiltinFn.incref_data_ptr_single_thread.symbolName(),
+        BuiltinFn.decref_data_ptr_single_thread.symbolName(),
+        BuiltinFn.box_decref_with_single_thread.symbolName(),
+        BuiltinFn.erased_callable_decref_single_thread.symbolName(),
     };
-
     for (common_roots) |root| {
         try std.testing.expect(core_builtin_roots.has(root));
     }
+
+    // The overflow helpers are roots in every payload.
+    for (builtin_registry.overflow_root_symbols) |root| {
+        try std.testing.expect(core_builtin_roots.has(root));
+    }
+
+    // `.full`-only and `.jit_only` wrappers are absent from the core payload,
+    // so they are not valid core roots.
+    try std.testing.expect(!core_builtin_roots.has(BuiltinFn.dec_sqrt.symbolName()));
+    try std.testing.expect(!core_builtin_roots.has(BuiltinFn.hot_reload_enter.symbolName()));
 }
 
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
@@ -416,7 +344,7 @@ pub fn initializeLLVM() void {
 }
 
 /// Compile LLVM bitcode file to object file
-pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) Allocator.Error!bool {
+pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) (Allocator.Error || error{LLVMNotAvailable})!bool {
     if (comptime !llvm_available) {
         try renderLLVMNotAvailableError(gpa);
         return error.LLVMNotAvailable;
@@ -541,7 +469,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             return false;
         }
 
-        const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc_builtins_bc");
+        const bc_buf = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(builtins_bc.ptr, builtins_bc.len, "roc-builtins-bc");
         var builtins_module: ?*anyopaque = null;
         if (externs.LLVMParseBitcode2(bc_buf, &builtins_module) == 0) {
             externs.LLVMSetTarget(builtins_module, target_triple_z.ptr);
@@ -700,6 +628,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         .bitcode_filename = null,
         .coverage = coverage_options,
         .no_target_libcalls = config.no_target_libcalls,
+        .lower_memory_intrinsics_to_loops = config.lower_memory_intrinsics_to_loops,
     };
 
     const emit_result = externs.ZigLLVMTargetMachineEmitToFile(

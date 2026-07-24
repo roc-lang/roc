@@ -5,7 +5,7 @@ type=file
 ~~~
 # SOURCE
 ~~~roc
-# This is a module comment!
+# This is a mod comment!
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 import pf.Stdout exposing [line!, write!]
@@ -216,8 +216,8 @@ expect {
 # EXPECTED
 EXPECTED RECORD ACCESSOR - syntax_grab_bag.md:154:2:154:5
 NOT IMPLEMENTED - syntax_grab_bag.md:6:1:12:4
-MODULE NOT FOUND - syntax_grab_bag.md:16:1:16:27
-MODULE NOT FOUND - syntax_grab_bag.md:17:1:20:20
+MOD NOT FOUND - syntax_grab_bag.md:16:1:16:27
+MOD NOT FOUND - syntax_grab_bag.md:17:1:20:20
 UNDECLARED TYPE - syntax_grab_bag.md:36:8:36:11
 UNDECLARED TYPE - syntax_grab_bag.md:36:13:36:16
 UNDECLARED TYPE - syntax_grab_bag.md:39:2:39:5
@@ -297,7 +297,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 ┌─────────────────┐
 │ NOT IMPLEMENTED ├─ This feature is not yet implemented: malformed import ───┐
-└┬────────────────┘  module name contains invalid control characters.         │
+└┬────────────────┘  mod name contains invalid control characters.         │
  │                                                                            │
  │  import # Comment after import keyword                                     │
  │      pf # Comment after qualifier                                          │
@@ -314,7 +314,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `BadName` was not found in this Roc ─────────┐
+│ MOD NOT FOUND ├─ The mod `BadName` was not found in this Roc ─────────┐
 └┬─────────────────┘  project.                                                │
  │                                                                            │
  │  import BadName as GoodName                                                │
@@ -324,7 +324,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `BadNameMultiline` was not found in this ────┐
+│ MOD NOT FOUND ├─ The mod `BadNameMultiline` was not found in this ────┐
 └┬─────────────────┘  Roc project.                                            │
  │                                                                            │
  │  import                                                                    │
@@ -463,7 +463,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  # This is a module comment!                                               │
+ │  # This is a mod comment!                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
@@ -487,7 +487,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  # This is a module comment!                                               │
+ │  # This is a mod comment!                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
@@ -511,7 +511,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 │ UNUSED VARIABLE ├─ Variable `rest` is defined here and then never used. ────┐
 └┬────────────────┘                                                           │
  │                                                                            │
- │  # This is a module comment!                                               │
+ │  # This is a mod comment!                                                  │
  │  ‾                                                                         │
  └──────────────────────────────────────────────────── syntax_grab_bag.md:1:1 ┘
 
@@ -1024,7 +1024,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                  │
  └────────────────────────────────────────────────── syntax_grab_bag.md:201:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1785,7 +1785,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-# This is a module comment!
+# This is a mod comment!
 app [main!] { pf: platform "../basic-cli/platform.roc" }
 
 import pf.Stdout exposing [line!, write!]
@@ -2274,7 +2274,7 @@ expect {
 				(s-return
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-call (constraint-fn-var 4283)
+					(e-call (constraint-fn-var 1815)
 						(e-lookup-local
 							(p-assign (ident "match_time")))
 						(e-not-implemented)))
@@ -2297,7 +2297,7 @@ expect {
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 4374)
+						(e-interpolation (constraint-fn-var 1842) (dispatcher-var 374)
 							(first
 								(e-literal (string "Hello, ")))
 							(parts
@@ -2345,7 +2345,7 @@ expect {
 											(e-literal (string "")))))))
 						(s-reassign
 							(p-assign (ident "number"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 4634)
+							(e-dispatch-call (method "plus") (constraint-fn-var 1924)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "number"))))
@@ -2421,7 +2421,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 5110)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 2060)
 									(receiver
 										(e-match
 											(match
@@ -2446,7 +2446,7 @@ expect {
 														(value
 															(e-num (value "12"))))))))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 5105)
+										(e-dispatch-call (method "times") (constraint-fn-var 2057)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -2461,18 +2461,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 5227)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 2093)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 5189)
+															(e-dispatch-call (method "plus") (constraint-fn-var 2083)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 5336)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 2120)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 5298)
+															(e-dispatch-call (method "minus") (constraint-fn-var 2110)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2487,11 +2487,11 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 5455)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 2157)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 5450)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 2154)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -2506,12 +2506,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 5521)
+													(e-dispatch-call (method "next_static_dispatch_method") (constraint-fn-var 2215)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 5488)
+																		(e-dispatch-call (method "static_dispatch_method") (constraint-fn-var 2186)
 																			(receiver
 																				(e-match
 																					(match
@@ -2670,22 +2670,22 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "#malformed_import_0")
+	(s-import (mod "#malformed_import_0")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false))))
-	(s-import (module "pkg.Something")
+	(s-import (mod "pkg.Something")
 		(exposes
 			(exposed (name "func") (alias "function") (wildcard false))
 			(exposed (name "Type") (alias "ValueCategory") (wildcard false))
 			(exposed (name "Custom") (wildcard true))))
-	(s-import (module "BadName")
+	(s-import (mod "BadName")
 		(exposes))
-	(s-import (module "BadNameMultiline")
+	(s-import (mod "BadNameMultiline")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")

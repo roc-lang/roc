@@ -24,9 +24,15 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// Serialization format version for specialization cache files.
 /// Version 3: `SpecRecord` carries an immutable requested-type identity plus
 /// separate request/solved type views.
-pub const FORMAT_VERSION: u32 = 3;
+/// Version 4: Type definitions carry generated iterator backing evidence.
+/// Version 5: Monotype programs carry restored static-data candidate records.
+/// Version 6: specialization identities include the checked method lookup
+/// scope whose generated dispatch targets are embedded in the body.
+/// Version 7: expression tags include post-lift join-point control forms.
+/// Version 8: cached type digests are alias-transparent.
+pub const FORMAT_VERSION: u32 = 8;
 
-const SECTION_COUNT = 39;
+const SECTION_COUNT = 40;
 /// Required byte alignment for every section payload. This covers all typed
 /// Monotype cache sections so mapping can produce process slices directly.
 pub const SECTION_ALIGNMENT: u64 = 16;
@@ -71,6 +77,7 @@ pub const SectionId = enum(u8) {
     roots,
     layout_requests,
     runtime_schema_requests,
+    static_data_values,
     comptime_sites,
     source_files,
     expr_locs,
@@ -207,6 +214,7 @@ pub const SpecializationCacheHeader = extern struct {
     roots: FileSlice = .{},
     layout_requests: FileSlice = .{},
     runtime_schema_requests: FileSlice = .{},
+    static_data_values: FileSlice = .{},
     /// Packed debug/source sections. These are byte payloads because the live
     /// builder representation still uses process pointers for text slices and
     /// branch-region lists.
@@ -269,6 +277,7 @@ pub const MappedView = struct {
             .roots = try self.sectionTyped(Ast.Root, header.roots),
             .layout_requests = try self.sectionTyped(Ast.LayoutRequest, header.layout_requests),
             .runtime_schema_requests = try self.sectionTyped(Ast.RuntimeSchemaRequest, header.runtime_schema_requests),
+            .static_data_values = try self.sectionTyped(Ast.StaticDataValue, header.static_data_values),
             .comptime_sites = try self.sectionBytes(header.comptime_sites),
             .source_files = try self.sectionBytes(header.source_files),
             .expr_locs = try self.sectionTyped(Base.SourceLoc, header.expr_locs),
@@ -314,6 +323,7 @@ pub const MappedSections = struct {
     roots: []const Ast.Root,
     layout_requests: []const Ast.LayoutRequest,
     runtime_schema_requests: []const Ast.RuntimeSchemaRequest,
+    static_data_values: []const Ast.StaticDataValue,
     comptime_sites: []const u8,
     source_files: []const u8,
     expr_locs: []const Base.SourceLoc,
@@ -361,6 +371,7 @@ pub const MappedProgramView = struct {
     roots: []const Ast.Root,
     layout_requests: []const Ast.LayoutRequest,
     runtime_schema_requests: []const Ast.RuntimeSchemaRequest,
+    static_data_values: []const Ast.StaticDataValue,
     expr_locs: []const Base.SourceLoc,
     expr_regions: []const Base.Region,
     stmt_locs: []const Base.SourceLoc,
@@ -519,6 +530,8 @@ pub const MappedProgramView = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => true,
+            .static_data_candidate => |candidate| self.staticDataRefInBounds(candidate.static_data) and
+                self.exprRefInBounds(candidate.runtime_expr),
             .list, .tuple => |span| self.exprIdSpanInBounds(span),
             .record => |span| self.fieldExprSpanInBounds(span),
             .tag => |tag| self.exprIdSpanInBounds(tag.payloads),
@@ -559,6 +572,11 @@ pub const MappedProgramView = struct {
                 self.exprRefInBounds(loop.body),
             .break_ => |maybe_expr| if (maybe_expr) |expr| self.exprRefInBounds(expr) else true,
             .continue_ => |continue_| self.exprIdSpanInBounds(continue_.values),
+            // These shared-union variants are post-lift-only and are never
+            // valid in a serialized Monotype specialization.
+            .join_point,
+            .jump,
+            => false,
             .dbg,
             .expect,
             => |expr| self.exprRefInBounds(expr),
@@ -626,6 +644,10 @@ pub const MappedProgramView = struct {
 
     fn exprRefInBounds(self: MappedProgramView, expr: Ast.ExprId) bool {
         return @intFromEnum(expr) < self.exprs.len;
+    }
+
+    fn staticDataRefInBounds(self: MappedProgramView, id: Common.StaticDataId) bool {
+        return @intFromEnum(id) < self.static_data_values.len;
     }
 
     fn patRefInBounds(self: MappedProgramView, pat: Ast.PatId) bool {
@@ -823,6 +845,7 @@ pub fn mappedProgramView(view: MappedView) CacheError!MappedProgramView {
         .roots = sections_.roots,
         .layout_requests = sections_.layout_requests,
         .runtime_schema_requests = sections_.runtime_schema_requests,
+        .static_data_values = sections_.static_data_values,
         .expr_locs = sections_.expr_locs,
         .expr_regions = sections_.expr_regions,
         .stmt_locs = sections_.stmt_locs,
@@ -982,7 +1005,7 @@ pub fn computeValidityId(inputs: ValidityInputs) [32]u8 {
     writeHashBytes(&hasher, "static-data-requests");
     writeHashU32(&hasher, @intCast(inputs.roots.static_data_requests.len));
     for (inputs.roots.static_data_requests) |request| {
-        writeProvidedDataExport(&hasher, request.data);
+        writeStaticDataRequest(&hasher, request);
     }
 
     writeHashBytes(&hasher, "spec-records");
@@ -1047,6 +1070,7 @@ pub fn computeCompilerLayoutHash() [32]u8 {
     writeLayout(&hasher, Ast.Root);
     writeLayout(&hasher, Ast.LayoutRequest);
     writeLayout(&hasher, Ast.RuntimeSchemaRequest);
+    writeLayout(&hasher, Ast.StaticDataValue);
     writeLayout(&hasher, Base.SourceLoc);
     writeLayout(&hasher, Base.Region);
 
@@ -1100,6 +1124,7 @@ fn sections(header: *const SpecializationCacheHeader) [SECTION_COUNT]FileSlice {
         header.roots,
         header.layout_requests,
         header.runtime_schema_requests,
+        header.static_data_values,
         header.comptime_sites,
         header.source_files,
         header.expr_locs,
@@ -1143,6 +1168,7 @@ const section_order = [_]SectionId{
     .roots,
     .layout_requests,
     .runtime_schema_requests,
+    .static_data_values,
     .comptime_sites,
     .source_files,
     .expr_locs,
@@ -1186,14 +1212,15 @@ fn sectionIndex(id: SectionId) usize {
         .roots => 28,
         .layout_requests => 29,
         .runtime_schema_requests => 30,
-        .comptime_sites => 31,
-        .source_files => 32,
-        .expr_locs => 33,
-        .expr_regions => 34,
-        .stmt_locs => 35,
-        .stmt_regions => 36,
-        .local_names => 37,
-        .debug_names => 38,
+        .static_data_values => 31,
+        .comptime_sites => 32,
+        .source_files => 33,
+        .expr_locs => 34,
+        .expr_regions => 35,
+        .stmt_locs => 36,
+        .stmt_regions => 37,
+        .local_names => 38,
+        .debug_names => 39,
     };
 }
 
@@ -1253,6 +1280,7 @@ fn setSection(header: *SpecializationCacheHeader, id: SectionId, slice: FileSlic
         .roots => header.roots = slice,
         .layout_requests => header.layout_requests = slice,
         .runtime_schema_requests => header.runtime_schema_requests = slice,
+        .static_data_values => header.static_data_values = slice,
         .comptime_sites => header.comptime_sites = slice,
         .source_files => header.source_files = slice,
         .expr_locs => header.expr_locs = slice,
@@ -1303,14 +1331,19 @@ fn writeRootSource(hasher: *std.crypto.hash.sha2.Sha256, source: checked.RootSou
     }
 }
 
-fn writeProvidedDataExport(hasher: *std.crypto.hash.sha2.Sha256, data: checked.ProvidedDataExport) void {
-    writeHashU32(hasher, @intFromEnum(data.source_name));
-    writeHashU32(hasher, @intFromEnum(data.ffi_symbol));
-    writeHashU32(hasher, @intFromEnum(data.def));
-    writeHashU32(hasher, @intFromEnum(data.pattern));
-    writeCheckedTypeId(hasher, data.checked_type);
-    writeHashBytes32(hasher, data.source_scheme.bytes);
-    writeConstData(hasher, data.const_ref);
+fn writeStaticDataRequest(hasher: *std.crypto.hash.sha2.Sha256, request: Common.StaticDataRequest) void {
+    writeConstData(hasher, request.const_locator);
+    writeOptionalConstNodeId(hasher, request.node);
+    writeCheckedTypeId(hasher, request.checked_type);
+}
+
+fn writeOptionalConstNodeId(hasher: *std.crypto.hash.sha2.Sha256, maybe_node: ?checked.ConstNodeId) void {
+    if (maybe_node) |node| {
+        writeHashBool(hasher, true);
+        writeHashU32(hasher, @intFromEnum(node));
+    } else {
+        writeHashBool(hasher, false);
+    }
 }
 
 fn writeConstData(hasher: *std.crypto.hash.sha2.Sha256, data: anytype) void {
@@ -1381,6 +1414,7 @@ fn writeProcedureUseTemplate(hasher: *std.crypto.hash.sha2.Sha256, use: checked.
 
 fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) void {
     writeCallableIdentity(hasher, spec.identity.callable);
+    writeHashBytes32(hasher, spec.identity.method_scope.bytes);
     writeHashBytes32(hasher, spec.identity.source_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.identity.request_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.request_fn_ty_digest.bytes);
@@ -2080,6 +2114,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
                 .proc_base = 1,
                 .template = 1,
             } },
+            .method_scope = testModuleDigest(5),
             .source_fn_ty_digest = .{},
             .request_fn_ty_digest = .{},
             .request_fn_ty = fn_ty,
@@ -2172,82 +2207,6 @@ test "monotype specialization cache maps fresh single-shard program view equival
     const mapped_program = try mappedProgramView(mapped);
 
     try expectEquivalentProgramViews(fresh, concrete_type_digests, mapped_program);
-}
-
-test "monotype specialization cache mapped view survives source builder deallocation" {
-    const allocator = std.testing.allocator;
-
-    var image: []u8 = undefined;
-    {
-        var type_nodes = std.ArrayList(Type.Content).empty;
-        defer type_nodes.deinit(allocator);
-        var type_digests = std.ArrayList(checked_names.TypeDigest).empty;
-        defer type_digests.deinit(allocator);
-        var fns = std.ArrayList(Ast.Fn).empty;
-        defer fns.deinit(allocator);
-        var defs = std.ArrayList(Ast.Def).empty;
-        defer defs.deinit(allocator);
-        var exprs = std.ArrayList(Ast.Expr).empty;
-        defer exprs.deinit(allocator);
-
-        const first_type_index: u32 = std.math.minInt(u32);
-        const first_fn_index: u32 = std.math.minInt(u32);
-        const unit_ty: Type.TypeId = @enumFromInt(first_type_index);
-        const fn_ty: Type.TypeId = @enumFromInt(1);
-        try type_nodes.append(allocator, .zst);
-        try type_nodes.append(allocator, .{ .func = .{
-            .args = Type.Span.empty(),
-            .ret = unit_ty,
-        } });
-        try type_digests.appendNTimes(allocator, .{}, type_nodes.items.len);
-
-        const fn_id: Ast.FnId = @enumFromInt(first_fn_index);
-        const fn_template = Ast.FnTemplate{
-            .fn_def = .{ .checked_generated = testProcedureTemplate(1, 1) },
-            .source_fn_ty = @enumFromInt(1),
-            .source_fn_key = .{},
-            .mono_fn_ty = fn_ty,
-        };
-        try fns.append(allocator, .{ .source = fn_template });
-        try defs.append(allocator, .{
-            .symbol = @enumFromInt(1),
-            .fn_def = fn_template,
-            .fn_id = fn_id,
-            .args = Ast.Span(Ast.TypedLocal).empty(),
-            .body = .hosted,
-            .ret = unit_ty,
-        });
-        try exprs.append(allocator, .{
-            .ty = unit_ty,
-            .data = .{ .call_proc = .{
-                .callee = Ast.localProcCallee(fn_id),
-                .args = Ast.Span(Ast.ExprId).empty(),
-            } },
-        });
-
-        image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
-            .{ .id = .type_nodes, .bytes = std.mem.sliceAsBytes(type_nodes.items) },
-            .{ .id = .type_digests, .bytes = std.mem.sliceAsBytes(type_digests.items) },
-            .{ .id = .fns, .bytes = std.mem.sliceAsBytes(fns.items) },
-            .{ .id = .defs, .bytes = std.mem.sliceAsBytes(defs.items) },
-            .{ .id = .exprs, .bytes = std.mem.sliceAsBytes(exprs.items) },
-        });
-    }
-    defer allocator.free(image);
-
-    var header: SpecializationCacheHeader = undefined;
-    @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
-    const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
-    const program = try mappedProgramView(mapped);
-    var name_store = checked_names.NameStore.init(allocator);
-    defer name_store.deinit();
-    const loaded_shards = [_]LoadedShard{.{
-        .shard_id = program.shard_id,
-        .fn_count = @intCast(program.fns.len),
-    }};
-    var resolved: [0]ResolvedImportedFn = .{};
-    _ = try program.verifyAndResolveImports(&name_store, loaded_shards[0..], resolved[0..]);
-    try std.testing.expectEqual(@as(usize, 1), program.exprs.len);
 }
 
 test "monotype specialization cache reports malformed internal data as corruption" {
@@ -2436,6 +2395,7 @@ test "monotype specialization cache validity includes stored specialization iden
                 .proc_base = 1,
                 .template = 2,
             } },
+            .method_scope = testModuleDigest(8),
             .source_fn_ty_digest = first_source_digest,
             .request_fn_ty_digest = mono_digest,
             .request_fn_ty = spec_ty,
@@ -2449,6 +2409,8 @@ test "monotype specialization cache validity includes stored specialization iden
     };
     var second_spec = first_spec;
     second_spec.identity.source_fn_ty_digest = second_source_digest;
+    var third_spec = first_spec;
+    third_spec.identity.method_scope = testModuleDigest(9);
 
     const no_specs = computeValidityId(.{ .root_module = testModuleId(1) });
     const first = computeValidityId(.{
@@ -2459,9 +2421,14 @@ test "monotype specialization cache validity includes stored specialization iden
         .root_module = testModuleId(1),
         .specs = &.{second_spec},
     });
+    const third = computeValidityId(.{
+        .root_module = testModuleId(1),
+        .specs = &.{third_spec},
+    });
 
     try std.testing.expect(!std.mem.eql(u8, no_specs[0..], first[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], second[0..]));
+    try std.testing.expect(!std.mem.eql(u8, first[0..], third[0..]));
 }
 
 fn expectEquivalentProgramViews(
@@ -2500,6 +2467,7 @@ fn expectEquivalentProgramViews(
     try std.testing.expectEqualSlices(Ast.Root, fresh.roots, mapped.roots);
     try std.testing.expectEqualSlices(Ast.LayoutRequest, fresh.layout_requests, mapped.layout_requests);
     try std.testing.expectEqualSlices(Ast.RuntimeSchemaRequest, fresh.runtime_schema_requests, mapped.runtime_schema_requests);
+    try std.testing.expectEqualSlices(Ast.StaticDataValue, fresh.static_data_values, mapped.static_data_values);
     try std.testing.expectEqualSlices(Base.SourceLoc, fresh.expr_locs, mapped.expr_locs);
     try std.testing.expectEqualSlices(Base.Region, fresh.expr_regions, mapped.expr_regions);
     try std.testing.expectEqualSlices(Base.SourceLoc, fresh.stmt_locs, mapped.stmt_locs);

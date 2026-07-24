@@ -108,7 +108,7 @@ NO CHANGE
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-string
 						(e-literal (string "Hello, world!")))))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

@@ -53,7 +53,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "outer"))
@@ -176,7 +176,7 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "plus") (constraint-fn-var 171)
+			(e-dispatch-call (method "plus") (constraint-fn-var 255)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -203,7 +203,7 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 						(e-lambda
 							(args
 								(p-underscore))
-							(e-dispatch-call (method "plus") (constraint-fn-var 239)
+							(e-dispatch-call (method "plus") (constraint-fn-var 271)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "level1"))))
@@ -227,7 +227,7 @@ main = (captureSimple, captureMultiple, outerFn, useClosure)
 						(p-assign (ident "n")))))))
 	(d-let
 		(p-assign (ident "useClosure"))
-		(e-call (constraint-fn-var 280)
+		(e-call (constraint-fn-var 286)
 			(e-lookup-local
 				(p-assign (ident "makeClosure")))
 			(e-num (value "100"))))

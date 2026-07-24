@@ -1,0 +1,1 @@
+package [A, B, C] {}

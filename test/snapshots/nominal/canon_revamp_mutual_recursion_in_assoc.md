@@ -30,7 +30,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Tree")
@@ -83,7 +83,7 @@ Tree := [Leaf, Node].{
 		(e-lambda
 			(args
 				(p-assign (ident "t")))
-			(e-call (constraint-fn-var 77)
+			(e-call (constraint-fn-var 215)
 				(e-lookup-local
 					(p-assign (ident "Tree.isOdd")))
 				(e-lookup-local
@@ -97,7 +97,7 @@ Tree := [Leaf, Node].{
 		(e-lambda
 			(args
 				(p-assign (ident "t")))
-			(e-call (constraint-fn-var 92)
+			(e-call (constraint-fn-var 222)
 				(e-lookup-local
 					(p-assign (ident "Tree.isEven")))
 				(e-lookup-local

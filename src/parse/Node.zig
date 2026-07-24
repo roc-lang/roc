@@ -16,6 +16,7 @@ tag: Tag,
 data: Data,
 main_token: TokenIdx,
 region: AST.TokenizedRegion,
+collection_layout: AST.CollectionLayout = .compact,
 
 /// A SafeMultiList of Nodes
 pub const List = collections.SafeMultiList(Node);
@@ -432,7 +433,7 @@ pub const Tag = enum {
     /// * lhs - receiver expr
     /// * rhs - field ident expr
     field_access,
-    /// Method call syntax `a.foo(...)`.
+    /// Attached method call syntax `a.foo(...)`.
     /// * main_token - dotted method token
     /// * lhs - receiver expr
     /// * rhs - extra_data index storing [args_start, args_len]

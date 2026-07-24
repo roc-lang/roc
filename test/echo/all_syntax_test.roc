@@ -91,7 +91,7 @@ multiline_str = |number|
 # `=>` shows effectfulness in the type signature
 effect_demo! : Str => {}
 effect_demo! = |msg|
-	echo!(msg)
+	echo!("${msg}\n")
 
 question_postfix : List(Str) -> Try(I64, _)
 question_postfix = |strings| {
@@ -121,8 +121,12 @@ question_with_err_lambda = |strings| {
 
 # Use crash for placeholders you want to fill in later.
 implement_me_later : Str -> Str
-implement_me_later = |_str| {
-	crash "not implemented"
+implement_me_later = |str| {
+	if str == "" {
+		str
+	} else {
+		crash "not implemented"
+	}
 }
 
 # for loops can be easier to think about than List.fold (previously `List.walk`)
@@ -163,7 +167,7 @@ while_loop = |limit| {
 }
 
 print! = |something| {
-	echo!(Str.inspect(something))
+	echo!("${Str.inspect(something)}\n")
 }
 
 dbg_keyword = || {
@@ -341,10 +345,10 @@ stringify : a -> Str where [a.to_str : a -> Str]
 stringify = |value| value.to_str()
 
 main! = |_args| {
-	echo!("Hello, world!")
-	echo!("Hello, world! (using alias)")
+	echo!("Hello, world!\n")
+	echo!("Hello, world! (using alias)\n")
 
-	echo!(Str.inspect(number_operators(10, 5)))
+	echo!("${Str.inspect(number_operators(10, 5))}\n")
 	print!(boolean_operators(Bool.True, Bool.False))
 
 	# pizza operator (|>) is gone, we now have static dispatch instead.
@@ -354,12 +358,12 @@ main! = |_args| {
 	# If you want a very similar style for a function that is not defined on the type but is in scope, you can use `->`:
 	print!("Three"->my_concat(" Four"))
 
-	echo!(simple_match(Red))
+	echo!("${simple_match(Red)}\n")
 	print!(match_list_patterns([1, 10]))
-	echo!(match_tag_union_advanced(Ok({})))
+	echo!("${match_tag_union_advanced(Ok({}))}\n")
 
-	echo!(multiline_str(3))
-	echo!("Unicode escape sequence: \u(00A0)")
+	echo!("${multiline_str(3)}\n")
+	echo!("Unicode escape sequence: \u(00A0)\n")
 
 	effect_demo!("This is an effectful function!")
 
@@ -380,7 +384,7 @@ main! = |_args| {
 
 	print!(dbg_keyword())
 
-	echo!(if_demo(2))
+	echo!("${if_demo(2)}\n")
 
 	print!(tuple_demo)
 

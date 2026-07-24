@@ -102,12 +102,12 @@ match ... {
 								(p-assign (ident "name"))))
 						(s-let
 							(p-assign (ident "#interp_1"))
-							(e-dispatch-call (method "to_str") (constraint-fn-var 61)
+							(e-dispatch-call (method "to_str") (constraint-fn-var 222)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "age"))))
 								(args)))
-						(e-interpolation (constraint-fn-var 120)
+						(e-interpolation (constraint-fn-var 241) (dispatcher-var 19)
 							(first
 								(e-literal (string "")))
 							(parts
@@ -142,7 +142,7 @@ match ... {
 							(p-assign (ident "#interp_3"))
 							(e-lookup-local
 								(p-assign (ident "name"))))
-						(e-interpolation (constraint-fn-var 181)
+						(e-interpolation (constraint-fn-var 262) (dispatcher-var 41)
 							(first
 								(e-literal (string "")))
 							(parts

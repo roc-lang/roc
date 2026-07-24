@@ -34,6 +34,9 @@ const TermColor = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
+    // This tool stays standalone (no build_options wiring), so unlike the
+    // first-party DebugAllocators behind -Ddebug-gpa-traces it keeps std's
+    // default allocation-site traces; it allocates too little to matter.
     var gpa_impl = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_impl.deinit();
     const gpa = gpa_impl.allocator();
@@ -490,9 +493,7 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
         "src/mir/",
         "src/lir/",
         "src/layout/",
-        "src/interpreter_layout/",
         "src/values/",
-        "src/interpreter_values/",
         "src/backend/",
         "src/target/",
         "src/eval/",

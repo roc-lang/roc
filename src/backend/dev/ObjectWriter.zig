@@ -75,6 +75,7 @@ pub fn generateObjectFileWithDebug(
                     .size = sym.size,
                     .is_global = sym.is_global or sym.is_external,
                     .is_function = sym.is_function,
+                    .is_hidden = sym.is_hidden,
                 });
 
                 // Add relocations for this symbol
@@ -223,6 +224,7 @@ pub const Symbol = struct {
     is_global: bool,
     is_function: bool,
     is_external: bool,
+    is_hidden: bool = false,
     // Unwind metadata for Windows object files.
     prologue_size: u32 = 0,
     stack_alloc: u32 = 0,

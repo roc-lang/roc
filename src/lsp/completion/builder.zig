@@ -730,8 +730,13 @@ pub const CompletionBuilder = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .nominal_type => |nominal| {
-                            const backing_var = type_store.getNominalBackingVar(nominal);
-                            resolved = type_store.resolveVar(backing_var);
+                            // Row/tuple structure is declaration data: unwrap
+                            // through the declaration's backing template
+                            // (formals appear as rigid vars).
+                            const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
+                            const decl = type_store.getNominalDecl(decl_idx);
+                            if (!decl.isValid()) break;
+                            resolved = type_store.resolveVar(decl.backing);
                             content = resolved.desc.content;
                             continue;
                         },
@@ -795,8 +800,13 @@ pub const CompletionBuilder = struct {
                             return;
                         },
                         .nominal_type => |nominal| {
-                            const backing_var = type_store.getNominalBackingVar(nominal);
-                            resolved = type_store.resolveVar(backing_var);
+                            // Row/tuple structure is declaration data: unwrap
+                            // through the declaration's backing template
+                            // (formals appear as rigid vars).
+                            const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
+                            const decl = type_store.getNominalDecl(decl_idx);
+                            if (!decl.isValid()) break;
+                            resolved = type_store.resolveVar(decl.backing);
                             content = resolved.desc.content;
                             continue;
                         },
@@ -860,8 +870,13 @@ pub const CompletionBuilder = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .nominal_type => |nominal| {
-                            const backing_var = type_store.getNominalBackingVar(nominal);
-                            resolved = type_store.resolveVar(backing_var);
+                            // Row/tuple structure is declaration data: unwrap
+                            // through the declaration's backing template
+                            // (formals appear as rigid vars).
+                            const decl_idx = type_store.lookupNominalDecl(nominal) orelse break;
+                            const decl = type_store.getNominalDecl(decl_idx);
+                            if (!decl.isValid()) break;
+                            resolved = type_store.resolveVar(decl.backing);
                             content = resolved.desc.content;
                             continue;
                         },

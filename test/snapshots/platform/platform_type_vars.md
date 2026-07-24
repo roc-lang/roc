@@ -92,11 +92,7 @@ EndOfFile,
 ~~~roc
 platform ""
 	requires {
-		[Model : model] for main : {
-			init : model,
-			update : model, I64 -> Model,
-			render : model -> I64,
-		}
+		[Model : model] for main : { init : model, update : model, I64 -> Model, render : model -> I64 }
 	}
 	exposes []
 	packages {}

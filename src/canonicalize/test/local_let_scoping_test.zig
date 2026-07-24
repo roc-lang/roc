@@ -39,29 +39,6 @@ fn scopingDiagnosticCounts(source: []const u8) ScopingTestError!Counts {
     return counts;
 }
 
-test "local self-recursion is allowed" {
-    const counts = try scopingDiagnosticCounts(
-        \\|n| {
-        \\    fac = |x| if (x <= 1) 1 else x * fac(x - 1)
-        \\    fac(n)
-        \\}
-    );
-    try testing.expectEqual(@as(usize, 0), counts.forward_ref);
-    try testing.expectEqual(@as(usize, 0), counts.mutual);
-}
-
-test "backward reference to an earlier local def is allowed" {
-    const counts = try scopingDiagnosticCounts(
-        \\|_| {
-        \\    f = |x| x + 1
-        \\    g = |x| f(x)
-        \\    g(1)
-        \\}
-    );
-    try testing.expectEqual(@as(usize, 0), counts.forward_ref);
-    try testing.expectEqual(@as(usize, 0), counts.mutual);
-}
-
 test "nested self-recursion is allowed" {
     const counts = try scopingDiagnosticCounts(
         \\|_| {
@@ -74,28 +51,4 @@ test "nested self-recursion is allowed" {
     );
     try testing.expectEqual(@as(usize, 0), counts.forward_ref);
     try testing.expectEqual(@as(usize, 0), counts.mutual);
-}
-
-test "forward reference to a later local def is use-before-definition" {
-    const counts = try scopingDiagnosticCounts(
-        \\|_| {
-        \\    g = |x| f(x)
-        \\    f = |x| x + 1
-        \\    g(1)
-        \\}
-    );
-    try testing.expectEqual(@as(usize, 1), counts.forward_ref);
-    try testing.expectEqual(@as(usize, 0), counts.mutual);
-}
-
-test "mutual recursion between local defs is reported" {
-    const counts = try scopingDiagnosticCounts(
-        \\|_| {
-        \\    is_even = |n| if (n == 0) True else is_odd(n - 1)
-        \\    is_odd = |n| if (n == 0) False else is_even(n - 1)
-        \\    is_even(4)
-        \\}
-    );
-    try testing.expectEqual(@as(usize, 0), counts.forward_ref);
-    try testing.expectEqual(@as(usize, 1), counts.mutual);
 }

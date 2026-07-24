@@ -55,7 +55,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "recurse")
 			(ty-fn
@@ -171,14 +171,14 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 305)
+			(e-dispatch-call (method "plus") (constraint-fn-var 313)
 				(receiver
 					(e-num (value "1")))
 				(args
-					(e-call (constraint-fn-var 304)
+					(e-call (constraint-fn-var 312)
 						(e-lookup-local
 							(p-assign (ident "recurse")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 224)
+						(e-dispatch-call (method "plus") (constraint-fn-var 292)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -204,10 +204,10 @@ main! = |_| {
 								(e-num (value "0"))))
 						(e-num (value "1"))))
 				(if-else
-					(e-call (constraint-fn-var 669)
+					(e-call (constraint-fn-var 403)
 						(e-lookup-local
 							(p-assign (ident "pongIt")))
-						(e-dispatch-call (method "minus") (constraint-fn-var 589)
+						(e-dispatch-call (method "minus") (constraint-fn-var 383)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -233,10 +233,10 @@ main! = |_| {
 								(e-num (value "0"))))
 						(e-num (value "2"))))
 				(if-else
-					(e-call (constraint-fn-var 1024)
+					(e-call (constraint-fn-var 488)
 						(e-lookup-local
 							(p-assign (ident "pingIt")))
-						(e-dispatch-call (method "minus") (constraint-fn-var 944)
+						(e-dispatch-call (method "minus") (constraint-fn-var 468)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
@@ -251,7 +251,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 1095)
+			(e-call (constraint-fn-var 503)
 				(e-lookup-local
 					(p-assign (ident "recurse")))
 				(e-lookup-local
@@ -264,7 +264,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 1129)
+					(e-call (constraint-fn-var 511)
 						(e-lookup-local
 							(p-assign (ident "caller")))
 						(e-num (value "0"))))

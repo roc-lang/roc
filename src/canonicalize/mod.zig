@@ -103,10 +103,11 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Statement.zig"));
     std.testing.refAllDecls(@import("TypeAnnotation.zig"));
 
-    std.testing.refAllDecls(@import("test/anno_only_test.zig"));
     std.testing.refAllDecls(@import("test/bool_test.zig"));
+    std.testing.refAllDecls(@import("test/diagnostic_publication_test.zig"));
     std.testing.refAllDecls(@import("test/frac_test.zig"));
     std.testing.refAllDecls(@import("test/if_statement_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_10151_test.zig"));
     std.testing.refAllDecls(@import("test/import_validation_test.zig"));
     std.testing.refAllDecls(@import("test/int_test.zig"));
     std.testing.refAllDecls(@import("test/range_test.zig"));
@@ -120,6 +121,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/local_let_scoping_test.zig"));
     std.testing.refAllDecls(@import("test/uninitialized_var_test.zig"));
     std.testing.refAllDecls(@import("test/while_loop_test.zig"));
+    std.testing.refAllDecls(@import("test/where_clause_ownership_test.zig"));
+    std.testing.refAllDecls(@import("test/type_shadowing_test.zig"));
 
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));

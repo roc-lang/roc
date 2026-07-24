@@ -22,7 +22,7 @@ parse_headers : Str -> Try(
 		wildcard_optional : Try(Str, [Missing]),
 		x_auth_token : Try(Str, [Missing]),
 	},
-	Encoding.HttpHeader,
+	[BadHeader, MissingRequiredField(Str)],
 )
 parse_headers = Encoding.HttpHeader.parser_for()
 
@@ -39,7 +39,7 @@ main! = |headers| {
 			wildcard_optional : Try(Str, _),
 			x_auth_token : Try(Str, [Missing]),
 		},
-		Encoding.HttpHeader,
+		[BadHeader, MissingRequiredField(Str)],
 	)
 	decoded_result = parse_headers(headers)
 
@@ -75,8 +75,8 @@ main! = |headers| {
 				+ question_optional_length
 				+ x_auth_token_length
 		}
-		Err(Encoding.HttpHeader.MissingRequired) => 999999
-		Err(Encoding.HttpHeader.BadHeader) => 999999
+		Err(MissingRequiredField(_)) => 999999
+		Err(BadHeader) => 999999
 	}
 }
 

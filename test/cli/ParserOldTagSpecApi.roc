@@ -1,11 +1,11 @@
 ParserOldTagSpecApi :: [].{}
 
 Format := [Default].{
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [FormatError, ..])
 	parse_tag_union = |_, spec, state|
 		match state {
 			Present(tag_name) => {
-				value = Encoding.ParseTagUnionSpec.parse(spec, tag_name, State.Present(tag_name), Str.is_eq, MissingRequired)?
+				value = Encoding.ParseTagUnionSpec.parse(spec, tag_name, State.Present(tag_name), Str.is_eq, FormatError)?
 				Ok({ value, rest: State.Present("") })
 			}
 		}
@@ -13,9 +13,9 @@ Format := [Default].{
 
 State := [Present(Str)]
 
-parse : Str -> Try(a, [MissingRequired])
+parse : Str -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -24,5 +24,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try([One], [MissingRequired])
+main : Try([One], [FormatError])
 main = parse("One")

@@ -2,26 +2,38 @@
 
 const std = @import("std");
 const builtins = @import("builtins");
+const shim_symbols = builtins.shim_symbols;
 
 const empty_hosted_fns = [_]builtins.host_abi.HostedFn{};
 
-export const roc_shim_hosted_count: usize = 0;
-export const roc_shim_hosted_fns: [*]const builtins.host_abi.HostedFn = &empty_hosted_fns;
+const hosted_count: usize = 0;
+const hosted_fns: [*]const builtins.host_abi.HostedFn = &empty_hosted_fns;
 
-export fn roc_alloc(_: usize, _: usize) ?*anyopaque {
+comptime {
+    @export(&hosted_count, .{ .name = shim_symbols.roc_shim_hosted_count });
+    @export(&hosted_fns, .{ .name = shim_symbols.roc_shim_hosted_fns });
+    @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
+    @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
+    @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });
+    @export(&rocDbg, .{ .name = shim_symbols.roc_dbg });
+    @export(&rocExpectFailed, .{ .name = shim_symbols.roc_expect_failed });
+    @export(&rocCrashed, .{ .name = shim_symbols.roc_crashed });
+}
+
+fn rocAlloc(_: usize, _: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
-export fn roc_dealloc(_: *anyopaque, _: usize) void {}
+fn rocDealloc(_: *anyopaque, _: usize) callconv(.c) void {}
 
-export fn roc_realloc(_: *anyopaque, _: usize, _: usize) ?*anyopaque {
+fn rocRealloc(_: *anyopaque, _: usize, _: usize) callconv(.c) ?*anyopaque {
     return null;
 }
 
-export fn roc_dbg(_: [*]const u8, _: usize) void {}
+fn rocDbg(_: [*]const u8, _: usize) callconv(.c) void {}
 
-export fn roc_expect_failed(_: [*]const u8, _: usize) void {}
+fn rocExpectFailed(_: [*]const u8, _: usize) callconv(.c) void {}
 
-export fn roc_crashed(_: [*]const u8, _: usize) void {
+fn rocCrashed(_: [*]const u8, _: usize) callconv(.c) void {
     std.process.abort();
 }

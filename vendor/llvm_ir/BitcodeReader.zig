@@ -135,7 +135,7 @@ pub fn deinit(bc: *BitcodeReader) void {
 }
 
 /// Verifies the 4-byte magic number at the start of the bitcode file.
-pub fn checkMagic(bc: *BitcodeReader, magic: *const [4]u8) Allocator.Error!void {
+pub fn checkMagic(bc: *BitcodeReader, magic: *const [4]u8) !void {
     var buffer: [4]u8 = undefined;
     try bc.readBytes(&buffer);
     if (!std.mem.eql(u8, &buffer, magic)) return error.InvalidMagic;
@@ -145,7 +145,7 @@ pub fn checkMagic(bc: *BitcodeReader, magic: *const [4]u8) Allocator.Error!void 
 }
 
 /// Returns the next item from the bitcode stream, or null at end of file.
-pub fn next(bc: *BitcodeReader) Allocator.Error!?Item {
+pub fn next(bc: *BitcodeReader) !?Item {
     while (true) {
         const record = (try bc.nextRecord()) orelse
             return if (bc.stack.items.len > 1) error.EndOfStream else null;
@@ -192,13 +192,13 @@ pub fn next(bc: *BitcodeReader) Allocator.Error!?Item {
 }
 
 /// Skips over the contents of a block without parsing its records.
-pub fn skipBlock(bc: *BitcodeReader, block: Block) Allocator.Error!void {
+pub fn skipBlock(bc: *BitcodeReader, block: Block) !void {
     assert(bc.bit_offset == 0);
     try bc.reader.discardAll(4 * @as(usize, block.len));
     try bc.endBlock();
 }
 
-fn nextRecord(bc: *BitcodeReader) Allocator.Error!?Record {
+fn nextRecord(bc: *BitcodeReader) !?Record {
     const state = &bc.stack.items[bc.stack.items.len - 1];
     const abbrev_id = bc.readFixed(u32, state.abbrev_id_width) catch |err| switch (err) {
         error.EndOfStream => return null,
@@ -281,7 +281,7 @@ fn nextRecord(bc: *BitcodeReader) Allocator.Error!?Record {
     };
 }
 
-fn startBlock(bc: *BitcodeReader, block_id: ?u32, new_abbrev_len: u6) Allocator.Error!void {
+fn startBlock(bc: *BitcodeReader, block_id: ?u32, new_abbrev_len: u6) !void {
     const abbrevs = if (block_id) |id|
         if (bc.block_info.get(id)) |block_info| block_info.abbrevs.abbrevs.items else &.{}
     else
@@ -335,13 +335,13 @@ fn startBlock(bc: *BitcodeReader, block_id: ?u32, new_abbrev_len: u6) Allocator.
     for (abbrevs) |abbrev| try state.abbrevs.addAbbrevAssumeCapacity(bc.allocator, abbrev);
 }
 
-fn endBlock(bc: *BitcodeReader) Allocator.Error!void {
+fn endBlock(bc: *BitcodeReader) !void {
     if (bc.stack.items.len == 0) return error.InvalidEndBlock;
     bc.stack.items[bc.stack.items.len - 1].deinit(bc.allocator);
     bc.stack.items.len -= 1;
 }
 
-fn parseBlockInfoBlock(bc: *BitcodeReader) Allocator.Error!void {
+fn parseBlockInfoBlock(bc: *BitcodeReader) !void {
     var block_id: ?u32 = null;
     while (true) {
         const record = (try bc.nextRecord()) orelse return error.EndOfStream;
@@ -391,12 +391,12 @@ fn align32Bits(bc: *BitcodeReader) void {
     bc.bit_offset = 0;
 }
 
-fn read32Bits(bc: *BitcodeReader) Allocator.Error!u32 {
+fn read32Bits(bc: *BitcodeReader) !u32 {
     assert(bc.bit_offset == 0);
     return bc.reader.takeInt(u32, .little);
 }
 
-fn readBytes(bc: *BitcodeReader, bytes: []u8) Allocator.Error!void {
+fn readBytes(bc: *BitcodeReader, bytes: []u8) !void {
     assert(bc.bit_offset == 0);
     try bc.reader.readSliceAll(bytes);
 
@@ -409,7 +409,7 @@ fn readBytes(bc: *BitcodeReader, bytes: []u8) Allocator.Error!void {
     }
 }
 
-fn readFixed(bc: *BitcodeReader, comptime T: type, bits: u7) Allocator.Error!T {
+fn readFixed(bc: *BitcodeReader, comptime T: type, bits: u7) !T {
     var result: T = 0;
     var shift: std.math.Log2IntCeil(T) = 0;
     var remaining = bits;
@@ -425,7 +425,7 @@ fn readFixed(bc: *BitcodeReader, comptime T: type, bits: u7) Allocator.Error!T {
     return result;
 }
 
-fn readVbr(bc: *BitcodeReader, comptime T: type, bits: u7) Allocator.Error!T {
+fn readVbr(bc: *BitcodeReader, comptime T: type, bits: u7) !T {
     const chunk_bits: u6 = @intCast(bits - 1);
     const chunk_msb = @as(u64, 1) << chunk_bits;
 
@@ -440,7 +440,7 @@ fn readVbr(bc: *BitcodeReader, comptime T: type, bits: u7) Allocator.Error!T {
     return @intCast(result);
 }
 
-fn readChar6(bc: *BitcodeReader) Allocator.Error!u8 {
+fn readChar6(bc: *BitcodeReader) !u8 {
     return switch (try bc.readFixed(u6, 6)) {
         0...25 => |c| @as(u8, c - 0) + 'a',
         26...51 => |c| @as(u8, c - 26) + 'A',

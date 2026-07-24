@@ -88,7 +88,8 @@ All communication uses JSON messages. Each message must have a `type` field.
 ```json
 {
   "type": "LOAD_SOURCE",
-  "source": "module [foo]\nfoo = 42\nbar = \"baz\"\n"
+  "filename": "Demo.roc",
+  "source": "Demo := [].{\n    foo = 42\n    bar = \"baz\"\n}\n"
 }
 ```
 
@@ -98,21 +99,10 @@ All communication uses JSON messages. Each message must have a `type` field.
   "status": "SUCCESS",
   "message": "LOADED",
   "diagnostics": {
-    "summary": {"errors": 0, "warnings": 1},
+    "summary": {"errors": 0, "warnings": 0},
     "debug_counts": { ... },
-    "list": [
-      {
-        "severity": "warning",
-        "message": "UNUSED_DEFINITION",
-        "region": {
-          "start_line": 1,
-          "start_column": 1,
-          "end_line": 1,
-          "end_column": 5
-        }
-      }
-    ],
-    "html": "<div class=\"report warning\">...</div>"
+    "list": [],
+    "html": "<div class=\"reports\"></div>"
   }
 }
 ```
@@ -198,7 +188,7 @@ All communication uses JSON messages. Each message must have a `type` field.
 ```json
 {
   "status": "SUCCESS",
-  "data": "module [foo]\n\nfoo = 42\n\nbar = \"baz\"\n"
+  "data": "Demo := [].{\n\tfoo = 42\n\tbar = \"baz\"\n}\n"
 }
 ```
 

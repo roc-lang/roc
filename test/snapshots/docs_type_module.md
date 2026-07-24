@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type module with doc comments
+description=Type mod with doc comments
 type=docs
 ~~~
 # SOURCE
@@ -49,10 +49,10 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "Color")
     (package "app")
-    (kind type_module)
+    (kind type_mod)
     (doc "A color value.")
     (entry
       (name "Color")
@@ -62,18 +62,18 @@ main_for_host = main
       (entry
         (name "red")
         (kind value)
-        (type (fn (record) (type-ref (module "app.Color") (name "Color"))))
+        (type (fn (record) (type-ref (mod "app.Color") (name "Color"))))
         (doc "The red color.")
       )
       (entry
         (name "to_str")
         (kind value)
-        (type (fn (type-ref (module "app.Color") (name "Color")) (type-ref (name "Str"))))
+        (type (fn (type-ref (mod "app.Color") (name "Color")) (type-ref (name "Str"))))
         (doc "Convert a color to a string.")
       )
     )
   )
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)

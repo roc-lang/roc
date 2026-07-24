@@ -12,6 +12,7 @@ const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
+const types = @import("types");
 
 const Common = @import("../common.zig");
 const Layouts = @import("layouts.zig");
@@ -27,6 +28,7 @@ const LirProgram = lir_core.Program;
 const LirStore = lir_core.LirStore;
 const RootMetadata = lir_core.RootMetadata.RootMetadata;
 const static_dispatch = check.StaticDispatchRegistry;
+const exact_numeral = types.numeral;
 const GuardedList = collections.GuardedList;
 
 /// Runtime schema metadata produced alongside lowered LIR.
@@ -3145,14 +3147,17 @@ const ProcedureBuilder = struct {
                 .{ .procedure_binding = binding }
             else
                 .{ .nested_expr = .{ .module = lookup.module.key, .expr = nestedCallableSiteExprForExpr(lookup.module, local.expr) orelse local.expr } },
-            .generated_structural_parser => .{ .generated_codec = .{
-                .kind = .parser_constructor,
-                .shape = shape,
-            } },
-            .generated_structural_encoder => .{ .generated_codec = .{
-                .kind = .encoder_constructor,
-                .shape = shape,
-            } },
+            .structural => |kind| switch (kind) {
+                .parser => .{ .generated_codec = .{
+                    .kind = .parser_constructor,
+                    .shape = shape,
+                } },
+                .encoder => .{ .generated_codec = .{
+                    .kind = .encoder_constructor,
+                    .shape = shape,
+                } },
+                .equality, .hash, .map, .map_effectful => boxyLowerInvariant("non-codec structural target reached Boxy method worker selection"),
+            },
         };
     }
 
@@ -3169,8 +3174,7 @@ const ProcedureBuilder = struct {
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
             .local_proc,
-            .generated_structural_parser,
-            .generated_structural_encoder,
+            .structural,
             => boxyLowerInvariant("boxy nominal method target reached lowering without a procedure worker"),
         };
         return self.plan.workerForSourceType(source, .{
@@ -4280,6 +4284,8 @@ const ProcedureBuilder = struct {
                     .assign_list,
                     .assign_struct,
                     .assign_tag,
+                    .store_struct,
+                    .store_tag,
                     .set_local,
                     .debug,
                     .expect,
@@ -11148,6 +11154,8 @@ const ProcedureBuilder = struct {
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .store_struct,
+                .store_tag,
                 .set_local,
                 .debug,
                 .expect,
@@ -12761,23 +12769,10 @@ const ProcBodyBuilder = struct {
         self.parent.result.store.current_region = expr.source_region;
 
         return switch (expr.data) {
-            .num => |num| if (try self.assignBuiltinNumLiteralForDynamicTarget(target, num.value, num.kind, expr.ty, next)) |literal|
-                literal
+            .numeral => |numeral| if (numeral.plan) |plan|
+                try self.lowerNumeralConversionInto(target, expr_id, expr.ty, plan, next)
             else
-                // A concrete target's committed layout decides the runtime
-                // encoding: Dec-typed numerals need the scaled Dec bit pattern,
-                // not the raw integer bits.
-                try self.assignBuiltinNumLiteralPayload(
-                    target,
-                    self.parent.result.store.getLocal(target).layout_idx,
-                    num.value,
-                    next,
-                ),
-            .typed_int => |int| try self.assignIntLiteral(target, int.value.toI128(), next),
-            .frac_f32 => |frac| try self.assignF32Literal(target, frac.value, next),
-            .frac_f64 => |frac| try self.assignF64Literal(target, frac.value, next),
-            .dec => |dec| try self.assignDecLiteral(target, dec.value, next),
-            .dec_small => |dec| try self.assignDecLiteral(target, dec.value.toRocDec(), next),
+                try self.assignCheckedNumeralLiteral(target, expr.ty, numeral.literal, next),
             .str_segment => |literal| try self.assignStringLiteral(target, literal, next),
             .bytes_literal => |literal| try self.assignStringLiteral(target, literal, next),
             .str => |segments| try self.lowerStrInto(target, expr.ty, segments, next),
@@ -12865,8 +12860,6 @@ const ProcBodyBuilder = struct {
                 try self.lowerCallableExprTypeRefInto(target, use_type, expr_id, next)
             else
                 try self.lowerCallableExprInto(target, expr_id, next),
-            .num_from_numeral => |maybe_plan| try self.lowerNumeralConversionInto(target, expr_id, expr.ty, maybe_plan, next),
-            .typed_num_from_numeral => |maybe_plan| try self.lowerNumeralConversionInto(target, expr_id, expr.ty, maybe_plan, next),
             else => {
                 if (comptime zig_builtin.mode == .Debug and zig_builtin.target.os.tag != .freestanding) {
                     std.debug.print("boxy lowering unimplemented checked expression form: {s}\n", .{@tagName(expr.data)});
@@ -16862,6 +16855,8 @@ const ProcBodyBuilder = struct {
             .hash,
             .parser_for,
             .encoder_for,
+            .map,
+            .map_effectful,
             => {},
         }
 
@@ -16912,6 +16907,9 @@ const ProcBodyBuilder = struct {
             .parser_for,
             .encoder_for,
             => boxyLowerInvariant("unresolved parser or encoder dispatch reached boxy lowering before structural parser/encoder support"),
+            .map,
+            .map_effectful,
+            => boxyLowerInvariant("derived map dispatch reached Boxy lowering without an explicit checked implementation"),
         };
     }
 
@@ -17112,6 +17110,8 @@ const ProcBodyBuilder = struct {
             .hash,
             .parser_for,
             .encoder_for,
+            .map,
+            .map_effectful,
             => {},
         }
         const call_returns_method_result = call_target == target;
@@ -19418,7 +19418,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalPayload(self.module, tag_ty).backing;
+                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
                     const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing = try self.addFrameLocalForRepWithFreshDescriptor(backing_rep);
                     const assign = try self.assignPlannedCallBoundary(target, backing, rep_id, backing_rep, next);
@@ -20565,11 +20565,7 @@ const ProcBodyBuilder = struct {
                 break :blk false;
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             .str_interpolation,
             => false,
@@ -20606,11 +20602,7 @@ const ProcBodyBuilder = struct {
                 break :blk try self.lowerAppliedTagPatternThen(pattern.ty, tag.name, tag.args, source, next, null, &.{});
             },
             .underscore => next,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             .str_interpolation,
             .runtime_error,
@@ -20638,26 +20630,12 @@ const ProcBodyBuilder = struct {
             .record_destructure => |destructs| try self.lowerRecordPatternThen(pattern.ty, destructs, source, on_match, miss, remaps),
             .nominal => |nominal| try self.lowerNominalPatternThen(pattern.ty, nominal.backing_pattern, source, on_match, miss, remaps),
             .applied_tag => |tag| try self.lowerAppliedTagPatternThen(pattern.ty, tag.name, tag.args, source, on_match, miss, remaps),
-            .num_literal => |literal| blk: {
+            .numeral_literal => |literal| blk: {
                 if (literal.conversion != null) {
                     boxyLowerInvariant("non-builtin numeral pattern reached boxy match lowering before dictionary conversion lowering");
                 }
-                break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .int = literal.value }, on_match, miss);
+                break :blk try self.lowerNumeralPatternThen(pattern.ty, source, literal.literal, on_match, miss);
             },
-            .small_dec_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin small decimal pattern reached boxy match lowering before dictionary conversion lowering");
-                }
-                break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .dec = literal.value.toRocDec() }, on_match, miss);
-            },
-            .dec_literal => |literal| blk: {
-                if (literal.conversion != null) {
-                    boxyLowerInvariant("non-builtin decimal pattern reached boxy match lowering before dictionary conversion lowering");
-                }
-                break :blk try self.lowerLiteralPatternThen(pattern.ty, source, .{ .dec = literal.value }, on_match, miss);
-            },
-            .frac_f32_literal => |value| try self.lowerLiteralPatternThen(pattern.ty, source, .{ .frac_f32 = value }, on_match, miss),
-            .frac_f64_literal => |value| try self.lowerLiteralPatternThen(pattern.ty, source, .{ .frac_f64 = value }, on_match, miss),
             .str_literal => |literal| blk: {
                 if (literal.conversion != null) {
                     boxyLowerInvariant("non-builtin string pattern reached boxy match lowering before dictionary conversion lowering");
@@ -21248,7 +21226,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalPayload(self.module, tag_ty).backing;
+                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
                     const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
                     return try self.lowerAppliedTagPatternRepThen(backing_ty, backing_rep, name, args, source, on_match, miss, remaps);
                 },
@@ -21546,6 +21524,21 @@ const ProcBodyBuilder = struct {
         return try self.assignLiteralPattern(literal_local, literal, compare);
     }
 
+    fn lowerNumeralPatternThen(
+        self: *ProcBodyBuilder,
+        pattern_ty: checked.CheckedTypeId,
+        source: LIR.LocalId,
+        literal: can.ModuleEnv.NumeralLiteral,
+        on_match: LIR.CFStmtId,
+        miss: ?PatternMiss,
+    ) Allocator.Error!LIR.CFStmtId {
+        const literal_local = try self.addFrameLocalForType(pattern_ty);
+        const eq = try self.addFrameLocal(.bool);
+        const switch_stmt = try self.boolSwitchNoContinuation(eq, on_match, try self.patternMissJump(miss));
+        const compare = try self.lowerEqRepLocalsInto(eq, source, literal_local, self.repForType(pattern_ty), false, switch_stmt);
+        return try self.assignCheckedNumeralLiteral(literal_local, pattern_ty, literal, compare);
+    }
+
     fn assignLiteralPattern(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -21783,11 +21776,7 @@ const ProcBodyBuilder = struct {
             .list => |list| try self.bindReassignIrrefutableListPattern(list, source, reassigned_binders, next),
             .underscore => next,
             .applied_tag,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             .str_interpolation,
             .runtime_error,
@@ -22241,11 +22230,7 @@ const ProcBodyBuilder = struct {
                 break :blk next;
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             .str_interpolation,
             => next,
@@ -27670,69 +27655,82 @@ const ProcBodyBuilder = struct {
         } });
     }
 
-    fn assignBuiltinNumLiteralForDynamicTarget(
+    fn assignCheckedNumeralLiteral(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
-        value: can.CIR.IntValue,
-        kind: can.CIR.NumKind,
         checked_ty: checked.CheckedTypeId,
+        literal: can.ModuleEnv.NumeralLiteral,
         next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-        if (!self.layoutIsBoxyDynamicStorage(target_layout)) return null;
+    ) Allocator.Error!LIR.CFStmtId {
+        const default_layout = builtinNumeralLayoutForType(self.module, checked_ty);
+        if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
+            const exact = self.module.module_env.exactNumeral(literal);
+            const value: LIR.LiteralValue = switch (default_layout) {
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => .{ .boxy_dynamic_num_literal = .{
+                    .value = exactIntBitsForLayout(exact, default_layout) orelse return try self.invalidNumeralLiteral(),
+                    .desc = desc_ref,
+                    .default_layout = default_layout,
+                } },
+                .f32, .f64, .dec => .{ .boxy_dynamic_frac_literal = .{
+                    .dec_bits = (try exact_numeral.decBits(self.parent.allocator, exact)) orelse return try self.invalidNumeralLiteral(),
+                    .desc = desc_ref,
+                    .default_layout = default_layout,
+                } },
+                else => boxyLowerInvariant("builtin numeral resolved to a non-numeric layout"),
+            };
+            const assigned = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = value,
+                .next = next,
+            } });
+            return try self.prependLiteralTargetDescriptorMaterialization(target, assigned);
+        }
+        if (self.dynamicLiteralTarget(target)) |info| {
+            const payload = try self.addFrameLocal(info.payload_layout);
+            const box = try self.assignBoxedLiteralPayload(target, payload, info, next);
+            return try self.assignExactNumeralPayload(payload, info.payload_layout, literal, box);
+        }
+        return try self.assignExactNumeralPayload(
+            target,
+            self.parent.result.store.getLocal(target).layout_idx,
+            literal,
+            next,
+        );
+    }
 
-        const current_desc = self.parent.result.store.getLocal(target).boxy_desc orelse {
-            const payload_layout = builtinNumLiteralPayloadLayout(kind);
-            const payload_desc = try self.appendLiteralPayloadDesc(payload_layout, checked_ty);
-            self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
-
-            const payload = try self.addFrameLocal(payload_layout);
-            const box = try self.assignBoxedLiteralPayload(target, payload, .{
-                .payload_layout = payload_layout,
-                .payload_desc = payload_desc,
-            }, next);
-            return try self.assignBuiltinNumLiteralPayload(payload, payload_layout, value, box);
-        };
-        const needs_default_payload = switch (current_desc) {
-            .static => |desc_id| self.parent.result.boxy_type_descs.items[@intFromEnum(desc_id)].payload_layout == target_layout,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => {
-                // A live binding knows the target's representation; the
-                // literal encodes itself against it at runtime instead of
-                // assuming the kind's default layout.
-                const literal = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+    fn assignExactNumeralPayload(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        payload_layout: layout.Idx,
+        literal: can.ModuleEnv.NumeralLiteral,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const exact = self.module.module_env.exactNumeral(literal);
+        return switch (payload_layout) {
+            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => blk: {
+                const value = exactIntBitsForLayout(exact, payload_layout) orelse
+                    break :blk try self.invalidNumeralLiteral();
+                break :blk try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
-                    .value = .{ .boxy_dynamic_num_literal = .{
-                        .value = value.toI128(),
-                        .desc = current_desc,
-                        .default_layout = builtinNumLiteralPayloadLayout(kind),
-                    } },
+                    .value = .{ .i128_literal = .{ .value = value, .layout_idx = payload_layout } },
                     .next = next,
                 } });
-                const target_desc_local = current_desc.localOrNull() orelse return literal;
-                if (self.localIsReadOnlyDescriptorInput(target_desc_local)) return literal;
-                const materialization = try self.descriptorMaterializationForSourceRep(self.repForType(checked_ty));
-                if (materialization.desc.localOrNull() == target_desc_local) {
-                    boxyLowerInvariant("dynamic numeric literal descriptor initializer referenced its own target");
-                }
-                return try self.prependDescriptorArgMaterialization(.{
-                    .local = target_desc_local,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                }, materialization.desc, literal);
             },
+            .f32 => try self.assignF32Literal(target, try exact_numeral.floatBits(f32, self.parent.allocator, exact), next),
+            .f64 => try self.assignF64Literal(target, try exact_numeral.floatBits(f64, self.parent.allocator, exact), next),
+            .dec => blk: {
+                const bits = (try exact_numeral.decBits(self.parent.allocator, exact)) orelse
+                    break :blk try self.invalidNumeralLiteral();
+                break :blk try self.assignDecLiteral(target, .{ .num = bits }, next);
+            },
+            else => boxyLowerInvariant("checked numeral reached a non-numeric Boxy payload layout"),
         };
-        if (!needs_default_payload) return null;
+    }
 
-        const payload_layout = builtinNumLiteralPayloadLayout(kind);
-        const payload_desc = try self.appendLiteralPayloadDesc(payload_layout, checked_ty);
-        self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
-
-        const payload = try self.addFrameLocal(payload_layout);
-        const box = try self.assignBoxedLiteralPayload(target, payload, .{
-            .payload_layout = payload_layout,
-            .payload_desc = payload_desc,
-        }, next);
-        return try self.assignBuiltinNumLiteralPayload(payload, payload_layout, value, box);
+    fn invalidNumeralLiteral(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .crash = .{
+            .msg = try self.parent.result.store.insertString("invalid numeric literal"),
+        } });
     }
 
     fn appendLiteralPayloadDesc(
@@ -27750,31 +27748,10 @@ const ProcBodyBuilder = struct {
         return .{ .static = desc_id };
     }
 
-    fn assignBuiltinNumLiteralPayload(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        payload_layout: layout.Idx,
-        value: can.CIR.IntValue,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return switch (payload_layout) {
-            .f32 => try self.assignF32Literal(target, @floatCast(intValueToF64(value)), next),
-            .f64 => try self.assignF64Literal(target, intValueToF64(value), next),
-            .dec => try self.assignDecLiteral(target, intValueToDec(value), next),
-            else => try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .i128_literal = .{
-                    .value = value.toI128(),
-                    .layout_idx = payload_layout,
-                } },
-                .next = next,
-            } }),
-        };
-    }
-
-    fn builtinNumLiteralPayloadLayout(kind: can.CIR.NumKind) layout.Idx {
-        return switch (kind) {
-            .num_unbound, .int_unbound => .dec,
+    fn builtinNumeralLayoutForType(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) layout.Idx {
+        const builtin = checkedBuiltinNominalForType(module, checked_ty) orelse
+            boxyLowerInvariant("builtin numeral had no checked builtin nominal type");
+        return switch (builtin) {
             .u8 => .u8,
             .i8 => .i8,
             .u16 => .u16,
@@ -27788,28 +27765,28 @@ const ProcBodyBuilder = struct {
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
+            else => boxyLowerInvariant("numeral had a non-numeric checked builtin nominal type"),
         };
     }
 
-    fn intValueToDec(value: can.CIR.IntValue) builtins.dec.RocDec {
-        const whole = switch (value.kind) {
-            .i128 => @as(i128, @bitCast(value.bytes)),
-            .u128 => blk: {
-                const unsigned = @as(u128, @bitCast(value.bytes));
-                if (unsigned > @as(u128, @intCast(std.math.maxInt(i128)))) {
-                    boxyLowerInvariant("integer literal defaulted to Dec exceeded Dec whole-number range");
-                }
-                break :blk @as(i128, @intCast(unsigned));
-            },
+    fn exactIntBitsForLayout(exact: exact_numeral.Exact, payload_layout: layout.Idx) ?i128 {
+        const target: exact_numeral.Target = switch (payload_layout) {
+            .u8 => .u8,
+            .i8 => .i8,
+            .u16 => .u16,
+            .i16 => .i16,
+            .u32 => .u32,
+            .i32 => .i32,
+            .u64 => .u64,
+            .i64 => .i64,
+            .u128 => .u128,
+            .i128 => .i128,
+            else => boxyLowerInvariant("integer numeral requested bits for a non-integer layout"),
         };
-        return builtins.dec.RocDec.fromWholeInt(whole) orelse
-            boxyLowerInvariant("integer literal defaulted to Dec exceeded Dec range");
-    }
-
-    fn intValueToF64(value: can.CIR.IntValue) f64 {
-        return switch (value.kind) {
-            .i128 => builtins.compiler_rt_128.i128_to_f64(@as(i128, @bitCast(value.bytes))),
-            .u128 => builtins.compiler_rt_128.u128_to_f64(@as(u128, @bitCast(value.bytes))),
+        const bits = exact_numeral.intBits(exact, target) orelse return null;
+        return switch (bits) {
+            .i128 => |value| value,
+            .u128 => |value| @bitCast(value),
         };
     }
 
@@ -27998,27 +27975,8 @@ const ProcBodyBuilder = struct {
             .generated_numeral => |lit| lit,
             else => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
         };
-        const text = try checked.numeralLiteralDecimalText(self.parent.allocator, self.module.module_env, literal);
-        defer self.parent.allocator.free(text);
-
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
-        const assign_literal = if (std.fmt.parseInt(i128, text, 10)) |value|
-            switch (target_layout) {
-                .f32 => try self.assignF32Literal(target, @floatFromInt(value), next),
-                .f64 => try self.assignF64Literal(target, @floatFromInt(value), next),
-                .dec => try self.assignDecLiteral(target, .{ .num = value * builtins.dec.RocDec.one_point_zero_i128 }, next),
-                else => try self.assignIntLiteral(target, value, next),
-            }
-        else |_| switch (target_layout) {
-            .f32 => try self.assignF32Literal(target, std.fmt.parseFloat(f32, text) catch
-                boxyLowerInvariant("from_numeral fractional literal did not parse as f32"), next),
-            .f64 => try self.assignF64Literal(target, std.fmt.parseFloat(f64, text) catch
-                boxyLowerInvariant("from_numeral fractional literal did not parse as f64"), next),
-            .dec => try self.assignDecLiteral(target, builtins.dec.RocDec.fromNonemptySlice(text) orelse
-                boxyLowerInvariant("from_numeral fractional literal did not parse as Dec"), next),
-            else => boxyLowerInvariant("fractional from_numeral literal reached a non-fractional boxy target"),
-        };
-        return try self.prependLiteralTargetDescriptorMaterialization(target, assign_literal);
+        return try self.assignExactNumeralPayload(target, target_layout, literal, next);
     }
 
     fn prependLiteralTargetDescriptorMaterialization(
@@ -33056,11 +33014,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             => {},
             .runtime_error,
@@ -33136,11 +33090,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             => {},
             .runtime_error,
@@ -33186,11 +33136,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             => {},
             else => try self.reserveMatchPatternBindings(pattern_id),
@@ -33244,11 +33190,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             => {},
             .runtime_error,
@@ -33286,11 +33228,7 @@ const ProcBodyBuilder = struct {
             .applied_tag => |tag| try self.appliedTagPatternCanMiss(pattern.ty, tag.name, tag.args),
             .list,
             .str_interpolation,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             => true,
             .runtime_error,
@@ -33366,7 +33304,7 @@ const ProcBodyBuilder = struct {
             ),
             .nominal => |kind| switch (kind) {
                 .transparent, .builtin_other => {
-                    const backing_ty = resolvedNominalPayload(self.module, tag_ty).backing;
+                    const backing_ty = resolvedNominalBacking(self.module, tag_ty);
                     const backing_rep = self.requiredSingleChild(rep_id, .nominal_backing).rep;
                     return try self.appliedTagPatternRepCanMiss(backing_ty, backing_rep, name, args, payload_can_miss);
                 },
@@ -33411,11 +33349,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .underscore,
-            .num_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
+            .numeral_literal,
             .str_literal,
             .str_interpolation,
             => {},
@@ -34961,6 +34895,7 @@ fn checkedTypeUsesBuiltinStructuralEquality(module: ProcedureModuleView, checked
         .empty_tag_union,
         => true,
         .pending,
+        .err,
         .flex,
         .rigid,
         .alias,
@@ -35142,6 +35077,12 @@ fn resolvedNominalPayload(module: ProcedureModuleView, checked_ty: checked.Check
     };
 }
 
+fn resolvedNominalBacking(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypeId {
+    const nominal = resolvedNominalPayload(module, checked_ty);
+    return module.checked_types.nominalBackingTemplateForPayload(nominal) orelse
+        boxyLowerInvariant("boxy lowering requested the backing of an opaque nominal type");
+}
+
 fn checkedBuiltinNominalForType(
     module: ProcedureModuleView,
     checked_ty: checked.CheckedTypeId,
@@ -35185,6 +35126,7 @@ fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedT
 
         switch (module.checked_types.payload(current)) {
             .pending => boxyLowerInvariant("pending checked type reached boxy const lowering"),
+            .err => boxyLowerInvariant("checked error type reached boxy const lowering"),
             .alias => |alias| {
                 current = alias.backing;
                 continue;
@@ -35224,7 +35166,7 @@ fn appendRequestedLayouts(
         });
     }
     for (roots.static_data_requests, 0..) |request, index| {
-        const checked_type = request.data.checked_type;
+        const checked_type = request.checked_type;
         const rep_id = plan.root_reps.items[root_rep_start + roots.layout_requests.len + index];
         try result.requested_layouts.append(allocator, .{
             .ty = root_types.rootKey(checked_type),
@@ -35347,7 +35289,9 @@ const ConstPlanBuilder = struct {
     fn boolTagUnionConstPlan(self: *ConstPlanBuilder, rep: Plan.TypeRepresentation) Allocator.Error!LirProgram.ConstPlan {
         const module = procedureModuleById(self.modules, rep.source_type.module);
         const nominal = resolvedNominalPayload(module, rep.source_type.ty);
-        const tag_union = switch (resolvedTypePayload(module, nominal.backing)) {
+        const backing = module.checked_types.nominalBackingTemplateForPayload(nominal) orelse
+            boxyLowerInvariant("boxy const planning requested the backing of an opaque nominal type");
+        const tag_union = switch (resolvedTypePayload(module, backing)) {
             .tag_union => |tag_union| tag_union,
             else => boxyLowerInvariant("Bool nominal backing was not a checked tag union"),
         };
@@ -36014,7 +35958,6 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36029,7 +35972,7 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
         .id = @enumFromInt(1),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -36117,7 +36060,6 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36129,7 +36071,8 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
         typeSchemeKey(7),
     );
     const const_node = try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } });
-    checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node });
+    const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
+    checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root_type = root_type });
 
     const template_ref = procedureTemplateRef(checked_module.key, 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
@@ -36236,7 +36179,6 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36251,7 +36193,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
         .id = @enumFromInt(1),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .dec_small = .{ .value = value, .has_suffix = false } },
+        .data = .{ .numeral = .{ .literal = try testSmallDecNumeral(value), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -36314,7 +36256,6 @@ test "boxy lowerer emits direct calls to planned private workers" {
             .kind = .pure,
             .args = .{ .start = 0, .len = 1 },
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
     try checked_module.checked_types.payloads.append(gpa, .{
@@ -36322,7 +36263,6 @@ test "boxy lowerer emits direct calls to planned private workers" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36371,7 +36311,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(41), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
@@ -36523,7 +36463,6 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36563,7 +36502,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try import_checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -36641,7 +36580,6 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36704,40 +36642,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         .by_checked_expr = &refs_by_expr,
     };
 
-    const imports = [_]checked.ImportedModuleView{
-        .{
-            .key = import_checked_module.key,
-            .module_env = undefined,
-            .canonical_names = &import_checked_module.canonical_names,
-            .module_identity = undefined,
-            .exports = .{},
-            .checked_types = import_checked_module.checked_types.view(),
-            .checked_bodies = import_checked_module.checked_bodies.view(),
-            .exhaustiveness_sites = undefined,
-            .checked_const_bodies = undefined,
-            .checked_procedure_templates = &import_checked_module.checked_procedure_templates,
-            .compile_time_roots = undefined,
-            .entry_wrappers = undefined,
-            .intrinsic_wrappers = undefined,
-            .resolved_value_refs = &import_checked_module.resolved_value_refs,
-            .nested_proc_sites = undefined,
-            .static_dispatch_plans = &import_checked_module.static_dispatch_plans,
-            .hosted_procs = &import_checked_module.hosted_procs,
-            .exported_procedure_templates = .{},
-            .exported_procedure_bindings = import_checked_module.exported_procedure_bindings.view(),
-            .exported_const_templates = .{},
-            .provided_exports = undefined,
-            .top_level_procedure_bindings = &import_checked_module.top_level_procedure_bindings,
-            .platform_required_declarations = undefined,
-            .platform_required_bindings = undefined,
-            .callable_eval_templates = .{},
-            .hoisted_constants = undefined,
-            .const_templates = undefined,
-            .method_registry = undefined,
-            .interface_capabilities = &import_checked_module.interface_capabilities,
-            .const_store = undefined,
-        },
-    };
+    const imports = [_]checked.ImportedModuleView{checked.importedView(&import_checked_module)};
 
     const root = checked.RootRequest{
         .order = 0,
@@ -36844,7 +36749,6 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -36982,7 +36886,6 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37058,7 +36961,6 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37131,7 +37033,6 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37156,7 +37057,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -37220,7 +37121,6 @@ test "boxy lowerer emits checked return statements as terminal ret" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37254,13 +37154,13 @@ test "boxy lowerer emits checked return statements as terminal ret" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -37324,7 +37224,6 @@ test "boxy lowerer emits checked runtime error expressions as terminal runtime_e
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37396,7 +37295,6 @@ test "boxy lowerer emits checked runtime error statements as terminal runtime_er
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37427,7 +37325,7 @@ test "boxy lowerer emits checked runtime error statements as terminal runtime_er
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -37490,7 +37388,6 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37539,7 +37436,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -37623,7 +37520,6 @@ test "boxy lowerer emits checked break as the active loop exit" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37672,7 +37568,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(41), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -37751,7 +37647,6 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37790,13 +37685,13 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -37889,7 +37784,6 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -37947,13 +37841,13 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -38054,7 +37948,6 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -38135,13 +38028,13 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(0), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(0), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(41), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -38237,7 +38130,6 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -38326,13 +38218,13 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(9), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -38434,7 +38326,6 @@ test "boxy lowerer emits checked string interpolation match patterns" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -38605,7 +38496,6 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -38701,7 +38591,7 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(41), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -38784,7 +38674,6 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -38793,9 +38682,8 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         .id = @enumFromInt(fixtureTableIndex(0)),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num_literal = .{
-            .value = intValue(42),
-            .kind = .u64,
+        .data = .{ .numeral_literal = .{
+            .literal = try testIntNumeral(42),
             .conversion = null,
         } },
     });
@@ -38837,19 +38725,19 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -38932,7 +38820,6 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -38941,9 +38828,8 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .id = @enumFromInt(fixtureTableIndex(0)),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .small_dec_literal = .{
-            .value = value,
-            .has_suffix = false,
+        .data = .{ .numeral_literal = .{
+            .literal = try testSmallDecNumeral(value),
             .conversion = null,
         } },
     });
@@ -38985,19 +38871,19 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .dec_small = .{ .value = value, .has_suffix = false } },
+        .data = .{ .numeral = .{ .literal = try testSmallDecNumeral(value), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -39090,7 +38976,6 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -39148,13 +39033,13 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
         .id = @enumFromInt(3),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -39222,7 +39107,6 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -39315,7 +39199,6 @@ test "boxy lowerer emits short-circuit checked boolean and" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -39427,7 +39310,6 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -39452,13 +39334,13 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -39541,7 +39423,6 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(2),
-            .needs_instantiation = false,
         },
     });
 
@@ -39579,13 +39460,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
@@ -39597,13 +39478,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         .id = @enumFromInt(6),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(7),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(3), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(3), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -39688,7 +39569,6 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -39712,13 +39592,13 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(5), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -39798,7 +39678,6 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -39833,19 +39712,19 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -39924,7 +39803,6 @@ test "boxy lowerer emits checked string segment literals" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40008,7 +39886,6 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -40088,7 +39965,6 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40222,7 +40098,6 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40243,7 +40118,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -40317,7 +40192,6 @@ test "boxy lowerer emits checked expect expressions before unit result" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40404,7 +40278,6 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40431,7 +40304,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -40534,7 +40407,6 @@ test "boxy lowerer emits checked dbg statements in block order" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40565,7 +40437,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(13), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(13), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
@@ -40642,7 +40514,6 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40688,7 +40559,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
@@ -40764,7 +40635,6 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40807,7 +40677,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(5), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -40873,7 +40743,6 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -40932,13 +40801,13 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
@@ -41029,7 +40898,6 @@ test "boxy lowerer destructures tuple declaration patterns" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -41111,7 +40979,7 @@ test "boxy lowerer destructures tuple declaration patterns" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(0), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(0), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
@@ -41123,13 +40991,13 @@ test "boxy lowerer destructures tuple declaration patterns" {
         .id = @enumFromInt(5),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(6),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -41224,7 +41092,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -41304,13 +41171,13 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(11), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(22), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
@@ -41410,7 +41277,6 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -41478,13 +41344,13 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(3), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(3), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(4), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(4), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
@@ -41573,7 +41439,6 @@ test "boxy lowerer emits tuple construction in element order" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -41599,13 +41464,13 @@ test "boxy lowerer emits tuple construction in element order" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -41686,7 +41551,6 @@ test "boxy lowerer emits tuple access as field_read" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -41718,13 +41582,13 @@ test "boxy lowerer emits tuple access as field_read" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -41803,7 +41667,6 @@ test "boxy lowerer emits record construction in layout order after source-order 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(2),
-            .needs_instantiation = false,
         },
     });
 
@@ -41832,13 +41695,13 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -41922,7 +41785,6 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(2),
-            .needs_instantiation = false,
         },
     });
 
@@ -41957,13 +41819,13 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(9), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(5), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -42054,7 +41916,6 @@ test "boxy lowerer emits record field access using layout field index" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -42089,13 +41950,13 @@ test "boxy lowerer emits record field access using layout field index" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(1), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -42183,7 +42044,6 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
-            .backing = @enumFromInt(fixtureTableIndex(0)),
             .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
         },
     });
@@ -42192,7 +42052,6 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -42216,7 +42075,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(5), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -42353,7 +42212,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
-            .backing = @enumFromInt(3),
             .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
@@ -42364,7 +42222,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -42460,13 +42317,13 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u8 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(500), .kind = .u16 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(500), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(6),
@@ -42595,7 +42452,6 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
-            .backing = @enumFromInt(3),
             .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
@@ -42606,7 +42462,6 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(2),
-            .needs_instantiation = false,
         },
     });
 
@@ -42650,13 +42505,13 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u8 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(500), .kind = .u16 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(500), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -42791,7 +42646,6 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
-            .backing = @enumFromInt(3),
             .representation = .{ .local_declaration = @enumFromInt(fixtureTableIndex(0)) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
@@ -42805,7 +42659,6 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(5),
-            .needs_instantiation = false,
         },
     });
 
@@ -42852,19 +42705,19 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .id = @enumFromInt(4),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(7), .kind = .u8 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(5),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(500), .kind = .u16 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(500), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(6),
         .ty = @enumFromInt(5),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -42962,7 +42815,6 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -43052,7 +42904,6 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(2),
-            .needs_instantiation = false,
         },
     });
 
@@ -43081,13 +42932,13 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(3), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(3), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(4), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(4), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -43165,7 +43016,6 @@ test "boxy lowerer emits list construction with committed element layout" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -43191,13 +43041,13 @@ test "boxy lowerer emits list construction with committed element layout" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(8), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(8), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(9), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -43273,7 +43123,6 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
             .kind = .pure,
             .args = .{ .start = 1, .len = 2 },
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -43442,7 +43291,6 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -43474,13 +43322,13 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
         .id = @enumFromInt(3),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(8), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(8), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(4),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(9), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -43584,7 +43432,6 @@ test "boxy lowerer emits empty list construction" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -43658,7 +43505,6 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -43687,13 +43533,13 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(10), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(10), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(20), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(20), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -43773,7 +43619,6 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -43799,7 +43644,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -43871,7 +43716,6 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
             .kind = .pure,
             .args = .{ .start = 1, .len = 1 },
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 
@@ -44015,7 +43859,6 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -44053,7 +43896,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(99), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -44131,7 +43974,6 @@ test "boxy lowerer inspects concrete Box payloads" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -44163,7 +44005,7 @@ test "boxy lowerer inspects concrete Box payloads" {
         .id = @enumFromInt(3),
         .ty = @enumFromInt(1),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(42), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -44317,7 +44159,6 @@ test "boxy lowerer emits checked integer division low-level calls" {
             .kind = .pure,
             .args = .{},
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -44346,13 +44187,13 @@ test "boxy lowerer emits checked integer division low-level calls" {
         .id = @enumFromInt(2),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(84), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(84), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @enumFromInt(3),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .{ .num = .{ .value = intValue(2), .kind = .u64 } },
+        .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),
@@ -44418,7 +44259,6 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
             .kind = .pure,
             .args = .{ .start = 0, .len = 1 },
             .ret = @enumFromInt(fixtureTableIndex(0)),
-            .needs_instantiation = false,
         },
     });
 
@@ -44594,7 +44434,10 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
         .{ .root = .{ .module = &checked_module, .roots = undefined } },
         .{
             .layout_requests = &.{@as(checked.CheckedTypeId, @enumFromInt(fixtureTableIndex(0)))},
-            .static_data_requests = &.{.{ .data = data }},
+            .static_data_requests = &.{.{
+                .const_locator = data.const_ref,
+                .checked_type = data.checked_type,
+            }},
         },
         &plan,
         .{},
@@ -44697,11 +44540,11 @@ fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
     return .{
         .key = moduleKey(1),
         .canonical_names = names.CanonicalNameStore.init(allocator),
-        .module_identity = undefined,
-        .checking_context_identity = undefined,
+        .module_identity = testModuleIdentity(),
+        .checking_context_identity = .{},
         .module_env = .{ .checked_source = testEmptyModuleEnv() },
-        .exports = undefined,
-        .provides_requires = undefined,
+        .exports = .{},
+        .provides_requires = .{},
         .method_registry = .{},
         .static_dispatch_plans = .{},
         .resolved_value_refs = .{},
@@ -44720,9 +44563,19 @@ fn minimalCheckedArtifact(allocator: Allocator) checked.CheckedModuleArtifact {
     };
 }
 
+fn testModuleIdentity() checked.ModuleIdentity {
+    return .{
+        .module_idx = 0,
+        .module_name = @enumFromInt(fixtureTableIndex(0)),
+        .display_module_name = @enumFromInt(fixtureTableIndex(0)),
+        .qualified_module_name = @enumFromInt(fixtureTableIndex(0)),
+        .kind = .module,
+    };
+}
+
 fn builtinNominal(
     builtin: checked.CheckedBuiltinNominal,
-    backing: checked.CheckedTypeId,
+    _: checked.CheckedTypeId,
     args: checked.CheckedTypeRange,
 ) checked.StoredNominal {
     return .{
@@ -44731,7 +44584,6 @@ fn builtinNominal(
         .owner_module = .{},
         .builtin = builtin,
         .is_opaque = false,
-        .backing = backing,
         .representation = .{ .builtin = builtin },
         .args = args,
     };
@@ -44761,11 +44613,59 @@ fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
     return key;
 }
 
-fn intValue(value: i128) can.CIR.IntValue {
-    return .{
-        .bytes = @bitCast(value),
-        .kind = .i128,
-    };
+fn testIntNumeral(value: u128) Allocator.Error!can.ModuleEnv.NumeralLiteral {
+    return recordTestNumeral(value, 0, 0, false, false);
+}
+
+fn testSmallDecNumeral(value: can.CIR.SmallDecValue) Allocator.Error!can.ModuleEnv.NumeralLiteral {
+    var divisor: u128 = 1;
+    for (0..value.denominator_power_of_ten) |_| divisor *= 10;
+
+    const magnitude: u128 = @intCast(if (value.numerator < 0) -@as(i32, value.numerator) else value.numerator);
+    return recordTestNumeral(
+        magnitude / divisor,
+        magnitude % divisor,
+        value.denominator_power_of_ten,
+        value.numerator < 0,
+        true,
+    );
+}
+
+fn recordTestNumeral(
+    before: u128,
+    after: u128,
+    scale: u8,
+    is_negative: bool,
+    is_fractional: bool,
+) Allocator.Error!can.ModuleEnv.NumeralLiteral {
+    var before_buffer: [16]u8 = undefined;
+    var after_buffer: [16]u8 = undefined;
+    const before_digits = base256Digits(before, &before_buffer);
+    const after_digits = if (scale == 0) &.{} else base256Digits(after, &after_buffer);
+    const env = testEmptyModuleEnv();
+    const node = @as(can.CIR.Node.Idx, @enumFromInt(fixtureTableIndex(0)));
+    try env.recordNumeralLiteral(
+        node,
+        before_digits,
+        after_digits,
+        scale,
+        is_negative,
+        is_fractional,
+        is_fractional,
+        true,
+    );
+    return env.numeralLiteralForNode(node) orelse unreachable;
+}
+
+fn base256Digits(value: u128, buffer: *[16]u8) []const u8 {
+    var remaining = value;
+    var len: usize = 0;
+    while (true) {
+        buffer.*[buffer.len - 1 - len] = @truncate(remaining);
+        len += 1;
+        remaining >>= 8;
+        if (remaining == 0) return buffer.*[buffer.len - len ..];
+    }
 }
 
 const ListMapCanReuseTransformRet = enum {
@@ -44814,7 +44714,6 @@ fn lowerListMapCanReuseFixture(
             .kind = .pure,
             .args = .{ .start = 1, .len = 1 },
             .ret = transform_ret_ty,
-            .needs_instantiation = false,
         },
     });
     try checked_module.checked_types.payloads.append(allocator, .{
@@ -44822,7 +44721,6 @@ fn lowerListMapCanReuseFixture(
             .kind = .pure,
             .args = .{ .start = 2, .len = 2 },
             .ret = @enumFromInt(1),
-            .needs_instantiation = false,
         },
     });
 

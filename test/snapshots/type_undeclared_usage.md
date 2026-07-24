@@ -12,13 +12,13 @@ processValue = |value| {
     "processed"
 }
 
-AnotherType : SomeModule.MissingType
+AnotherType : SomeMod.MissingType
 ~~~
 # EXPECTED
 UNDECLARED TYPE - type_undeclared_usage.md:1:10:1:21
 UNDECLARED TYPE - type_undeclared_usage.md:3:16:3:32
 UNUSED VARIABLE - type_undeclared_usage.md:4:17:4:22
-MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
+MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 # PROBLEMS
 
 ┌─────────────────┐
@@ -54,11 +54,11 @@ MODULE NOT IMPORTED - type_undeclared_usage.md:8:15:8:37
 
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `SomeModule` ───────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `SomeMod` ──────────┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
- │  AnotherType : SomeModule.MissingType                                      │
- │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
+ │  AnotherType : SomeMod.MissingType                                         │
+ │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                         │
  └───────────────────────────────────────────── type_undeclared_usage.md:8:15 ┘
 
 
@@ -75,7 +75,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "MyType")
@@ -97,7 +97,7 @@ EndOfFile,
 		(s-type-decl
 			(header (name "AnotherType")
 				(args))
-			(ty (name "SomeModule.MissingType")))))
+			(ty (name "SomeMod.MissingType")))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -108,7 +108,7 @@ processValue = |value| {
 	"processed"
 }
 
-AnotherType : SomeModule.MissingType
+AnotherType : SomeMod.MissingType
 ~~~
 # CANONICALIZE
 ~~~clojure

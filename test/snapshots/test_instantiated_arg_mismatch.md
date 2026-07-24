@@ -87,7 +87,7 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call (constraint-fn-var 86)
+	(e-call (constraint-fn-var 214)
 		(e-lookup-local
 			(p-assign (ident "pair")))
 		(e-num (value "42"))

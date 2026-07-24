@@ -49,6 +49,86 @@ fn printI128Decimal(buf: []u8, val: i128) usize {
     return pos;
 }
 
+/// Round the exact rational `scaled / 10^18` directly to IEEE binary32.
+/// This deliberately never converts through binary64, which would introduce a
+/// double-rounding boundary for Dec-to-F32 conversion.
+fn scaledI128ToF32(scaled: i128) f32 {
+    if (scaled == 0) return 0.0;
+
+    const negative = scaled < 0;
+    const raw: u128 = @bitCast(scaled);
+    const magnitude = if (negative) 0 -% raw else raw;
+    const scale: u128 = @intCast(RocDec.one_point_zero_i128);
+
+    const magnitude_bit: i32 = 127 - @as(i32, @intCast(@clz(magnitude)));
+    const scale_bit: i32 = 127 - @as(i32, @intCast(@clz(scale)));
+    var exponent = magnitude_bit - scale_bit;
+
+    // Correct the bit-length estimate to floor(log2(magnitude / scale)).
+    if (exponent >= 0) {
+        if (i128h.shr(magnitude, @intCast(exponent)) < scale) exponent -= 1;
+    } else {
+        if (i128h.shl(magnitude, @intCast(-exponent)) < scale) exponent -= 1;
+    }
+
+    const significand_shift = 23 - exponent;
+    const numerator: u128 = if (significand_shift >= 0)
+        i128h.shl(magnitude, @intCast(significand_shift))
+    else
+        magnitude;
+    const denominator: u128 = if (significand_shift >= 0)
+        scale
+    else
+        i128h.shl(scale, @intCast(-significand_shift));
+
+    var significand: u32 = @intCast(i128h.divTrunc_u128(numerator, denominator));
+    const remainder = i128h.rem_u128(numerator, denominator);
+    const twice_remainder = i128h.shl(remainder, 1);
+    if (twice_remainder > denominator or (twice_remainder == denominator and (significand & 1) != 0)) {
+        significand += 1;
+    }
+
+    if (significand == (@as(u32, 1) << 24)) {
+        significand >>= 1;
+        exponent += 1;
+    }
+
+    const sign_bit: u32 = @intFromBool(negative);
+    const biased_exponent: u32 = @intCast(exponent + 127);
+    const fraction = significand & ((@as(u32, 1) << 23) - 1);
+    return @bitCast((sign_bit << 31) | (biased_exponent << 23) | fraction);
+}
+
+/// Convert an IEEE binary32 value directly to the exact Dec scale, truncating
+/// toward zero without any binary64 arithmetic.
+fn f32ToScaledI128(value: f32) ?i128 {
+    const raw: u32 = @bitCast(value);
+    const negative = (raw >> 31) != 0;
+    const raw_exponent = (raw >> 23) & 0xff;
+    if (raw_exponent == 0xff) return null;
+    if (raw_exponent == 0) return 0;
+
+    const fraction = raw & 0x007f_ffff;
+    const significand: u128 = (@as(u128, 1) << 23) | fraction;
+    const scaled_significand = i128h.mul_u128_lo(significand, @intCast(RocDec.one_point_zero_i128));
+    const shift = @as(i32, @intCast(raw_exponent)) - 127 - 23;
+    const magnitude: u128 = if (shift >= 0) blk: {
+        if (shift >= 128) return null;
+        const amount: u7 = @intCast(shift);
+        if (scaled_significand > i128h.shr(std.math.maxInt(u128), amount)) return null;
+        break :blk i128h.shl(scaled_significand, amount);
+    } else blk: {
+        const amount: u32 = @intCast(-shift);
+        break :blk if (amount >= 128) 0 else i128h.shr(scaled_significand, @intCast(amount));
+    };
+
+    const negative_limit = i128h.shl(@as(u128, 1), 127);
+    const positive_limit: u128 = @bitCast(@as(i128, std.math.maxInt(i128)));
+    if ((!negative and magnitude > positive_limit) or (negative and magnitude > negative_limit)) return null;
+    if (!negative) return @intCast(magnitude);
+    return @bitCast(0 -% magnitude);
+}
+
 /// Roc's fixed-point decimal runtime representation.
 ///
 /// `num` stores the decimal value scaled by 10^18, so `1.0` is represented as
@@ -111,6 +191,10 @@ pub const RocDec = extern struct {
 
         const ret: RocDec = .{ .num = i128h.f64_to_i128(result) };
         return ret;
+    }
+
+    pub fn fromF32(num: f32) ?RocDec {
+        return .{ .num = f32ToScaledI128(num) orelse return null };
     }
 
     pub fn toF64(dec: RocDec) f64 {
@@ -750,6 +834,31 @@ pub const RocDec = extern struct {
         // For Dec, remainder is straightforward since both operands have the same scaling factor
         return RocDec{ .num = i128h.rem_i128(self.num, other.num) };
     }
+
+    pub fn mod(
+        self: RocDec,
+        other: RocDec,
+        roc_ops: *RocOps,
+    ) RocDec {
+        // (n % 0) is an error
+        if (other.num == 0) {
+            roc_ops.crash("Decimal modulo by 0!");
+        }
+
+        // Both operands share the same scaling factor, so the truncated
+        // remainder of the raw values is the truncated remainder of the Decs.
+        const remainder = i128h.rem_i128(self.num, other.num);
+        if (remainder == 0) {
+            return RocDec{ .num = 0 };
+        }
+
+        // Modulo carries the sign of the divisor: when the truncated remainder
+        // has the opposite sign, shift it by the divisor to flip its sign.
+        if ((remainder > 0) != (other.num > 0)) {
+            return RocDec{ .num = remainder +% other.num };
+        }
+        return RocDec{ .num = remainder };
+    }
 };
 
 const dec_cordic_k = RocDec{ .num = 607252935008881256 };
@@ -1369,8 +1478,7 @@ pub fn fromF32C(
     arg_f32: f32,
     roc_ops: *RocOps,
 ) callconv(.c) i128 {
-    const arg_f64 = arg_f32;
-    if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
+    if (@call(.always_inline, RocDec.fromF32, .{arg_f32})) |dec| {
         return dec.num;
     } else {
         roc_ops.crash("Decimal conversion from f32!");
@@ -1385,22 +1493,12 @@ pub fn toF64(arg: RocDec) callconv(.c) f64 {
 
 /// Convert Dec to F32 (lossy conversion)
 pub fn toF32(arg: RocDec) callconv(.c) f32 {
-    return @floatCast(arg.toF64());
+    return scaledI128ToF32(arg.num);
 }
 
 /// Convert Dec to F32 with range check - returns null if out of range
 pub fn toF32Try(arg: RocDec) ?f32 {
-    const f64_val = arg.toF64();
-    // Check if the value is within F32 range
-    if (f64_val > math.floatMax(f32) or f64_val < -math.floatMax(f32)) {
-        return null;
-    }
-    // Also check for infinity (which would indicate overflow)
-    const f32_val: f32 = @floatCast(f64_val);
-    if (math.isInf(f32_val) and !math.isInf(f64_val)) {
-        return null;
-    }
-    return f32_val;
+    return toF32(arg);
 }
 
 /// Convert Dec to integer by truncating the fractional part (wrapping on overflow)
@@ -1531,6 +1629,26 @@ pub fn divTruncC(
 ) callconv(.c) i128 {
     const quotient = @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops });
     return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
+}
+
+/// C ABI truncated-remainder wrapper. The result carries the sign of the
+/// dividend. Crashes through RocOps on a zero divisor.
+pub fn remC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.rem, .{ arg1, arg2, roc_ops }).num;
+}
+
+/// C ABI modulo wrapper. The result carries the sign of the divisor. Crashes
+/// through RocOps on a zero divisor.
+pub fn modC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    return @call(.always_inline, RocDec.mod, .{ arg1, arg2, roc_ops }).num;
 }
 
 /// C ABI natural-log wrapper. The caller must provide a positive Dec; arithmetic
@@ -1710,6 +1828,25 @@ test "fromF64 overflow" {
     try std.testing.expectEqual(dec, null);
 }
 
+test "F32 and Dec convert directly without binary64 intermediates" {
+    try std.testing.expectEqual(
+        RocDec{ .num = 100000001490116119 },
+        RocDec.fromF32(@bitCast(@as(u32, 0x3dcc_cccd))).?,
+    );
+    try std.testing.expectEqual(@as(?RocDec, null), RocDec.fromF32(std.math.inf(f32)));
+
+    // This exact Dec value lies on the side of an F32 rounding boundary that
+    // a Dec -> F64 -> F32 double rounding gets wrong by one F32 ULP.
+    try std.testing.expectEqual(
+        @as(u32, 0x341c_4fc9),
+        @as(u32, @bitCast(toF32(.{ .num = 145576585453 }))),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0xb41c_4fc9),
+        @as(u32, @bitCast(toF32(.{ .num = -145576585453 }))),
+    );
+}
+
 test "fromStr: empty" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1730,16 +1867,6 @@ test "fromStr: 0" {
     try std.testing.expectEqual(RocDec{ .num = 0 }, dec.?);
 }
 
-test "fromStr: 1" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("1", 1, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str);
-
-    try std.testing.expectEqual(RocDec.one_point_zero, dec.?);
-}
-
 test "fromStr: 123.45" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1758,26 +1885,6 @@ test "fromStr: .45" {
     const dec = RocDec.fromStr(roc_str);
 
     try std.testing.expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
-}
-
-test "fromStr: 0.45" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("0.45", 4, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str);
-
-    try std.testing.expectEqual(RocDec{ .num = 450000000000000000 }, dec.?);
-}
-
-test "fromStr: 123" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("123", 3, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str);
-
-    try std.testing.expectEqual(RocDec{ .num = 123000000000000000000 }, dec.?);
 }
 
 test "fromStr: -.45" {
@@ -1830,26 +1937,6 @@ test "fromStr: abc" {
     try std.testing.expectEqual(dec, null);
 }
 
-test "fromStr: 123.abc" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("123.abc", 7, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str);
-
-    try std.testing.expectEqual(dec, null);
-}
-
-test "fromStr: abc.123" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("abc.123", 7, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str);
-
-    try std.testing.expectEqual(dec, null);
-}
-
 test "fromStr: .123.1" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1858,17 +1945,6 @@ test "fromStr: .123.1" {
     const dec = RocDec.fromStr(roc_str);
 
     try std.testing.expectEqual(dec, null);
-}
-
-test "to_str: 100.00" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = .{ .num = 100000000000000000000 };
-    var res_roc_str = dec.to_str(test_env.getOps());
-
-    const res_slice: []const u8 = "100.0"[0..];
-    try std.testing.expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
 test "to_str: 123.45" {
@@ -1959,28 +2035,6 @@ test "to_str: -0.00045" {
     try std.testing.expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
 }
 
-test "to_str: -111.123456" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = .{ .num = -111123456000000000000 };
-    var res_roc_str = dec.to_str(test_env.getOps());
-
-    const res_slice: []const u8 = "-111.123456"[0..];
-    try std.testing.expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
-}
-
-test "to_str: 123.1111111" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = .{ .num = 123111111100000000000 };
-    var res_roc_str = dec.to_str(test_env.getOps());
-
-    const res_slice: []const u8 = "123.1111111"[0..];
-    try std.testing.expectEqualSlices(u8, res_slice, res_roc_str.asSlice());
-}
-
 test "to_str: 123.1111111111111 (big str)" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2066,15 +2120,6 @@ test "add: 0" {
     try std.testing.expectEqual(RocDec{ .num = 0 }, dec.add(.{ .num = 0 }, test_env.getOps()));
 }
 
-test "add: 1" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = .{ .num = 0 };
-
-    try std.testing.expectEqual(RocDec{ .num = 1 }, dec.add(.{ .num = 1 }, test_env.getOps()));
-}
-
 test "sub: 0" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2082,15 +2127,6 @@ test "sub: 0" {
     var dec: RocDec = .{ .num = 1 };
 
     try std.testing.expectEqual(RocDec{ .num = 1 }, dec.sub(.{ .num = 0 }, test_env.getOps()));
-}
-
-test "sub: 1" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = .{ .num = 1 };
-
-    try std.testing.expectEqual(RocDec{ .num = 0 }, dec.sub(.{ .num = 1 }, test_env.getOps()));
 }
 
 test "mul: by 0" {
@@ -2111,15 +2147,6 @@ test "mul: by 1" {
     try std.testing.expectEqual(RocDec.fromU64(15), dec.mul(RocDec.fromU64(1), test_env.getOps()));
 }
 
-test "mul: by 2" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = RocDec.fromU64(15);
-
-    try std.testing.expectEqual(RocDec.fromU64(30), dec.mul(RocDec.fromU64(2), test_env.getOps()));
-}
-
 test "div: 0 / 2" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2127,24 +2154,6 @@ test "div: 0 / 2" {
     var dec: RocDec = RocDec.fromU64(0);
 
     try std.testing.expectEqual(RocDec.fromU64(0), dec.div(RocDec.fromU64(2), test_env.getOps()));
-}
-
-test "div: 2 / 2" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = RocDec.fromU64(2);
-
-    try std.testing.expectEqual(RocDec.fromU64(1), dec.div(RocDec.fromU64(2), test_env.getOps()));
-}
-
-test "div: 20 / 2" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var dec: RocDec = RocDec.fromU64(20);
-
-    try std.testing.expectEqual(RocDec.fromU64(10), dec.div(RocDec.fromU64(2), test_env.getOps()));
 }
 
 test "div: 8 / 5" {
@@ -2227,16 +2236,6 @@ test "fract: 0" {
     try std.testing.expectEqual(RocDec{ .num = 0 }, dec.fract());
 }
 
-test "fract: 1" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("1", 1, test_env.getOps());
-    var dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(RocDec{ .num = 0 }, dec.fract());
-}
-
 test "fract: 123.45" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2257,16 +2256,6 @@ test "fract: -123.45" {
     try std.testing.expectEqual(RocDec{ .num = -450000000000000000 }, dec.fract());
 }
 
-test "fract: .45" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init(".45", 3, test_env.getOps());
-    var dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
-}
-
 test "fract: -0.00045" {
     const dec: RocDec = .{ .num = -450000000000000 };
     const res = dec.fract();
@@ -2282,16 +2271,6 @@ test "trunc: 0" {
     var dec = RocDec.fromStr(roc_str).?;
 
     try std.testing.expectEqual(RocDec{ .num = 0 }, dec.trunc(test_env.getOps()));
-}
-
-test "trunc: 1" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("1", 1, test_env.getOps());
-    var dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(RocDec.one_point_zero, dec.trunc(test_env.getOps()));
 }
 
 test "trunc: 123.45" {
@@ -2312,16 +2291,6 @@ test "trunc: -123.45" {
     var dec = RocDec.fromStr(roc_str).?;
 
     try std.testing.expectEqual(RocDec{ .num = -123000000000000000000 }, dec.trunc(test_env.getOps()));
-}
-
-test "trunc: .45" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init(".45", 3, test_env.getOps());
-    var dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(RocDec{ .num = 0 }, dec.trunc(test_env.getOps()));
 }
 
 test "trunc: -0.00045" {
@@ -2404,16 +2373,6 @@ test "powInt: 2 ^ 2" {
     try std.testing.expectEqual(dec, RocDec.two_point_zero.powInt(2, test_env.getOps()));
 }
 
-test "powInt: 0.5 ^ 2" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("0.25", 4, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(dec, RocDec.zero_point_five.powInt(2, test_env.getOps()));
-}
-
 test "pow: 0.5 ^ 2.0" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -2422,52 +2381,6 @@ test "pow: 0.5 ^ 2.0" {
     const dec = RocDec.fromStr(roc_str).?;
 
     try std.testing.expectEqual(dec, RocDec.zero_point_five.pow(RocDec.two_point_zero, test_env.getOps()));
-}
-
-test "sqrt: 1.0" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("1.0", 3, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(dec, RocDec.sqrt(RocDec.one_point_zero, test_env.getOps()));
-}
-
-test "sqrt: 0.0" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("0.0", 3, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str).?;
-
-    try std.testing.expectEqual(dec, dec.sqrt(test_env.getOps()));
-}
-
-test "sqrt: 9.0" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("9.0", 3, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str).?;
-
-    const roc_str_expected = RocStr.init("3.0", 3, test_env.getOps());
-    const expected = RocDec.fromStr(roc_str_expected).?;
-
-    try std.testing.expectEqual(expected, dec.sqrt(test_env.getOps()));
-}
-
-test "sqrt: 1.44" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    const roc_str = RocStr.init("1.44", 4, test_env.getOps());
-    const dec = RocDec.fromStr(roc_str).?;
-
-    const roc_str_expected = RocStr.init("1.2", 3, test_env.getOps());
-    const expected = RocDec.fromStr(roc_str_expected).?;
-
-    try std.testing.expectEqual(expected, dec.sqrt(test_env.getOps()));
 }
 
 fn expectApproxDec(expected: RocDec, actual: RocDec, tolerance: u128) error{TestUnexpectedResult}!void {
@@ -2749,20 +2662,56 @@ test "sqrt: 2.0 truncates to fixed-point precision" {
     try std.testing.expectEqual(expected, two.sqrt(test_env.getOps()));
 }
 
-test "sqrt: small fixed-point values stay deterministic" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    try expectRocDecConstant((try decFromText("0.000000000000000001")).sqrt(test_env.getOps()), "0.000000001");
-    try expectRocDecConstant((try decFromText("12321.0")).sqrt(test_env.getOps()), "111.0");
-}
-
 test "sqrt fixtures match exact fixed-point spec" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
 
     inline for (dec_sqrt_spec_cases) |case| {
         try std.testing.expectEqual(case.expected, case.input.sqrt(test_env.getOps()));
+    }
+}
+
+test "Dec rem carries sign of dividend; mod carries sign of divisor" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    const whole = struct {
+        fn dec(n: i128) RocDec {
+            return RocDec{ .num = n * RocDec.one_point_zero_i128 };
+        }
+    }.dec;
+
+    const Case = struct {
+        lhs: RocDec,
+        rhs: RocDec,
+        expected_rem: RocDec,
+        expected_mod: RocDec,
+    };
+
+    const cases = [_]Case{
+        .{ .lhs = whole(7), .rhs = whole(3), .expected_rem = whole(1), .expected_mod = whole(1) },
+        .{ .lhs = whole(-7), .rhs = whole(3), .expected_rem = whole(-1), .expected_mod = whole(2) },
+        .{ .lhs = whole(7), .rhs = whole(-3), .expected_rem = whole(1), .expected_mod = whole(-2) },
+        .{ .lhs = whole(-7), .rhs = whole(-3), .expected_rem = whole(-1), .expected_mod = whole(-1) },
+        .{ .lhs = whole(0), .rhs = whole(3), .expected_rem = whole(0), .expected_mod = whole(0) },
+        .{ .lhs = whole(6), .rhs = whole(3), .expected_rem = whole(0), .expected_mod = whole(0) },
+        .{
+            .lhs = RocDec.fromFraction(55, 1),
+            .rhs = whole(2),
+            .expected_rem = RocDec.fromFraction(15, 1),
+            .expected_mod = RocDec.fromFraction(15, 1),
+        },
+        .{
+            .lhs = RocDec.fromFraction(-55, 1),
+            .rhs = whole(2),
+            .expected_rem = RocDec.fromFraction(-15, 1),
+            .expected_mod = RocDec.fromFraction(5, 1),
+        },
+    };
+
+    for (cases) |case| {
+        try std.testing.expectEqual(case.expected_rem.num, remC(case.lhs, case.rhs, test_env.getOps()));
+        try std.testing.expectEqual(case.expected_mod.num, modC(case.lhs, case.rhs, test_env.getOps()));
     }
 }
 

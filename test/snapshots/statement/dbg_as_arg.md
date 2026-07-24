@@ -21,7 +21,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))
@@ -57,7 +57,7 @@ bar = |f| f(dbg (42))
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 60)
+			(e-call (constraint-fn-var 196)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-dbg
@@ -67,7 +67,7 @@ bar = |f| f(dbg (42))
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 169)
+			(e-call (constraint-fn-var 221)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-dbg

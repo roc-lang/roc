@@ -5,7 +5,7 @@ type=snippet
 ~~~
 # SOURCE
 ~~~roc
-import Module exposing [Pair]
+import Mod exposing [Pair]
 
 Pair1(x, _) = Pair(0, 1)
 Pair2(_, y) = Pair(0, 1)
@@ -26,9 +26,9 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
-		(s-import (raw "Module")
+		(s-import (raw "Mod")
 			(exposing
 				(exposed-upper-ident (text "Pair"))))
 		(s-decl
@@ -58,7 +58,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import Module exposing [Pair]
+import Mod exposing [Pair]
 
 Pair1(x, _) = Pair(0, 1)
 
@@ -87,7 +87,7 @@ Pair3(_, _) = Pair(0, 1)
 			(args
 				(e-num (value "0"))
 				(e-num (value "1")))))
-	(s-import (module "Module")
+	(s-import (mod "Mod")
 		(exposes
 			(exposed (name "Pair") (wildcard false)))))
 ~~~

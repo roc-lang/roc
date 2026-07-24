@@ -252,6 +252,7 @@ pub const LayoutStoreImage = extern struct {
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
             .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
             .scratch_intern_key = .empty,
+            .interned_recursive_graphs = std.StringHashMap(layout_mod.Idx).init(allocator),
             .target_usize = target_usize,
         };
     }
@@ -594,6 +595,7 @@ fn serializeSidecarInto(
         .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
         .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
         .scratch_intern_key = .empty,
+        .interned_recursive_graphs = std.StringHashMap(layout_mod.Idx).init(gpa),
         .target_usize = lowered.layouts.target_usize,
     };
     const strings = try lowered.store.strings.clone(gpa);
@@ -668,6 +670,19 @@ pub fn buildSidecarBlob(
             },
         }
     }
+}
+
+comptime {
+    // The LIR image mirrors these three stores field-for-field. When a
+    // serialized field is added to or removed from a store, update the matching
+    // `*Image` extern struct, its `fromStore` and `view` methods, and the
+    // "LIR image round-trips every populated store field" test at the bottom of
+    // this file, then update the expected field count below. A same-build
+    // omission (a new store field left out of the image plumbing) is otherwise
+    // silent, since `FORMAT_VERSION` only guards cross-version mismatches.
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 25);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 12);
+    std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
 
 /// Fill the reserved LIR image header in a contiguous buffer.
@@ -1033,4 +1048,200 @@ test "LIR image views empty and populated boxy tables" {
 
 test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+/// The 16 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
+/// `next_synthetic_symbol` are serialized too but exercised separately below.
+const serialized_guarded_fields = [_][]const u8{
+    "cf_stmts",
+    "cf_switch_branches",
+    "str_match_steps",
+    "str_match_arms",
+    "join_points",
+    "locals",
+    "local_ids",
+    "u64s",
+    "proc_specs",
+    "source_file_bytes",
+    "source_file_ends",
+    "cf_stmt_locs",
+    "cf_stmt_regions",
+    "proc_locs",
+    "proc_debug_names",
+    "local_names",
+};
+
+test "LIR image round-trips every populated store field" {
+    const gpa = std.testing.allocator;
+
+    // One contiguous buffer owns every array the image references. The image
+    // records offsets relative to `buffer.ptr`, so all backing storage below is
+    // allocated from this fixed buffer rather than from `gpa` directly.
+    const buffer = try gpa.alignedAlloc(u8, .@"16", 1 << 20);
+    defer gpa.free(buffer);
+    var fba_state = std.heap.FixedBufferAllocator.init(buffer);
+    const fba = fba_state.allocator();
+
+    const target_usize = base.target.TargetUsize.native;
+
+    const h = struct {
+        /// Allocate `count` elements of `T` and fill their raw bytes with a
+        /// per-field-distinctive, per-index pattern so a dropped or swapped
+        /// field (same or different element type) is detectable after view.
+        fn distinct(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error![]T {
+            const slice = try alloc.alloc(T, count);
+            const bytes = std.mem.sliceAsBytes(slice);
+            for (bytes, 0..) |*b, i| b.* = seed +% @as(u8, @truncate(i));
+            return slice;
+        }
+        /// Build a populated `GuardedList` for a `LirStore` field of type `FieldT`.
+        fn guarded(comptime FieldT: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!FieldT {
+            const T = std.meta.Child(FieldT.Slice);
+            const slice = try distinct(T, alloc, count, seed);
+            return FieldT.fromArrayList(.{ .items = slice, .capacity = count });
+        }
+        /// Build a populated `SafeList(T)` backed by the fixed buffer.
+        fn safeList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeList(T) {
+            const slice = try distinct(T, alloc, count, seed);
+            return .{ .items = .{ .items = slice, .capacity = count } };
+        }
+        /// Build a populated `SafeMultiList(T)` backed by the fixed buffer.
+        fn multiList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeMultiList(T) {
+            var mal: std.MultiArrayList(T) = .{};
+            try mal.resize(alloc, count);
+            const total = std.MultiArrayList(T).capacityInBytes(mal.capacity);
+            for (mal.bytes[0..total], 0..) |*b, i| b.* = seed +% @as(u8, @truncate(i));
+            return .{ .items = mal };
+        }
+        /// Assert two byte spans are equal and non-empty.
+        fn expectBytesEq(a: []const u8, b: []const u8) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+            try std.testing.expect(a.len > 0);
+            try std.testing.expectEqualSlices(u8, a, b);
+        }
+    };
+
+    // A LirStore with every serialized list populated distinctively. `init`
+    // seeds the non-serialized scalar/ambient fields; the arrays it creates are
+    // empty and immediately overwritten with fixed-buffer-backed storage, so the
+    // store is never deinitialized (its arrays are not owned by `gpa`).
+    var store = LirStore.init(gpa);
+    inline for (serialized_guarded_fields, 0..) |fname, i| {
+        @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), fba, 2 + i, @intCast(0x20 + i));
+    }
+    store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
+    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, fba, 24, 0x90), .capacity = 24 } } };
+
+    // A layout Store with every serialized list populated distinctively. Only
+    // the seven array-backed fields are serialized; the interning caches are not
+    // read by `fromStore`, so they are left undefined here.
+    var layouts = layout_mod.Store{
+        .allocator = gpa,
+        .layouts = try h.safeList(layout_mod.Layout, fba, 3, 0x40),
+        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, fba, 4, 0x50), .capacity = 4 },
+        .tuple_elems = try h.safeList(layout_mod.Idx, fba, 5, 0x60),
+        .struct_fields = try h.multiList(layout_mod.StructField, fba, 6, 0x70),
+        .struct_data = try h.safeList(layout_mod.StructData, fba, 7, 0x80),
+        .tag_union_variants = try h.multiList(layout_mod.TagUnionVariant, fba, 8, 0x88),
+        .tag_union_data = try h.safeList(layout_mod.TagUnionData, fba, 9, 0xa0),
+        .interned_layouts = undefined,
+        .scratch_intern_key = undefined,
+        .interned_recursive_graphs = undefined,
+        .target_usize = target_usize,
+    };
+
+    const root_procs = try h.distinct(LIR.LirProcSpecId, fba, 3, 0xb0);
+    const entrypoints = try h.distinct(PlatformEntrypoint, fba, 2, 0xc0);
+
+    const base_ptr = buffer.ptr;
+    const image_size = fba_state.end_index;
+
+    // Serialize: fill the header exactly as `fillHeaderInBuffer` does, so this
+    // drives the real `fromStore`/`arrayRef` plumbing under test.
+    const header: Header = .{
+        .magic = MAGIC,
+        .format_version = FORMAT_VERSION,
+        .image_size = image_size,
+        .root_procs = try arrayRef(base_ptr, image_size, root_procs),
+        .platform_entrypoints = try arrayRef(base_ptr, image_size, entrypoints),
+        .store = try LirStoreImage.fromStore(base_ptr, image_size, &store),
+        .layouts = try LayoutStoreImage.fromStore(base_ptr, image_size, &layouts),
+        .boxy_tables = std.mem.zeroes(BoxyTablesImage),
+    };
+
+    // View back over the same buffer.
+    var view = try viewMappedImageWithAllocator(&header, base_ptr, buffer.len, target_usize, gpa);
+    defer view.deinit();
+
+    // Every serialized guarded list must round-trip byte-for-byte. A field
+    // omitted from `fromStore`/`view` would read back as empty and fail here.
+    inline for (serialized_guarded_fields) |fname| {
+        const a = @field(store, fname).unsafeRawItemsForView();
+        const b = @field(view.store, fname).unsafeRawItemsForView();
+        try std.testing.expectEqual(a.len, b.len);
+        try h.expectBytesEq(std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
+    }
+
+    // Scalar and sub-image fields.
+    try std.testing.expectEqual(@as(u64, 0x0123_4567_89ab_cdef), view.store.next_synthetic_symbol);
+    try h.expectBytesEq(store.strings.buffer.items.items, view.store.strings.buffer.items.items);
+
+    // `patterns`/`pattern_ids` carry no data in statement-only LIR (nothing
+    // lowers into the LIR-level pattern lists), so the image intentionally omits
+    // them and `view` restores them empty. Assert that intent explicitly rather
+    // than round-tripping populated data.
+    try std.testing.expectEqual(@as(usize, 0), view.store.patterns.len());
+    try std.testing.expectEqual(@as(usize, 0), view.store.pattern_ids.len());
+
+    // Ambient lowering state is reset by `view`; it is not image data.
+    try std.testing.expectEqual(base.SourceLoc.none, view.store.current_loc);
+    try std.testing.expectEqual(base.Region.zero(), view.store.current_region);
+    // A viewed image is read-only, so string insertion is disabled.
+    try std.testing.expectEqual(false, view.store.strings_insertable);
+
+    // Layout store: seven serialized lists plus the view-supplied target width.
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.layouts.items.items),
+        std.mem.sliceAsBytes(view.layouts.layouts.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.resolved_list_layouts.items),
+        std.mem.sliceAsBytes(view.layouts.resolved_list_layouts.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.tuple_elems.items.items),
+        std.mem.sliceAsBytes(view.layouts.tuple_elems.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.struct_data.items.items),
+        std.mem.sliceAsBytes(view.layouts.struct_data.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.tag_union_data.items.items),
+        std.mem.sliceAsBytes(view.layouts.tag_union_data.items.items),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.struct_fields.field(.index)),
+        std.mem.sliceAsBytes(view.layouts.struct_fields.field(.index)),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.struct_fields.field(.layout)),
+        std.mem.sliceAsBytes(view.layouts.struct_fields.field(.layout)),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.struct_fields.field(.is_padding)),
+        std.mem.sliceAsBytes(view.layouts.struct_fields.field(.is_padding)),
+    );
+    try h.expectBytesEq(
+        std.mem.sliceAsBytes(layouts.tag_union_variants.field(.payload_layout)),
+        std.mem.sliceAsBytes(view.layouts.tag_union_variants.field(.payload_layout)),
+    );
+    try std.testing.expectEqual(target_usize, view.layouts.target_usize);
+    try std.testing.expectEqual(target_usize, view.target_usize);
+
+    // Header-level array refs.
+    try std.testing.expectEqual(@as(usize, 3), view.root_procs.len);
+    try std.testing.expectEqual(@as(usize, 2), view.platform_entrypoints.len);
+    try h.expectBytesEq(std.mem.sliceAsBytes(root_procs), std.mem.sliceAsBytes(view.root_procs));
+    try h.expectBytesEq(std.mem.sliceAsBytes(entrypoints), std.mem.sliceAsBytes(view.platform_entrypoints));
 }

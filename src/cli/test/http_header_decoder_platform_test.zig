@@ -100,8 +100,8 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(output_path);
 
     if (prebuilt_path == null) {
-        var env_map = try util.buildIsolatedTestEnvMap(io, allocator, null);
-        defer env_map.deinit();
+        var env = try util.buildIsolatedTestEnvMap(io, allocator, null);
+        defer env.deinit(io, allocator);
 
         const target_arg = try std.fmt.allocPrint(allocator, "--target={s}", .{target_name});
         defer allocator.free(target_arg);
@@ -117,7 +117,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
             output_arg,
             "test/http-headers/app.roc",
         }, .{
-            .env_map = &env_map,
+            .env_map = &env.env_map,
             .max_output_bytes = 10 * 1024 * 1024,
         });
         defer allocator.free(build_result.stdout);
@@ -177,6 +177,11 @@ test "HTTP header parsing platform derives structural parser without runtime all
     defer allocator.free(scrambled_order_response);
     try runServerAndCheckResponse(allocator, output_path, scrambled_order_request, scrambled_order_response);
 
+    // These case-varying header names dispatch through the LLVM-emitted
+    // `emitSwarCaselessAsciiEqualMasked` (this app is built with `--opt=speed`,
+    // i.e. the LLVM backend). They are the end-to-end drift guard for that
+    // routine against `builtins.str.wordCaselessAsciiEqualMasked`, whose raw
+    // word-level contract is pinned by `swar_caseless_word_vectors`.
     const lower_case_request = try buildCacheControlCaseRequest(allocator, "cache-control");
     defer allocator.free(lower_case_request);
     const lower_case_response = try buildExpectedResponse(allocator, expectedHeaderLength(0));

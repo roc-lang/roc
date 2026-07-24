@@ -768,7 +768,10 @@ fn compactFrac(
 }
 
 fn smallDecFromParts(before: []const u8, after: []const u8, after_count: u64, is_negative: bool) ?SmallDecValue {
-    if (after_count > std.math.maxInt(u8)) return null;
+    // A scale beyond Dec's 18 decimal places is not representable as a
+    // small-dec fast path (it would silently shift the value); such literals
+    // take the exact path and fail Dec fit validation instead.
+    if (after_count > 18) return null;
     const after_digit_count = usizeToU64(after.len) orelse return null;
     if (after_digit_count > after_count) return null;
     const after_leading_zero_count = after_count - after_digit_count;

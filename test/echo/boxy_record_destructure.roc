@@ -9,6 +9,6 @@ main! = |_args| {
 	rec0 = { name: "Bob", age: 25, score: 99 }
 	rec = identity(rec0)
 	{ name, age, score } = rec
-	echo!("${name} ${age.to_str()} ${score.to_str()}")
+	echo!("${name} ${age.to_str()} ${score.to_str()}\n")
 	Ok({})
 }

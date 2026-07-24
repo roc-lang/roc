@@ -277,6 +277,49 @@ pub const CliProblem = union(enum) {
         reason: []const u8,
     },
 
+    // Install Problems
+
+    /// `roc install` was given an invalid shorthand name
+    invalid_shorthand: struct {
+        name: []const u8,
+    },
+
+    /// The shorthand is already installed from a different URL
+    shorthand_conflict: struct {
+        name: []const u8,
+        existing_url: []const u8,
+        new_url: []const u8,
+    },
+
+    /// No installation exists under this shorthand for this compiler version
+    unknown_shorthand: struct {
+        name: []const u8,
+    },
+
+    /// An installed entry exists but its contents are missing or invalid
+    install_entry_corrupt: struct {
+        name: []const u8,
+        path: []const u8,
+        reason: []const u8,
+    },
+
+    /// The persistent install directory could not be determined
+    install_dir_unavailable: struct {
+        reason: []const u8,
+    },
+
+    /// The downloaded bundle has no main.roc at its root
+    install_bundle_missing_main: struct {
+        url: []const u8,
+        searched_path: []const u8,
+    },
+
+    /// Publishing a completed installation into place failed
+    install_publish_failed: struct {
+        name: []const u8,
+        err: ReportedError,
+    },
+
     // Process/Runtime Problems
 
     /// Child process failed to spawn
@@ -369,6 +412,13 @@ pub const CliProblem = union(enum) {
             .bump_failed,
             .download_failed,
             .package_cache_error,
+            .invalid_shorthand,
+            .shorthand_conflict,
+            .unknown_shorthand,
+            .install_entry_corrupt,
+            .install_dir_unavailable,
+            .install_bundle_missing_main,
+            .install_publish_failed,
             .child_process_spawn_failed,
             .child_process_failed,
             .child_process_signaled,
@@ -412,6 +462,13 @@ pub const CliProblem = union(enum) {
             .bump_failed => |info| try createBumpFailedReport(allocator, info),
             .download_failed => |info| try createDownloadFailedReport(allocator, info),
             .package_cache_error => |info| try createPackageCacheErrorReport(allocator, info),
+            .invalid_shorthand => |info| try createInvalidShorthandReport(allocator, info),
+            .shorthand_conflict => |info| try createShorthandConflictReport(allocator, info),
+            .unknown_shorthand => |info| try createUnknownShorthandReport(allocator, info),
+            .install_entry_corrupt => |info| try createInstallEntryCorruptReport(allocator, info),
+            .install_dir_unavailable => |info| try createInstallDirUnavailableReport(allocator, info),
+            .install_bundle_missing_main => |info| try createInstallBundleMissingMainReport(allocator, info),
+            .install_publish_failed => |info| try createInstallPublishFailedReport(allocator, info),
             .child_process_spawn_failed => |info| try createChildProcessSpawnFailedReport(allocator, info),
             .child_process_failed => |info| try createChildProcessFailedReport(allocator, info),
             .child_process_signaled => |info| try createChildProcessSignaledReport(allocator, info),
@@ -812,6 +869,112 @@ fn createPackageCacheErrorReport(allocator: Allocator, info: anytype) Allocator.
 
     try report.document.addText("Reason: ");
     try report.document.addText(info.reason);
+
+    return report;
+}
+
+fn createInvalidShorthandReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` is not a valid shorthand name.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Shorthand", headline, .runtime_error);
+
+    try report.document.addText("A shorthand starts with a lowercase letter, followed by lowercase letters, digits, or underscores. The name `roc` and Windows reserved device names such as `con` and `nul` are not allowed on any OS.");
+    try report.document.addLineBreaks(2);
+    try report.document.addText("For example: ");
+    try report.document.addAnnotated("tokei", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("rust_glue", .emphasized);
+
+    return report;
+}
+
+fn createShorthandConflictReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` is already installed from a different URL.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Shorthand Conflict", headline, .runtime_error);
+
+    try report.document.addText("Currently installed from:");
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.existing_url, .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Requested:");
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.new_url, .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addSuggestion("The existing installation was left unchanged. To install this URL, choose a different shorthand name.");
+
+    return report;
+}
+
+fn createUnknownShorthandReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "Nothing is installed under the name `{s}` for this compiler version.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unknown Shorthand", headline, .runtime_error);
+
+    const install_hint = try std.fmt.allocPrint(allocator, "To install something under that name, run: roc install {s} <URL>", .{info.name});
+    defer allocator.free(install_hint);
+    try report.document.addSuggestion(install_hint);
+    try report.document.addLineBreak();
+    const path_hint = try std.fmt.allocPrint(allocator, "If you meant a local file named `{s}`, write it as `./{s}`.", .{ info.name, info.name });
+    defer allocator.free(path_hint);
+    try report.document.addSuggestion(path_hint);
+
+    return report;
+}
+
+fn createInstallEntryCorruptReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The installation under `{s}` is corrupt or incomplete.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Corrupt Installation", headline, .runtime_error);
+
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.path, .path);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Reason: ");
+    try report.document.addText(info.reason);
+    try report.document.addLineBreaks(2);
+    const hint = try std.fmt.allocPrint(allocator, "Delete that directory, then reinstall with: roc install {s} <URL>", .{info.name});
+    defer allocator.free(hint);
+    try report.document.addSuggestion(hint);
+
+    return report;
+}
+
+fn createInstallDirUnavailableReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, "Install Directory Unavailable", "I could not determine the install directory.", .runtime_error);
+
+    try report.document.addText("Reason: ");
+    try report.document.addText(info.reason);
+    try report.document.addLineBreaks(2);
+    try report.document.addSuggestion("Set the ROC_INSTALL_DIR environment variable to choose an install directory explicitly.");
+
+    return report;
+}
+
+fn createInstallBundleMissingMainReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The bundle downloaded from {s} has no main.roc at its root.", .{info.url});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Bundle", headline, .runtime_error);
+
+    try report.document.addText("I looked for:");
+    try report.document.addLineBreak();
+    try report.document.addText("    ");
+    try report.document.addAnnotated(info.searched_path, .path);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Installable bundles must contain a main.roc at the archive root.");
+
+    return report;
+}
+
+fn createInstallPublishFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "I could not publish the completed installation for `{s}`.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Install Publish Failed", headline, .runtime_error);
+
+    try report.document.addText("Error: ");
+    try report.document.addText(@errorName(info.err));
 
     return report;
 }

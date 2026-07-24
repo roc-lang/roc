@@ -21,7 +21,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "r")
 			(ty-apply
@@ -42,11 +42,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-call (constraint-fn-var 308)
-			(e-lookup-external
-				(builtin))
-			(e-num (value "0"))
-			(e-num (value "10")))
+		(e-dispatch-call (method "range_exclusive") (constraint-fn-var 207)
+			(receiver
+				(e-num (value "0")))
+			(args
+				(e-num (value "10"))))
 		(annotation
 			(ty-apply (name "Iter") (builtin)
 				(ty-lookup (name "U8") (builtin))))))

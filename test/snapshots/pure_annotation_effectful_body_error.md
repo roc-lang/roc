@@ -95,12 +95,12 @@ NO CHANGE
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-call (constraint-fn-var 68)
+		(e-call (constraint-fn-var 212)
 			(e-lookup-local
 				(p-assign (ident "bad_function")))
 			(e-string
 				(e-literal (string "This should fail")))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

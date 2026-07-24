@@ -179,13 +179,15 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     build_env.filesystem = echo_ctx.io();
 
     build_env.discoverDependencies(opts.paths.app_abs) catch |err| {
-        _ = try emitDiagnostics(&build_env, diag, allocator);
-        diag.step("discoverDependencies", err);
+        if (!try emitDiagnostics(&build_env, diag, allocator)) {
+            diag.step("discoverDependencies", err);
+        }
         return err;
     };
     build_env.compileDiscovered() catch |err| {
-        _ = try emitDiagnostics(&build_env, diag, allocator);
-        diag.step("compileDiscovered", err);
+        if (!try emitDiagnostics(&build_env, diag, allocator)) {
+            diag.step("compileDiscovered", err);
+        }
         return err;
     };
 
@@ -307,6 +309,7 @@ fn runEchoView(
         &view.layouts,
         eval.LirInterpreter.BoxyTables.fromImageView(view),
         &roc_ops,
+        .preserve,
     ) catch |err| {
         diag.step("LirInterpreter.init", err);
         return err;

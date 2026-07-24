@@ -2,7 +2,7 @@ JsonEncodeNestedContainerEdgeCases :: [].{}
 
 list_record_parses_and_encodes : Str -> Bool
 list_record_parses_and_encodes = |json| {
-	result : Try(List({ foo : Str }), Json.ParseErr)
+	result : Try(List({ foo : Str }), [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse(json)
 
 	match result {
@@ -17,7 +17,7 @@ expect list_record_parses_and_encodes("[{\"foo\":\"a\"},{\"foo\":\"b\"}]")
 
 list_tuple_record_parses_and_encodes : Str -> Bool
 list_tuple_record_parses_and_encodes = |json| {
-	result : Try(List({ points : (Str, U64) }), Json.ParseErr)
+	result : Try(List({ points : (Str, U64) }), [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse(json)
 
 	match result {
@@ -32,7 +32,7 @@ expect list_tuple_record_parses_and_encodes("[{\"points\":[\"left\",1]},{\"point
 
 list_tag_record_parses_and_encodes : Str -> Bool
 list_tag_record_parses_and_encodes = |json| {
-	result : Try(List({ status : [Active, Paused] }), Json.ParseErr)
+	result : Try(List({ status : [Active, Paused] }), [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse(json)
 
 	match result {
@@ -46,13 +46,13 @@ list_tag_record_parses_and_encodes = |json| {
 expect list_tag_record_parses_and_encodes("[{\"status\":\"Active\"},{\"status\":\"Paused\"}]")
 
 expect {
-	missing_payload : Try([Active, Paused], Json.ParseErr)
+	missing_payload : Try([Active, Paused], [InvalidJson(Str)])
 	missing_payload = Json.parse("{\"Active\":}")
 
-	missing_trailing_payload : Try([Active, Paused], Json.ParseErr)
+	missing_trailing_payload : Try([Active, Paused], [InvalidJson(Str)])
 	missing_trailing_payload = Json.parse("{\"Active\":,}")
 
-	explicit_empty_payload : Try([Active, Paused], Json.ParseErr)
+	explicit_empty_payload : Try([Active, Paused], [InvalidJson(Str)])
 	explicit_empty_payload = Json.parse("{\"Active\":{}}")
 
 	missing_payload_is_invalid = missing_payload == Err(Json.invalid_json)
@@ -64,7 +64,7 @@ expect {
 
 list_two_field_record_parses_and_encodes : Str -> Bool
 list_two_field_record_parses_and_encodes = |json| {
-	result : Try(List({ foo : Str, bar : U64 }), Json.ParseErr)
+	result : Try(List({ foo : Str, bar : U64 }), [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse(json)
 
 	match result {
@@ -79,7 +79,7 @@ expect list_two_field_record_parses_and_encodes("[{\"foo\":\"a\",\"bar\":1},{\"f
 
 list_tag_tuple_record_parses_and_encodes : Str -> Bool
 list_tag_tuple_record_parses_and_encodes = |json| {
-	result : Try(List({ status : [Active, Paused], points : (Str, U64) }), Json.ParseErr)
+	result : Try(List({ status : [Active, Paused], points : (Str, U64) }), [InvalidJson(Str), MissingRequiredField(Str)])
 	result = Json.parse(json)
 
 	match result {

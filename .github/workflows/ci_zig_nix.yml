@@ -28,14 +28,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
 
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
       - name: Restore Zig dependency packages
         id: zig-deps-cache
-        uses: actions/cache/restore@v4 # ratchet:actions/cache/restore@v4
+        uses: actions/cache/restore@v6.1.0 # ratchet:actions/cache/restore@v6.1.0
         with:
           # Keep this key and path in sync with ci_zig.yml. The daily Nightly
           # Gate run executes this workflow on main, so new PRs can restore
@@ -57,7 +57,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: 'nix develop ./src/ -c bash ci/zig_nix_ci.sh ${{ matrix.nix_ci_mode }} ${{ matrix.target_flag }}'
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Check Zig dependency package cache contents
@@ -73,7 +72,7 @@ jobs:
 
       - name: Save Zig dependency packages
         if: always() && steps.zig-deps-cache.outputs.cache-hit != 'true' && steps.zig-deps-cache-contents.outputs.present == 'true'
-        uses: actions/cache/save@v4 # ratchet:actions/cache/save@v4
+        uses: actions/cache/save@v6.1.0 # ratchet:actions/cache/save@v6.1.0
         with:
           path: ${{ env.ZIG_GLOBAL_CACHE_DIR }}/p
           key: zig-deps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
@@ -83,7 +82,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: |
+            set -euo pipefail
             nix build ./src#roc
             result/bin/roc check CONTRIBUTING/profiling/bench_repeated_check.roc
-          error_string_contains: "build.zig.zon|HttpConnectionClosing|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3

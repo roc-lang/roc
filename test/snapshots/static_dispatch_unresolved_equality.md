@@ -36,7 +36,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "poly"))
@@ -78,7 +78,7 @@ result = poly() == poly()
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(rhs
-				(e-call (constraint-fn-var 26)
+				(e-call (constraint-fn-var 188)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

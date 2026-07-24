@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type module visibility: only the main type and its children are documented
+description=Type mod visibility: only the main type and its children are documented
 type=docs
 ~~~
 # SOURCE
@@ -30,7 +30,7 @@ Color := [Red, Green, Blue].{
         }
 }
 
-## This helper is private to the module and should NOT appear in docs.
+## This helper is private to the mod and should NOT appear in docs.
 color_name : [Red, Green, Blue] -> Str
 color_name = |tag|
     match tag {
@@ -58,10 +58,10 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "Color")
     (package "app")
-    (kind type_module)
+    (kind type_mod)
     (doc "A color value.")
     (entry
       (name "Color")
@@ -71,18 +71,18 @@ main_for_host = main
       (entry
         (name "red")
         (kind value)
-        (type (fn (record) (type-ref (module "app.Color") (name "Color"))))
+        (type (fn (record) (type-ref (mod "app.Color") (name "Color"))))
         (doc "The red color.")
       )
       (entry
         (name "to_str")
         (kind value)
-        (type (fn (type-ref (module "app.Color") (name "Color")) (type-ref (name "Str"))))
+        (type (fn (type-ref (mod "app.Color") (name "Color")) (type-ref (name "Str"))))
         (doc "Convert a color to a string.")
       )
     )
   )
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)

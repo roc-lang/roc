@@ -539,6 +539,37 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
+        /// CLZ reg, reg (count leading zeros). Data-processing (1 source):
+        /// `sf 1 0 11010110 00000 000100 Rn Rd` (base 0xDAC01000).
+        pub fn clzRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1 << 30) |
+                (0b0 << 29) |
+                (0b11010110 << 21) |
+                (0b00000 << 16) |
+                (0b000100 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// RBIT reg, reg (reverse bits). Data-processing (1 source):
+        /// `sf 1 0 11010110 00000 000000 Rn Rd` (base 0xDAC00000). Count
+        /// trailing zeros is composed as RBIT followed by CLZ.
+        pub fn rbitRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            const sf = width.sf();
+            const inst: u32 = (@as(u32, sf) << 31) |
+                (0b1 << 30) |
+                (0b0 << 29) |
+                (0b11010110 << 21) |
+                (0b00000 << 16) |
+                (0b000000 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
         /// CMP reg, reg (compare - alias for SUBS with XZR destination)
         pub fn cmpRegReg(self: *Self, width: RegisterWidth, lhs: GeneralReg, rhs: GeneralReg) Allocator.Error!void {
             // SUBS XZR, Xn, Xm

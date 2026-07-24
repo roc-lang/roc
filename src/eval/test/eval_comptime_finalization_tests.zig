@@ -59,11 +59,6 @@ const expect_success =
     \\main = 42
 ;
 
-const expect_failure =
-    \\expect missing_expect_condition
-    \\main = 42
-;
-
 const inline_expect_failure =
     \\bad = {
     \\    expect False
@@ -87,6 +82,33 @@ const dbg_does_not_halt =
     \\    42
     \\}
     \\main = x
+;
+
+const unused_top_level_dbg_does_not_halt =
+    \\unused : I64
+    \\unused = {
+    \\    dbg 40
+    \\    1.I64
+    \\}
+    \\main = 42
+;
+
+const unused_top_level_expect_failure =
+    \\unused : I64
+    \\unused = {
+    \\    expect False
+    \\    1.I64
+    \\}
+    \\main = 42
+;
+
+const unused_top_level_crash =
+    \\unused : I64
+    \\unused = {
+    \\    crash "unused top-level constant crash"
+    \\    1.I64
+    \\}
+    \\main = 42
 ;
 
 const folded_multiply =
@@ -168,16 +190,29 @@ const associated_deep_multiple =
     \\main = Outer.a + Outer.Middle.b + Outer.Middle.Inner.c
 ;
 
-const problem_type_mismatch =
-    \\main = missing_numeric_bound_value
+const u8_out_of_range =
+    \\main : U8
+    \\main = 256
+;
+
+const i8_below_min =
+    \\main : I8
+    \\main = -129
+;
+
+const u64_negative =
+    \\main : U64
+    \\main = -1
 ;
 
 const div_zero =
-    \\main = missing_division_by_zero_value
+    \\main : I64
+    \\main = 1 // 0
 ;
 
 const mod_zero =
-    \\main = missing_modulo_by_zero_value
+    \\main : I64
+    \\main = 1 % 0
 ;
 
 const int_list_nil =
@@ -709,6 +744,22 @@ const opaque_function_field =
     \\main = W.run(W.mk("x")) == V("x")
 ;
 
+// Repro for https://github.com/roc-lang/roc/issues/10118
+const stored_where_constrained_closure =
+    \\Item := [It(Str)].{
+    \\    to_str : Item -> Str
+    \\    to_str = |Item.It(s)| s
+    \\}
+    \\
+    \\mk : a -> ({} -> Str) where [a.to_str : a -> Str]
+    \\mk = |x| |{}| x.to_str()
+    \\
+    \\p : {} -> Str
+    \\p = mk(Item.It("whereconstrained"))
+    \\
+    \\main = p({})
+;
+
 const top_level_expect_type_error =
     \\foo : U64 -> U64
     \\foo = |x| x
@@ -724,6 +775,30 @@ const import_crash_module =
     \\        crash "import crash"
     \\        0
     \\    }
+    \\    safe = 42
+    \\}
+;
+
+const import_unused_expect_module =
+    \\hidden_bad : I64
+    \\hidden_bad = {
+    \\    expect False
+    \\    0.I64
+    \\}
+    \\
+    \\Util := [].{
+    \\    safe = 42
+    \\}
+;
+
+const import_unused_crash_module =
+    \\hidden_bad : I64
+    \\hidden_bad = {
+    \\    crash "imported unused top-level constant crash"
+    \\    0.I64
+    \\}
+    \\
+    \\Util := [].{
     \\    safe = 42
     \\}
 ;
@@ -762,15 +837,16 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - cross-module crash is detected", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = import_crash_module }}, .source = "import Util\nmain = Util.safe", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - imported constant can be accessed from headerless module", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = "Util := [].{\n    hidden = 1\n    shown = 2\n}\n" }}, .source = "import Util\nmain = Util.hidden", .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "comptime eval - expect success does not report", .source_kind = .module, .source = expect_success, .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime eval - expect failure is reported but does not halt within def", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - multiple expect failures are reported", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - inline expect failure in constant is reported", .source_kind = .module, .source = inline_expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - multiple inline expect failures in constant are reported", .source_kind = .module, .source = multiple_inline_expect_failures, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - crash does not halt other defs", .source_kind = .module, .source = crash_other_defs, .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime eval - expect failure does not halt evaluation", .source_kind = .module, .source = expect_failure, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - dbg does not halt evaluation", .source_kind = .module, .source = dbg_does_not_halt, .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "comptime eval - unused top-level dbg still evaluates", .source_kind = .module, .source = unused_top_level_dbg_does_not_halt, .expected = .{ .inspect_str = "42.0" } },
+    .{ .name = "comptime eval - unused top-level constant expect failure is reported", .source_kind = .module, .source = unused_top_level_expect_failure, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - unused top-level constant crash is reported", .source_kind = .module, .source = unused_top_level_crash, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - imported unused top-level expect failure is reported", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = import_unused_expect_module }}, .source = "import Util\nmain = Util.safe", .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - imported unused top-level crash is reported", .source_kind = .module, .imports = &.{.{ .name = "Util", .source = import_unused_crash_module }}, .source = "import Util\nmain = Util.safe", .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - crash in first def does not halt other defs", .source_kind = .module, .source = crash_first_other_defs, .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "comptime eval - crash halts within single def", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "comptime eval - constant folding multiplication", .source_kind = .module, .source = folded_multiply, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - constant folding preserves literal", .source_kind = .module, .source = folded_literal, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - constant folding multiple defs", .source_kind = .module, .source = folded_multiple, .expected = .{ .inspect_str = "42.0" } },
@@ -782,49 +858,76 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - multiple associated items with dependencies", .source_kind = .module, .source = associated_multiple, .expected = .{ .inspect_str = "7.0" } },
     .{ .name = "comptime eval - deeply nested associated items (5+ levels)", .source_kind = .module, .source = associated_deep, .expected = .{ .inspect_str = "123.0" } },
     .{ .name = "comptime eval - deeply nested with multiple items at each level", .source_kind = .module, .source = associated_deep_multiple, .expected = .{ .inspect_str = "60.0" } },
-    .{ .name = "comptime eval - U8: 256 does not fit", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U8: negative does not fit", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I8: -129 does not fit", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - U8: 256 does not fit", .source_kind = .module, .source = u8_out_of_range, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - I8: -129 does not fit", .source_kind = .module, .source = i8_below_min, .expected = .{ .problem = {} } },
+    .{ .name = "comptime eval - U64: negative literal does not fit", .source_kind = .module, .source = u64_negative, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - U8 valid max value", .source_kind = .module, .source = "main : U8\nmain = 255", .expected = .{ .inspect_str = "255" } },
-    .{ .name = "comptime eval - U8 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U8 negative with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U8 fractional with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - I8 valid range", .source_kind = .module, .source = "main : I8\nmain = -128", .expected = .{ .inspect_str = "-128" } },
-    .{ .name = "comptime eval - I8 too small with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I8 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I8 fractional with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - U16 valid max value", .source_kind = .module, .source = "main : U16\nmain = 65535", .expected = .{ .inspect_str = "65535" } },
-    .{ .name = "comptime eval - U16 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U16 negative with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - I16 valid range", .source_kind = .module, .source = "main : I16\nmain = -32768", .expected = .{ .inspect_str = "-32768" } },
-    .{ .name = "comptime eval - I16 too small with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I16 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - U32 valid max value", .source_kind = .module, .source = "main : U32\nmain = 4294967295", .expected = .{ .inspect_str = "4294967295" } },
-    .{ .name = "comptime eval - U32 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U32 negative with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - I32 valid range", .source_kind = .module, .source = "main : I32\nmain = -2147483648", .expected = .{ .inspect_str = "-2147483648" } },
-    .{ .name = "comptime eval - I32 too small with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I32 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - U64 valid max value", .source_kind = .module, .source = "main : U64\nmain = 18446744073709551615", .expected = .{ .inspect_str = "18446744073709551615" } },
-    .{ .name = "comptime eval - U64 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U64 negative with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - I64 valid range", .source_kind = .module, .source = "main : I64\nmain = -9223372036854775808", .expected = .{ .inspect_str = "-9223372036854775808" } },
-    .{ .name = "comptime eval - I64 too small with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I64 too large with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - I64 fractional with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - U128 valid max value", .source_kind = .module, .source = "main : U128\nmain = 340282366920938463463374607431768211455", .expected = .{ .inspect_str = "340282366920938463463374607431768211455" } },
-    .{ .name = "comptime eval - U128 negative does not fit", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - U128 fractional with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - I128 valid range", .source_kind = .module, .source = "main : I128\nmain = -170141183460469231731687303715884105728", .expected = .{ .inspect_str = "-170141183460469231731687303715884105728" } },
-    .{ .name = "comptime eval - I128 fractional with descriptive error", .source_kind = .module, .source = problem_type_mismatch, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - F32 valid", .source_kind = .module, .source = "main : F32\nmain = 1.5", .expected = .{ .inspect_str = "1.5" } },
     .{ .name = "comptime eval - F64 valid", .source_kind = .module, .source = "main : F64\nmain = 1.5", .expected = .{ .inspect_str = "1.5" } },
+    .{ .name = "comptime float bits - F32 finite control", .source_kind = .module, .source = "main : F32\nmain = 1.5", .expected = .{ .comptime_f32_bits = 0x3fc00000 } },
+    .{ .name = "comptime float bits - F32 negative zero control", .source_kind = .module, .source = "main : F32\nmain = F32.times(0.0, -1.0)", .expected = .{ .comptime_f32_bits = 0x80000000 } },
+    .{ .name = "comptime float bits - F32 infinity control", .source_kind = .module, .source = "main : F32\nmain = F32.infinity", .expected = .{ .comptime_f32_bits = 0x7f800000 } },
+    .{ .name = "comptime float bits - F32 positive quiet NaN payload", .source_kind = .module, .source = "main : F32\nmain = F32.from_bits(2143289345)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 negative signaling NaN payload", .source_kind = .module, .source = "main : F32\nmain = F32.from_bits(4286578689)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 zero divided by zero", .source_kind = .module, .source = "main : F32\nmain = F32.div_by(0.0, 0.0)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 infinity minus infinity", .source_kind = .module, .source = "main : F32\nmain = F32.minus(F32.infinity, F32.infinity)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 zero times infinity", .source_kind = .module, .source = "main : F32\nmain = F32.times(0.0, F32.infinity)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 infinity divided by infinity", .source_kind = .module, .source = "main : F32\nmain = F32.div_by(F32.infinity, F32.infinity)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 infinite remainder", .source_kind = .module, .source = "main : F32\nmain = F32.rem_by(F32.infinity, 1.0)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 square root propagates NaN", .source_kind = .module, .source = "main : F32\nmain = F32.sqrt(F32.from_bits(2141266757))", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 power domain NaN", .source_kind = .module, .source = "main : F32\nmain = F32.pow(-1.0, 0.5)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 sine infinity NaN", .source_kind = .module, .source = "main : F32\nmain = F32.sin(F32.infinity)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 arcsine domain NaN", .source_kind = .module, .source = "main : F32\nmain = F32.asin(2.0)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 payload propagation", .source_kind = .module, .source = "main : F32\nmain = F32.plus(F32.from_bits(2141266757), 1.0)", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{ .name = "comptime float bits - F32 deterministic sine", .source_kind = .module, .source = "main : F32\nmain = F32.sin(1.0)", .expected = .{ .comptime_f32_bits = 0x3f576aa5 } },
+    .{ .name = "comptime float bits - F32 deterministic cosine", .source_kind = .module, .source = "main : F32\nmain = F32.cos(1.0)", .expected = .{ .comptime_f32_bits = 0x3f0a5140 } },
+    .{ .name = "comptime float bits - F32 deterministic tangent", .source_kind = .module, .source = "main : F32\nmain = F32.tan(1.0)", .expected = .{ .comptime_f32_bits = 0x3fc75924 } },
+    .{ .name = "comptime float bits - F32 deterministic arcsine", .source_kind = .module, .source = "main : F32\nmain = F32.asin(0.5)", .expected = .{ .comptime_f32_bits = 0x3f060a92 } },
+    .{ .name = "comptime float bits - F32 deterministic arccosine", .source_kind = .module, .source = "main : F32\nmain = F32.acos(0.5)", .expected = .{ .comptime_f32_bits = 0x3f860a92 } },
+    .{ .name = "comptime float bits - F32 deterministic arctangent", .source_kind = .module, .source = "main : F32\nmain = F32.atan(1.0)", .expected = .{ .comptime_f32_bits = 0x3f490fdb } },
+    .{ .name = "comptime float bits - F32 deterministic power", .source_kind = .module, .source = "main : F32\nmain = F32.pow(0.2, 3.3)", .expected = .{ .comptime_f32_bits = 0x3ba1c06f } },
+    .{ .name = "comptime float bits - F64 finite control", .source_kind = .module, .source = "main : F64\nmain = 1.5", .expected = .{ .comptime_f64_bits = 0x3ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 negative zero control", .source_kind = .module, .source = "main : F64\nmain = F64.times(0.0, -1.0)", .expected = .{ .comptime_f64_bits = 0x8000000000000000 } },
+    .{ .name = "comptime float bits - F64 infinity control", .source_kind = .module, .source = "main : F64\nmain = F64.infinity", .expected = .{ .comptime_f64_bits = 0x7ff0000000000000 } },
+    .{ .name = "comptime float bits - F64 positive quiet NaN payload", .source_kind = .module, .source = "main : F64\nmain = F64.from_bits(9221120237041090561)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 negative signaling NaN payload", .source_kind = .module, .source = "main : F64\nmain = F64.from_bits(18442240474082181121)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 zero divided by zero", .source_kind = .module, .source = "main : F64\nmain = F64.div_by(0.0, 0.0)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 infinity minus infinity", .source_kind = .module, .source = "main : F64\nmain = F64.minus(F64.infinity, F64.infinity)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 zero times infinity", .source_kind = .module, .source = "main : F64\nmain = F64.times(0.0, F64.infinity)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 infinity divided by infinity", .source_kind = .module, .source = "main : F64\nmain = F64.div_by(F64.infinity, F64.infinity)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 infinite remainder", .source_kind = .module, .source = "main : F64\nmain = F64.rem_by(F64.infinity, 1.0)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 square root propagates NaN", .source_kind = .module, .source = "main : F64\nmain = F64.sqrt(F64.from_bits(9220034518954349876))", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 power domain NaN", .source_kind = .module, .source = "main : F64\nmain = F64.pow(-1.0, 0.5)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 sine infinity NaN", .source_kind = .module, .source = "main : F64\nmain = F64.sin(F64.infinity)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 arcsine domain NaN", .source_kind = .module, .source = "main : F64\nmain = F64.asin(2.0)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 payload propagation", .source_kind = .module, .source = "main : F64\nmain = F64.plus(F64.from_bits(9220034518954349876), 1.0)", .expected = .{ .comptime_f64_bits = 0x7ff8000000000000 } },
+    .{ .name = "comptime float bits - F64 NaN narrowed to F32", .source_kind = .module, .source = "main : F32\nmain = F64.to_f32_wrap(F64.from_bits(9221120237041090561))", .expected = .{ .comptime_f32_bits = 0x7fc00000 } },
+    .{
+        .name = "comptime float bits - F32 NaNs are normalized inside static lists",
+        .source_kind = .module,
+        .source = "main : List(F32)\nmain = [F32.from_bits(4286578689), F32.div_by(0.0, 0.0), 1.5]",
+        .expected = .{ .comptime_f32_list_bits = &.{ 0x7fc00000, 0x7fc00000, 0x3fc00000 } },
+    },
+    .{
+        .name = "comptime float bits - F64 NaNs are normalized inside static lists",
+        .source_kind = .module,
+        .source = "main : List(F64)\nmain = [F64.from_bits(18442240474082181121), F64.div_by(0.0, 0.0), 1.5]",
+        .expected = .{ .comptime_f64_list_bits = &.{ 0x7ff8000000000000, 0x7ff8000000000000, 0x3ff8000000000000 } },
+    },
     .{ .name = "comptime eval - Dec valid", .source_kind = .module, .source = "main : Dec\nmain = 1.5", .expected = .{ .inspect_str = "1.5" } },
     .{ .name = "comptime eval - F32 integer literal valid", .source_kind = .module, .source = "main : F32\nmain = 42", .expected = .{ .inspect_str = "42" } },
     .{ .name = "comptime eval - F64 negative valid", .source_kind = .module, .source = "main : F64\nmain = -1.5", .expected = .{ .inspect_str = "-1.5" } },
     .{ .name = "comptime eval - to_str on unbound number literal", .source_kind = .module, .source = "main = I64.to_str(42)", .expected = .{ .inspect_str = "\"42\"" } },
     .{ .name = "comptime eval - division by zero produces error", .source_kind = .module, .source = div_zero, .expected = .{ .problem = {} } },
-    .{ .name = "comptime eval - division by zero in expression", .source_kind = .module, .source = div_zero, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - modulo by zero produces error", .source_kind = .module, .source = mod_zero, .expected = .{ .problem = {} } },
     .{ .name = "comptime eval - division by zero does not crash subsequent defs (issue 9001)", .source_kind = .module, .source = "good = 42\nmain = good", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "comptime eval - recursive nominal: simple IntList Nil", .source_kind = .module, .source = int_list_nil, .expected = .{ .inspect_str = "Nil" } },
@@ -888,15 +991,11 @@ pub const tests = [_]TestCase{
     .{ .name = "comptime eval - issue 8901: pattern matching on nominal type", .source_kind = .module, .source = nominal_match, .expected = .{ .inspect_str = "1.0" } },
     .{ .name = "issue 8930: wrapped tag union in wrapped record should not crash", .source_kind = .module, .source = wrapped_record, .expected = .{ .inspect_str = "CombinedValue({ combination_method: Add })" } },
     .{ .name = "issue 8944: wrapper function for List.get with match", .source_kind = .module, .source = list_get_wrapper, .expected = .{ .inspect_str = "Ok(\"c\")" } },
-    .{ .name = "issue 8979: while (True) {} should crash instead of hanging", .source = crash_now, .expected = .{ .crash = {} } },
-    .{ .name = "issue 8979: while (True) with body but no exit should crash", .source = crash_now, .expected = .{ .crash = {} } },
-    .{ .name = "issue 8979: while with expression evaluating to True and no exit should crash", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "issue 8979: while (True) with break should not crash", .source_kind = .module, .source = while_true_break, .expected = .{ .inspect_str = "True" } },
     .{ .name = "issue 8979: while (True) with conditional break should not crash", .source_kind = .module, .source = while_conditional_break, .expected = .{ .inspect_str = "5.0" } },
     .{ .name = "issue 8979: while with mutable condition should not crash", .source_kind = .module, .source = while_mutable_condition, .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "issue 8979: while with comparison involving mutable var should not crash", .source_kind = .module, .source = while_mutable_comparison, .expected = .{ .inspect_str = "5.0" } },
     .{ .name = "issue 8979: while (False) should not crash", .source_kind = .module, .source = while_false, .expected = .{ .inspect_str = "42.0" } },
-    .{ .name = "issue 8979: nested while - inner break does not save outer loop", .source = crash_now, .expected = .{ .crash = {} } },
     .{ .name = "tag union matching with payload inside function - single module", .source_kind = .module, .source = tag_payload_single, .expected = .{ .inspect_str = "42" } },
     .{ .name = "comptime exhaustiveness - match succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_match_ok, .expected = .{ .inspect_str = "\"blah\"" } },
     .{ .name = "comptime exhaustiveness - Email.parse destructure succeeds empirically", .source_kind = .module, .source = comptime_exhaustive_destructure_email, .expected = .{ .inspect_str = "\"alice@example.com\"" } },
@@ -927,6 +1026,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "42" },
     },
     .{ .name = "issue 9262: dev evaluator handles opaque function field lookup", .source_kind = .module, .source = opaque_function_field, .expected = .{ .inspect_str = "True" } },
+    .{ .name = "issue 10118: stored where-constrained closure keeps dispatch evidence", .source_kind = .module, .source = stored_where_constrained_closure, .expected = .{ .inspect_str = "\"whereconstrained\"" } },
     .{
         .name = "issue 9281: dev evaluator stack overflow with nested recursive opaque types across modules",
         .source_kind = .module,

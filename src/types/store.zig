@@ -47,11 +47,10 @@ const TypeIdent = types.TypeIdent;
 const Alias = types.Alias;
 const FlatType = types.FlatType;
 const NominalType = types.NominalType;
-const Record = types.Record;
+const NominalDecl = types.NominalDecl;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
+const InterpolationPartMetadata = types.InterpolationPartMetadata;
 const SourceDecl = types.SourceDecl;
-
-const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct {
@@ -63,6 +62,28 @@ pub const ResolvedVarDesc = struct {
 
 /// Two variables & descs
 pub const ResolvedVarDescs = struct { a: ResolvedVarDesc, b: ResolvedVarDesc };
+
+/// One entry in the store's sorted nominal-declaration lookup index: a
+/// declaration key (origin module identity, source statement) mapped to the
+/// declaration's stable index in `Store.nominal_decls`. The index list is kept
+/// sorted by key so lookups are a binary search; declarations themselves are
+/// append-only so `NominalDecl.Idx` values stay stable across registrations.
+const NominalDeclIndexEntry = struct {
+    origin_module: base.ModuleIdentity.Idx,
+    statement: u32,
+    decl: NominalDecl.Idx,
+
+    const SafeList = collections.SafeList(@This());
+
+    /// Total order over declaration keys: origin module identity index first,
+    /// then statement.
+    fn orderByKey(origin_module: base.ModuleIdentity.Idx, statement: u32, entry: @This()) std.math.Order {
+        const lhs_origin = @intFromEnum(origin_module);
+        const rhs_origin = @intFromEnum(entry.origin_module);
+        if (lhs_origin != rhs_origin) return std.math.order(lhs_origin, rhs_origin);
+        return std.math.order(statement, entry.statement);
+    }
+};
 
 /// Reperents either type data *or* a symlink to another type variable
 pub const Slot = union(enum) {
@@ -108,7 +129,18 @@ pub const Store = struct {
     vars: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
+    interpolation_parts: InterpolationPartMetadata.SafeList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
+
+    /// The nominal declaration table: one entry per nominal declaration whose
+    /// applications can appear in this store (local declarations plus every
+    /// imported declaration copied in by `copy_import`). Append-only, so
+    /// `NominalDecl.Idx` values are stable; keyed lookups go through the
+    /// sorted `nominal_decl_index`.
+    nominal_decls: NominalDecl.SafeList,
+    /// Sorted (origin module identity, statement) -> declaration index. Kept
+    /// sorted on insert; lookups binary-search.
+    nominal_decl_index: NominalDeclIndexEntry.SafeList,
 
     /// Undo trail for speculative unification. While a probe is active
     /// (`savepoint_active`), every in-place write to a slot or descriptor that
@@ -155,7 +187,12 @@ pub const Store = struct {
             .vars = try VarSafeList.initCapacity(gpa, child_capacity),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
+            .interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+
+            // nominal declaration table (modules typically declare few types)
+            .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
+            .nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16),
         };
     }
 
@@ -183,7 +220,12 @@ pub const Store = struct {
         self.vars.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
         self.tags.deinit(self.gpa);
+        self.interpolation_parts.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
+
+        // nominal declaration table
+        self.nominal_decls.deinit(self.gpa);
+        self.nominal_decl_index.deinit(self.gpa);
 
         // speculation undo trail
         self.slot_trail.deinit(self.gpa);
@@ -199,7 +241,10 @@ pub const Store = struct {
             .vars = try self.vars.clone(gpa),
             .record_fields = try self.record_fields.clone(gpa),
             .tags = try self.tags.clone(gpa),
+            .interpolation_parts = try self.interpolation_parts.clone(gpa),
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
+            .nominal_decls = try self.nominal_decls.clone(gpa),
+            .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
         };
     }
 
@@ -243,6 +288,7 @@ pub const Store = struct {
         vars_len: usize,
         record_fields_len: usize,
         tags_len: usize,
+        interpolation_parts_len: usize,
         static_dispatch_constraints_len: usize,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
@@ -296,6 +342,7 @@ pub const Store = struct {
             .vars_len = self.vars.items.items.len,
             .record_fields_len = self.record_fields.items.len,
             .tags_len = self.tags.items.len,
+            .interpolation_parts_len = self.interpolation_parts.items.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
             .verify_clone = verify_clone,
         };
@@ -357,6 +404,7 @@ pub const Store = struct {
         self.vars.items.shrinkRetainingCapacity(savepoint.vars_len);
         self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
+        self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
 
         // Back to not speculating; savepoint_baseline_* are dead until the next create.
@@ -508,18 +556,57 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// The declared rule a `dangerousSetVarRedirect` call site bends the solved
+    /// graph under. A redirect outside ordinary unification is indistinguishable
+    /// at review time from a change to the language's typing rules, so every call
+    /// site must name the rule it operates under, and every member here must be
+    /// one of:
+    ///
+    ///   (i)  diagnostic recovery on an already-reported error — the redirect
+    ///        cannot change which programs typecheck or which plans are output
+    ///        for error-free programs; or
+    ///   (ii) a language/pipeline rule declared in design.md — the member's doc
+    ///        comment names the design.md section that declares it, and the rule
+    ///        has tests pinning both its accepted and its rejected side.
+    ///
+    /// A new call site must either cite an existing member whose rule covers it
+    /// or add a member (and the design.md declaration it cites) in the same
+    /// change. "It makes a test pass" is not a rule.
+    pub const RedirectRule = enum {
+        /// (i) Diagnostic recovery: the target var belongs to an expression
+        /// whose error has already been reported, and the redirect only lets
+        /// checking continue past it.
+        diagnostic_recovery_reported_error,
+        /// (ii) design.md "Platform/App Relation" (for-clause alias identity):
+        /// a platform requirement's for-clause alias is a binder over an
+        /// app-supplied type, so copied occurrences of the alias resolve to the
+        /// app's own type declaration.
+        for_clause_alias_identity,
+        /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
+        /// of a hosted function widens the condition's closed error row to the
+        /// enclosing annotated return's error row when every visible error is
+        /// included, keeping the hosted callee's declared closed row intact.
+        hosted_try_question_widening,
+    };
+
     /// Set a type variable to redirect to the provided variables.
     /// During type-checking, you probably don't want to use this function.
+    ///
+    /// This is the primitive that mutates the solved graph outside ordinary
+    /// unification. `rule` names the declared rule (see `RedirectRule`) the call
+    /// site operates under; a call without one does not compile.
     ///
     /// IMPORTANT: When using this function during type checking, it's possible
     /// to loose `rank` information! You should prefer to use regular `unify`
     /// over this function, which correctly propagates rank, unless you already
     /// know the two vars are of the same rank.
-    pub fn dangerousSetVarRedirect(self: *Self, target_var: Var, redirect_to: Var) Allocator.Error!void {
+    pub fn dangerousSetVarRedirect(self: *Self, comptime rule: RedirectRule, target_var: Var, redirect_to: Var) Allocator.Error!void {
         std.debug.assert(@intFromEnum(target_var) < self.len());
         std.debug.assert(@intFromEnum(redirect_to) < self.len());
         // Self-redirects cause infinite loops in resolveVar
-        std.debug.assert(target_var != redirect_to);
+        if (std.debug.runtime_safety and target_var == redirect_to) {
+            std.debug.panic("self-redirect of var {d} under rule {s}", .{ @intFromEnum(target_var), @tagName(rule) });
+        }
         if (std.debug.runtime_safety) {
             // Redirecting a root var into a transparent alias whose backing resolves
             // back to that same root creates a self-referential (infinite) alias.
@@ -634,23 +721,22 @@ pub const Store = struct {
         };
     }
 
-    /// Make nominal data type
+    /// Make a nominal type application: identity plus actual type args only.
+    /// The backing type lives in the declaration table, not the application.
     /// Does not insert content into the types store
     pub fn mkNominal(
         self: *Self,
         ident: TypeIdent,
-        backing_var: Var,
         args: []const Var,
         origin_module: base.ModuleIdentity.Idx,
         is_opaque: bool,
     ) std.mem.Allocator.Error!Content {
-        return self.mkNominalWithSourceDecl(ident, backing_var, args, origin_module, null, is_opaque);
+        return self.mkNominalWithSourceDecl(ident, args, origin_module, null, is_opaque);
     }
 
     pub fn mkNominalWithSourceDecl(
         self: *Self,
         ident: TypeIdent,
-        backing_var: Var,
         args: []const Var,
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
@@ -658,7 +744,6 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!Content {
         return self.mkNominalWithSourceDeclAndBuiltinOrigin(
             ident,
-            backing_var,
             args,
             origin_module,
             source_decl,
@@ -670,7 +755,6 @@ pub const Store = struct {
     pub fn mkNominalWithSourceDeclAndBuiltinOrigin(
         self: *Self,
         ident: TypeIdent,
-        backing_var: Var,
         args: []const Var,
         origin_module: base.ModuleIdentity.Idx,
         source_decl: ?u32,
@@ -682,17 +766,12 @@ pub const Store = struct {
             is_opaque,
             builtin_origin,
         );
-        const backing_idx = try self.appendVar(backing_var);
-        var span = try self.appendVars(args);
-
-        // Adjust args span to include backing  var
-        span.start = backing_idx;
-        span.count = span.count + 1;
+        const args_range = try self.appendVars(args);
 
         return Content{ .structure = FlatType{
             .nominal_type = NominalType{
                 .ident = ident,
-                .vars = .{ .nonempty = span },
+                .args = args_range,
                 .origin_module = origin_module,
                 .source = source,
             },
@@ -702,26 +781,23 @@ pub const Store = struct {
     // Make a function data type with unbound effectfulness
     // Does not insert content into the types store.
     pub fn mkFuncUnbound(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
+        return self.mkFuncUnboundWithEffectDeps(args, ret, &.{});
+    }
+
+    /// Make a function data type whose effect is inferred from directed
+    /// dependencies on other function types.
+    pub fn mkFuncUnboundWithEffectDeps(
+        self: *Self,
+        args: []const Var,
+        ret: Var,
+        effect_deps: []const Var,
+    ) std.mem.Allocator.Error!Content {
         const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
-        var needs_inst = false;
-        for (args) |arg| {
-            if (self.needsInstantiation(arg)) {
-                needs_inst = true;
-                break;
-            }
-        }
-
-        // Also check the return type
-        if (!needs_inst) {
-            needs_inst = self.needsInstantiation(ret);
-        }
-
+        const effect_deps_range = try self.appendVars(effect_deps);
         return Content{ .structure = .{ .fn_unbound = .{
             .args = args_range,
             .ret = ret,
-            .needs_instantiation = needs_inst,
+            .effect_deps = effect_deps_range,
         } } };
     }
 
@@ -729,25 +805,9 @@ pub const Store = struct {
     // Does not insert content into the types store.
     pub fn mkFuncPure(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
         const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
-        var needs_inst = false;
-        for (args) |arg| {
-            if (self.needsInstantiation(arg)) {
-                needs_inst = true;
-                break;
-            }
-        }
-
-        // Also check the return type
-        if (!needs_inst) {
-            needs_inst = self.needsInstantiation(ret);
-        }
-
         return Content{ .structure = .{ .fn_pure = .{
             .args = args_range,
             .ret = ret,
-            .needs_instantiation = needs_inst,
         } } };
     }
 
@@ -755,107 +815,10 @@ pub const Store = struct {
     // Does not insert content into the types store.
     pub fn mkFuncEffectful(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
         const args_range = try self.appendVars(args);
-
-        // Check if any arguments need instantiation
-        var needs_inst = false;
-        for (args) |arg| {
-            if (self.needsInstantiation(arg)) {
-                needs_inst = true;
-                break;
-            }
-        }
-
-        // Also check the return type
-        if (!needs_inst) {
-            needs_inst = self.needsInstantiation(ret);
-        }
-
         return Content{ .structure = .{ .fn_effectful = .{
             .args = args_range,
             .ret = ret,
-            .needs_instantiation = needs_inst,
         } } };
-    }
-
-    // Helper to check if a type variable needs instantiation
-    pub fn needsInstantiation(self: *const Self, var_: Var) bool {
-        const resolved = self.resolveVar(var_);
-
-        // Generalized variables (rank 0) always need instantiation
-        if (resolved.desc.rank == Rank.generalized) {
-            return true;
-        }
-
-        return self.needsInstantiationContent(resolved.desc.content);
-    }
-
-    pub fn needsInstantiationContent(self: *const Self, content: Content) bool {
-        return switch (content) {
-            .flex => true, // Flexible variables need instantiation
-            .rigid => true, // Rigid variables need instantiation when used outside their defining scope
-            // An alias is transparent: it needs instantiation exactly when its
-            // backing type does. Aliases cannot be recursive, so this walk
-            // terminates. Treating every alias as needing instantiation would
-            // (among other things) exclude concrete alias-annotated top-level
-            // values from compile-time evaluation.
-            .alias => |alias| self.needsInstantiation(self.getAliasBackingVar(alias)),
-            .structure => |flat_type| self.needsInstantiationFlatType(flat_type),
-            .err => false,
-        };
-    }
-
-    pub fn needsInstantiationFlatType(self: *const Self, flat_type: FlatType) bool {
-        return switch (flat_type) {
-            .tuple => |tuple| blk: {
-                const elems_slice = self.sliceVars(tuple.elems);
-                for (elems_slice) |elem_var| {
-                    if (self.needsInstantiation(elem_var)) break :blk true;
-                }
-                break :blk false;
-            },
-            .nominal_type => |nominal| blk: {
-                const args = self.sliceNominalArgs(nominal);
-                for (args) |arg_var| {
-                    if (self.needsInstantiation(arg_var)) break :blk true;
-                }
-                break :blk false;
-            },
-            .fn_pure => |func| func.needs_instantiation,
-            .fn_effectful => |func| func.needs_instantiation,
-            .fn_unbound => |func| func.needs_instantiation,
-            .record => |record| self.needsInstantiationRecord(record),
-            .record_unbound => |fields| self.needsInstantiationRecordFields(fields),
-            .empty_record => false,
-            .tag_union => |tag_union| self.needsInstantiationTagUnion(tag_union),
-            .empty_tag_union => false,
-        };
-    }
-
-    pub fn needsInstantiationRecord(self: *const Self, record: Record) bool {
-        const fields_slice = self.getRecordFieldsSlice(record.fields);
-        for (fields_slice.items(.var_)) |type_var| {
-            if (self.needsInstantiation(type_var)) return true;
-        }
-        return self.needsInstantiation(record.ext);
-    }
-
-    pub fn needsInstantiationRecordFields(self: *const Self, fields: RecordField.SafeMultiList.Range) bool {
-        const fields_slice = self.getRecordFieldsSlice(fields);
-        for (fields_slice.items(.var_)) |type_var| {
-            if (self.needsInstantiation(type_var)) return true;
-        }
-        return false;
-    }
-
-    pub fn needsInstantiationTagUnion(self: *const Self, tag_union: TagUnion) bool {
-        const tags_slice = self.getTagsSlice(tag_union.tags);
-        for (tags_slice.items(.args)) |tag_args| {
-            const args_slice = self.sliceVars(tag_args);
-            for (args_slice) |arg_var| {
-                if (self.needsInstantiation(arg_var)) return true;
-            }
-        }
-        return self.needsInstantiation(tag_union.ext);
     }
 
     // sub list setters //
@@ -890,6 +853,11 @@ pub const Store = struct {
     /// Append a slice of tags to the backing list, returning the range
     pub fn appendTags(self: *Self, slice: []const Tag) std.mem.Allocator.Error!TagSafeMultiList.Range {
         return try self.tags.appendSlice(self.gpa, slice);
+    }
+
+    /// Append interpolation part metadata to the backing list, returning the range
+    pub fn appendInterpolationParts(self: *Self, slice: []const InterpolationPartMetadata) std.mem.Allocator.Error!InterpolationPartMetadata.SafeList.Range {
+        return try self.interpolation_parts.appendSlice(self.gpa, slice);
     }
 
     /// Append static dispatch constraints to the backing list, returning the range
@@ -927,6 +895,19 @@ pub const Store = struct {
     /// Given a range, get a slice of tags from the backing array
     pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.sliceRange(range);
+    }
+
+    /// Given a range, get a slice of interpolation part metadata from the backing array
+    pub fn sliceInterpolationParts(self: *const Self, range: InterpolationPartMetadata.SafeList.Range) []InterpolationPartMetadata {
+        return self.interpolation_parts.sliceRange(range);
+    }
+
+    /// Get an interpolation part at a specific offset within a range.
+    /// Use this for index-based iteration when checking can trigger reallocations.
+    pub fn getInterpolationPartAt(self: *const Self, range: InterpolationPartMetadata.SafeList.Range, offset: u32) InterpolationPartMetadata {
+        std.debug.assert(offset < range.count);
+        const idx: InterpolationPartMetadata.SafeList.Idx = @enumFromInt(@intFromEnum(range.start) + offset);
+        return self.interpolation_parts.get(idx).*;
     }
 
     /// Given a range, get a slice of vars from the backing array
@@ -974,20 +955,12 @@ pub const Store = struct {
 
     // helpers - nominal types //
 
-    // Nominal types contain a span of variables. In this span, the 1st element
-    // is the backing variable, and the remainder are the arguments
-
-    /// Get the backing var for this nominal type
-    pub fn getNominalBackingVar(self: *const Self, nominal: NominalType) Var {
-        std.debug.assert(nominal.vars.nonempty.count > 0);
-        return self.vars.get(nominal.vars.nonempty.start).*;
-    }
+    // A nominal application carries only its actual type arguments; backing
+    // structure is resolved through the declaration table.
 
     /// Get the arg vars for this nominal type
     pub fn sliceNominalArgs(self: *const Self, nominal: NominalType) []Var {
-        std.debug.assert(nominal.vars.nonempty.count > 0);
-        const slice = self.vars.sliceRange(nominal.vars.nonempty);
-        return slice[1..];
+        return self.vars.sliceRange(nominal.args);
     }
 
     /// Get the arg vars range for this nominal type.
@@ -995,18 +968,116 @@ pub const Store = struct {
     /// Unlike sliceNominalArgs, this returns indices that remain valid even if
     /// the underlying storage is reallocated.
     pub fn getNominalArgsRange(nominal: NominalType) VarSafeList.Range {
-        std.debug.assert(nominal.vars.nonempty.count > 0);
-        var span = nominal.vars.nonempty;
-        span.dropFirstElem();
-        return span;
+        return nominal.args;
     }
 
     /// Get the an iterator arg vars for this nominal type
     pub fn iterNominalArgs(self: *const Self, nominal: NominalType) VarSafeList.Iterator {
-        std.debug.assert(nominal.vars.nonempty.count > 0);
-        var span = nominal.vars.nonempty;
-        span.dropFirstElem();
-        return self.vars.iterRange(span);
+        return self.vars.iterRange(nominal.args);
+    }
+
+    /// Whether this nominal application's declaration is known invalid
+    /// (malformed backing or invalid recursion). Applications whose
+    /// declaration cannot be resolved (no source declaration — possible only
+    /// for hand-constructed types in tests) count as valid.
+    pub fn nominalDeclIsInvalid(self: *const Self, nominal: NominalType) bool {
+        const decl_idx = self.lookupNominalDecl(nominal) orelse return false;
+        return !self.getNominalDecl(decl_idx).isValid();
+    }
+
+    // nominal declaration table //
+
+    /// Register a nominal declaration, or update it if its key is already
+    /// present (a declaration is re-registered when its body is generated
+    /// after predeclaration). Returns the declaration's stable index.
+    ///
+    /// Must not run inside a unification savepoint: the declaration table is
+    /// not journaled, so a rollback could not undo the registration.
+    pub fn registerNominalDecl(self: *Self, decl: NominalDecl) Allocator.Error!NominalDecl.Idx {
+        std.debug.assert(!self.savepoint_active);
+        std.debug.assert(decl.source.sourceDecl().present);
+
+        const statement = decl.statement();
+        const entries = self.nominal_decl_index.items.items;
+        var lo: usize = 0;
+        var hi: usize = entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (NominalDeclIndexEntry.orderByKey(decl.origin_module, statement, entries[mid])) {
+                .lt => hi = mid,
+                .gt => lo = mid + 1,
+                .eq => {
+                    const existing = entries[mid].decl;
+                    self.nominal_decls.set(existing, decl);
+                    return existing;
+                },
+            }
+        }
+
+        const decl_idx = try self.nominal_decls.append(self.gpa, decl);
+        try self.nominal_decl_index.items.insert(self.gpa, lo, .{
+            .origin_module = decl.origin_module,
+            .statement = statement,
+            .decl = decl_idx,
+        });
+        return decl_idx;
+    }
+
+    /// Look up a nominal declaration by its key: the declaring module's
+    /// env-local identity index plus the declaration statement in that module.
+    pub fn lookupNominalDeclByKey(
+        self: *const Self,
+        origin_module: base.ModuleIdentity.Idx,
+        statement: u32,
+    ) ?NominalDecl.Idx {
+        const entries = self.nominal_decl_index.items.items;
+        var lo: usize = 0;
+        var hi: usize = entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (NominalDeclIndexEntry.orderByKey(origin_module, statement, entries[mid])) {
+                .lt => hi = mid,
+                .gt => lo = mid + 1,
+                .eq => return entries[mid].decl,
+            }
+        }
+        return null;
+    }
+
+    /// Look up the declaration for a nominal application. Returns null only
+    /// when the application carries no source declaration (possible for
+    /// hand-constructed types in tests; checker-created applications always
+    /// carry one).
+    pub fn lookupNominalDecl(self: *const Self, nominal: NominalType) ?NominalDecl.Idx {
+        const source_decl = nominal.sourceDecl();
+        if (!source_decl.present) return null;
+        return self.lookupNominalDeclByKey(nominal.origin_module, source_decl.statement);
+    }
+
+    /// Get a nominal declaration by index.
+    pub fn getNominalDecl(self: *const Self, idx: NominalDecl.Idx) NominalDecl {
+        return self.nominal_decls.get(idx).*;
+    }
+
+    /// Overwrite a nominal declaration entry in place (used by copy_import to
+    /// fill a reserved entry once its formals and backing have been copied).
+    pub fn setNominalDecl(self: *Self, idx: NominalDecl.Idx, decl: NominalDecl) void {
+        std.debug.assert(!self.savepoint_active);
+        self.nominal_decls.set(idx, decl);
+    }
+
+    /// Mark a nominal declaration invalid (malformed backing or invalid
+    /// recursion). Applications of invalid declarations poison to err.
+    pub fn markNominalDeclInvalid(self: *Self, idx: NominalDecl.Idx) void {
+        std.debug.assert(!self.savepoint_active);
+        var decl = self.nominal_decls.get(idx).*;
+        decl.flags.valid = false;
+        self.nominal_decls.set(idx, decl);
+    }
+
+    /// The number of registered nominal declarations.
+    pub fn nominalDeclCount(self: *const Self) u64 {
+        return self.nominal_decls.len();
     }
 
     // rank //
@@ -1083,6 +1154,22 @@ pub const Store = struct {
                         .desc = desc,
                     };
                 },
+            }
+        }
+    }
+
+    /// Whether `var_` resolves through aliases to a function structure.
+    pub fn varResolvesToFunction(self: *const Self, var_: Var) bool {
+        var current = var_;
+        while (true) {
+            const resolved = self.resolveVar(current);
+            switch (resolved.desc.content) {
+                .alias => |alias| current = self.getAliasBackingVar(alias),
+                .structure => |flat| return switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => true,
+                    else => false,
+                },
+                .err, .flex, .rigid => return false,
             }
         }
     }
@@ -1191,7 +1278,10 @@ pub const Store = struct {
         vars: VarSafeList.Serialized,
         record_fields: RecordFieldSafeMultiList.Serialized,
         tags: TagSafeMultiList.Serialized,
+        interpolation_parts: InterpolationPartMetadata.SafeList.Serialized,
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
+        nominal_decls: NominalDecl.SafeList.Serialized,
+        nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -1206,7 +1296,10 @@ pub const Store = struct {
             try self.vars.serialize(&store.vars, allocator, writer);
             try self.record_fields.serialize(&store.record_fields, allocator, writer);
             try self.tags.serialize(&store.tags, allocator, writer);
+            try self.interpolation_parts.serialize(&store.interpolation_parts, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
+            try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
+            try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -1225,7 +1318,10 @@ pub const Store = struct {
                 .vars = self.vars.deserializeInto(base_addr),
                 .record_fields = self.record_fields.deserializeInto(base_addr),
                 .tags = self.tags.deserializeInto(base_addr),
+                .interpolation_parts = self.interpolation_parts.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
+                .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
+                .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
             };
         }
 
@@ -1239,7 +1335,10 @@ pub const Store = struct {
                 .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
                 .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
+                .interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+                .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
+                .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
             };
         }
     };
@@ -1261,7 +1360,10 @@ pub const Store = struct {
             .vars = (try self.vars.serialize(allocator, writer)).*,
             .record_fields = (try self.record_fields.serialize(allocator, writer)).*,
             .tags = (try self.tags.serialize(allocator, writer)).*,
+            .interpolation_parts = (try self.interpolation_parts.serialize(allocator, writer)).*,
             .static_dispatch_constraints = (try self.static_dispatch_constraints.serialize(allocator, writer)).*,
+            .nominal_decls = (try self.nominal_decls.serialize(allocator, writer)).*,
+            .nominal_decl_index = (try self.nominal_decl_index.serialize(allocator, writer)).*,
         };
 
         return @constCast(offset_self);
@@ -1274,109 +1376,10 @@ pub const Store = struct {
         self.vars.relocate(offset);
         self.record_fields.relocate(offset);
         self.tags.relocate(offset);
+        self.interpolation_parts.relocate(offset);
         self.static_dispatch_constraints.relocate(offset);
-    }
-
-    /// Calculate the size needed to serialize this Store
-    pub fn serializedSize(self: *const Self) usize {
-        const slots_size = self.slots.serializedSize();
-        const descs_size = self.descs.serializedSize();
-        const record_fields_size = self.record_fields.serializedSize();
-        const tags_size = self.tags.serializedSize();
-        const vars_size = self.vars.serializedSize();
-        const static_dispatch_constraints_size = self.static_dispatch_constraints.serializedSize();
-
-        // Add alignment padding for each component
-        var total_size: usize = @sizeOf(u32) * 6; // size headers
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
-
-        total_size += slots_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-
-        total_size += descs_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-
-        total_size += record_fields_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-
-        total_size += tags_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-
-        total_size += vars_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-
-        total_size += static_dispatch_constraints_size;
-        total_size = std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT);
-
-        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, total_size, SERIALIZATION_ALIGNMENT.toByteUnits());
-    }
-
-    /// Deserialize a Store from the provided buffer
-    pub fn deserializeFrom(buffer: []const u8, allocator: Allocator) Allocator.Error!Self {
-        if (buffer.len < @sizeOf(u32) * 6) return error.BufferTooSmall;
-
-        var offset: usize = 0;
-
-        // Read sizes
-        const slots_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const descs_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const record_fields_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const tags_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const vars_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        const static_dispatch_constraints_size = @as(*const u32, @ptrCast(@alignCast(buffer.ptr + offset))).*;
-        offset += @sizeOf(u32);
-
-        // Deserialize data
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const slots_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + slots_size]));
-        const slots = try SlotStore.deserializeFrom(slots_buffer, allocator);
-        offset += slots_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const descs_buffer = @as([]align(@alignOf(Desc)) const u8, @alignCast(buffer[offset .. offset + descs_size]));
-        const descs = try DescStore.deserializeFrom(descs_buffer, allocator);
-        offset += descs_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const record_fields_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + record_fields_size]));
-        const record_fields = try RecordFieldSafeMultiList.deserializeFrom(record_fields_buffer, allocator);
-        offset += record_fields_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const tags_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + tags_size]));
-        const tags = try TagSafeMultiList.deserializeFrom(tags_buffer, allocator);
-        offset += tags_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const vars_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + vars_size]));
-        const vars = try VarSafeList.deserializeFrom(vars_buffer, allocator);
-        offset += vars_size;
-
-        offset = std.mem.alignForward(usize, offset, SERIALIZATION_ALIGNMENT.toByteUnits());
-        const static_dispatch_constraints_buffer = @as([]align(SERIALIZATION_ALIGNMENT.toByteUnits()) const u8, @alignCast(buffer[offset .. offset + static_dispatch_constraints_size]));
-        const static_dispatch_constraints = try StaticDispatchConstraint.SafeList.deserializeFrom(static_dispatch_constraints_buffer, allocator);
-        offset += static_dispatch_constraints_size;
-
-        return Self{
-            .gpa = allocator,
-            .slots = slots,
-            .descs = descs,
-            .record_fields = record_fields,
-            .tags = tags,
-            .vars = vars,
-            .static_dispatch_constraints = static_dispatch_constraints,
-        };
+        self.nominal_decls.relocate(offset);
+        self.nominal_decl_index.relocate(offset);
     }
 };
 
@@ -1615,6 +1618,18 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex" {
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
 }
 
+test "dangerousSetVarRedirect requires a declared rule by signature" {
+    // Zig has no negative-compile test harness, so the "an unreasoned call
+    // does not build" guarantee is pinned by reflection: the signature must
+    // take a `RedirectRule` before the two vars, and the enum must stay
+    // exhaustive so only declared members can be passed. Removing the rule
+    // parameter fails this test.
+    const fn_info = @typeInfo(@TypeOf(Store.dangerousSetVarRedirect)).@"fn";
+    try std.testing.expectEqual(4, fn_info.params.len);
+    try std.testing.expectEqual(Store.RedirectRule, fn_info.params[1].type.?);
+    comptime std.debug.assert(@typeInfo(Store.RedirectRule).@"enum".is_exhaustive);
+}
+
 test "savepoint clone cross-check is compiled in for test builds" {
     try std.testing.expect(savepoint_verification == .clone_crosscheck);
 }
@@ -1809,6 +1824,122 @@ test "Store basic CompactWriter roundtrip" {
     try std.testing.expectEqual(deser_flex_resolved.desc_idx, deser_redirect_resolved.desc_idx);
 }
 
+fn testNominalDecl(origin_module: base.ModuleIdentity.Idx, statement: u32, backing: Var) error{OutOfMemory}!NominalDecl {
+    return NominalDecl{
+        .ident = .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        .origin_module = origin_module,
+        .source = try NominalType.Source.initChecked(
+            try SourceDecl.fromStatementChecked(statement),
+            false,
+            false,
+        ),
+        .formals = Var.SafeList.Range.empty(),
+        .backing = backing,
+        .flags = .{ .valid = true },
+    };
+}
+
+test "nominal declaration table: register, lookup, upsert" {
+    const gpa = std.testing.allocator;
+
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const backing_a = try store.fresh();
+    const backing_b = try store.fresh();
+    const backing_c = try store.fresh();
+
+    const origin_0: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin_1: base.ModuleIdentity.Idx = @enumFromInt(2);
+
+    // Register out of key order to exercise sorted insertion.
+    const idx_b = try store.registerNominalDecl(try testNominalDecl(origin_1, 5, backing_b));
+    const idx_a = try store.registerNominalDecl(try testNominalDecl(origin_0, 9, backing_a));
+    const idx_c = try store.registerNominalDecl(try testNominalDecl(origin_1, 2, backing_c));
+
+    try std.testing.expectEqual(@as(u64, 3), store.nominalDeclCount());
+    try std.testing.expectEqual(idx_a, store.lookupNominalDeclByKey(origin_0, 9).?);
+    try std.testing.expectEqual(idx_b, store.lookupNominalDeclByKey(origin_1, 5).?);
+    try std.testing.expectEqual(idx_c, store.lookupNominalDeclByKey(origin_1, 2).?);
+    try std.testing.expectEqual(@as(?NominalDecl.Idx, null), store.lookupNominalDeclByKey(origin_0, 5));
+    try std.testing.expectEqual(@as(?NominalDecl.Idx, null), store.lookupNominalDeclByKey(origin_1, 9));
+
+    try std.testing.expectEqual(backing_a, store.getNominalDecl(idx_a).backing);
+
+    // Re-registering the same key updates in place and keeps the index stable.
+    var updated = try testNominalDecl(origin_0, 9, backing_c);
+    const formal = try store.fresh();
+    updated.formals = try store.appendVars(&.{formal});
+    const idx_a_again = try store.registerNominalDecl(updated);
+    try std.testing.expectEqual(idx_a, idx_a_again);
+    try std.testing.expectEqual(@as(u64, 3), store.nominalDeclCount());
+    try std.testing.expectEqual(backing_c, store.getNominalDecl(idx_a).backing);
+    try std.testing.expectEqual(@as(u32, 1), store.getNominalDecl(idx_a).formals.count);
+
+    // Validity flips in place.
+    try std.testing.expect(store.getNominalDecl(idx_b).isValid());
+    store.markNominalDeclInvalid(idx_b);
+    try std.testing.expect(!store.getNominalDecl(idx_b).isValid());
+
+    // Lookup through a nominal application resolves by (origin, statement).
+    const app_content = try store.mkNominalWithSourceDecl(
+        .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        &.{},
+        origin_1,
+        5,
+        false,
+    );
+    const app = app_content.structure.nominal_type;
+    try std.testing.expectEqual(idx_b, store.lookupNominalDecl(app).?);
+}
+
+test "nominal declaration table: CompactWriter roundtrip" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const CompactWriter = collections.CompactWriter;
+
+    var original = try Store.init(gpa);
+    defer original.deinit();
+
+    const formal = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 7))) });
+    const backing = try original.freshFromContent(Content{ .structure = .empty_record });
+
+    const origin: base.ModuleIdentity.Idx = @enumFromInt(3);
+    var decl = try testNominalDecl(origin, 11, backing);
+    decl.formals = try original.appendVars(&.{formal});
+    _ = try original.registerNominalDecl(decl);
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const file = try tmp_dir.dir.createFile(io, "test_nominal_decls.dat", .{ .read = true });
+    defer file.close(io);
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+
+    _ = try original.serialize(gpa, &writer);
+    try writer.writeGather(file, io);
+
+    const file_size = writer.total_bytes;
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
+    defer gpa.free(buffer);
+
+    _ = try file.readPositionalAll(io, buffer, 0);
+
+    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
+    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+
+    try std.testing.expectEqual(@as(u64, 1), deserialized.nominalDeclCount());
+    const deser_idx = deserialized.lookupNominalDeclByKey(origin, 11).?;
+    const deser_decl = deserialized.getNominalDecl(deser_idx);
+    try std.testing.expectEqual(backing, deser_decl.backing);
+    try std.testing.expect(deser_decl.isValid());
+    const deser_formals = deserialized.sliceVars(deser_decl.formals);
+    try std.testing.expectEqual(@as(usize, 1), deser_formals.len);
+    try std.testing.expectEqual(formal, deser_formals[0]);
+}
+
 test "Store comprehensive CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -1827,7 +1958,6 @@ test "Store comprehensive CompactWriter roundtrip" {
     const builtin_module_idx = base.ModuleIdentity.Idx.NONE;
     const list_content = try original.mkNominal(
         .{ .ident_idx = list_ident_idx },
-        list_elem,
         &[_]Var{list_elem},
         builtin_module_idx,
         false,
@@ -2221,89 +2351,6 @@ test "Store multiple instances CompactWriter roundtrip" {
     try std.testing.expectEqual(@as(usize, 0), deserialized3.len());
 }
 
-test "SlotStore and DescStore serialization and deserialization" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    const CompactWriter = collections.CompactWriter;
-
-    var original = try Store.init(gpa);
-    defer original.deinit();
-
-    // Create several variables to populate SlotStore with roots
-    const var1 = try original.freshFromContent(Content{ .flex = Flex.init() });
-    const var2 = try original.freshFromContent(Content{ .structure = .empty_record });
-    const var3 = try original.freshFromContent(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) });
-
-    // Create redirects to populate SlotStore with redirects
-    const redirect1 = try original.freshRedirect(var1);
-    const redirect2 = try original.freshRedirect(var2);
-    const redirect3 = try original.freshRedirect(redirect1); // Chain of redirects
-
-    // Verify SlotStore has both root and redirect entries
-    try std.testing.expectEqual(@as(usize, 6), original.slots.backing.len());
-
-    // Verify DescStore has the descriptors
-    try std.testing.expectEqual(@as(usize, 3), original.descs.backing.items.len);
-
-    // Create a temp file
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile(io, "test_explicit_stores.dat", .{ .read = true });
-    defer file.close(io);
-
-    // Serialize using arena allocator
-    var arena = collections.SingleThreadArena.init(gpa);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var writer = CompactWriter.init();
-    defer writer.deinit(arena_allocator);
-
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
-
-    // Write to file
-    try writer.writeGather(file, io);
-
-    // Read back
-    const file_size = writer.total_bytes;
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
-    defer gpa.free(buffer);
-
-    _ = try file.readPositionalAll(io, buffer, 0);
-
-    // Cast and relocate - Store struct is at the beginning of the buffer
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify SlotStore was correctly deserialized
-    try std.testing.expectEqual(@as(usize, 6), deserialized.slots.backing.len());
-
-    // Verify DescStore was correctly deserialized
-    try std.testing.expectEqual(@as(usize, 3), deserialized.descs.backing.items.len);
-
-    // Verify we can resolve variables correctly
-    const resolved1 = deserialized.resolveVar(var1);
-    try std.testing.expectEqual(Content{ .flex = Flex.init() }, resolved1.desc.content);
-
-    const resolved2 = deserialized.resolveVar(var2);
-    try std.testing.expectEqual(Content{ .structure = .empty_record }, resolved2.desc.content);
-
-    const resolved3 = deserialized.resolveVar(var3);
-    try std.testing.expectEqual(Content{ .rigid = Rigid.init(@bitCast(@as(u32, 123))) }, resolved3.desc.content);
-
-    // Verify redirects work
-    const resolved_redirect1 = deserialized.resolveVar(redirect1);
-    try std.testing.expectEqual(resolved1.desc_idx, resolved_redirect1.desc_idx);
-
-    const resolved_redirect3 = deserialized.resolveVar(redirect3);
-    try std.testing.expectEqual(resolved1.desc_idx, resolved_redirect3.desc_idx);
-
-    const resolved_redirect2 = deserialized.resolveVar(redirect2);
-    try std.testing.expectEqual(resolved2.desc_idx, resolved_redirect2.desc_idx);
-}
-
 test "source declaration overflow is rejected before mutating type store" {
     const gpa = std.testing.allocator;
 
@@ -2333,7 +2380,6 @@ test "source declaration overflow is rejected before mutating type store" {
         error.OutOfMemory,
         store.mkNominalWithSourceDecl(
             .{ .ident_idx = base.Ident.Idx.NONE },
-            unread_backing_var,
             &.{},
             base.ModuleIdentity.Idx.NONE,
             NominalType.Source.max_statement + 1,
@@ -2343,62 +2389,4 @@ test "source declaration overflow is rejected before mutating type store" {
     try std.testing.expectEqual(before_slots, store.len());
     try std.testing.expectEqual(before_descs, store.descs.backing.len());
     try std.testing.expectEqual(before_vars, store.vars.len());
-}
-
-test "Store with path compression CompactWriter roundtrip" {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    const CompactWriter = collections.CompactWriter;
-
-    var original = try Store.init(gpa);
-    defer original.deinit();
-
-    // Create a redirect chain
-    const c = try original.fresh();
-    const b = try original.freshRedirect(c);
-    const a = try original.freshRedirect(b);
-
-    // Compress the path
-    const resolved = original.resolveVarAndCompressPath(a);
-    try std.testing.expectEqual(c, resolved.var_);
-
-    // Verify path is compressed
-    try std.testing.expectEqual(Slot{ .redirect = c }, original.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = c }, original.getSlot(b));
-
-    // Create a temp file
-    var tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const file = try tmp_dir.dir.createFile(io, "test_compressed_store.dat", .{ .read = true });
-    defer file.close(io);
-
-    // Serialize
-    var writer = CompactWriter{
-        .iovecs = .empty,
-        .total_bytes = 0,
-        .allocated_memory = .empty,
-    };
-    defer writer.deinit(gpa);
-
-    const serialized = try original.serialize(gpa, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
-
-    // Write to file
-    try writer.writeGather(file, io);
-
-    // Read back
-    const file_size = writer.total_bytes;
-    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(file_size));
-    defer gpa.free(buffer);
-
-    _ = try file.readPositionalAll(io, buffer, 0);
-
-    // Cast and relocate - Store is at the beginning of the buffer
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
-
-    // Verify compressed paths are preserved
-    try std.testing.expectEqual(Slot{ .redirect = c }, deserialized.getSlot(a));
-    try std.testing.expectEqual(Slot{ .redirect = c }, deserialized.getSlot(b));
 }

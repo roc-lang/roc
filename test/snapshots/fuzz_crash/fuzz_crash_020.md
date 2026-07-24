@@ -136,9 +136,9 @@ MISSING MATCH ARROW - fuzz_crash_020.md:62:5:62:5
 MISSING MATCH ARROW - fuzz_crash_020.md:63:7:63:7
 MISSING MATCH ARROW - fuzz_crash_020.md:66:12:66:12
 EXPECTED RECORD ACCESSOR - fuzz_crash_020.md:83:2:83:5
-MODULE NOT FOUND - fuzz_crash_020.md:6:1:8:6
-MODULE NOT FOUND - fuzz_crash_020.md:10:1:10:19
-MODULE NOT FOUND - fuzz_crash_020.md:11:1:12:4
+MOD NOT FOUND - fuzz_crash_020.md:6:1:8:6
+MOD NOT FOUND - fuzz_crash_020.md:10:1:10:19
+MOD NOT FOUND - fuzz_crash_020.md:11:1:12:4
 UNDECLARED TYPE - fuzz_crash_020.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_020.md:19:4:19:6
@@ -340,7 +340,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Stdot` was not found in this Roc project. ──┐
+│ MOD NOT FOUND ├─ The mod `Stdot` was not found in this Roc project. ──┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Stdot                                                              │
@@ -352,7 +352,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Bae` was not found in this Roc project. ────┐
+│ MOD NOT FOUND ├─ The mod `Bae` was not found in this Roc project. ────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import Bae as Gooe                                                        │
@@ -362,7 +362,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `Ba` was not found in this Roc project. ─────┐
+│ MOD NOT FOUND ├─ The mod `Ba` was not found in this Roc project. ─────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  import                                                                    │
@@ -936,15 +936,15 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `main!` is ──────────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `main!` is ──────────┐
 └┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this module.                                     │
+ │                           this mod.                                     │
  │                                                                            │
  │  app [main!] { pf: platform "c" }                                          │
  │       ‾‾‾‾‾                                                                │
  └───────────────────────────────────────────────────── fuzz_crash_020.md:2:6 ┘
 
-    You can fix this by either defining `main!` in this module, or by removing
+    You can fix this by either defining `main!` in this mod, or by removing
     it from the list of exposed values.
 
 
@@ -968,7 +968,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │                                                                            │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:22:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -980,7 +980,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾‾‾                                                                  │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:37:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1058,7 +1058,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
  └──────────────────────────────────────────────────── fuzz_crash_020.md:74:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1070,7 +1070,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾                                                                    │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:113:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1103,11 +1103,11 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
 
     It has the type:
 
-        (f, j, Error, [O, ..], (Error, Error), List(k))
+        (f, j, Error, [O, ..], (Error, Error), List(l))
           where [
             f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
             j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),
-            k.from_numeral : Numeral -> Try(k, [InvalidNumeral(Str)]),
+            l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),
           ]
 
     Since this expression is used as a statement, it must evaluate to `{}`.
@@ -1155,7 +1155,7 @@ MISSING METHOD - fuzz_crash_020.md:105:55:105:72
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └─────────────────────────────────────────────────── fuzz_crash_020.md:116:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -1985,7 +1985,7 @@ expect {
 				(s-return
 					(e-runtime-error (tag "expr_not_canonicalized")))
 				(s-expr
-					(e-call (constraint-fn-var 2320)
+					(e-call (constraint-fn-var 1146)
 						(e-lookup-local
 							(p-assign (ident "me")))
 						(e-not-implemented)))
@@ -2033,7 +2033,7 @@ expect {
 										(p-assign (ident "#interp_2"))
 										(e-lookup-local
 											(p-assign (ident "er"))))
-									(e-interpolation (constraint-fn-var 2604)
+									(e-interpolation (constraint-fn-var 1242) (dispatcher-var 256)
 										(first
 											(e-literal (string "Ag ")))
 										(parts
@@ -2043,7 +2043,7 @@ expect {
 											(e-lookup-local
 												(p-assign (ident "#interp_2")))
 											(e-literal (string "")))))))
-						(e-dispatch-call (method "plus") (constraint-fn-var 2607)
+						(e-dispatch-call (method "plus") (constraint-fn-var 1245)
 							(receiver
 								(e-runtime-error (tag "ident_not_in_scope")))
 							(args
@@ -2107,7 +2107,7 @@ expect {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 3053)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1373)
 									(receiver
 										(e-match
 											(match
@@ -2141,18 +2141,18 @@ expect {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 3170)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1406)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 3132)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1396)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 3279)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1433)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 3241)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1423)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -2167,7 +2167,7 @@ expect {
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 3363)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1461)
 										(receiver
 											(e-num (value "12")))
 										(args
@@ -2181,12 +2181,12 @@ expect {
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 3430)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1522)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 3397)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1493)
 																			(receiver
 																				(e-match
 																					(match
@@ -2310,15 +2310,15 @@ expect {
 		(e-anno-only)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))))
-	(s-import (module "Stdot")
+	(s-import (mod "Stdot")
 		(exposes
 			(exposed (name "Cust") (wildcard false))))
-	(s-import (module "Bae")
+	(s-import (mod "Bae")
 		(exposes))
-	(s-import (module "Ba")
+	(s-import (mod "Ba")
 		(exposes))
 	(s-alias-decl
 		(ty-header (name "Map")

@@ -57,7 +57,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "string_function")
 			(ty-fn
@@ -106,7 +106,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 226)
+			(e-dispatch-call (method "times") (constraint-fn-var 244)
 				(receiver
 					(e-runtime-error (tag "erroneous_value_use")))
 				(args

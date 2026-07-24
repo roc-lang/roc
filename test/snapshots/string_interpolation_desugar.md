@@ -21,7 +21,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "greet")
 			(ty-fn
@@ -54,7 +54,7 @@ NO CHANGE
 					(p-assign (ident "#interp_0"))
 					(e-lookup-local
 						(p-assign (ident "name"))))
-				(e-interpolation (constraint-fn-var 109)
+				(e-interpolation (constraint-fn-var 215) (dispatcher-var 13)
 					(first
 						(e-literal (string "Hello, ")))
 					(parts

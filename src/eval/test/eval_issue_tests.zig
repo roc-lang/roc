@@ -502,6 +502,31 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "Ok(22.0)" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/10049
+        // Structural derivation must call a named component's exact equality
+        // and hash methods instead of inspecting its backing representation.
+        .name = "issue 10049: structural containers honor component equality and hash methods",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    d1 = Dict.from_list([("Bob", 3.1), ("John", 4.2)])
+        \\    d2 = Dict.from_list([("John", 4.2), ("Bob", 3.1)])
+        \\    records_equal = { owes: d1 } == { owes: d2 }
+        \\    tuples_equal = (d1, 0) == (d2, 0)
+        \\    tags_equal = Owes(d1) == Owes(d2)
+        \\    lists_equal = [d1] == [d2]
+        \\    sets_equal = { items: Set.from_list([1, 2]) } == { items: Set.from_list([2, 1]) }
+        \\    hash_round_trip = Dict.empty().insert({ owes: d1 }, "found").get({ owes: d2 }) == Ok("found")
+        \\    tuple_hash_round_trip = Dict.empty().insert((d1, 0), "found").get((d2, 0)) == Ok("found")
+        \\    tag_hash_round_trip = Dict.empty().insert(Owes(d1), "found").get(Owes(d2)) == Ok("found")
+        \\    set_hash_round_trip = Dict.empty().insert(Set.from_list([1, 2]), "found").get(Set.from_list([2, 1])) == Ok("found")
+        \\
+        \\    records_equal and tuples_equal and tags_equal and lists_equal and sets_equal and hash_round_trip and tuple_hash_round_trip and tag_hash_round_trip and set_hash_round_trip
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/9783
         // The exact mathematical result is 16129, which does not fit in I8.
         .name = "issue 9783: signed times crashes on overflow",
@@ -534,5 +559,110 @@ pub const tests = [_]TestCase{
         .name = "issue 9814: signed rem and mod by negative one return zero",
         .source = "(I8.rem_by(I8.lowest, -1), I8.mod_by(I8.lowest, -1))",
         .expected = .{ .inspect_str = "(0, 0)" },
+    },
+    .{
+        // I128 modulo carries the sign of the divisor: a negative dividend with a
+        // positive divisor yields a positive result, never the truncated
+        // remainder (-1). Exercises the dev and wasm backends' i128-width paths.
+        .name = "i128 mod_by: negative dividend, positive divisor",
+        .source = "I128.mod_by(-7, 3)",
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // I128 modulo with a positive dividend and negative divisor yields a
+        // negative result (sign of the divisor).
+        .name = "i128 mod_by: positive dividend, negative divisor",
+        .source = "I128.mod_by(7, -3)",
+        .expected = .{ .inspect_str = "-2" },
+    },
+    .{
+        // A dividend larger in magnitude than 64 bits forces the true i128 path.
+        // -(2^64 + 1) mod 3 == 1 (truncated remainder -2, adjusted by +3).
+        .name = "i128 mod_by: magnitude exceeds 64 bits",
+        .source = "I128.mod_by(-18446744073709551617, 3)",
+        .expected = .{ .inspect_str = "1" },
+    },
+    .{
+        // Truncated remainder keeps the sign of the dividend on every backend,
+        // in contrast to modulo which carries the sign of the divisor.
+        .name = "i128 rem_by: negative dividend keeps dividend sign",
+        .source = "I128.rem_by(-7, 3)",
+        .expected = .{ .inspect_str = "-1" },
+    },
+    .{
+        .name = "i128 rem_by: magnitude exceeds 64 bits",
+        .source = "I128.rem_by(-18446744073709551617, 3)",
+        .expected = .{ .inspect_str = "-2" },
+    },
+    .{
+        // Dec truncated remainder keeps the sign of the dividend. Dec has no
+        // mod_by in the language surface, so Dec modulo cannot be exercised
+        // end-to-end; this pins the reachable Dec rem path.
+        .name = "dec rem_by: negative dividend keeps dividend sign",
+        .source = "Dec.rem_by(-7.5, 2.0)",
+        .expected = .{ .inspect_str = "-1.5" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10084
+        // `item` is bound only through `outer.get`'s return type. The call edge
+        // must carry both static-dispatch evidence entries into specialization.
+        .name = "issue 10084: constraint-only receiver evidence reaches nested dispatch",
+        .source_kind = .module,
+        .source =
+        \\Inner := [Inner(U64)].{
+        \\    get : Inner -> U64
+        \\    get = |Inner.Inner(value)| value
+        \\}
+        \\
+        \\Outer := [Outer(Inner)].{
+        \\    get : Outer -> Inner
+        \\    get = |Outer.Outer(value)| value
+        \\}
+        \\
+        \\nested_get : outer -> result where [outer.get : outer -> item, item.get : item -> result]
+        \\nested_get = |outer| outer.get().get()
+        \\
+        \\main = nested_get(Outer.Outer(Inner.Inner(42)))
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10210
+        .name = "issue 10210: Dec division by zero crashes on every executor",
+        .source =
+        \\{
+        \\    f = |a, b| a / b
+        \\    f(1.0.Dec, 0.0.Dec)
+        \\}
+        ,
+        .expected = .{ .crash = {} },
+    },
+    .{
+        .name = "issue 10210: Dec truncating division by zero crashes on every executor",
+        .source = "Dec.div_trunc_by(1.0, 0.0)",
+        .expected = .{ .crash = {} },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10209
+        // A concrete-number lambda remains callable directly from its record field.
+        .name = "issue 10209: concrete-number function stored in record field remains callable",
+        .source =
+        \\{
+        \\    r = { op: |x| x * 11.I64 }
+        \\    (r.op)(4.I64)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "44" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10170
+        .name = "issue 10170: List fold can concatenate iterator accumulators",
+        .source =
+        \\{
+        \\    _ = [[].iter()].fold([].iter(), |a, b| a.concat(b))
+        \\    {}
+        \\}
+        ,
+        .expected = .{ .inspect_str = "{}" },
     },
 };

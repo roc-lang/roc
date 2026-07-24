@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json")
 			(exposing
@@ -63,7 +63,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-num (value "42")))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "JsonValue") (wildcard false))))
 	(s-alias-decl

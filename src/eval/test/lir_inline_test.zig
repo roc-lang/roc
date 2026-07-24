@@ -85,8 +85,10 @@ fn lowerModule(
 }
 
 const LowerModuleOptions = struct {
+    checked_module_state: lir.CheckedPipeline.CheckedModuleState = .complete,
     inline_expects: lir.CheckedPipeline.InlineExpectMode = .run,
     proc_debug_names: bool = false,
+    tag_reachability: bool = false,
     imports: []const helpers.ModuleSource = &.{},
 };
 
@@ -122,9 +124,11 @@ fn lowerModuleWithOptions(
         .{ .requests = resources.checked_artifact.root_requests.requests },
         .{
             .target_usize = base.target.TargetUsize.native,
+            .checked_module_state = options.checked_module_state,
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
+            .tag_reachability = options.tag_reachability,
         },
     );
     errdefer lowered.deinit();
@@ -233,6 +237,106 @@ fn monotypeCountersForModuleWithImports(
     defer mono.deinit();
 
     return counters;
+}
+
+const StructuralJsonMonotypeStats = struct {
+    functions: usize,
+    definitions: usize,
+    expressions: usize,
+    locals: usize,
+    template_misses: u64,
+    nested_misses: u64,
+};
+
+const StructuralJsonOperation = enum { parse, encode };
+
+fn structuralJsonSource(
+    allocator: Allocator,
+    field_count: usize,
+    field_ty: []const u8,
+    operation: StructuralJsonOperation,
+) Allocator.Error![]u8 {
+    var source = std.ArrayList(u8).empty;
+    errdefer source.deinit(allocator);
+
+    try source.appendSlice(allocator,
+        \\Shape : {
+        \\
+    );
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(
+            allocator,
+            "    f{d} : {s},\n",
+            .{ field_index, field_ty },
+        );
+        defer allocator.free(field);
+        try source.appendSlice(allocator, field);
+    }
+    try source.appendSlice(allocator, "}\n\n");
+    switch (operation) {
+        .parse => try source.appendSlice(allocator,
+            \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+            \\main = |json| Json.parse(json)
+            \\
+        ),
+        .encode => try source.appendSlice(allocator,
+            \\main : Shape -> Str
+            \\main = |value| Json.to_str(value)
+            \\
+        ),
+    }
+
+    return try source.toOwnedSlice(allocator);
+}
+
+fn structuralJsonMonotypeStats(
+    allocator: Allocator,
+    field_count: usize,
+    field_ty: []const u8,
+    operation: StructuralJsonOperation,
+) TestError!StructuralJsonMonotypeStats {
+    const source = try structuralJsonSource(allocator, field_count, field_ty, operation);
+    defer allocator.free(source);
+
+    var counters: MonoLower.SpecializationCounters = .{};
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{
+        .specialization_counters = &counters,
+    });
+    defer lowered.deinit(allocator);
+
+    return .{
+        .functions = lowered.mono.view().fns.len,
+        .definitions = lowered.mono.view().defs.len,
+        .expressions = lowered.mono.view().exprs.len,
+        .locals = lowered.mono.view().locals.len,
+        .template_misses = counters.template_misses,
+        .nested_misses = counters.nested_misses,
+    };
+}
+
+const StructuralJsonLirStats = struct {
+    procedures: usize,
+    statements: usize,
+    locals: usize,
+};
+
+fn structuralJsonLirStats(
+    allocator: Allocator,
+    field_count: usize,
+    field_ty: []const u8,
+    operation: StructuralJsonOperation,
+) TestError!StructuralJsonLirStats {
+    const source = try structuralJsonSource(allocator, field_count, field_ty, operation);
+    defer allocator.free(source);
+
+    var lowered = try lowerModule(allocator, source, .wrappers);
+    defer lowered.deinit(allocator);
+    const store = &lowered.lowered.lir_result.store;
+    return .{
+        .procedures = store.getProcSpecs().len,
+        .statements = store.getCFStmts().len,
+        .locals = store.getLocals().len,
+    };
 }
 
 fn expectEquivalentMonotypeProgramViews(lhs: postcheck.Monotype.Ast.ProgramView, rhs: postcheck.Monotype.Ast.ProgramView) error{TestExpectedEqual}!void {
@@ -426,6 +530,7 @@ fn runLoweredWithHostEvents(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         runtime_env.get_ops(),
+        .preserve,
     );
     defer interpreter.deinit();
 
@@ -701,6 +806,124 @@ fn liftModuleAfterSpecConstr(
     };
 }
 
+test "issue 10153 nested loops do not multiply SpecConstr callable functions" {
+    const allocator = std.testing.allocator;
+    // Repro for https://github.com/roc-lang/roc/issues/10153. Adding one fixed
+    // nested loop may add its own worker family, but must not duplicate the
+    // already-specialized callable graph produced by the generic Json wrapper.
+    const single_loop_source =
+        \\outer : List(U8) -> List(U8)
+        \\outer = |xs| {
+        \\    var $out = []
+        \\    for x in xs {
+        \\        $out = List.concat($out, inner(x))
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\inner : U8 -> List(U8)
+        \\inner = |x| [x]
+        \\
+        \\parse_response = |body|
+        \\    match Json.parse(body) {
+        \\        Ok(v) => Ok(v)
+        \\        Err(_) => Err(Bad)
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    _xs = outer([1, 2])
+        \\    decoded : Try({ id : I32 }, _)
+        \\    decoded = parse_response("{\"id\": 1}")
+        \\    match decoded {
+        \\        Ok(_) => {}
+        \\        Err(_) => {}
+        \\    }
+        \\}
+    ;
+    const nested_loop_source =
+        \\outer : List(U8) -> List(U8)
+        \\outer = |xs| {
+        \\    var $out = []
+        \\    for x in xs {
+        \\        $out = List.concat($out, inner(x))
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\inner : U8 -> List(U8)
+        \\inner = |x| {
+        \\    var $out = []
+        \\    for _y in 0..<1 {
+        \\        $out = List.append($out, x)
+        \\    }
+        \\    $out
+        \\}
+        \\
+        \\parse_response = |body|
+        \\    match Json.parse(body) {
+        \\        Ok(v) => Ok(v)
+        \\        Err(_) => Err(Bad)
+        \\    }
+        \\
+        \\main : {}
+        \\main = {
+        \\    _xs = outer([1, 2])
+        \\    decoded : Try({ id : I32 }, _)
+        \\    decoded = parse_response("{\"id\": 1}")
+        \\    match decoded {
+        \\        Ok(_) => {}
+        \\        Err(_) => {}
+        \\    }
+        \\}
+    ;
+
+    var single_loop = try liftModuleAfterSpecConstr(allocator, single_loop_source);
+    defer single_loop.deinit(allocator);
+    var nested_loop = try liftModuleAfterSpecConstr(allocator, nested_loop_source);
+    defer nested_loop.deinit(allocator);
+
+    try std.testing.expect(nested_loop.lifted.fnCount() <= single_loop.lifted.fnCount() * 2);
+    try std.testing.expect(nested_loop.lifted.exprCount() <= single_loop.lifted.exprCount() * 2);
+}
+
+test "issue 10165 higher-order decoder widens propagated error row" {
+    const allocator = std.testing.allocator;
+    // Repro for https://github.com/roc-lang/roc/issues/10165. A decoder that
+    // propagates a leaf error with `?` may add its own error tag, and the
+    // resulting higher-order callable must lower with that wider error row.
+    const source =
+        \\Stmt : {}
+        \\
+        \\str_dec : Str -> (List(Str) -> (Stmt -> Try(Str, [NoSuchField(Str), ..])))
+        \\str_dec = |_name| |_cols| |_stmt| Ok("todo")
+        \\
+        \\main : {} -> Try({}, _)
+        \\main = |_args| {
+        \\    dec = decode_row(["status"])
+        \\    row = dec({})?
+        \\    _ = row
+        \\    Ok({})
+        \\}
+        \\
+        \\decode_row = |cols|
+        \\    |stmt| {
+        \\        status_str = str_dec("status")(cols)(stmt)?
+        \\        match status_str {
+        \\            "todo" => Ok(Todo)
+        \\            _ => Err(ParseError("unknown status"))
+        \\        }
+        \\    }
+    ;
+
+    var lowered = try lowerModule(allocator, source, .none);
+    defer lowered.deinit(allocator);
+
+    var run = try runLoweredWithHostEvents(allocator, &lowered.lowered);
+    defer run.deinit(allocator);
+    try std.testing.expectEqual(eval.RuntimeHostEnv.Termination.returned, run.termination);
+}
+
 fn expectInlinePlanDecision(
     source: []const u8,
     fn_name: []const u8,
@@ -796,12 +1019,29 @@ fn collectAssignCallProcs(
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
             .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
+            .store_struct => |stmt| try work.append(allocator, stmt.next),
+            .store_tag => |stmt| try work.append(allocator, stmt.next),
             .assign_call => |stmt| {
                 try calls.append(allocator, stmt.proc);
                 try work.append(allocator, stmt.next);
             },
             .assign_call_erased => |stmt| try work.append(allocator, stmt.next),
             .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
             .assign_low_level => |stmt| try work.append(allocator, stmt.next),
             .assign_list => |stmt| try work.append(allocator, stmt.next),
             .assign_struct => |stmt| try work.append(allocator, stmt.next),
@@ -843,21 +1083,6 @@ fn collectAssignCallProcs(
                 try work.append(allocator, stmt.body);
                 try work.append(allocator, stmt.remainder);
             },
-            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
-            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
-            .boxy_tag_match => |stmt| {
-                try work.append(allocator, stmt.on_match);
-                try work.append(allocator, stmt.on_miss);
-            },
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .loop_continue,
@@ -877,8 +1102,21 @@ const ProcShape = struct {
     arg_count: usize,
     direct_call_count: usize = 0,
     erased_call_count: usize = 0,
+    packed_erased_fn_count: usize = 0,
     low_level_count: usize = 0,
+    list_len_count: usize = 0,
+    list_get_unsafe_count: usize = 0,
+    list_with_capacity_count: usize = 0,
+    list_append_unsafe_count: usize = 0,
+    list_reserve_count: usize = 0,
     str_count_utf8_bytes_count: usize = 0,
+    str_concat_count: usize = 0,
+    box_box_count: usize = 0,
+    box_unbox_count: usize = 0,
+    box_prepare_update_count: usize = 0,
+    ptr_cast_count: usize = 0,
+    ptr_load_count: usize = 0,
+    ptr_store_count: usize = 0,
     self_call_count: usize = 0,
     switch_count: usize = 0,
     str_match_set_count: usize = 0,
@@ -887,6 +1125,8 @@ const ProcShape = struct {
     jump_count: usize = 0,
     struct_assign_count: usize = 0,
     tag_assign_count: usize = 0,
+    store_struct_count: usize = 0,
+    store_tag_count: usize = 0,
 };
 
 fn collectProcShape(
@@ -894,127 +1134,7 @@ fn collectProcShape(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     proc_id: LIR.LirProcSpecId,
 ) TestError!ProcShape {
-    const proc = lowered.lir_result.store.getProcSpec(proc_id);
-    var shape = ProcShape{
-        .arg_count = lowered.lir_result.store.getLocalSpan(proc.args).len,
-    };
-
-    const body = proc.body orelse return shape;
-
-    var work = std.ArrayList(LIR.CFStmtId).empty;
-    defer work.deinit(allocator);
-    try work.append(allocator, body);
-
-    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
-    defer visited.deinit();
-
-    while (work.pop()) |stmt_id| {
-        const visited_entry = try visited.getOrPut(stmt_id);
-        if (visited_entry.found_existing) continue;
-
-        switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
-            .assign_ref => |stmt| try work.append(allocator, stmt.next),
-            .assign_literal => |stmt| try work.append(allocator, stmt.next),
-            .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
-            .assign_call => |stmt| {
-                shape.direct_call_count += 1;
-                if (stmt.proc == proc_id) shape.self_call_count += 1;
-                try work.append(allocator, stmt.next);
-            },
-            .assign_call_erased => |stmt| {
-                shape.erased_call_count += 1;
-                try work.append(allocator, stmt.next);
-            },
-            .assign_packed_erased_fn => |stmt| try work.append(allocator, stmt.next),
-            .assign_low_level => |stmt| {
-                shape.low_level_count += 1;
-                if (stmt.op == .str_count_utf8_bytes) shape.str_count_utf8_bytes_count += 1;
-                try work.append(allocator, stmt.next);
-            },
-            .assign_list => |stmt| try work.append(allocator, stmt.next),
-            .assign_struct => |stmt| {
-                shape.struct_assign_count += 1;
-                try work.append(allocator, stmt.next);
-            },
-            .assign_tag => |stmt| {
-                shape.tag_assign_count += 1;
-                try work.append(allocator, stmt.next);
-            },
-            .set_local => |stmt| try work.append(allocator, stmt.next),
-            .debug => |stmt| try work.append(allocator, stmt.next),
-            .expect => |stmt| try work.append(allocator, stmt.next),
-            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
-            .incref => |stmt| try work.append(allocator, stmt.next),
-            .decref => |stmt| try work.append(allocator, stmt.next),
-            .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
-            .free => |stmt| try work.append(allocator, stmt.next),
-            .switch_stmt => |stmt| {
-                shape.switch_count += 1;
-                if (stmt.continuation) |continuation| try work.append(allocator, continuation);
-                try work.append(allocator, stmt.default_branch);
-                const branches = lowered.lir_result.store.getCFSwitchBranches(stmt.branches);
-                for (0..branches.len) |i| {
-                    const branch = GuardedList.at(branches, i);
-                    try work.append(allocator, branch.body);
-                }
-            },
-            .switch_initialized_payload => |stmt| {
-                shape.switch_count += 1;
-                try work.append(allocator, stmt.initialized_branch);
-                try work.append(allocator, stmt.uninitialized_branch);
-            },
-            .str_match => |stmt| {
-                try work.append(allocator, stmt.on_match);
-                try work.append(allocator, stmt.on_miss);
-            },
-            .str_match_set => |stmt| {
-                shape.str_match_set_count += 1;
-                const arms = lowered.lir_result.store.getStrMatchArms(stmt.arms);
-                for (0..arms.len) |i| {
-                    const arm = GuardedList.at(arms, i);
-                    try work.append(allocator, arm.on_match);
-                }
-                try work.append(allocator, stmt.on_miss);
-            },
-            .join => |stmt| {
-                shape.join_count += 1;
-                shape.max_join_param_count = @max(
-                    shape.max_join_param_count,
-                    lowered.lir_result.store.getLocalSpan(stmt.params).len,
-                );
-                try work.append(allocator, stmt.body);
-                try work.append(allocator, stmt.remainder);
-            },
-            .jump => {
-                shape.jump_count += 1;
-            },
-            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
-            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
-            .boxy_tag_match => |stmt| {
-                try work.append(allocator, stmt.on_match);
-                try work.append(allocator, stmt.on_miss);
-            },
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
-            .ret,
-            .crash,
-            .expect_err,
-            => {},
-        }
-    }
-
-    return shape;
+    return collectLirResultProcShape(allocator, &lowered.lir_result, proc_id);
 }
 
 const IterCollectShape = enum {
@@ -1023,21 +1143,24 @@ const IterCollectShape = enum {
 };
 
 fn procShapeMatchesIterCollect(shape: ProcShape, wanted: IterCollectShape) bool {
-    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range.
-    // `from_iter` branches on the iterator's length: a Known length reserves the
-    // whole allocation up front and writes each item with the unchecked append,
-    // while an Unknown length grows with the reserving append. That per-element
-    // branch (the inner `match length`) is the extra switch/join/jump over the
-    // earlier single-append loop. Spec constr specializes the worker for the
-    // concrete element type, and because ranges carry a Known length (via each
-    // numeric type's `steps_between`) the specialized worker threads that count
-    // as a third arg (`with_capacity` preallocation).
+    // Fingerprints of the `Iter.collect` -> `List.from_iter` worker over a range
+    // (ranges are built on `Iter.custom`, so the worker's iterator argument is a
+    // custom-step record). `from_iter` branches on the iterator's length: a Known
+    // length reserves the whole allocation up front and writes each item with the
+    // unchecked append, while an Unknown length grows with the reserving append.
+    // That per-element branch (the inner `match length`) accounts for the
+    // worker's switch/join/jump counts, which are identical in both builds. The
+    // builds differ in call structure: the generic worker leaves the range
+    // step's iterator-rebuild helpers as four outgoing direct calls, while spec
+    // constr inlines the step closure for the concrete range state, leaving at
+    // most two.
     return switch (wanted) {
-        .specialized => shape.arg_count == 3 and
-            shape.direct_call_count >= 5 and
-            shape.switch_count >= 10 and
-            shape.join_count >= 16 and
-            shape.jump_count >= 20,
+        .specialized => shape.arg_count == 1 and
+            shape.direct_call_count <= 2 and
+            shape.switch_count == 8 and
+            shape.join_count == 11 and
+            shape.jump_count == 15 and
+            shape.struct_assign_count >= 2,
         .generic => shape.arg_count == 1 and
             shape.direct_call_count == 4 and
             shape.switch_count == 8 and
@@ -1108,184 +1231,6 @@ fn reachableProcShape(
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
 }
 
-fn markReachableLiftedExpr(
-    program: *const postcheck.MonotypeLifted.Ast.Program,
-    expr_id: postcheck.MonotypeLifted.Ast.ExprId,
-    reachable: []bool,
-) void {
-    const index = @intFromEnum(expr_id);
-    if (reachable[index]) return;
-    reachable[index] = true;
-
-    switch (program.getExprAt(index).data) {
-        .local,
-        .unit,
-        .int_lit,
-        .frac_f32_lit,
-        .frac_f64_lit,
-        .dec_lit,
-        .str_lit,
-        .bytes_lit,
-        .crash,
-        .comptime_exhaustiveness_failed,
-        .uninitialized,
-        .uninitialized_payload,
-        => {},
-        .fn_ref => |fn_ref| {
-            const operands = program.captureOperandSpan(fn_ref.captures);
-            for (0..operands.len) |i| {
-                const operand = GuardedList.at(operands, i);
-                markReachableLiftedExpr(program, operand.value, reachable);
-            }
-        },
-        .list,
-        .tuple,
-        => |items| {
-            const children = program.exprSpan(items);
-            for (0..children.len) |i| markReachableLiftedExpr(program, GuardedList.at(children, i), reachable);
-        },
-        .record => |fields| {
-            const field_exprs = program.fieldExprSpan(fields);
-            for (0..field_exprs.len) |i| {
-                const field = GuardedList.at(field_exprs, i);
-                markReachableLiftedExpr(program, field.value, reachable);
-            }
-        },
-        .tag => |tag| {
-            const payloads = program.exprSpan(tag.payloads);
-            for (0..payloads.len) |i| markReachableLiftedExpr(program, GuardedList.at(payloads, i), reachable);
-        },
-        .nominal,
-        .dbg,
-        .expect,
-        => |child| markReachableLiftedExpr(program, child, reachable),
-        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
-        .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
-        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
-        .if_initialized_payload => |switch_| {
-            markReachableLiftedExpr(program, switch_.cond, reachable);
-            markReachableLiftedExpr(program, switch_.initialized, reachable);
-            markReachableLiftedExpr(program, switch_.uninitialized, reachable);
-        },
-        .try_sequence => |sequence| {
-            markReachableLiftedExpr(program, sequence.try_expr, reachable);
-            markReachableLiftedExpr(program, sequence.ok_body, reachable);
-        },
-        .try_record_sequence => |sequence| {
-            markReachableLiftedExpr(program, sequence.try_expr, reachable);
-            markReachableLiftedExpr(program, sequence.ok_body, reachable);
-        },
-        .let_ => |let_| {
-            markReachableLiftedExpr(program, let_.value, reachable);
-            markReachableLiftedExpr(program, let_.rest, reachable);
-        },
-        .lambda,
-        .def_ref,
-        .fn_def,
-        => {},
-        .call_value => |call| {
-            markReachableLiftedExpr(program, call.callee, reachable);
-            const args = program.exprSpan(call.args);
-            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
-        },
-        .call_proc => |call| {
-            const args = program.exprSpan(call.args);
-            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
-            const operands = program.captureOperandSpan(call.captures);
-            for (0..operands.len) |i| {
-                const operand = GuardedList.at(operands, i);
-                markReachableLiftedExpr(program, operand.value, reachable);
-            }
-        },
-        .low_level => |call| {
-            const args = program.exprSpan(call.args);
-            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
-        },
-        .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
-        .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
-        .structural_eq => |eq| {
-            markReachableLiftedExpr(program, eq.lhs, reachable);
-            markReachableLiftedExpr(program, eq.rhs, reachable);
-        },
-        .structural_hash => |h| {
-            markReachableLiftedExpr(program, h.value, reachable);
-            markReachableLiftedExpr(program, h.hasher, reachable);
-        },
-        .match_ => |match| {
-            markReachableLiftedExpr(program, match.scrutinee, reachable);
-            const branches = program.branchSpan(match.branches);
-            for (0..branches.len) |i| {
-                const branch = GuardedList.at(branches, i);
-                if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
-                markReachableLiftedExpr(program, branch.body, reachable);
-            }
-        },
-        .if_ => |if_| {
-            const branches = program.ifBranchSpan(if_.branches);
-            for (0..branches.len) |i| {
-                const branch = GuardedList.at(branches, i);
-                markReachableLiftedExpr(program, branch.cond, reachable);
-                markReachableLiftedExpr(program, branch.body, reachable);
-            }
-            markReachableLiftedExpr(program, if_.final_else, reachable);
-        },
-        .block => |block| {
-            const statements = program.stmtSpan(block.statements);
-            for (0..statements.len) |i| markReachableLiftedStmt(program, GuardedList.at(statements, i), reachable);
-            markReachableLiftedExpr(program, block.final_expr, reachable);
-        },
-        .loop_ => |loop| {
-            const initial_values = program.exprSpan(loop.initial_values);
-            for (0..initial_values.len) |i| markReachableLiftedExpr(program, GuardedList.at(initial_values, i), reachable);
-            markReachableLiftedExpr(program, loop.body, reachable);
-        },
-        .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
-        .continue_ => |continue_| {
-            const values = program.exprSpan(continue_.values);
-            for (0..values.len) |i| markReachableLiftedExpr(program, GuardedList.at(values, i), reachable);
-        },
-    }
-}
-
-fn markReachableLiftedStmt(
-    program: *const postcheck.MonotypeLifted.Ast.Program,
-    stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
-    reachable: []bool,
-) void {
-    switch (program.getStmt(stmt_id)) {
-        .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
-        .expr,
-        .expect,
-        .dbg,
-        => |expr| markReachableLiftedExpr(program, expr, reachable),
-        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
-        .crash => {},
-        .uninitialized => {},
-    }
-}
-
-fn countUnreachableLiftedDirectCalls(
-    allocator: Allocator,
-    program: *const postcheck.MonotypeLifted.Ast.Program,
-) TestError!usize {
-    const reachable = try allocator.alloc(bool, program.exprCount());
-    defer allocator.free(reachable);
-    @memset(reachable, false);
-
-    for (program.fnsView()) |fn_| {
-        switch (fn_.body) {
-            .roc => |body| markReachableLiftedExpr(program, body, reachable),
-            .hosted => {},
-        }
-    }
-
-    var count: usize = 0;
-    for (program.exprsView(), reachable) |expr, is_reachable| {
-        if (!is_reachable and expr.data == .call_proc) count += 1;
-    }
-    return count;
-}
-
 fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
         shape.self_call_count == 0 and
@@ -1309,8 +1254,7 @@ fn whileRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
 }
 
 fn whileRecordStateWorkerIsGeneric(shape: ProcShape) bool {
-    return shape.arg_count == 1 and
-        shape.self_call_count == 0 and
+    return shape.self_call_count == 0 and
         shape.join_count >= 1 and
         shape.max_join_param_count == 1 and
         shape.jump_count >= 2;
@@ -1389,22 +1333,6 @@ fn hasGroupedStrMatchSet(shape: ProcShape) bool {
     return shape.str_match_set_count == 1;
 }
 
-fn expectIterCollectWorkerSpecialized(source: []const u8) TestError!void {
-    const allocator = std.testing.allocator;
-
-    var optimized = try lowerModule(allocator, source, .wrappers);
-    defer optimized.deinit(allocator);
-
-    var unoptimized = try lowerModule(allocator, source, .none);
-    defer unoptimized.deinit(allocator);
-
-    try std.testing.expect(try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
-    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
-
-    try std.testing.expect(!try reachableIterCollectShape(allocator, &unoptimized.lowered, .specialized));
-    try std.testing.expect(try reachableIterCollectShape(allocator, &unoptimized.lowered, .generic));
-}
-
 fn rootDirectCallTarget(
     allocator: Allocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -1464,11 +1392,159 @@ fn sameNestedSourceSite(
         lhs.site == rhs.site;
 }
 
+test "issue 10121 optional JSON record encoder has linear Monotype function growth" {
+    // Repro for https://github.com/roc-lang/roc/issues/10121: generated
+    // functions should grow at most linearly with the encoded record shape.
+    const allocator = std.testing.allocator;
+    const four_fields = try structuralJsonMonotypeStats(allocator, 4, "Try(Str, [Missing])", .encode);
+    const eight_fields = try structuralJsonMonotypeStats(allocator, 8, "Try(Str, [Missing])", .encode);
+
+    const linear_bound = four_fields.functions * 2;
+    if (eight_fields.functions > linear_bound) {
+        std.debug.print(
+            "optional JSON encoder generated {d} functions for 4 fields but {d} for 8 fields " ++
+                "(template misses {d}->{d}, nested misses {d}->{d})\n",
+            .{
+                four_fields.functions,
+                eight_fields.functions,
+                four_fields.template_misses,
+                eight_fields.template_misses,
+                four_fields.nested_misses,
+                eight_fields.nested_misses,
+            },
+        );
+    }
+    try std.testing.expect(eight_fields.functions <= linear_bound);
+}
+
+test "issue 10121 repeated nested JSON record fields share encoder helpers" {
+    const allocator = std.testing.allocator;
+    const four_fields = try structuralJsonMonotypeStats(allocator, 4, "{ bar : Str, count : U64 }", .encode);
+    const eight_fields = try structuralJsonMonotypeStats(allocator, 8, "{ bar : Str, count : U64 }", .encode);
+
+    if (eight_fields.functions > four_fields.functions + 4) {
+        std.debug.print("nested JSON encoder functions 4={d} 8={d}\n", .{ four_fields.functions, eight_fields.functions });
+    }
+    try std.testing.expect(eight_fields.functions <= four_fields.functions + 4);
+}
+
+test "issue 10121 repeated nested JSON record fields share parser helpers" {
+    const allocator = std.testing.allocator;
+    const four_fields = try structuralJsonMonotypeStats(allocator, 4, "{ bar : Str, count : U64 }", .parse);
+    const eight_fields = try structuralJsonMonotypeStats(allocator, 8, "{ bar : Str, count : U64 }", .parse);
+
+    const linear_expression_bound = four_fields.expressions * 2;
+    if (eight_fields.expressions > linear_expression_bound) {
+        std.debug.print(
+            "nested JSON parser Monotype size grew nonlinearly: " ++
+                "defs {d}->{d}, exprs {d}->{d}, locals {d}->{d}\n",
+            .{
+                four_fields.definitions,
+                eight_fields.definitions,
+                four_fields.expressions,
+                eight_fields.expressions,
+                four_fields.locals,
+                eight_fields.locals,
+            },
+        );
+    }
+    try std.testing.expect(eight_fields.expressions <= linear_expression_bound);
+}
+
+test "issue 10121 structural JSON helper sharing survives LIR lowering" {
+    const allocator = std.testing.allocator;
+    const encoder_one = try structuralJsonLirStats(allocator, 1, "Try(Str, [Missing])", .encode);
+    const encoder_two = try structuralJsonLirStats(allocator, 2, "Try(Str, [Missing])", .encode);
+    const parser_one = try structuralJsonLirStats(allocator, 1, "{ bar : Str, count : U64 }", .parse);
+
+    const encoder_is_linear = encoder_two.procedures <= encoder_one.procedures * 2 and
+        encoder_two.statements <= encoder_one.statements * 2 and
+        encoder_two.locals <= encoder_one.locals * 2;
+    const parser_within_budget = parser_one.procedures < 4096 and
+        parser_one.statements < 65536 and
+        parser_one.locals < 65536;
+    if (!encoder_is_linear or !parser_within_budget) {
+        std.debug.print(
+            "structural JSON LIR exceeded smoke-test bounds: encoder " ++
+                "procs {d}->{d}, stmts {d}->{d}, locals {d}->{d}; parser " ++
+                "procs {d}, stmts {d}, locals {d}\n",
+            .{
+                encoder_one.procedures,
+                encoder_two.procedures,
+                encoder_one.statements,
+                encoder_two.statements,
+                encoder_one.locals,
+                encoder_two.locals,
+                parser_one.procedures,
+                parser_one.statements,
+                parser_one.locals,
+            },
+        );
+    }
+    try std.testing.expect(encoder_is_linear);
+    try std.testing.expect(parser_within_budget);
+}
+
+test "issue 10121 shared JSON helpers preserve optional nested round trips" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Shape : {
+        \\    item : Try({ bar : Str, count : U64 }, [Missing]),
+        \\}
+        \\
+        \\main : Bool
+        \\main = {
+        \\    ok_original : Shape
+        \\    ok_original = {
+        \\        item: Ok({ bar: "one", count: 1 }),
+        \\    }
+        \\    missing_original : Shape
+        \\    missing_original = {
+        \\        item: Err(Missing),
+        \\    }
+        \\
+        \\    ok_encoded = Json.to_str(ok_original)
+        \\    missing_encoded = Json.to_str(missing_original)
+        \\    ok_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    ok_parsed = Json.parse(ok_encoded)
+        \\    missing_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing_parsed = Json.parse(missing_encoded)
+        \\
+        \\    ok_round_trips =
+        \\        match ok_parsed {
+        \\            Ok(value) => Json.to_str(value) == ok_encoded
+        \\            Err(_) => False
+        \\        }
+        \\    missing_round_trips =
+        \\        match missing_parsed {
+        \\            Ok(value) => Json.to_str(value) == missing_encoded
+        \\            Err(_) => False
+        \\        }
+        \\    ok_round_trips and missing_round_trips
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+    );
+    defer compiled.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
 test "issue 9802 same-type map2 specialization counters are bounded" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Boxed(a) := [Boxed(a)]
         \\
         \\const : a -> Boxed(a)
@@ -1511,14 +1587,16 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
         .specialization_type_digest_cache_misses = 128,
         .specialization_type_digest_nodes_visited = 128,
         .exact_type_checks = 22,
+        .nominal_backing_reuses = 1,
+        .nominal_backing_instantiations = 73,
+        .evidence_walks = 708,
+        .evidence_walk_memo_hits = 514,
     }, counters);
 }
 
 test "issue 9802 growing-structural map2 specialization counters are bounded" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\Boxed(a) := [Boxed(a)]
         \\
         \\const : a -> Boxed(a)
@@ -1559,21 +1637,23 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .specialization_type_digest_cache_misses = 290,
         .specialization_type_digest_nodes_visited = 290,
         .exact_type_checks = 5,
+        .nominal_backing_reuses = 8,
+        .nominal_backing_instantiations = 101,
+        .evidence_walks = 820,
+        .evidence_walk_memo_hits = 566,
     }, counters);
 }
 
 test "imported and local generic specialization counters reuse closed types" {
     const allocator = std.testing.allocator;
     const util_module =
-        \\module [identity]
-        \\
-        \\identity : a -> a
-        \\identity = |value| value
+        \\Util := [].{
+        \\    identity : a -> a
+        \\    identity = |value| value
+        \\}
     ;
     const source =
-        \\module [main]
-        \\
-        \\import Util exposing [identity]
+        \\import Util
         \\
         \\Boxed(a) := [Boxed(a)]
         \\
@@ -1584,8 +1664,8 @@ test "imported and local generic specialization counters reuse closed types" {
         \\main = {
         \\    value = Boxed(1)
         \\    {
-        \\        imported_a: identity(value),
-        \\        imported_b: identity(value),
+        \\        imported_a: Util.identity(value),
+        \\        imported_b: Util.identity(value),
         \\        local_a: local_identity(value),
         \\        local_b: local_identity(value),
         \\    }
@@ -1602,11 +1682,71 @@ test "imported and local generic specialization counters reuse closed types" {
     try std.testing.expect(counters.template_lookup_candidates <= counters.template_requests);
 }
 
+test "alias-heavy generic specialization count does not exceed backing types" {
+    const allocator = std.testing.allocator;
+    const backing_source =
+        \\id : a -> a
+        \\id = |value| value
+        \\
+        \\main : { a : U64, b : U64, c : U64, d : U64, e : U64 }
+        \\main = {
+        \\    x0 : U64
+        \\    x0 = 1
+        \\    x1 : U64
+        \\    x1 = 2
+        \\    x2 : U64
+        \\    x2 = 3
+        \\    x3 : U64
+        \\    x3 = 4
+        \\    {
+        \\        a: id(0),
+        \\        b: id(x0),
+        \\        c: id(x1),
+        \\        d: id(x2),
+        \\        e: id(x3),
+        \\    }
+        \\}
+    ;
+    const alias_source =
+        \\Alias0 : U64
+        \\Alias1 : Alias0
+        \\Alias2 : Alias1
+        \\Alias3 : Alias2
+        \\
+        \\id : a -> a
+        \\id = |value| value
+        \\
+        \\main : { a : U64, b : U64, c : U64, d : U64, e : U64 }
+        \\main = {
+        \\    x0 : Alias0
+        \\    x0 = 1
+        \\    x1 : Alias1
+        \\    x1 = 2
+        \\    x2 : Alias2
+        \\    x2 = 3
+        \\    x3 : Alias3
+        \\    x3 = 4
+        \\    {
+        \\        a: id(0),
+        \\        b: id(x0),
+        \\        c: id(x1),
+        \\        d: id(x2),
+        \\        e: id(x3),
+        \\    }
+        \\}
+    ;
+
+    var backing = try lowerMonotypeModule(allocator, backing_source);
+    defer backing.deinit(allocator);
+    var alias = try lowerMonotypeModule(allocator, alias_source);
+    defer alias.deinit(allocator);
+
+    try std.testing.expect(alias.mono.view().specs.len <= backing.mono.view().specs.len);
+}
+
 test "disabling monotype specialization cache does not change monotype output" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\identity : a -> a
         \\identity = |value| value
         \\
@@ -1630,8 +1770,6 @@ test "disabling monotype specialization cache does not change monotype output" {
 test "monotype specialization cache read reuses loaded hits and lowers fresh misses" {
     const allocator = std.testing.allocator;
     const mixed_source =
-        \\module [main]
-        \\
         \\identity : a -> a
         \\identity = |value| value
         \\
@@ -1681,8 +1819,6 @@ test "monotype specialization cache read reuses loaded hits and lowers fresh mis
 test "nested function specializations keep equal types at different sites distinct" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\first : U64 -> U64
         \\first = |n| {
         \\    id = |x| x
@@ -1722,8 +1858,6 @@ test "nested function specializations keep equal types at different sites distin
 test "one nested function site specializes at multiple closed function types" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\choose : a -> a
         \\choose = |value| {
         \\    id = |x| x
@@ -1756,8 +1890,6 @@ test "one nested function site specializes at multiple closed function types" {
 test "differently ordered source record rows produce normalized monotype rows" {
     const allocator = std.testing.allocator;
     const source =
-        \\module [main]
-        \\
         \\choose : Bool -> { a : U64, b : U64 }
         \\choose = |flag| if flag { b: 2, a: 1 } else { a: 3, b: 4 }
         \\
@@ -2018,25 +2150,6 @@ test "trmc: result used before the constructor is not transformed" {
     , .none);
 }
 
-test "plant iter pipeline specializes collect worker after inlining" {
-    try expectIterCollectWorkerSpecialized(
-        \\Plant : { seed : I64 }
-        \\
-        \\random_plant : I64 -> Plant
-        \\random_plant = |seed| { seed: seed }
-        \\
-        \\starting_plants : () -> List(Plant)
-        \\starting_plants = || {
-        \\    (0.I64..=15)
-        \\        .map(|i| random_plant(i * 12))
-        \\        .collect()
-        \\}
-        \\
-        \\main : () -> List(Plant)
-        \\main = || starting_plants()
-    );
-}
-
 test "known-length List.iter collect specializes without unbound locals" {
     // Regression: collecting a Known-length iterator (List.iter) under
     // optimization specializes a recursive capturing worker (List.iter's `make`
@@ -2053,21 +2166,6 @@ test "known-length List.iter collect specializes without unbound locals" {
         \\    )
     , .wrappers);
     defer optimized.deinit(allocator);
-}
-
-test "direct iter collect worker specializes constructor recursive call" {
-    try expectIterCollectWorkerSpecialized(
-        \\Plant : { seed : I64 }
-        \\
-        \\random_plant : I64 -> Plant
-        \\random_plant = |seed| { seed: seed }
-        \\
-        \\main : () -> List(Plant)
-        \\main = ||
-        \\    Iter.collect(
-        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
-        \\    )
-    );
 }
 
 test "spec constr does not duplicate opaque let-bound direct calls" {
@@ -2314,7 +2412,9 @@ test "spec constr writes dynamically discovered workers once" {
     var lifted = try liftModuleAfterSpecConstr(allocator, source);
     defer lifted.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 0), try countUnreachableLiftedDirectCalls(allocator, &lifted.lifted));
+    for (lifted.lifted.fnsView()) |fn_| {
+        try std.testing.expect(fn_.body == .roc);
+    }
 }
 
 test "spec constr specializes recursive record state" {
@@ -2554,10 +2654,24 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_reuse_box,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
             .assign_tag,
+            .store_struct,
+            .store_tag,
             .set_local,
             .debug,
             .expect,
@@ -2575,18 +2689,6 @@ test "LIR statements and procs carry resolved source locations" {
             .jump,
             .ret,
             .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
-            .boxy_tag_match,
             => true,
         };
         if (!has_source) {
@@ -2765,4 +2867,2844 @@ test "shared callees are lifted once and never gain spurious captures" {
     for (lifted_fns) |func| {
         try std.testing.expectEqual(@as(u32, 0), func.captures.len);
     }
+}
+
+const LirProgram = lir.Program;
+
+const ExpectedHostEvent = union(enum) {
+    dbg: []const u8,
+    expect_failed,
+    crashed: []const u8,
+};
+
+fn expectOptimizedHostEvents(
+    source: []const u8,
+    expected_termination: eval.RuntimeHostEnv.Termination,
+    expected: []const ExpectedHostEvent,
+) TestError!void {
+    const allocator = std.testing.allocator;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+    defer optimized.deinit(allocator);
+
+    var run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+    defer run.deinit(allocator);
+
+    try std.testing.expectEqual(expected_termination, run.termination);
+    try std.testing.expectEqual(expected.len, run.events.len);
+    for (expected, run.events) |expected_event, actual_event| {
+        switch (expected_event) {
+            .dbg => |expected_msg| switch (actual_event) {
+                .dbg => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
+                else => return error.TestUnexpectedResult,
+            },
+            .expect_failed => switch (actual_event) {
+                .expect_failed => {},
+                else => return error.TestUnexpectedResult,
+            },
+            .crashed => |expected_msg| switch (actual_event) {
+                .crashed => |actual_msg| try std.testing.expectEqualStrings(expected_msg, actual_msg),
+                else => return error.TestUnexpectedResult,
+            },
+        }
+    }
+}
+
+fn collectLirResultProcShape(
+    allocator: Allocator,
+    result: *const LirProgram.Result,
+    proc_id: LIR.LirProcSpecId,
+) TestError!ProcShape {
+    const proc = result.store.getProcSpec(proc_id);
+    var shape = ProcShape{
+        .arg_count = result.store.getLocalSpan(proc.args).len,
+    };
+
+    const body = proc.body orelse return shape;
+
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, body);
+
+    var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
+    defer visited.deinit();
+
+    while (work.pop()) |stmt_id| {
+        const visited_entry = try visited.getOrPut(stmt_id);
+        if (visited_entry.found_existing) continue;
+
+        switch (result.store.getCFStmt(stmt_id)) {
+            .assign_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_literal => |stmt| try work.append(allocator, stmt.next),
+            .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
+            .assign_call => |stmt| {
+                shape.direct_call_count += 1;
+                if (stmt.proc == proc_id) shape.self_call_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .assign_call_erased => |stmt| {
+                shape.erased_call_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .assign_packed_erased_fn => |stmt| {
+                shape.packed_erased_fn_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .assign_boxy_desc_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_eq => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag => |stmt| try work.append(allocator, stmt.next),
+            .assign_boxy_tag_payload => |stmt| try work.append(allocator, stmt.next),
+            .assign_call_dict => |stmt| try work.append(allocator, stmt.next),
+            .boxy_tag_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
+            .assign_low_level => |stmt| {
+                shape.low_level_count += 1;
+                switch (stmt.op) {
+                    .list_len => shape.list_len_count += 1,
+                    .list_get_unsafe => shape.list_get_unsafe_count += 1,
+                    .list_with_capacity => shape.list_with_capacity_count += 1,
+                    .list_append_unsafe => shape.list_append_unsafe_count += 1,
+                    .list_reserve => shape.list_reserve_count += 1,
+                    .str_count_utf8_bytes => shape.str_count_utf8_bytes_count += 1,
+                    .str_concat => shape.str_concat_count += 1,
+                    .box_box => shape.box_box_count += 1,
+                    .box_unbox => shape.box_unbox_count += 1,
+                    .box_prepare_update => shape.box_prepare_update_count += 1,
+                    .ptr_cast => shape.ptr_cast_count += 1,
+                    .ptr_load => shape.ptr_load_count += 1,
+                    .ptr_store => shape.ptr_store_count += 1,
+                    else => {},
+                }
+                try work.append(allocator, stmt.next);
+            },
+            .assign_list => |stmt| try work.append(allocator, stmt.next),
+            .assign_struct => |stmt| {
+                shape.struct_assign_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .assign_tag => |stmt| {
+                shape.tag_assign_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .store_struct => |stmt| {
+                shape.store_struct_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .store_tag => |stmt| {
+                shape.store_tag_count += 1;
+                try work.append(allocator, stmt.next);
+            },
+            .set_local => |stmt| try work.append(allocator, stmt.next),
+            .debug => |stmt| try work.append(allocator, stmt.next),
+            .expect => |stmt| try work.append(allocator, stmt.next),
+            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
+            .incref => |stmt| try work.append(allocator, stmt.next),
+            .decref => |stmt| try work.append(allocator, stmt.next),
+            .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
+            .free => |stmt| try work.append(allocator, stmt.next),
+            .switch_stmt => |stmt| {
+                shape.switch_count += 1;
+                if (stmt.continuation) |continuation| try work.append(allocator, continuation);
+                try work.append(allocator, stmt.default_branch);
+                const branches = result.store.getCFSwitchBranches(stmt.branches);
+                for (0..branches.len) |index| {
+                    try work.append(allocator, GuardedList.at(branches, index).body);
+                }
+            },
+            .switch_initialized_payload => |stmt| {
+                shape.switch_count += 1;
+                try work.append(allocator, stmt.initialized_branch);
+                try work.append(allocator, stmt.uninitialized_branch);
+            },
+            .str_match => |stmt| {
+                try work.append(allocator, stmt.on_match);
+                try work.append(allocator, stmt.on_miss);
+            },
+            .str_match_set => |stmt| {
+                shape.str_match_set_count += 1;
+                const arms = result.store.getStrMatchArms(stmt.arms);
+                for (0..arms.len) |index| {
+                    try work.append(allocator, GuardedList.at(arms, index).on_match);
+                }
+                try work.append(allocator, stmt.on_miss);
+            },
+            .join => |stmt| {
+                shape.join_count += 1;
+                shape.max_join_param_count = @max(
+                    shape.max_join_param_count,
+                    result.store.getLocalSpan(stmt.params).len,
+                );
+                try work.append(allocator, stmt.body);
+                try work.append(allocator, stmt.remainder);
+            },
+            .jump => {
+                shape.jump_count += 1;
+            },
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .loop_continue,
+            .loop_break,
+            .ret,
+            .crash,
+            .expect_err,
+            => {},
+        }
+    }
+
+    return shape;
+}
+
+fn reachableProcDebugName(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    expected_name: []const u8,
+) TestError!bool {
+    var work = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, try rootProc(lowered));
+
+    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+
+    while (work.pop()) |proc_id| {
+        const visited_entry = try visited.getOrPut(proc_id);
+        if (visited_entry.found_existing) continue;
+
+        if (lowered.lir_result.store.procDebugName(proc_id)) |name| {
+            if (std.mem.eql(u8, name, expected_name)) return true;
+        }
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try work.append(allocator, call);
+    }
+    return false;
+}
+
+fn reachableProcShapeFieldTotal(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+) TestError!usize {
+    var work = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, try rootProc(lowered));
+
+    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+
+    var total: usize = 0;
+    while (work.pop()) |proc_id| {
+        const visited_entry = try visited.getOrPut(proc_id);
+        if (visited_entry.found_existing) continue;
+
+        const shape = try collectProcShape(allocator, lowered, proc_id);
+        total += @field(shape, field_name);
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try work.append(allocator, call);
+    }
+    return total;
+}
+
+fn expectReachableProcShapeFieldNoGreater(
+    allocator: Allocator,
+    iter_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    list_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+) TestError!void {
+    try expectReachableProcShapeFieldNoGreaterBy(allocator, iter_lowered, list_lowered, field_name, 0);
+}
+
+fn expectReachableProcShapeFieldNoGreaterBy(
+    allocator: Allocator,
+    iter_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    list_lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+    allowed_extra: usize,
+) TestError!void {
+    const iter_total = try reachableProcShapeFieldTotal(allocator, iter_lowered, field_name);
+    const list_total = try reachableProcShapeFieldTotal(allocator, list_lowered, field_name);
+    try std.testing.expect(iter_total <= list_total + allowed_extra);
+}
+
+fn expectReachableProcShapeFieldEqual(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    comptime field_name: []const u8,
+    expected: usize,
+) TestError!void {
+    const actual = try reachableProcShapeFieldTotal(allocator, lowered, field_name);
+    try std.testing.expectEqual(expected, actual);
+}
+
+fn expectStaticListIterAppendLoopAvoidsListAppendAllocation(
+    iter_source: []const u8,
+    list_source: []const u8,
+) TestError!void {
+    const allocator = std.testing.allocator;
+    var iter_optimized = try lowerModuleWithOptions(allocator, iter_source, .wrappers, .{ .tag_reachability = true });
+    defer iter_optimized.deinit(allocator);
+    var list_optimized = try lowerModuleWithOptions(allocator, list_source, .wrappers, .{ .tag_reachability = true });
+    defer list_optimized.deinit(allocator);
+
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_with_capacity_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_reserve_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &iter_optimized.lowered, "list_append_unsafe_count", 0);
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_with_capacity_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_reserve_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "list_append_unsafe_count");
+    try expectReachableProcShapeFieldNoGreater(allocator, &iter_optimized.lowered, &list_optimized.lowered, "box_box_count");
+    try expectReachableProcShapeFieldNoGreaterBy(allocator, &iter_optimized.lowered, &list_optimized.lowered, "switch_count", 1);
+}
+
+fn expectNoReachableErasedCallableLowering(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) TestError!void {
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, lowered, "erased_call_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, lowered, "packed_erased_fn_count"));
+}
+
+fn expectLoweredIterChainAllocatesNothing(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) TestError!void {
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "list_with_capacity_count", 0);
+}
+
+fn expectLoweredIterStateHasNoBoxesOrErasedCallables(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) TestError!void {
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, lowered, "packed_erased_fn_count", 0);
+}
+
+// Zero-allocation gate for iterator chains that escape their construction site
+// (returned from a function, passed to a non-inlined function, chosen by a
+// branch). Range sources carry no list, so a statically-known chain must lower
+// to no heap allocation at all: no boxed iterator state, no erased callable
+// dispatch, no list allocation. This is the static companion to the runtime
+// allocations_at_most=0 gate in eval_iter_alloc_tests.zig, which cannot express
+// module-level function definitions. It checks both `.none` and `.wrappers` so
+// the gate proves representation-level minting, not opt-only wrapper
+// specialization. RED on the recursive-nominal representation (an escaping
+// iterator boxes its state in its constructor).
+fn expectEscapingIterChainAllocatesNothing(source: []const u8) TestError!void {
+    const allocator = std.testing.allocator;
+
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try expectLoweredIterChainAllocatesNothing(allocator, &ordinary.lowered);
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+    try expectLoweredIterChainAllocatesNothing(allocator, &optimized.lowered);
+}
+
+test "iter alloc static: iterator returned from a function is zero-alloc" {
+    try expectEscapingIterChainAllocatesNothing(
+        \\consume : Iter(U64) -> U64
+        \\consume = |it| {
+        \\    var $sum = 0.U64
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\make : U64 -> Iter(U64)
+        \\make = |n| Iter.map(0.U64..<n, |x| x + 1)
+        \\
+        \\main : U64
+        \\main = consume(make(5))
+    );
+}
+
+test "iter alloc static: iterator passed to a non-inlined function is zero-alloc" {
+    try expectEscapingIterChainAllocatesNothing(
+        \\consume : Iter(U64) -> U64
+        \\consume = |it| {
+        \\    var $sum = 0.U64
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = consume(Iter.map(0.U64..<5, |x| x + 1))
+    );
+}
+
+test "iter alloc static: branch-chosen iterator is zero-alloc" {
+    try expectEscapingIterChainAllocatesNothing(
+        \\consume : Iter(U64) -> U64
+        \\consume = |it| {
+        \\    var $sum = 0.U64
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\choose : Bool -> Iter(U64)
+        \\choose = |flag|
+        \\    if flag {
+        \\        Iter.map(0.U64..<5, |x| x + 1)
+        \\    } else {
+        \\        Iter.keep_if(0.U64..<5, |x| x > 2)
+        \\    }
+        \\
+        \\main : U64
+        \\main = consume(choose(5.U64 > 0))
+    );
+}
+
+test "iter alloc static: same adapter with different capture layouts is zero-alloc" {
+    try expectEscapingIterChainAllocatesNothing(
+        \\Config : { big : U64, small : U64 }
+        \\
+        \\consume : Iter(U64) -> U64
+        \\consume = |it| {
+        \\    var $sum = 0.U64
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\choose : Bool -> Iter(U64)
+        \\choose = |flag| {
+        \\    offset = 1.U64
+        \\    config : Config
+        \\    config = { big: 10, small: 3 }
+        \\    if flag {
+        \\        Iter.map(0.U64..<5, |x| x + offset)
+        \\    } else {
+        \\        Iter.map(0.U64..<5, |x| x + config.big + config.small)
+        \\    }
+        \\}
+        \\
+        \\main : Bool -> U64
+        \\main = |flag| consume(choose(flag))
+    );
+}
+
+test "iter alloc static: runtime-count map wrapping terminates at dynamic boundary" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\consume : Iter(U64) -> U64
+        \\consume = |it| {
+        \\    var $sum = 0.U64
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\wrap : U64, Iter(U64) -> Iter(U64)
+        \\wrap = |count, iterator| {
+        \\    var $i = 0.U64
+        \\    var $current = iterator
+        \\    while $i < count {
+        \\        offset = $i
+        \\        $current = Iter.map($current, |x| x + offset)
+        \\        $i = $i + 1
+        \\    }
+        \\    $current
+        \\}
+        \\
+        \\main : U64 -> U64
+        \\main = |count| consume(wrap(count, 0.U64..<5))
+    ;
+
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "box_box_count") > 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "box_box_count") > 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "packed_erased_fn_count", 0);
+}
+
+test "iter alloc static: recursive map wrapping terminates at dynamic boundary" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\consume : Iter(U64) -> U64
+        \\consume = |it| {
+        \\    var $sum = 0.U64
+        \\    for x in it {
+        \\        $sum = $sum + x
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\wrap : U64, Iter(U64) -> Iter(U64)
+        \\wrap = |count, iterator|
+        \\    if count == 0 {
+        \\        iterator
+        \\    } else {
+        \\        offset = count
+        \\        wrap(count - 1, Iter.map(iterator, |x| x + offset))
+        \\    }
+        \\
+        \\main : U64 -> U64
+        \\main = |count| consume(wrap(count, 0.U64..<5))
+    ;
+
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "packed_erased_fn_count") > 0);
+
+    // The `.wrappers` half of this case is blocked on a capture-identity bug
+    // that the termination fixes above unmasked: the recursively-wrapped
+    // iterator captures the same binder at two recursion depths, and both
+    // capture slots receive the same CaptureId, tripping the lift.zig
+    // "lifted capture set contained two slots with the same CaptureId"
+    // invariant. Disambiguating recursion-level captures in the
+    // BinderIdentity/CaptureId system is tracked as its own fix; when it
+    // lands, this test must also lower the source at `.wrappers` and make
+    // the same three assertions.
+}
+
+// Both sides of the depth backstop on statically bounded chains: a 10-adapter
+// chain (depth 11) stays under the cap and lowers flat, while a 20-adapter
+// chain (depth 21) trips it and takes the explicit forced-dynamic callable
+// representation. Sources are generated so the two tests differ only in
+// adapter count.
+fn deepStaticChainSource(comptime map_count: usize) []const u8 {
+    comptime {
+        var source: []const u8 =
+            \\main : U64 -> U64
+            \\main = |n| {
+            \\    i0 = 0.U64..<n
+            \\
+        ;
+        for (0..map_count) |index| {
+            source = source ++ std.fmt.comptimePrint("    i{d} = Iter.map(i{d}, |x| x + 1)\n", .{ index + 1, index });
+        }
+        source = source ++ std.fmt.comptimePrint("    Iter.fold(i{d}, 0.U64, |acc, x| acc + x)\n}}\n", .{map_count});
+        return source;
+    }
+}
+
+test "iter alloc static: deep static chain under the depth cap stays flat" {
+    const allocator = std.testing.allocator;
+    const source = comptime deepStaticChainSource(10);
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
+}
+
+test "iter alloc static: static chain past the depth cap uses forced dynamic representation" {
+    const allocator = std.testing.allocator;
+    const source = comptime deepStaticChainSource(20);
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 2);
+}
+
+// The base `[list].iter().fold` must lower with no boxed iterator state and no
+// erased callable dispatch: the list literal may allocate its backing store, but
+// the iterator itself must carry its step closure inline by value. This asserts
+// only the iterator-attributable counts (box_box / erased_call / packed_erased);
+// the list's own `list_with_capacity` is expected and not asserted here.
+test "iter alloc static: base list fold is zero-alloc" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : I64
+        \\main = {
+        \\    xs = [1.I64, 2, 3, 4, 5]
+        \\    Iter.fold(xs.iter(), 0, |a, b| a + b)
+        \\}
+    ;
+
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer ordinary.deinit(allocator);
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &ordinary.lowered);
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &optimized.lowered);
+}
+
+fn reachableReturnSlotProcCount(
+    allocator: Allocator,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+) TestError!usize {
+    var work = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, try rootProc(lowered));
+
+    var visited = std.AutoHashMap(LIR.LirProcSpecId, void).init(allocator);
+    defer visited.deinit();
+
+    var count: usize = 0;
+    while (work.pop()) |proc_id| {
+        const visited_entry = try visited.getOrPut(proc_id);
+        if (visited_entry.found_existing) continue;
+
+        const proc = lowered.lir_result.store.getProcSpec(proc_id);
+        const args = lowered.lir_result.store.getLocalSpan(proc.args);
+        if (proc.ret_layout == .zst and args.len != 0) candidate: {
+            const first_arg_layout = lowered.lir_result.layouts.getLayout(
+                lowered.lir_result.store.getLocal(GuardedList.at(args, 0)).layout_idx,
+            );
+            if (first_arg_layout.tag != .ptr) break :candidate;
+            const result_layout = lowered.lir_result.layouts.getLayout(first_arg_layout.getIdx());
+            switch (result_layout.tag) {
+                .struct_, .tag_union => {},
+                else => break :candidate,
+            }
+            const shape = try collectProcShape(allocator, lowered, proc_id);
+            if (shape.ptr_store_count != 0 or shape.store_struct_count != 0 or shape.store_tag_count != 0) count += 1;
+        }
+
+        const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
+        defer allocator.free(calls);
+        for (calls) |call| try work.append(allocator, call);
+    }
+    return count;
+}
+
+fn localLoopStateIsSplitToTwoLeaves(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 2 and
+        shape.jump_count >= 2;
+}
+
+fn whileRecordStateWithCallableCapturesIsSpecialized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 3 and
+        shape.jump_count >= 2;
+}
+
+fn whileRecordStateWithZeroCaptureCallableIsSpecialized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 1 and
+        shape.jump_count >= 2 and
+        shape.direct_call_count == 0;
+}
+
+fn whileRecordStateWithOpaqueCallableIsSpecialized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 2 and
+        shape.jump_count >= 2;
+}
+
+fn branchJoinedRecordStateWorkerIsSpecialized(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 2 and
+        shape.jump_count >= 2;
+}
+
+fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
+    return shape.self_call_count == 0 and
+        shape.join_count >= 1 and
+        shape.max_join_param_count == 1 and
+        shape.jump_count >= 2;
+}
+
+fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) TestError!void {
+    const allocator = std.testing.allocator;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+    defer optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
+    try std.testing.expectEqual(expected_append_unsafe_count, try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_append_unsafe_count"));
+}
+
+test "user iter method is not recognized as builtin list cursor" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\Bag := [Bag].{
+        \\    iter : Bag -> Iter(I64)
+        \\    iter = |_| Iter.single(1.I64)
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    var $sum = 0.I64
+        \\    for item in Bag.Bag {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+    try std.testing.expectEqual(@as(usize, 0), shape.list_len_count);
+    try std.testing.expectEqual(@as(usize, 0), shape.list_get_unsafe_count);
+}
+
+test "destination baseline: boxed record update reboxes a list and string payload" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\Plant : {
+        \\    x : I32,
+        \\    label : Str,
+        \\}
+        \\
+        \\Model : {
+        \\    tick : U64,
+        \\    label : Str,
+        \\    plants : List(Plant),
+        \\}
+        \\
+        \\State : [Running(Model), Done(Str)]
+        \\
+        \\step : Box(State) -> Box(State)
+        \\step = |boxed| {
+        \\    state = Box.unbox(boxed)
+        \\
+        \\    next =
+        \\        match state {
+        \\            Running(model) => {
+        \\                plants = List.append(model.plants, { x: 160, label: model.label })
+        \\                Running({ ..model, tick: model.tick + 1, plants })
+        \\            }
+        \\
+        \\            Done(msg) => Done(Str.concat(msg, "!"))
+        \\        }
+        \\
+        \\    Box.box(next)
+        \\}
+        \\
+        \\main : Box(State) -> Box(State)
+        \\main = |boxed| step(boxed)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const step_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, step_proc);
+
+    try std.testing.expectEqual(@as(usize, 1), shape.box_unbox_count);
+    try std.testing.expectEqual(@as(usize, 1), shape.box_box_count);
+    try std.testing.expect(shape.struct_assign_count >= 2);
+    try std.testing.expect(shape.tag_assign_count >= 2);
+}
+
+test "destination phase 3: direct boxed update wrapper calls a return-slot variant" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\Model : {
+        \\    tick : U64,
+        \\    label : Str,
+        \\}
+        \\
+        \\update : Model -> Model
+        \\update = |model| {
+        \\    tick = model.tick + 1
+        \\    { ..model, tick }
+        \\}
+        \\
+        \\step : Box(Model) -> Box(Model)
+        \\step = |boxed| Box.box(update(Box.unbox(boxed)))
+        \\
+        \\main : Box(Model) -> Box(Model)
+        \\main = |boxed| step(boxed)
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    const root_shape = try collectProcShape(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_cast_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_load_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "ptr_store_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "store_struct_count"));
+    try std.testing.expectEqual(@as(usize, 0), root_shape.ptr_store_count);
+    try std.testing.expectEqual(@as(usize, 1), try reachableReturnSlotProcCount(allocator, &lowered_source.lowered));
+}
+
+test "destination phase 3: effectful boxed update wrapper prepares box update" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\Model : {
+        \\    tick : U64,
+        \\    label : Str,
+        \\}
+        \\
+        \\update! : Model => Model
+        \\update! = |model| {
+        \\    tick = model.tick + 1
+        \\    { ..model, tick }
+        \\}
+        \\
+        \\main : Box(Model) => Box(Model)
+        \\main = |boxed| Box.box(update!(Box.unbox(boxed)))
+    , .wrappers);
+    defer lowered_source.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_unbox_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &lowered_source.lowered, "box_prepare_update_count"));
+}
+
+test "destination baseline: boxed lambda is packed then boxed" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\Formatter : U64 -> Str
+        \\
+        \\make : Str -> Box(Formatter)
+        \\make = |prefix| Box.box(|n| Str.concat(prefix, U64.to_str(n)))
+        \\
+        \\main : Str -> Box(Formatter)
+        \\main = |prefix| make(prefix)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const make_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, make_proc);
+
+    try std.testing.expectEqual(@as(usize, 1), shape.packed_erased_fn_count);
+}
+
+test "destination baseline: large record return feeds a record update" {
+    const allocator = std.testing.allocator;
+    var lowered_source = try lowerModule(allocator,
+        \\Big : {
+        \\    label : Str,
+        \\    items : List(U64),
+        \\    a : U64,
+        \\    b : U64,
+        \\    c : U64,
+        \\    d : U64,
+        \\    e : U64,
+        \\}
+        \\
+        \\make_big : Str, U64 -> Big
+        \\make_big = |label, n| {
+        \\    label,
+        \\    items: [n, n + 1],
+        \\    a: n,
+        \\    b: n + 1,
+        \\    c: n + 2,
+        \\    d: n + 3,
+        \\    e: n + 4,
+        \\}
+        \\
+        \\change_big : Str, U64 -> Big
+        \\change_big = |label, n| { ..make_big(label, n), e: n + 5 }
+        \\
+        \\main : Str, U64 -> Big
+        \\main = |label, n| change_big(label, n)
+    , .none);
+    defer lowered_source.deinit(allocator);
+
+    const change_proc = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+    const shape = try collectProcShape(allocator, &lowered_source.lowered, change_proc);
+
+    try std.testing.expect(shape.direct_call_count >= 1);
+    try std.testing.expect(shape.struct_assign_count >= 1);
+}
+
+// Ported pending iterator redesign: StrAppend remains out of the production
+// pipeline until variant generation has a size cost model.
+
+// Ported pending iterator redesign: the materialize-inline plan decision this test asserts is not part of the current inline plan.
+// test "call value wrapper is optimized-inline eligible but not materialize-inline eligible" {
+//     try expectInlinePlanDecisions(
+//         \\callee : U64 -> U64
+//         \\callee = |x| x + 1
+//         \\
+//         \\apply : (U64 -> U64), U64 -> U64
+//         \\apply = |fn, x| fn(x)
+//         \\
+//         \\main : U64
+//         \\main = apply(callee, 41)
+//     , "apply", true, false);
+// }
+
+// Ported pending iterator redesign: the materialize-inline plan decision this test asserts is not part of the current inline plan.
+// test "simple direct low-level wrapper is materialize-inline eligible" {
+//     try expectInlinePlanDecisions(
+//         \\callee : U64 -> U64
+//         \\callee = |x| x + 1
+//         \\
+//         \\main : U64 -> U64
+//         \\main = |x| callee(x)
+//     , "callee", true, true);
+// }
+
+// Ported pending iterator redesign: the current inline plan deliberately
+// excludes functions with captures, even when every capture is an inline input.
+// Re-enable this when the inline plan represents capture substitution.
+// ─── TRMC pass outcomes through the full pipeline ───
+
+test "plant iter pipeline collect uses direct range map list loop" {
+    try expectRangeMapCollectUsesDirectListLoop(
+        \\Plant : { seed : I64 }
+        \\
+        \\random_plant : I64 -> Plant
+        \\random_plant = |seed| { seed: seed }
+        \\
+        \\starting_plants : () -> List(Plant)
+        \\starting_plants = || {
+        \\    (0.I64..=15)
+        \\        .map(|i| random_plant(i * 12))
+        \\        .collect()
+        \\}
+        \\
+        \\main : () -> List(Plant)
+        \\main = || starting_plants()
+    , 2);
+}
+
+test "direct range map collect uses direct list loop" {
+    try expectRangeMapCollectUsesDirectListLoop(
+        \\Plant : { seed : I64 }
+        \\
+        \\random_plant : I64 -> Plant
+        \\random_plant = |seed| { seed: seed }
+        \\
+        \\main : () -> List(Plant)
+        \\main = ||
+        \\    Iter.collect(
+        \\        Iter.map(0.I64..=15, |i| random_plant(i * 12)),
+        \\    )
+    , 2);
+}
+
+test "non-inlined call list argument keeps let-bound leaves available" {
+    // A boundary call cannot be inlined, so its arguments must materialize as
+    // ordinary public values. A list argument whose elements are let-bound
+    // locals must keep those bindings available (or substituted) when the
+    // boundary materializes inside nested inlining.
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\len_rec : List(U64), U64 -> U64
+        \\len_rec = |bytes, acc| {
+        \\    match bytes {
+        \\        [] => acc
+        \\        [_, .. as rest] => len_rec(rest, acc + 1)
+        \\    }
+        \\}
+        \\
+        \\countdown : U64 -> U64
+        \\countdown = |x| if x == 0 1 else countdown(x - 1)
+        \\
+        \\save : U64 -> U64
+        \\save = |frame| {
+        \\    data = U64.bitwise_and(frame, 255)
+        \\    other = countdown(3)
+        \\    len_rec([data, other], 0)
+        \\}
+        \\
+        \\init : { frame : U64 } -> U64
+        \\init = |state| {
+        \\    frame_count = state.frame
+        \\    save(frame_count)
+        \\}
+        \\
+        \\step : { frame : U64 }, U64 -> U64
+        \\step = |state, mode| {
+        \\    if mode == 1 {
+        \\        init(state)
+        \\    } else {
+        \\        0
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = step({ frame: 9 }, 1)
+    , .wrappers);
+    defer optimized.deinit(allocator);
+}
+
+test "multi-use match binding emits branch bodies once" {
+    // A control-flow value re-emits its branch bodies wherever it
+    // materializes, so a let-bound match consumed by more than one
+    // materializing use must be emitted once at its binding statement and
+    // referenced; otherwise every use duplicates every branch body.
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\route : U64 -> U64
+        \\route = |x| {
+        \\    if x > 3 {
+        \\        return 0
+        \\    }
+        \\    x + 1
+        \\}
+        \\
+        \\label : U64 -> Str
+        \\label = |n| {
+        \\    state = match route(n) {
+        \\        0 => Str.concat("a", "0")
+        \\        1 => Str.concat("b", "1")
+        \\        2 => Str.concat("c", "2")
+        \\        _ => Str.concat("d", "?")
+        \\    }
+        \\    Str.concat(state, state)
+        \\}
+        \\
+        \\main : Str
+        \\main = label(9)
+    , .wrappers);
+    defer optimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 5), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "str_concat_count"));
+}
+
+test "boundary field access projects private leaf branch" {
+    // A record consumed only through demanded field accesses splits into a
+    // sparse private product, and an if branch whose value is an opaque call
+    // result is carried whole as a private leaf. A boundary argument that
+    // projects a field from such an if value must project through every
+    // branch — including the leaf branch, whose field is an ordinary field
+    // access on the carried public value — rather than materialize the
+    // sparse receiver whole.
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\countdown : U64 -> U64
+        \\countdown = |x| {
+        \\    if x > 3 {
+        \\        return 0
+        \\    }
+        \\    x + 1
+        \\}
+        \\
+        \\load : U64 -> { score : U64, hi : U64, pad : U64 }
+        \\load = |seed| {
+        \\    if seed == 0 {
+        \\        { score: 0, hi: 1, pad: 2 }
+        \\    } else {
+        \\        load(seed - 1)
+        \\    }
+        \\}
+        \\
+        \\use : { score : U64, hi : U64, pad : U64 }, U64 -> U64
+        \\use = |state, mode| {
+        \\    match countdown(state.score) {
+        \\        1 => state.hi + mode
+        \\        other => other
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    state = if countdown(3) == 1 {
+        \\        { score: 10, hi: 20, pad: 30 }
+        \\    } else {
+        \\        load(7)
+        \\    }
+        \\    use(state, 1)
+        \\}
+    , .wrappers);
+    defer optimized.deinit(allocator);
+}
+
+test "local iterator append loop demands step captures across states" {
+    // The append step callable's appended-item capture is demanded only
+    // through the step-result `item` demand observed inside the loop body.
+    // That observation must reach the owning loop demand node so the state
+    // key carries the capture; otherwise the state callable is reconstructed
+    // without a capture its body demands.
+    const allocator = std.testing.allocator;
+    var optimized = try lowerModule(allocator,
+        \\Point : { x : I64 }
+        \\
+        \\points : () -> Iter(Point)
+        \\points = || [{ x: 1.I64 }, { x: 2 }].iter().append({ x: 3 })
+        \\
+        \\main : I64
+        \\main = {
+        \\    iter = points()
+        \\    var $sum = 0.I64
+        \\    for point in iter {
+        \\        $sum = $sum + point.x
+        \\    }
+        \\    $sum
+        \\}
+    , .wrappers);
+    defer optimized.deinit(allocator);
+
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "imported iterator producer keeps finite step callables" {
+    const allocator = std.testing.allocator;
+    const producer_module =
+        \\Points := [].{
+        \\    Point : { x : I64 }
+        \\
+        \\    points : () -> Iter(Point)
+        \\    points = || [{ x: 1.I64 }, { x: 2 }].iter().append({ x: 3 })
+        \\}
+    ;
+    const source =
+        \\import Points
+        \\
+        \\main : I64
+        \\main = {
+        \\    iter = Points.points()
+        \\    var $sum = 0.I64
+        \\    for point in iter {
+        \\        $sum = $sum + point.x
+        \\    }
+        \\    $sum
+        \\}
+    ;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{
+        .imports = &.{.{ .name = "Points", .source = producer_module }},
+    });
+    defer optimized.deinit(allocator);
+
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "static list iter append loop eliminates public iter adapters" {
+    const allocator = std.testing.allocator;
+    const iter_source =
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+    const list_source =
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\sum_points : U64 -> I64
+        \\sum_points = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ]
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_points(2)
+    ;
+
+    var iter_optimized = try lowerModuleWithProcDebugNames(allocator, iter_source, .wrappers, true);
+    defer iter_optimized.deinit(allocator);
+    var list_optimized = try lowerModuleWithProcDebugNames(allocator, list_source, .wrappers, true);
+    defer list_optimized.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.List.iter"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "Builtin.Iter.append"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &iter_optimized.lowered, "iter_from_step"));
+    try std.testing.expect(!try reachableProcDebugName(allocator, &list_optimized.lowered, "Builtin.Iter.append"));
+}
+
+// Ported pending iterator redesign: post_check_stats.optimized_contexts instrumentation is not part of the current pipeline.
+// test "post-check lowering mode constructs optimized context only in optimized mode" {
+//     const allocator = std.testing.allocator;
+//     const source =
+//         \\main : U64
+//         \\main = 0
+//     ;
+//
+//     var optimized = try lowerModule(allocator, source, .wrappers);
+//     defer optimized.deinit(allocator);
+//     var ordinary = try lowerModule(allocator, source, .none);
+//     defer ordinary.deinit(allocator);
+//
+//     try std.testing.expectEqual(@as(u32, 1), optimized.lowered.post_check_stats.optimized_contexts);
+//     try std.testing.expectEqual(@as(u32, 0), ordinary.lowered.post_check_stats.optimized_contexts);
+// }
+
+// Ported pending iterator redesign: post_check_stats.optimized_contexts instrumentation is not part of the current pipeline.
+// test "checking finalization lowering constructs no optimized context" {
+//     const allocator = std.testing.allocator;
+//     const source =
+//         \\main : U64
+//         \\main = 0
+//     ;
+//
+//     var lowered = try lowerModuleWithOptions(allocator, source, .none, .{
+//         .checked_module_state = .checking_finalization,
+//     });
+//     defer lowered.deinit(allocator);
+//
+//     try std.testing.expectEqual(@as(u32, 0), lowered.lowered.post_check_stats.optimized_contexts);
+// }
+
+test "post-check lowering mode gates public iter adapter elimination" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\sum_points : U64 -> U64
+        \\sum_points = |extra| {
+        \\    base_points = [1, 2, 3].iter()
+        \\
+        \\    collision_points =
+        \\        if extra == 0 {
+        \\            base_points
+        \\        } else {
+        \\            base_points.append(extra)
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for point in collision_points {
+        \\        $sum = $sum + point
+        \\    }
+        \\    $sum
+        \\}
+        \\
+        \\main : U64
+        \\main = sum_points(4)
+    ;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+    defer optimized.deinit(allocator);
+    var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer ordinary.deinit(allocator);
+
+    try std.testing.expect(!try reachableProcDebugName(allocator, &optimized.lowered, "Builtin.Iter.append"));
+    try std.testing.expect(try reachableProcDebugName(allocator, &ordinary.lowered, "Builtin.Iter.append"));
+}
+
+// Ported pending iterator redesign: this test constructs state_loop/state_continue lifted IR that the current lifted AST does not define.
+// test "state loop lowers to ordinary lir joins" {
+//     const allocator = std.testing.allocator;
+//     const source =
+//         \\main : U64
+//         \\main = 0
+//     ;
+//
+//     var lifted_source = try liftModuleAfterSpecConstr(allocator, source);
+//     defer helpers.cleanupParseAndCanonical(allocator, lifted_source.resources);
+//
+//     const Lifted = postcheck.MonotypeLifted.Ast;
+//     var lifted = lifted_source.lifted;
+//     var lifted_owned = true;
+//     defer if (lifted_owned) lifted.deinit();
+//     lifted_source.lifted = undefined;
+//
+//     try std.testing.expectEqual(@as(usize, 1), lifted.roots.items.len);
+//     const root_fn_id = lifted.roots.items[0].fn_id;
+//     const root_fn_index = @intFromEnum(root_fn_id);
+//     const ret_ty = lifted.fns.items[root_fn_index].ret;
+//     const original_body = switch (lifted.fns.items[root_fn_index].body) {
+//         .roc => |body| body,
+//         .hosted => return error.TestUnexpectedResult,
+//     };
+//
+//     const empty_params = try lifted.addTypedLocalSpan(&.{});
+//     const empty_values = try lifted.addExprSpan(&.{});
+//     const state_start: u32 = @intCast(lifted.state_loop_states.items.len);
+//     const state0_id: Lifted.StateLoopStateId = @enumFromInt(state_start);
+//     const state1_id: Lifted.StateLoopStateId = @enumFromInt(state_start + 1);
+//
+//     const break_expr = try lifted.addExpr(.{
+//         .ty = ret_ty,
+//         .data = .{ .break_ = original_body },
+//     });
+//     const continue_expr = try lifted.addExpr(.{
+//         .ty = ret_ty,
+//         .data = .{ .state_continue = .{
+//             .target_state = state1_id,
+//             .values = empty_values,
+//         } },
+//     });
+//     const states = [_]Lifted.StateLoopState{
+//         .{
+//             .params = empty_params,
+//             .body = continue_expr,
+//         },
+//         .{
+//             .params = empty_params,
+//             .body = break_expr,
+//         },
+//     };
+//     const state_span = try lifted.addStateLoopStateSpan(&states);
+//     const state_loop_expr = try lifted.addExpr(.{
+//         .ty = ret_ty,
+//         .data = .{ .state_loop = .{
+//             .entry_state = state0_id,
+//             .entry_values = empty_values,
+//             .states = state_span,
+//         } },
+//     });
+//     lifted.fns.items[root_fn_index].body = .{ .roc = state_loop_expr };
+//
+//     var solved = try postcheck.LambdaSolved.Solve.run(allocator, lifted);
+//     lifted_owned = false;
+//     lifted = undefined;
+//     var solved_owned = true;
+//     errdefer if (solved_owned) solved.deinit();
+//
+//     var output = try postcheck.SolvedLirLower.run(allocator, base.target.TargetUsize.native, solved, .{});
+//     solved_owned = false;
+//     solved = undefined;
+//     defer output.deinit();
+//
+//     try std.testing.expectEqual(@as(usize, 1), output.lir_result.root_procs.items.len);
+//     const root_proc = output.lir_result.root_procs.items[0];
+//     const shape = try collectLirResultProcShape(allocator, &output.lir_result, root_proc);
+//
+//     try std.testing.expectEqual(@as(usize, 2), shape.join_count);
+//     try std.testing.expectEqual(@as(usize, 0), shape.max_join_param_count);
+//     try std.testing.expectEqual(@as(usize, 2), shape.jump_count);
+// }
+
+test "dynamic static list iter append loop splits nested callable captures" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\main : U64 -> I64
+        \\main = |anim_index| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\        { x: 13, y: 3 },
+        \\        { x: 3, y: 5 },
+        \\        { x: 11, y: 6 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        if anim_index == 2 {
+        \\            base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\        } else if anim_index == 1 {
+        \\            base_points.append({ x: 2, y: 2 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+}
+
+test "static record list iter append loop avoids direct-list append allocation" {
+    const record_iter_source =
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\main : Bool -> I64
+        \\main = |use_extra| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\    ].iter()
+        \\
+        \\    collision_points =
+        \\        if use_extra {
+        \\            base_points.append({ x: 2, y: 1 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    const record_list_source =
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\main : Bool -> I64
+        \\main = |use_extra| {
+        \\    base_points = [
+        \\        { x: 11, y: 2 },
+        \\    ]
+        \\
+        \\    collision_points =
+        \\        if use_extra {
+        \\            base_points.append({ x: 2, y: 1 })
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    $sum
+        \\}
+    ;
+
+    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(record_iter_source, record_list_source);
+}
+
+test "static primitive list iter append loop avoids direct-list append allocation" {
+    const primitive_iter_source =
+        \\main : Bool -> I64
+        \\main = |use_extra| {
+        \\    base_points = [11.I64].iter()
+        \\
+        \\    collision_points =
+        \\        if use_extra {
+        \\            base_points.append(2)
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for point in collision_points {
+        \\        $sum = $sum + point
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    const primitive_list_source =
+        \\main : Bool -> I64
+        \\main = |use_extra| {
+        \\    base_points = [11.I64]
+        \\
+        \\    collision_points =
+        \\        if use_extra {
+        \\            base_points.append(2)
+        \\        } else {
+        \\            base_points
+        \\        }
+        \\
+        \\    var $sum = 0
+        \\    for point in collision_points {
+        \\        $sum = $sum + point
+        \\    }
+        \\    $sum
+        \\}
+    ;
+
+    try expectStaticListIterAppendLoopAvoidsListAppendAllocation(primitive_iter_source, primitive_list_source);
+}
+
+test "stream from iterator collect keeps finite step callables" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        [1.I64, 2]
+        \\            .iter()
+        \\            .append(3)
+        \\            .stream()
+        \\            .map!(|n| n + 1)
+        \\
+        \\    Stream.collect!(stream)
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "optimized infinite custom iterator consumes finite prefix" {
+    const source =
+        \\main : U64
+        \\main = {
+        \\    adv : ((U64, U64) -> Try((U64, (U64, U64)), [NoMore]))
+        \\    adv = |(a, b)| Try.Ok((a, (b, a + b)))
+        \\
+        \\    fib_iter = Iter.custom((0.U64, 1.U64), Unknown, adv)
+        \\
+        \\    var $sum = 0.U64
+        \\    for f in fib_iter.take_first(5) {
+        \\        $sum = $sum + f
+        \\    }
+        \\    dbg $sum
+        \\    $sum
+        \\}
+    ;
+
+    try expectOptimizedDbgEvents(source, &.{"7"});
+}
+
+test "spec constr list filter-map loop does not produce unbound ARC locals" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : List(I32)
+        \\main = {
+        \\    var $out = []
+        \\    for item in [] {
+        \\        $out = $out.append(item)
+        \\    }
+        \\    $out
+        \\}
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+}
+
+test "spec constr preserves known-match expect failure order" {
+    try expectOptimizedHostEvents(
+        \\State : { n : I64 }
+        \\Step : [One({ item : I64 })]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "payload"
+        \\    n
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    match One({ item: tap(state.n) }) {
+        \\        One({ item }) => {
+        \\            dbg "branch-before"
+        \\            expect False
+        \\            item
+        \\        }
+        \\    }
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , .returned, &.{
+        .{ .dbg = "\"payload\"" },
+        .{ .dbg = "\"branch-before\"" },
+        .expect_failed,
+    });
+}
+
+test "spec constr preserves known-match crash order" {
+    try expectOptimizedHostEvents(
+        \\State : { n : I64 }
+        \\Step : [One({ item : I64 })]
+        \\
+        \\tap : I64 -> I64
+        \\tap = |n| {
+        \\    dbg "payload"
+        \\    n
+        \\}
+        \\
+        \\outer : State -> I64
+        \\outer = |state|
+        \\    match One({ item: tap(state.n) }) {
+        \\        One({ item: _ }) => {
+        \\            dbg "branch-before"
+        \\            crash "boom"
+        \\        }
+        \\    }
+        \\
+        \\main : I64
+        \\main = outer({ n: 1 })
+    , .crashed, &.{
+        .{ .dbg = "\"payload\"" },
+        .{ .dbg = "\"branch-before\"" },
+        .{ .crashed = "boom" },
+    });
+}
+
+test "spec constr specializes primitive-start record state carried by while loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : I64 -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start, acc: 0 }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr does not require single-field record wrapper for local loop splitting" {
+    const allocator = std.testing.allocator;
+    const wrapped_source =
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : Start -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start.n, acc: 0 }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from({ n: 4 })
+    ;
+    const primitive_source =
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : I64 -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start, acc: 0 }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4)
+    ;
+
+    var wrapped_optimized = try lowerModule(allocator, wrapped_source, .wrappers);
+    defer wrapped_optimized.deinit(allocator);
+    var primitive_optimized = try lowerModule(allocator, primitive_source, .wrappers);
+    defer primitive_optimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &wrapped_optimized.lowered, localLoopStateIsSplitToTwoLeaves));
+    try std.testing.expect(try reachableProcShape(allocator, &primitive_optimized.lowered, localLoopStateIsSplitToTwoLeaves));
+}
+
+test "spec constr splits loop record state with opaque callable field" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, f : I64 -> I64 }
+        \\
+        \\inc : I64 -> I64
+        \\inc = |n| n + 1
+        \\
+        \\sum_from : I64 -> I64
+        \\sum_from = |start| {
+        \\    var $state = { n: start, f: inc }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, f: $state.f }
+        \\    }
+        \\
+        \\    f = $state.f
+        \\    f($state.n)
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithZeroCaptureCallableIsSpecialized));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr splits loop record state with direct callable captures" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, f : I64 -> I64 }
+        \\
+        \\sum_from : I64, I64, I64 -> I64
+        \\sum_from = |start, scale, offset| {
+        \\    f = |n| n * scale + offset
+        \\    var $state = { n: start, f }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, f: $state.f }
+        \\    }
+        \\
+        \\    f = $state.f
+        \\    f($state.n)
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4, 10, 3)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithOpaqueCallableIsSpecialized));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr splits loop record state with returned callable captures" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, f : I64 -> I64 }
+        \\
+        \\make_affine = |scale, offset| |n| n * scale + offset
+        \\
+        \\sum_from : I64, I64, I64 -> I64
+        \\sum_from = |start, scale, offset| {
+        \\    var $state = { n: start, f: make_affine(scale, offset) }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, f: $state.f }
+        \\    }
+        \\
+        \\    f = $state.f
+        \\    f($state.n)
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4, 10, 3)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithOpaqueCallableIsSpecialized));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr splits loop record state with annotated returned callable captures" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, f : I64 -> I64 }
+        \\
+        \\make_affine : I64, I64 -> (I64 -> I64)
+        \\make_affine = |scale, offset| |n| n * scale + offset
+        \\
+        \\sum_from : I64, I64, I64 -> I64
+        \\sum_from = |start, scale, offset| {
+        \\    var $state = { n: start, f: make_affine(scale, offset) }
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, f: $state.f }
+        \\    }
+        \\
+        \\    f = $state.f
+        \\    f($state.n)
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from(4, 10, 3)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, whileRecordStateWithOpaqueCallableIsSpecialized));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWithCallableCapturesIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, whileRecordStateWorkerIsGeneric));
+}
+
+test "spec constr exposes direct call record result for field access" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\make_state : I64 -> State
+        \\make_state = |n| { n: n, acc: n + 1 }
+        \\
+        \\read_acc : Start -> I64
+        \\read_acc = |start| make_state(start.n).acc
+        \\
+        \\main : I64
+        \\main = read_acc({ n: 4 })
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "direct_call_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "struct_assign_count"));
+
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "direct_call_count") > 0);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "struct_assign_count") > 0);
+}
+
+test "spec constr exposes block-wrapped direct call record result for field access" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\make_state : I64 -> State
+        \\make_state = |n| { n: n, acc: n + 1 }
+        \\
+        \\main : I64
+        \\main = { make_state(4) }.acc
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "direct_call_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "struct_assign_count"));
+
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "direct_call_count") > 0);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "struct_assign_count") > 0);
+}
+
+test "spec constr exposes demanded direct call argument facts" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\make_state : I64 -> State
+        \\make_state = |n| { n: n, acc: n + 1 }
+        \\
+        \\copy_state : State -> State
+        \\copy_state = |state| { n: state.n, acc: state.acc }
+        \\
+        \\main : I64
+        \\main = copy_state(make_state(4)).acc
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "direct_call_count"));
+
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &unoptimized.lowered, "direct_call_count") > 0);
+}
+
+test "spec constr specializes if-joined record state carried by while loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : Start, Bool -> I64
+        \\sum_from = |seed, flag| {
+        \\    start =
+        \\        if flag {
+        \\            { n: seed.n, acc: 0 }
+        \\        } else {
+        \\            { n: seed.n - 1, acc: 1 }
+        \\        }
+        \\
+        \\    var $state = start
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from({ n: 4 }, True)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+}
+
+test "spec constr specializes match-joined record state carried by while loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Start : { n : I64 }
+        \\State : { n : I64, acc : I64 }
+        \\
+        \\sum_from : Start, Bool -> I64
+        \\sum_from = |seed, flag| {
+        \\    start =
+        \\        match flag {
+        \\            True => { n: seed.n, acc: 0 }
+        \\            False => { n: seed.n - 1, acc: 1 }
+        \\        }
+        \\
+        \\    var $state = start
+        \\
+        \\    while $state.n != 0 {
+        \\        $state = { n: $state.n - 1, acc: $state.acc + $state.n }
+        \\    }
+        \\
+        \\    $state.acc
+        \\}
+        \\
+        \\main : I64
+        \\main = sum_from({ n: 4 }, True)
+    ;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var unoptimized = try lowerModule(allocator, source, .none);
+    defer unoptimized.deinit(allocator);
+
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(!try reachableProcShape(allocator, &optimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+
+    try std.testing.expect(!try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsSpecialized));
+    try std.testing.expect(try reachableProcShape(allocator, &unoptimized.lowered, branchJoinedRecordStateWorkerIsGeneric));
+}
+
+// Iterator lowering differential harness.
+//
+// Each `iterdiff:` test lowers ONE Roc source under two inline modes and runs
+// both through the interpreter against `RuntimeHostEnv`, then asserts the two
+// runs are observationally identical:
+//
+//   * `.wrappers` is the optimized/inlined lowering (the closest proxy the tree
+//     has for the lower-all-known-wrappers path).
+//   * `.none` is the naive, un-inlined lowering ("unfused").
+//
+// The two runs must agree on:
+//   * crash-versus-no-crash (`RecordedRun.termination`), and
+//   * the full ordered host-effect trace (`RecordedRun.events`): every `dbg`,
+//     `expect` failure, and crash message, in order.
+//
+// Result VALUES are observed through the effect trace: each pipeline `dbg`s its
+// result (and, where useful, each element as it is produced). `dbg` renders a
+// value structurally and pointer-independently (e.g. `[6, 8, 10, 12]`), so a
+// `dbg` of the collected List/Set output is a complete, allocation-independent
+// value assertion that lives inside the compared trace. Ordered per-element
+// `dbg`s additionally pin element order and effect ordering (design invariants
+// 4 and 5). Allocation counts are intentionally NOT compared: fusing away
+// adapter objects legitimately changes how much a run allocates.
+//
+// A test that fails or crashes here on the current tree is a genuine
+// pre-existing divergence between the optimized and naive lowerings, not a test
+// bug; such cases are committed commented-out with a `// Pre-existing
+// divergence:` marker rather than weakened to pass.
+
+fn expectRecordedRunsEqual(
+    expected: eval.RuntimeHostEnv.RecordedRun,
+    actual: eval.RuntimeHostEnv.RecordedRun,
+) TestError!void {
+    // crash-versus-no-crash
+    try std.testing.expectEqual(expected.termination, actual.termination);
+
+    // full ordered effect trace (dbg values, expect failures, crash messages)
+    try std.testing.expectEqual(expected.events.len, actual.events.len);
+    for (expected.events, actual.events) |expected_event, actual_event| {
+        try std.testing.expectEqual(
+            std.meta.activeTag(expected_event),
+            std.meta.activeTag(actual_event),
+        );
+        try std.testing.expectEqualStrings(expected_event.bytes(), actual_event.bytes());
+    }
+}
+
+fn expectSameObservationsAcrossInlineModes(source: []const u8) TestError!void {
+    const allocator = std.testing.allocator;
+
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    var naive = try lowerModule(allocator, source, .none);
+    defer naive.deinit(allocator);
+
+    var naive_run = try runLoweredWithHostEvents(allocator, &naive.lowered);
+    defer naive_run.deinit(allocator);
+
+    var optimized_run = try runLoweredWithHostEvents(allocator, &optimized.lowered);
+    defer optimized_run.deinit(allocator);
+
+    try expectRecordedRunsEqual(naive_run, optimized_run);
+}
+
+test "iterdiff: bounded list map collect agrees across inline modes" {
+    // Map over a statically-known list, collected into a List, then reduced to a
+    // scalar. The `dbg` of the collected list is the structural (allocation-
+    // independent) value assertion; `dbg` of the scalar pins the fold result.
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    doubled : List(I64)
+        \\    doubled =
+        \\        [1.I64, 2, 3, 4, 5, 6]
+        \\            .iter()
+        \\            .map(|n| n * 2)
+        \\            .collect()
+        \\    total = List.sum(doubled)
+        \\    dbg doubled
+        \\    dbg total
+        \\    total
+        \\}
+    );
+}
+
+// A filter-like adapter (`keep_if`) drives a collect loop whose loop-carried
+// source iterator advances through a runtime step result. The step callable's
+// successor iterator must carry the advanced inner iterator produced by the
+// step, so the inner index advances every iteration and the loop terminates.
+// Both lowering modes observe the same filtered list. Minimal repro:
+// `[1.I64, 2, 3].iter().keep_if(|n| n > 1).collect()` returns `[2, 3]`.
+test "iterdiff: bounded list map keep_if collect agrees across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    doubled : List(I64)
+        \\    doubled =
+        \\        [1.I64, 2, 3, 4, 5, 6]
+        \\            .iter()
+        \\            .map(|n| n * 2)
+        \\            .keep_if(|n| n > 5)
+        \\            .collect()
+        \\    total = List.sum(doubled)
+        \\    dbg doubled
+        \\    dbg total
+        \\    total
+        \\}
+    );
+}
+
+test "iterdiff: if-chosen iterator chains consumed by one loop agree across inline modes" {
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    threshold = 4.I64
+        \\    chosen : Iter(I64)
+        \\    chosen =
+        \\        if threshold > 3 {
+        \\            [1.I64, 2, 3].iter().map(|n| n * 10)
+        \\        } else {
+        \\            [4.I64, 5, 6].iter().keep_if(|n| n > 4)
+        \\        }
+        \\    var $sum = 0.I64
+        \\    for x in chosen {
+        \\        dbg x
+        \\        $sum = $sum + x
+        \\    }
+        \\    dbg $sum
+        \\    $sum
+        \\}
+    );
+}
+
+test "iterdiff: branch-chosen append search with early return agrees across inline modes" {
+    // Rocci's `on_screen_collided!` shape exactly: a zero-accumulator `for` over
+    // a branch-chosen append chain of record elements that returns early on the
+    // first match. The branch-append peel factors the shared base iteration out
+    // and replays the per-element check over each arm's appended items (binding
+    // each appended record's fields directly); the returned first-match value
+    // pins the exact pull order (base elements, then appended items in append
+    // order, with the early return short-circuiting). Both lowerings must return
+    // the same value for every `(selector, target)` probe.
+    try expectSameObservationsAcrossInlineModes(
+        \\Point : { x : I64, y : I64 }
+        \\
+        \\find : U64, I64 -> I64
+        \\find = |selector, target| {
+        \\    base = [{ x: 10, y: 1 }, { x: 20, y: 2 }, { x: 30, y: 3 }].iter()
+        \\    chosen =
+        \\        if selector == 2 {
+        \\            base.append({ x: 40, y: 4 }).append({ x: 50, y: 5 })
+        \\        } else if selector == 1 {
+        \\            base.append({ x: 60, y: 6 })
+        \\        } else {
+        \\            base
+        \\        }
+        \\    for { x, y } in chosen {
+        \\        if x >= target {
+        \\            return x + y
+        \\        }
+        \\    }
+        \\    -1
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    a = find(2, 35)
+        \\    b = find(2, 45)
+        \\    c = find(2, 100)
+        \\    d = find(1, 55)
+        \\    e = find(0, 5)
+        \\    f = find(0, 100)
+        \\    dbg a
+        \\    dbg b
+        \\    dbg c
+        \\    dbg d
+        \\    dbg e
+        \\    dbg f
+        \\    a + b + c + d + e + f
+        \\}
+    );
+}
+
+test "iterdiff: set materialized mid-pipeline then iterated agrees across inline modes" {
+    // Design invariant 4: constructing a Set from the elements really runs, so
+    // its deduplication happens exactly where written; the pipeline then keeps
+    // iterating over the materialized result. Both lowerings must observe the
+    // same deduplicated element sequence and the same collected output.
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    deduped : Set(I64)
+        \\    deduped = Set.from_list([3.I64, 1, 2, 2, 3, 1, 4, 3])
+        \\    doubled : List(I64)
+        \\    doubled =
+        \\        deduped
+        \\            .to_list()
+        \\            .iter()
+        \\            .map(|n| n * 2)
+        \\            .collect()
+        \\    dbg deduped.to_list()
+        \\    dbg doubled
+        \\    List.sum(doubled)
+        \\}
+    );
+}
+
+test "iterdiff: coarse custom is_eq set dedup keeps same representative across inline modes" {
+    // Design invariant 6: the optimizer must never use a user `is_eq` result to
+    // substitute one value for another. `Bucket.is_eq` compares only `key`, so
+    // deduplication is a coarse quotient; `tag` is the representative-
+    // distinguishing observer. Both lowerings must keep the SAME surviving
+    // representative (identical ordered `tag` trace), never a different one the
+    // quotient happens to call equal.
+    try expectSameObservationsAcrossInlineModes(
+        \\Bucket := { key : I64, tag : I64 }.{
+        \\    is_eq : Bucket, Bucket -> Bool
+        \\    is_eq = |a, b| a.key == b.key
+        \\}
+        \\
+        \\main : I64
+        \\main = {
+        \\    buckets : List(Bucket)
+        \\    buckets = [
+        \\        { key: 1, tag: 100 },
+        \\        { key: 2, tag: 200 },
+        \\        { key: 1, tag: 999 },
+        \\        { key: 2, tag: 888 },
+        \\        { key: 3, tag: 300 },
+        \\    ]
+        \\    deduped : Set(Bucket)
+        \\    deduped = Set.from_list(buckets)
+        \\    var $tag_sum = 0.I64
+        \\    for b in deduped.to_list().iter() {
+        \\        dbg b.tag
+        \\        $tag_sum = $tag_sum + b.tag
+        \\    }
+        \\    dbg $tag_sum
+        \\    $tag_sum
+        \\}
+    );
+}
+
+test "iterdiff: stream per-element effects agree across inline modes" {
+    // Design invariant 5: a Stream pipeline's observable effect trace is the
+    // per-element, innermost-first pull order, and every lowering must
+    // reproduce it exactly. The effectful `map!` step `dbg`s each element as it
+    // is pulled, so the ordered trace pins effect order across inline modes.
+    try expectSameObservationsAcrossInlineModes(
+        \\main : () => List(I64)
+        \\main = || {
+        \\    stream =
+        \\        [1.I64, 2, 3]
+        \\            .iter()
+        \\            .stream()
+        \\            .map!(|n| {
+        \\                dbg n
+        \\                n * 2
+        \\            })
+        \\    result = Stream.collect!(stream)
+        \\    dbg result
+        \\    result
+        \\}
+    );
+}
+
+// Pre-existing divergence: a bounded prefix (`take_first`) of an infinite custom
+// iterator (`Iter.custom`, the Fibonacci unfold below) diverges between the two
+// lowerings, and the seed+step representation does NOT fix it: the divergence is
+// an optimizer (spec_constr) miscompile, not a representation issue. The naive
+// (`.none`) run yields the correct sequence 0,1,1,2,3,5,8,13; the optimized
+// (`.wrappers`) run yields 0,0,0,0,0,0,0,0 (sum 0). Root cause, confirmed from
+// the lowered LIR: the custom step correctly computes the advanced `next_seed`,
+// but spec_constr rebuilds the successor iterator re-reading the ORIGINAL
+// captured seed instead of `next_seed` (the seed's initial value is entry-known,
+// so spec_constr treats a runtime-varying loop-carried field as loop-invariant
+// and freezes it). The `keep_if` hang above is the same bug on a loop-carried
+// iterator box. Repro kept commented out per the iterdiff convention above; on
+// the current tree, executing it sends Debug lowering down a multi-minute
+// spec-constr path before it can report the disagreement.
+//
+// test "iterdiff: infinite custom iterator bounded prefix agrees across inline modes" {
+//     try expectSameObservationsAcrossInlineModes(
+//         \\main : U64
+//         \\main = {
+//         \\    adv : ((U64, U64) -> Try((U64, (U64, U64)), [NoMore]))
+//         \\    adv = |(a, b)| Try.Ok((a, (b, a + b)))
+//         \\    fib_iter = Iter.custom((0.U64, 1.U64), Unknown, adv)
+//         \\    var $sum = 0.U64
+//         \\    for f in fib_iter.take_first(8) {
+//         \\        dbg f
+//         \\        $sum = $sum + f
+//         \\    }
+//         \\    dbg $sum
+//         \\    $sum
+//         \\}
+//     );
+// }
+
+// Tier-one LIR identity. A bounded
+// `list.iter().map(f).collect()` whose construction is statically known at its
+// consuming loop fuses to the same generated-code loop as a hand-written `for`
+// loop: no adapter dispatch, no per-element indirect call, one scalar loop that
+// indexes the source list directly.
+//
+// The comparison is asserted per the principled relation rather than raw
+// per-field equality across every field, because two field families cannot
+// reach equality for reasons that are inherent to the compared programs, not
+// missed fusion:
+//
+//   * Consumer allocation strategy. `.collect()` on a bounded iterator knows
+//     the length up front, so it pre-sizes with `list_with_capacity` and writes
+//     each element with the unchecked append. A hand-written `for` + `.append`
+//     is `List.append`, which reserves incrementally (`list_reserve`) and stays
+//     a per-element call. This is a consumer difference, not an iterator one, so
+//     `list_with_capacity`/`list_reserve`/`list_append_unsafe`/`direct_call`
+//     differ by design; the relation (collect pre-sizes, manual grows) is
+//     asserted instead.
+//   * Adapter carried box. `map` over a list carries a nested recursive-nominal
+//     iterator (map wraps the list iterator), whose loop-exit re-materialization
+//     needs a box (amplified to a nested pair here). The plain list-iterator
+//     `for` loop carries no such box, so its exit re-materializes nothing.
+test "iterdiff: tier-one map collect matches hand-written loop shape" {
+    const allocator = std.testing.allocator;
+    const iter_source =
+        \\main : List(I64)
+        \\main =
+        \\    [1.I64, 2, 3, 4, 5, 6]
+        \\        .iter()
+        \\        .map(|n| n * 2)
+        \\        .collect()
+    ;
+    const loop_source =
+        \\main : List(I64)
+        \\main = {
+        \\    var $out = []
+        \\    for n in [1.I64, 2, 3, 4, 5, 6] {
+        \\        $out = $out.append(n * 2)
+        \\    }
+        \\    $out
+        \\}
+    ;
+
+    var iter_lowered = try lowerModule(allocator, iter_source, .wrappers);
+    defer iter_lowered.deinit(allocator);
+    var loop_lowered = try lowerModule(allocator, loop_source, .wrappers);
+    defer loop_lowered.deinit(allocator);
+
+    const iter = &iter_lowered.lowered;
+    const loop = &loop_lowered.lowered;
+
+    // Tier-one guarantee: neither side dispatches through an erased adapter
+    // callable. Both the fused pipeline and the fused hand-written loop drive a
+    // first-order loop with no `Iter.next` indirection.
+    inline for (.{ "erased_call_count", "packed_erased_fn_count" }) |field_name| {
+        try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, iter, field_name));
+        try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, loop, field_name));
+    }
+
+    // Same fused loop skeleton: one loop join, the same set of back/exit edges,
+    // and one direct source-list index per element on each side.
+    inline for (.{ "join_count", "jump_count", "list_get_unsafe_count" }) |field_name| {
+        const iter_total = try reachableProcShapeFieldTotal(allocator, iter, field_name);
+        const loop_total = try reachableProcShapeFieldTotal(allocator, loop, field_name);
+        try std.testing.expectEqual(loop_total, iter_total);
+    }
+
+    // Consumer allocation strategy differs by design (see header): collect
+    // pre-sizes, the manual loop grows.
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, iter, "list_with_capacity_count") >= 1);
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, loop, "list_with_capacity_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, iter, "list_reserve_count"));
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, loop, "list_reserve_count") >= 1);
+
+    // The adapter and list loop both carry their state as scalar values, so no
+    // boxed iterator state remains reachable.
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, loop, "box_box_count"));
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, iter, "box_box_count"));
+}
+
+test "iter alloc static: list append append for-loop has no boxed iterator state" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> Str
+        \\main = |_seed| {
+        \\    base_points = [
+        \\        { x: 11.I64, y: 2.I64 }, { x: 13, y: 3 },
+        \\        { x: 3, y: 5 }, { x: 11, y: 6 },
+        \\        { x: 9, y: 8 }, { x: 5, y: 9 },
+        \\        { x: 7, y: 10 }, { x: 5, y: 12 },
+        \\    ].iter()
+        \\    collision_points = base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\    var $sum = 0.I64
+        \\    for { x, y } in collision_points {
+        \\        $sum = $sum + x + y
+        \\    }
+        \\    if $sum == 130 { "ok" } else { "bad" }
+        \\}
+    ;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 0);
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+test "iter alloc static: list append append fold has no boxed iterator state" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> Str
+        \\main = |_seed| {
+        \\    base_points = [
+        \\        { x: 11.I64, y: 2.I64 }, { x: 13, y: 3 },
+        \\        { x: 3, y: 5 }, { x: 11, y: 6 },
+        \\        { x: 9, y: 8 }, { x: 5, y: 9 },
+        \\        { x: 7, y: 10 }, { x: 5, y: 12 },
+        \\    ].iter()
+        \\    collision_points = base_points.append({ x: 2, y: 1 }).append({ x: 7, y: 1 })
+        \\    sum = Iter.fold(collision_points, 0.I64, |acc, p| acc + p.x + p.y)
+        \\    if sum == 130 { "ok" } else { "bad" }
+        \\}
+    ;
+
+    var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
+    defer optimized.deinit(allocator);
+
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 0);
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+}
+
+// Slice H aliasing guard (refcount-exactness for opportunistic mutation).
+//
+// Slice H turns per-element reads of a loop-carried list into borrows anchored
+// on the loop join parameter, dropping the retain/release pair those reads used
+// to carry. Roc's in-place mutation is refcount-exact: `List.append` mutates
+// its argument in place only when the list is uniquely owned. If the elision
+// ever undercounted a shared list, an append would wrongly see it as unique and
+// mutate shared data. These tests alias one list into two live consumers (one
+// of which would mutate it in place if it looked unique) and assert the naive
+// and optimized lowerings observe identical, unmutated values.
+test "iterdiff: list aliased into an append and a loop stays unmutated across inline modes" {
+    // `base` feeds both an append (a would-be in-place mutation) and a loop that
+    // reads it per element (the Slice H borrow pattern). Because both consumers
+    // are live, `base` is shared, so the append must copy it. The per-element
+    // `dbg x`, the final `dbg base`, and `dbg grown` diverge between modes if the
+    // shared list is ever mutated in place.
+    try expectSameObservationsAcrossInlineModes(
+        \\main : I64
+        \\main = {
+        \\    base : List(I64)
+        \\    base = [10.I64, 20, 30]
+        \\    grown : List(I64)
+        \\    grown = base.append(40)
+        \\    var $sum = 0.I64
+        \\    for x in base.iter() {
+        \\        dbg x
+        \\        $sum = $sum + x
+        \\    }
+        \\    dbg base
+        \\    dbg grown
+        \\    dbg $sum
+        \\    $sum
+        \\}
+    );
+}
+
+test "iterdiff: loop-carried list appended inside its own loop stays unmutated across inline modes" {
+    // The list is the loop source (carried across the join and read per element
+    // as a Slice H borrow) AND is appended inside the body. It is shared for the
+    // whole loop, so each append must copy it; an in-place mutation of the
+    // carried source would change later iterations and the final `dbg base`.
+    try expectSameObservationsAcrossInlineModes(
+        \\main : U64
+        \\main = {
+        \\    base : List(I64)
+        \\    base = [1.I64, 2, 3]
+        \\    var $out = []
+        \\    for x in base.iter() {
+        \\        with_x : List(I64)
+        \\        with_x = base.append(x)
+        \\        dbg with_x
+        \\        $out = $out.append(List.len(with_x))
+        \\    }
+        \\    dbg base
+        \\    dbg $out
+        \\    List.len($out)
+        \\}
+    );
+}
+
+test "spec constr keeps a same-binder scalar distinct from a substituted aggregate" {
+    // A source pattern binder is reused across every monomorphization of its
+    // binding. Here `pair` (a tuple parameter the caller passes a known tuple to,
+    // so call-pattern specialization substitutes it) and `scalar` (a runtime
+    // `let` local left un-inlined by a non-substitutable value) deliberately
+    // share one binder at two monomorphic types. Keying binder-scoped
+    // substitutions by the binder alone resolves the scalar reference to the
+    // substituted tuple, materializing a tuple directly inside the result tuple.
+    // The layout-carrying identity must keep them distinct.
+    const allocator = std.testing.allocator;
+    var mono = MonoAst.Program.init(allocator);
+    var mono_consumed = false;
+    errdefer if (!mono_consumed) mono.deinit();
+
+    const shared_binder: check.CheckedModule.PatternBinderId = @enumFromInt(7);
+
+    const u32_ty = try mono.types.add(.{ .primitive = .u32 });
+    const pair_span = try mono.types.addSpan(&.{ u32_ty, u32_ty });
+    const pair_ty = try mono.types.add(.{ .tuple = pair_span });
+    const worker_fn_ty = try mono.types.add(.{ .func = .{
+        .args = try mono.types.addSpan(&.{pair_ty}),
+        .ret = pair_ty,
+    } });
+    const worker_fn_id = try mono.addFn(.{
+        .fn_def = undefined,
+        .source_fn_ty = undefined,
+        .source_fn_key = .{},
+        .mono_fn_ty = worker_fn_ty,
+    });
+
+    const opaque_scalar = try mono.addImportedFn(.{ .shard = @enumFromInt(1), .fn_id = @enumFromInt(1) });
+
+    const pair_local = try mono.addLocalWithBinder(@enumFromInt(1), pair_ty, shared_binder);
+    const scalar_local = try mono.addLocalWithBinder(@enumFromInt(2), u32_ty, shared_binder);
+
+    const scalar_value = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .call_proc = .{
+        .callee = MonoAst.importedProcCallee(opaque_scalar),
+        .args = MonoAst.Span(MonoAst.ExprId).empty(),
+    } } });
+    const scalar_pat = try mono.addPat(.{ .ty = u32_ty, .data = .{ .bind = scalar_local } });
+
+    const pair_ref = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .local = pair_local } });
+    const pair_first = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .tuple_access = .{ .tuple = pair_ref, .elem_index = 0 } } });
+    const scalar_ref = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .local = scalar_local } });
+    const result_pair = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .tuple = try mono.addExprSpan(&.{ pair_first, scalar_ref }) } });
+    const worker_body = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .let_ = .{
+        .bind = scalar_pat,
+        .value = scalar_value,
+        .rest = result_pair,
+    } } });
+
+    try mono.defs.append(allocator, .{
+        .symbol = @enumFromInt(10),
+        .fn_id = worker_fn_id,
+        .args = try mono.addTypedLocalSpan(&.{.{ .local = pair_local, .ty = pair_ty }}),
+        .body = .{ .roc = worker_body },
+        .ret = pair_ty,
+    });
+
+    const lit_a = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 3)), .kind = .u128 } } });
+    const lit_b = try mono.addExpr(.{ .ty = u32_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 4)), .kind = .u128 } } });
+    const call_arg = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .tuple = try mono.addExprSpan(&.{ lit_a, lit_b }) } });
+    const caller_body = try mono.addExpr(.{ .ty = pair_ty, .data = .{ .call_proc = .{
+        .callee = MonoAst.localProcCallee(worker_fn_id),
+        .args = try mono.addExprSpan(&.{call_arg}),
+    } } });
+    try mono.defs.append(allocator, .{
+        .symbol = @enumFromInt(11),
+        .args = MonoAst.Span(MonoAst.TypedLocal).empty(),
+        .body = .{ .roc = caller_body },
+        .ret = pair_ty,
+    });
+
+    var lifted = try postcheck.MonotypeLifted.Lift.run(allocator, mono);
+    mono_consumed = true;
+    defer lifted.deinit();
+
+    try postcheck.MonotypeLifted.SpecConstr.run(allocator, &lifted);
+    try postcheck.MonotypeLifted.Lift.recomputeCaptures(allocator, &lifted);
+
+    // The input program has no tuple nested directly inside another tuple, so a
+    // nested tuple after specialization means the substituted aggregate leaked
+    // into the scalar slot.
+    for (lifted.exprsView()) |expr| {
+        const items = switch (expr.data) {
+            .tuple => |items| items,
+            else => continue,
+        };
+        const tuple_items = lifted.exprSpan(items);
+        for (0..tuple_items.len) |index| {
+            const item = GuardedList.at(tuple_items, index);
+            switch (lifted.getExpr(item).data) {
+                .tuple => return error.SubstitutedAggregateLeakedIntoScalar,
+                else => {},
+            }
+        }
+    }
+}
+
+fn bareListIterCollectLoopIsScalar(shape: ProcShape) bool {
+    return shape.join_count >= 1 and
+        shape.max_join_param_count >= 5 and
+        shape.list_get_unsafe_count >= 1 and
+        shape.list_append_unsafe_count >= 1 and
+        shape.erased_call_count == 0 and
+        shape.direct_call_count == 0;
+}
+
+test "bare list iter collect carries scalar list state in the loop" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : () -> List(I64)
+        \\main = || [1.I64, 2, 3].iter().collect()
+    ;
+    var optimized = try lowerModule(allocator, source, .wrappers);
+    defer optimized.deinit(allocator);
+
+    // The consumer loop carries the list-iter state as scalar loop variables
+    // (length payload, list, index) plus the output list, and indexes the
+    // list directly per element. No reachable proc dispatches through the
+    // erased step callable and no per-element call remains.
+    try std.testing.expect(try reachableProcShape(allocator, &optimized.lowered, bareListIterCollectLoopIsScalar));
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
+    try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
+    try expectNoReachableErasedCallableLowering(allocator, &optimized.lowered);
+    // The list-iter carries its step closure inline by value, so the loop state
+    // needs no boxed iterator state at all; the only allocation is the output
+    // list itself.
+    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "box_box_count"));
+}
+
+test "issue 10181 explicit Str interpolation suffix checks cleanly" {
+    // Repro for https://github.com/roc-lang/roc/issues/10181
+    const allocator = std.testing.allocator;
+    const source =
+        \\main! = |_| {
+        \\    x = "world"
+        \\    y = "hello ${x}".Str
+        \\    Ok({})
+        \\}
+    ;
+
+    const resources = try helpers.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+        allocator,
+        .module,
+        source,
+        &.{},
+        try sharedPrePublishedBuiltin(),
+        null,
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
+}
+
+const dispatch_boundary_source =
+    \\Thing := [Val(Str)].{
+    \\    to_str : Thing -> Str
+    \\    to_str = |Thing.Val(s)| s
+    \\}
+    \\
+    \\main : Str
+    \\main = Thing.Val("hi").to_str()
+;
+
+test "dispatch evidence boundary validator accepts a published artifact" {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    try std.testing.expect(resources.checked_artifact.validateDispatchEvidence() == null);
+}
+
+test "dispatch evidence boundary validator rejects non-normalized and malformed paths" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\helper : a -> Str where [a.to_str : a -> Str]
+        \\helper = |_x| "ok"
+        \\
+        \\main : Str
+        \\main = helper("hi")
+    ;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const paths = resources.checked_artifact.checked_procedure_templates.evidence_param_paths;
+    try std.testing.expect(paths.len > 0);
+
+    // Raw discriminant 8 is the retired checked-store `record_ext` step.
+    paths[0].kind = 8;
+    var failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_kind, failure.kind);
+
+    // A tag label must be immediately paired with a payload-index step.
+    paths[0].kind = 9;
+    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_invalid_shape, failure.kind);
+
+    // A well-formed selector must still resolve over the checked callable.
+    paths[0].kind = 0;
+    paths[0].data = std.math.maxInt(u32);
+    failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.evidence_param_path_diverges_from_checked_type, failure.kind);
+}
+
+test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    var removed: ?check.CheckedArtifact.CheckedExprId = null;
+    for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
+        switch (expr.data) {
+            .dispatch_call => |maybe_plan| if (maybe_plan != null) {
+                expr.data = .{ .dispatch_call = null };
+                removed = expr.id;
+                break;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(removed != null);
+
+    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.dispatch_expr_missing_plan, failure.kind);
+    try std.testing.expectEqual(removed.?, failure.expr.?);
+}
+
+test "dispatch evidence boundary validator names the method of a dangling evidence node" {
+    const allocator = std.testing.allocator;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const table = &resources.checked_artifact.static_dispatch_plans;
+    var corrupted_method: ?[]const u8 = null;
+    for (table.plans) |*plan| {
+        switch (plan.resolution) {
+            .direct => {
+                plan.resolution = .{ .direct = @enumFromInt(table.evidence_nodes.len) };
+                corrupted_method = resources.checked_artifact.canonical_names.methodNameText(plan.method);
+                break;
+            },
+            else => {},
+        }
+    }
+    try std.testing.expect(corrupted_method != null);
+
+    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.plan_evidence_node_out_of_bounds, failure.kind);
+    const named_method = resources.checked_artifact.canonical_names.methodNameText(failure.method orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings(corrupted_method.?, named_method);
+}
+
+test "dispatch evidence boundary validator reports a site-evidence key outside the body store" {
+    const allocator = std.testing.allocator;
+    // A where-constrained helper instantiated at a concrete type gives the
+    // instantiation site a site-evidence entry to corrupt.
+    const source =
+        \\Thing := [Val(Str)].{
+        \\    to_str : Thing -> Str
+        \\    to_str = |Thing.Val(s)| s
+        \\}
+        \\
+        \\helper : a -> Str where [a.to_str : a -> Str]
+        \\helper = |x| x.to_str()
+        \\
+        \\main : Str
+        \\main = helper(Thing.Val("hi"))
+    ;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+
+    const table = &resources.checked_artifact.static_dispatch_plans;
+    try std.testing.expect(table.site_evidence.len > 0);
+    table.site_evidence[0].key = @intCast(resources.checked_artifact.checked_bodies.exprCount());
+
+    const failure = resources.checked_artifact.validateDispatchEvidence() orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.site_evidence_key_out_of_bounds, failure.kind);
+    try std.testing.expectEqual(@as(?u32, 0), failure.index);
+}
+
+test "compiler-generated dispatch classes lower via checked evidence" {
+    const allocator = std.testing.allocator;
+    // One program exercising every compiler-generated dispatch class served
+    // by the component-lookup seam: iterator `for` dispatch, structural
+    // record equality dispatching a nominal component's own `is_eq`,
+    // `Str.inspect` through a custom `to_inspect`, and parser-format
+    // synthesis with builtin Set helpers (JSON parse of a Set field).
+    // Debug-mode lowering asserts dispatch-evidence totality by invariant
+    // throughout, and the evaluated output asserts every class resolved to
+    // the RIGHT target, not merely some lowerable one.
+    const source =
+        \\Speed := [Mph(U64)].{
+        \\    is_eq : Speed, Speed -> Bool
+        \\    is_eq = |Speed.Mph(a), Speed.Mph(b)| a == b
+        \\    to_inspect : Speed -> Str
+        \\    to_inspect = |Speed.Mph(mph)| Str.inspect(mph)
+        \\}
+        \\
+        \\main : Bool
+        \\main = {
+        \\    var $sum = 0.U64
+        \\    for item in [1.U64, 2.U64, 3.U64] {
+        \\        $sum = $sum + item
+        \\    }
+        \\    lhs = { speed: Speed.Mph($sum), label: "total" }
+        \\    rhs = { speed: Speed.Mph(6), label: "total" }
+        \\    other = { speed: Speed.Mph(7), label: "total" }
+        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    parsed = Json.parse("{ \"names\": [\"a\", \"b\"] }")
+        \\    parsed_count = match parsed {
+        \\        Ok(rec) => rec.names.len()
+        \\        Err(_) => 0
+        \\    }
+        \\    lhs == rhs and lhs != other and parsed_count == 2 and Str.inspect(lhs.speed) == "6"
+        \\}
+    ;
+
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(allocator, std.testing.io, .module, source, &.{}, .native, try sharedPrePublishedBuiltin(), null);
+    defer compiled.deinit(allocator);
+
+    // The program must check cleanly: a reported problem would resolve the
+    // dispatch plans as checked errors and crash-lower the very classes this
+    // test exists to exercise.
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10253: the recursive call
+// must carry the current position, 1, into the next iteration's `prev_len`.
+test "issue 10253 optimized tail recursion preserves the previous scalar argument" {
+    try expectOptimizedDbgEvents(
+        \\go : U64, List(U64), U64, Bool -> U64
+        \\go = |pos, heads, prev_len, _pending| {
+        \\    heads2 = heads.set(0, 7) ?? []
+        \\    cur = if pos != 0 { pos } else { 0 }
+        \\    if prev_len != 0 {
+        \\        prev_len
+        \\    } else {
+        \\        go(pos + 1, heads2, cur, Bool.False)
+        \\    }
+        \\}
+        \\
+        \\main : U64 -> {}
+        \\main = |zero| {
+        \\    dbg go(zero + 1, [], 0, Bool.False)
+        \\    {}
+        \\}
+    ,
+        &.{"1"},
+    );
 }

@@ -34,9 +34,9 @@ y = point.1  # 20
 This works with any expression that evaluates to a tuple:
 
 ```roc
-getPoint = || (100, 200)
+get_point = || (100, 200)
 
-x = getPoint().0  # 100
+x = get_point().0  # 100
 ```
 
 Chained access works for nested tuples:
@@ -75,10 +75,15 @@ point = (10, 20)
 In `match` expressions:
 
 ```roc
-describePoint = |point|
-    match point
-        (0, 0) -> "origin"
-        (0, _) -> "on y-axis"
-        (_, 0) -> "on x-axis"
-        (x, y) -> "at (${x.toStr()}, ${y.toStr()})"
+describe_point = |point|
+    match point {
+        (0, 0) => "origin"
+        (0, _) => "on y-axis"
+        (_, 0) => "on x-axis"
+        (x, y) => "at (${x.to_str()}, ${y.to_str()})"
+    }
 ```
+
+## [Tuples vs Records](#tuples-vs-records) {#tuples-vs-records}
+
+TODO

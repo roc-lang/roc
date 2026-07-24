@@ -70,7 +70,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json")
 			(exposing
@@ -142,7 +142,7 @@ main = {
 						(p-assign (ident "encoded")))))
 			(e-lookup-local
 				(p-assign (ident "decoded")))))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "decode") (wildcard false))
 			(exposed (name "to_str") (wildcard false)))))

@@ -7,6 +7,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const builtins = @import("builtins");
 
 const CIR = @import("CIR.zig");
 const DependencyGraph = @import("DependencyGraph.zig");
@@ -17,29 +18,15 @@ pub fn isBuiltinModule(env: *const ModuleEnv) bool {
     return env.module_role == .builtin;
 }
 
-/// Returns whether an annotation-only Builtin declaration is handled as an intrinsic wrapper.
+/// Returns whether an annotation-only Builtin declaration is handled as an
+/// intrinsic wrapper. The set of intrinsic names is declared in the builtin
+/// registry alongside the rest of the builtin membership data.
 pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool {
-    if (ident.eql(env.idents.builtin_str_inspect)) return true;
-
-    if (env.common.findIdent("Builtin.Str.Utf8Problem.is_eq")) |utf8_problem_eq| {
-        if (ident.eql(utf8_problem_eq)) return true;
-    }
-
-    const parse_intrinsics = [_][]const u8{
-        "Builtin.Encoding.ParseTagUnionSpec.parse",
-        "Builtin.Encoding.FieldName.FieldNames.rename_fields",
-        "Builtin.Encoding.FieldName.FieldNames.shortest_name",
-        "Builtin.Encoding.FieldName.FieldNames.longest_name",
-        "Builtin.Encoding.FieldName.FieldNames.iter",
-        "Builtin.Encoding.FieldName.FieldNames.for_size",
-        "Builtin.Encoding.FieldName.name",
-    };
-    for (parse_intrinsics) |name| {
+    for (builtins.builtin_registry.intrinsic_annotation_names) |name| {
         if (env.common.findIdent(name)) |intrinsic| {
             if (ident.eql(intrinsic)) return true;
         }
     }
-
     return false;
 }
 
@@ -191,11 +178,17 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
         try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
     }
-    if (env.common.findIdent("str_find_first_raw")) |str_find_first_ident| {
-        try low_level_map.put(str_find_first_ident, .str_find_first);
+    if (env.common.findIdent("str_split_first_raw")) |str_split_first_ident| {
+        try low_level_map.put(str_split_first_ident, .str_split_first);
     }
     if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
         try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
+    }
+    if (env.common.findIdent("str_get_utf8_byte_unsafe")) |ident| {
+        try low_level_map.put(ident, .str_get_utf8_byte_unsafe);
+    }
+    if (env.common.findIdent("str_substring_unsafe")) |ident| {
+        try low_level_map.put(ident, .str_substring_unsafe);
     }
     if (env.common.findIdent("Builtin.Str.with_capacity")) |str_with_capacity_ident| {
         try low_level_map.put(str_with_capacity_ident, .str_with_capacity);
@@ -470,9 +463,18 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
     // Bitwise shift operations (integer types only);
     for (integer_types) |num_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_left_by", .{num_type}, .num_shift_left_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_by", .{num_type}, .num_shift_right_by);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shift_right_zf_by", .{num_type}, .num_shift_right_zf_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shl_wrap", .{num_type}, .num_shift_left_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shr_wrap", .{num_type}, .num_shift_right_by);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.shr_zf_wrap", .{num_type}, .num_shift_right_zf_by);
+    }
+
+    // Bit-counting operations (integer types only). The operand's layout carries
+    // the width, so a single low-level op serves every integer type. Each returns
+    // a U8 regardless of operand width.
+    for (integer_types) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_one_bits", .{num_type}, .num_count_one_bits);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_leading_zero_bits", .{num_type}, .num_count_leading_zero_bits);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.count_trailing_zero_bits", .{num_type}, .num_count_trailing_zero_bits);
     }
 
     // Bitwise logical operations (integer types only)

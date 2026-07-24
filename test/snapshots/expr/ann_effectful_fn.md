@@ -26,7 +26,7 @@ TYPE MISMATCH - ann_effectful_fn.md:2:37:2:50
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────────────────────────────── ann_effectful_fn.md:2:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -118,7 +118,7 @@ EndOfFile,
 				(p-record-destructure
 					(destructs)))
 			(e-not-implemented)))
-	(e-call (constraint-fn-var 72)
+	(e-call (constraint-fn-var 224)
 		(e-lookup-local
 			(p-assign (ident "launchTheNukes")))
 		(e-empty_record)))

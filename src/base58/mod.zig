@@ -12,6 +12,10 @@ pub const base58_hash_bytes = base58.base58_hash_bytes;
 pub const encode = base58.encode;
 pub const decode = base58.decode;
 
+/// The 58-character base58 alphabet. Exposed so cross-module tests can assert
+/// that `base.url.isBase58Char` accepts exactly these characters.
+pub const base58_alphabet = base58.base58_alphabet;
+
 test {
     @import("std").testing.refAllDecls(@This());
 }

@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "describe")
 			(ty-fn
@@ -117,12 +117,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_0"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 247)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 277)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "first"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 317)
+									(e-interpolation (constraint-fn-var 301) (dispatcher-var 26)
 										(first
 											(e-literal (string "long list starting with ")))
 										(parts
@@ -130,9 +130,9 @@ describe = |value| match value {
 												(p-assign (ident "#interp_0")))
 											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 158)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 254)
 									(receiver
-										(e-call (constraint-fn-var 121)
+										(e-call (constraint-fn-var 245)
 											(e-lookup-external
 												(builtin))
 											(e-lookup-local
@@ -150,12 +150,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 343)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 313)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 413)
+									(e-interpolation (constraint-fn-var 337) (dispatcher-var 43)
 										(first
 											(e-literal (string "pair of equal values: ")))
 										(parts

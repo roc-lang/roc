@@ -1,0 +1,13 @@
+diff --git a/src/postcheck/solved_lir_lower.zig b/src/postcheck/solved_lir_lower.zig
+index 269f5e573e..365fd6d63f 100644
+--- a/src/postcheck/solved_lir_lower.zig
++++ b/src/postcheck/solved_lir_lower.zig
+@@ -4720,7 +4720,7 @@ const Lowerer = struct {
+             const front_dropped = try self.l.addLocalForLayout(self.l.result.store.getLocal(source).layout_idx);
+             const keep_len = try self.l.addLocalForLayout(.u64);
+             var current = try self.l.assignBinaryLowLevel(dest, .list_take_first, front_dropped, keep_len, next);
+-            current = try self.l.lenMinusConst(keep_len, len_local, @intCast(front + back), current);
++            current = try self.l.lenMinusConst(keep_len, len_local, @intCast(front + back + 1), current);
+             const keep_after_front = try self.l.addLocalForLayout(.u64);
+             current = try self.l.assignBinaryLowLevel(front_dropped, .list_take_last, source, keep_after_front, current);
+             return try self.l.lenMinusConst(keep_after_front, len_local, @intCast(front), current);

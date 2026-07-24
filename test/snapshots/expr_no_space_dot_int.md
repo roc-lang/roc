@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=dot-int tuple index access on a plain identifier
 type=snippet
 ~~~
 # SOURCE
@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))

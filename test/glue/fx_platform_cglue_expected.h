@@ -48,6 +48,9 @@ typedef struct {
 
 ROC_STATIC_ASSERT(sizeof(RocStr) == 3 * sizeof(size_t), "RocStr must be three pointer-sized words");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(RocStr) == ROC_ALIGNOF(size_t), "RocStr must be pointer-word aligned");
+ROC_STATIC_ASSERT(offsetof(RocStr, bytes) == 0, "RocStr.bytes offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocStr, capacity_or_alloc_ptr) == sizeof(size_t), "RocStr.capacity_or_alloc_ptr offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocStr, length) == 2 * sizeof(size_t), "RocStr.length offset mismatch");
 
 typedef struct {
     void* elements;
@@ -57,6 +60,9 @@ typedef struct {
 
 ROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), "RocList must be three pointer-sized words");
 ROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), "RocList must be pointer-word aligned");
+ROC_STATIC_ASSERT(offsetof(RocList, elements) == 0, "RocList.elements offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocList, length) == sizeof(size_t), "RocList.length offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocList, capacity_or_alloc_ptr) == 2 * sizeof(size_t), "RocList.capacity_or_alloc_ptr offset mismatch");
 
 typedef void* RocBox;
 
@@ -68,6 +74,8 @@ typedef struct {
     RocErasedCallableFn callable_fn_ptr;
     RocErasedCallableOnDrop on_drop;
 } RocErasedCallablePayload;
+ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, callable_fn_ptr) == 0, "RocErasedCallablePayload.callable_fn_ptr offset mismatch");
+ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, on_drop) == sizeof(RocErasedCallableFn), "RocErasedCallablePayload.on_drop offset mismatch");
 typedef uint8_t* RocErasedCallable;
 #define ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT 16u
 #define ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT 16u

@@ -275,6 +275,17 @@ pub const BoxyTables = struct {
             self.erased_arg_desc_params.len != 0;
     }
 
+    /// Whether code for `store` can call the shared Boxy runtime. An erased
+    /// callable with no arguments has no descriptor side-table entries, but
+    /// its explicit erased-call ABI still requires the runtime wrappers.
+    pub fn needsRuntimeForStore(self: BoxyTables, store: *const LirStore) bool {
+        if (self.needsRuntime()) return true;
+        for (store.getProcSpecs()) |proc| {
+            if (proc.abi == .erased_callable) return true;
+        }
+        return false;
+    }
+
     pub fn fromResult(result: *const LirProgram.Result) BoxyTables {
         return .{
             .type_descs = result.boxy_type_descs.items,
@@ -319,6 +330,18 @@ pub const BoxyTables = struct {
         };
     }
 };
+
+/// Whether a live lowered program requires the shared Boxy runtime.
+pub fn resultNeedsRuntime(result: *const LirProgram.Result) bool {
+    const tables = BoxyTables.fromResult(result);
+    return tables.needsRuntimeForStore(&result.store);
+}
+
+/// Whether a mapped LIR image requires the shared Boxy runtime.
+pub fn imageNeedsRuntime(view: *const lir.LirImage.ProgramView) bool {
+    const tables = BoxyTables.fromImageView(view);
+    return tables.needsRuntimeForStore(&view.store);
+}
 
 /// Descriptor-guided boxy value operations bound to their table and store
 /// dependencies. The runtime never resolves frame-local descriptor handles

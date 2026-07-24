@@ -1,16 +1,24 @@
 //! Shared runtime harness for parallel test runners.
 //!
-//! Provides a comptime-generic fork-based process pool, timing statistics,
-//! pipe I/O helpers, and standardized CLI argument parsing. Used by:
+//! Provides a comptime-generic process pool, timing statistics, pipe I/O
+//! helpers, and standardized CLI argument parsing. Used by:
 //! - src/eval/test/parallel_runner.zig (eval expression tests)
+//! - src/eval/test/lambda_mono_differential_runner.zig (body-lowering differential)
+//! - src/eval/test/host_effects_runner.zig (runtime host-effects tests)
 //! - src/cli/test/parallel_cli_runner.zig (platform integration tests)
+//! - src/lsp/test/parallel_integration_runner.zig (LSP integration tests)
 //!
-//! The pool forks child processes, each running one test. Results are
-//! serialized over a pipe and collected by the single-threaded parent.
+//! On POSIX the pool forks child processes, each running one test; results
+//! are serialized over a pipe and collected by the single-threaded parent.
+//! On Windows the pool spawns worker copies of the runner binary instead
+//! (`ProcessPool.runChildPool`), driven through `--worker <idx>` /
+//! `--worker-stream`; the worker side of that protocol lives in
+//! `ProcessPool.runWorkerMode` so every runner shares one implementation.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const collections = @import("collections");
 const posix = std.posix;
 const Allocator = std.mem.Allocator;
 
@@ -252,8 +260,12 @@ pub fn milliTimestamp() i64 {
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-/// pipe: returns [2]fd_t or error.
-pub fn pipe() error{PipeFailed}![2]posix.fd_t {
+/// pipe: returns [2]fd_t or error. Only defined where fork-based pools
+/// exist: mingw declares but does not implement pipe, so it must never be
+/// referenced on Windows (refAllDecls included).
+pub const pipe = if (has_fork) pipePosix else {};
+
+fn pipePosix() error{PipeFailed}![2]posix.fd_t {
     var fds: [2]posix.fd_t = undefined;
     const rc = std.c.pipe(&fds);
     if (rc != 0) return error.PipeFailed;
@@ -266,14 +278,21 @@ pub fn closeFd(fd: posix.fd_t) void {
 }
 
 /// Mark a file descriptor as close-on-exec so subprocesses do not inherit it.
-pub fn setCloseOnExec(fd: posix.fd_t) void {
+/// Only defined where fork-based pools exist: fcntl's F constants are absent
+/// on Windows, so the body must never be analyzed there (refAllDecls included).
+pub const setCloseOnExec = if (has_fork) setCloseOnExecPosix else {};
+
+fn setCloseOnExecPosix(fd: posix.fd_t) void {
     const flags = std.c.fcntl(fd, std.c.F.GETFD);
     if (flags == -1) return;
     _ = std.c.fcntl(fd, std.c.F.SETFD, flags | std.c.FD_CLOEXEC);
 }
 
-/// fork: wrapper around std.c.fork that returns pid_t or error.
-pub fn fork() error{ForkFailed}!posix.pid_t {
+/// fork: wrapper around std.c.fork that returns pid_t or error. Only defined
+/// where fork exists; see setCloseOnExec.
+pub const fork = if (has_fork) forkPosix else {};
+
+fn forkPosix() error{ForkFailed}!posix.pid_t {
     const pid = std.c.fork();
     if (pid < 0) return error.ForkFailed;
     return pid;
@@ -281,8 +300,12 @@ pub fn fork() error{ForkFailed}!posix.pid_t {
 
 /// Holds the process id and exit status from waitpid.
 pub const WaitResult = struct { pid: posix.pid_t, status: u32 };
-/// Waits for a child process and returns its pid and raw status.
-pub fn waitpid(pid: posix.pid_t, flags: c_int) WaitResult {
+
+/// Waits for a child process and returns its pid and raw status. Only defined
+/// where fork-based pools exist; see pipe.
+pub const waitpid = if (has_fork) waitpidPosix else {};
+
+fn waitpidPosix(pid: posix.pid_t, flags: c_int) WaitResult {
     var status: c_int = 0;
     const result = std.c.waitpid(pid, &status, flags);
     return .{ .pid = result, .status = @bitCast(status) };
@@ -363,6 +386,15 @@ pub fn writeAll(fd: posix.fd_t, data: []const u8) void {
         if (rc < 0) return;
         written += @intCast(rc);
     }
+}
+
+/// Write the u32 length prefix that frames one persistent-worker-mode result.
+/// The runner's raw serializer must write exactly `payload_len` bytes next;
+/// the parent (`ProcessPool.workerThread`) reads the prefix, then that many
+/// payload bytes, to frame results sharing the worker's stdout pipe.
+pub fn writeFrameHeader(fd: posix.fd_t, payload_len: usize) void {
+    const length: u32 = @intCast(payload_len);
+    writeAll(fd, std.mem.asBytes(&length));
 }
 
 /// Read a string of given length from buffer, advancing offset. Dupe into gpa.
@@ -595,6 +627,42 @@ pub fn workerTemplateArgConsumesValue(arg: []const u8) bool {
 /// Returns true when a worker argv flag should be removed by itself.
 pub fn workerTemplateDropsFlag(arg: []const u8) bool {
     return std.mem.eql(u8, arg, "--worker-stream");
+}
+
+/// Errors from `buildWorkerArgvTemplate`.
+pub const WorkerArgvError = Allocator.Error || std.process.ExecutablePathError || std.process.Args.ToSliceError;
+
+/// Build the argv template the Windows Child-based executor uses to re-invoke
+/// the current binary as a worker: the executable path followed by every
+/// original argument except per-worker flags (`--worker N`,
+/// `--worker-backend NAME`, `--stats-json PATH`) and the `--worker-stream`
+/// mode flag, which the pool appends itself. Selection flags (filters,
+/// suites, positionals) survive so parent and worker derive identical spec
+/// lists and protocol indices stay aligned. On POSIX the template is unused
+/// (children fork in place); build it unconditionally for a uniform call site.
+pub fn buildWorkerArgvTemplate(io: std.Io, arena: Allocator, process_args: std.process.Args) WorkerArgvError![]const []const u8 {
+    var self_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const self_path_len = try std.process.executablePath(io, &self_path_buf);
+    const self_path = try arena.dupe(u8, self_path_buf[0..self_path_len]);
+
+    const raw = try process_args.toSlice(arena);
+    const original_args: []const []const u8 = @ptrCast(raw);
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    try argv.append(arena, self_path);
+
+    var i: usize = 1;
+    while (i < original_args.len) : (i += 1) {
+        const arg = original_args[i];
+        if (workerTemplateArgConsumesValue(arg)) {
+            i += 1;
+            continue;
+        }
+        if (workerTemplateDropsFlag(arg)) continue;
+        try argv.append(arena, arg);
+    }
+
+    return try argv.toOwnedSlice(arena);
 }
 
 /// Writes a self-contained runner stats JSON file.
@@ -891,7 +959,24 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// and the same timeout budget enforced by the parent watchdog.
         runTest: *const fn (std.Io, Allocator, Spec, u64) Result,
         /// Serialize a result to the pipe fd.
+        ///
+        /// TODO(follow-up PR): unify `serialize` and `serializeStreamed` into
+        /// one buffer-building serializer
+        /// (`fn (*std.ArrayListUnmanaged(u8), Allocator, Result) void`) and
+        /// have the pool write the buffer raw (fork pipe / one-shot worker)
+        /// or behind a `writeFrameHeader` prefix (persistent worker). Every
+        /// runner currently carries both variants of the same wire format.
+        /// Deliberately NOT unified in this PR: doing so rewrites the POSIX
+        /// fork-path serializers of every Unix runner at the same time as the
+        /// Windows worker-pool change, which would make it hard to attribute
+        /// any performance shift to one change or the other.
         serialize: *const fn (posix.fd_t, Result) void,
+        /// Streamed variant of `serialize` for persistent worker mode: writes
+        /// the same wire bytes behind a u32 length prefix (`writeFrameHeader`)
+        /// so many results can share a worker's stdout pipe. Called by
+        /// `runWorkerMode` under `--worker-stream`. See the unification TODO
+        /// on `serialize`.
+        serializeStreamed: *const fn (posix.fd_t, Result) void,
         /// Deserialize a result from the accumulated pipe buffer.
         deserialize: *const fn ([]const u8, Allocator) ?Result,
         /// Default result for crash/timeout (before deserialization).
@@ -918,6 +1003,10 @@ pub fn PoolConfig(comptime Spec: type, comptime Result: type) type {
         /// Called from the parent thread right before launching each test.
         /// Use for "RUN <name>" logging — keeps it coherent across N workers.
         onTestStarted: ?*const fn (Spec) void = null,
+        /// Restrict a spec to one named backend when the parent passes
+        /// `--worker-backend <name>` alongside `--worker <idx>` (Phase-2
+        /// crash attribution). The runner interprets the name.
+        applyWorkerBackend: ?*const fn (*Spec, []const u8) void = null,
     };
 }
 
@@ -1230,6 +1319,57 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
             if (is_tty) {
                 std.debug.print("\r{s}\r", .{" " ** 72});
+            }
+        }
+
+        /// Run this process as one pool worker when the parent spawned it
+        /// with `--worker <idx>` (single-shot: run that spec, serialize the
+        /// result to stdout, exit) or `--worker-stream` (persistent: read
+        /// decimal spec indices from stdin one per line, write a
+        /// u32-length-prefixed result frame per index, loop until stdin
+        /// EOFs). Returns true when the process served as a worker and the
+        /// caller must return without starting its own pool — a worker that
+        /// fell through would recursively spawn workers. The caller must pass
+        /// the same specs, in the same order, that the parent pool sees:
+        /// `buildWorkerArgvTemplate` preserves every selection flag so both
+        /// sides derive identical spec lists, keeping protocol indices
+        /// aligned.
+        pub fn runWorkerMode(io: std.Io, cli: StandardArgs, specs: []const Spec, timeout_ms: u64) bool {
+            if (cli.worker_index) |idx| {
+                if (idx >= specs.len) std.process.exit(2);
+                var spec = specs[idx];
+                if (cli.worker_backend) |backend| {
+                    if (cfg.applyWorkerBackend) |apply| apply(&spec, backend);
+                }
+                var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
+                defer arena.deinit();
+                const result = cfg.runTest(io, arena.allocator(), spec, timeoutForSpec(spec, timeout_ms));
+                cfg.serialize(stdoutFd(), result);
+                return true;
+            }
+            if (!cli.worker_stream) return false;
+
+            var arena = collections.SingleThreadArena.init(std.heap.smp_allocator);
+            defer arena.deinit();
+            const stdout_handle = stdoutFd();
+            const stdin_handle = stdinFd();
+
+            var line_buf: [32]u8 = undefined;
+            while (true) {
+                var line_len: usize = 0;
+                const line = while (true) {
+                    if (line_len >= line_buf.len) return true; // malformed index line
+                    const n = posixRead(stdin_handle, line_buf[line_len .. line_len + 1]) catch return true;
+                    if (n == 0) return true; // EOF — parent is done
+                    if (line_buf[line_len] == '\n') break line_buf[0..line_len];
+                    line_len += 1;
+                };
+                const idx = std.fmt.parseInt(usize, line, 10) catch continue;
+                if (idx >= specs.len) continue;
+
+                _ = arena.reset(.retain_capacity);
+                const result = cfg.runTest(io, arena.allocator(), specs[idx], timeoutForSpec(specs[idx], timeout_ms));
+                cfg.serializeStreamed(stdout_handle, result);
             }
         }
 

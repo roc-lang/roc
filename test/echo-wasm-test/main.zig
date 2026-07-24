@@ -4,9 +4,10 @@
 //! functions that capture output into in-process buffers, and drives the
 //! exported API (init / allocateBuffer / addFile / compileAndRun) the same
 //! way `www/app.js` does. Validates that the tutorial example produces
-//! "Hello from the Greeting module!" as its single echo line.
+//! "Hello from the Greeting module!" as raw echo output.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const bytebox = @import("bytebox");
 
@@ -26,7 +27,6 @@ fn hostJsEcho(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const byteb
     const mem = memory_instance.buffer();
     if (@as(usize, ptr) + @as(usize, len) > mem.len) return;
     capture_ctx.echoed.appendSlice(capture_ctx.gpa, mem[ptr .. ptr + len]) catch return;
-    capture_ctx.echoed.append(capture_ctx.gpa, '\n') catch return;
 }
 
 fn hostJsStderr(_: ?*anyopaque, _: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -96,8 +96,8 @@ fn requireNotContains(haystack: []const u8, needle: []const u8, label: []const u
 pub fn main(init: std.process.Init) anyerror!void {
     const io = init.io;
 
-    var gpa_impl: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_impl.deinit();
+    var gpa_impl: std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }) = .init;
+    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
     const gpa = gpa_impl.allocator();
 
     var arena_impl = std.heap.ArenaAllocator.init(gpa);
@@ -198,7 +198,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     ;
     const exit_code = try compileAndRunSource(module_instance, alloc_handle, run_handle, main_src);
 
-    const expected_output = "Hello from the Greeting module!\n";
+    const expected_output = "Hello from the Greeting module!";
     const got_output = capture_ctx.echoed.items;
     const got_stderr = capture_ctx.stderr.items;
 
@@ -247,6 +247,29 @@ pub fn main(init: std.process.Init) anyerror!void {
     requireNotContains(bad_stderr, "/app/main.roc", "diagnostic stderr");
     requireNotContains(bad_stderr, "<div", "diagnostic stderr");
     requireNotContains(bad_stderr, "<span", "diagnostic stderr");
+    requireNotContains(bad_stderr, "echo: step", "diagnostic stderr");
+
+    resetCapturedOutput();
+    try invokeInit(module_instance, init_handle);
+
+    const malformed_src =
+        \\main! = |_| {
+        \\    todo = { name "Call mom", done: False }
+        \\    Ok({})
+        \\}
+    ;
+    const malformed_exit_code = try compileAndRunSource(module_instance, alloc_handle, run_handle, malformed_src);
+    const malformed_stderr = capture_ctx.stderr.items;
+
+    if (malformed_exit_code != 255) {
+        std.debug.print("FAIL: malformed source returned exit code {d}\n", .{malformed_exit_code});
+        std.debug.print("stderr:\n{s}\n", .{malformed_stderr});
+        std.process.exit(1);
+    }
+
+    requireContains(malformed_stderr, "SYNTAX", "syntax diagnostic stderr");
+    requireContains(malformed_stderr, "main.roc", "syntax diagnostic stderr");
+    requireNotContains(malformed_stderr, "echo: step", "syntax diagnostic stderr");
 
     std.debug.print("PASS: echo.wasm tutorial and diagnostic cases produced expected output.\n", .{});
 }

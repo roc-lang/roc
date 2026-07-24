@@ -47,7 +47,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "conv"))
@@ -99,7 +99,7 @@ ok = conv(5.U8)
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 32)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 193)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -115,7 +115,7 @@ ok = conv(5.U8)
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 81)
+		(e-call (constraint-fn-var 214)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8")))))

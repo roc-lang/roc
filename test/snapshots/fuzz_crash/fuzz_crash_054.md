@@ -9,11 +9,11 @@ app[]{f:platform""}import S exposing[c as
 f]
 ~~~
 # EXPECTED
-MODULE NOT FOUND - fuzz_crash_054.md:1:20:2:3
+MOD NOT FOUND - fuzz_crash_054.md:1:20:2:3
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `S` was not found in this Roc project. ──────┐
+│ MOD NOT FOUND ├─ The mod `S` was not found in this Roc project. ──────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  app[]{f:platform""}import S exposing[c as                                 │
@@ -57,7 +57,7 @@ import S exposing [
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "S")
+	(s-import (mod "S")
 		(exposes
 			(exposed (name "c") (alias "f") (wildcard false)))))
 ~~~

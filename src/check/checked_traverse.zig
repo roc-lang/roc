@@ -87,6 +87,17 @@ pub fn ReserveThenFillTraversal(comptime Key: type, comptime Result: type, compt
             self.active.clearRetainingCapacity();
         }
 
+        /// Return whether `result` is currently the reserved value for some
+        /// in-progress key. Used by pending-tolerant scans that must recognize a
+        /// root they are themselves mid-way through building.
+        pub fn hasReservedResult(self: *const Self, result: Result) bool {
+            var it = self.active.valueIterator();
+            while (it.next()) |value| {
+                if (std.meta.eql(value.*, result)) return true;
+            }
+            return false;
+        }
+
         pub fn visit(self: *Self, key: Key) Allocator.Error!Result {
             if (self.active.get(key)) |reserved| return reserved;
 
@@ -186,6 +197,7 @@ pub fn checkedTypePayloadContainsIdentityVariables(
             .forbid => true,
             .tolerate => context.pendingContainsIdentityVariables(root),
         },
+        .err => false,
         .flex,
         .rigid,
         => true,
@@ -439,4 +451,217 @@ test "DigestTraversal emits active depth for back edge" {
 
     try traversal.visit(1);
     try std.testing.expectEqualSlices(u8, &.{ 1, 2, 0 }, context.bytes.items);
+}
+
+/// Composite merge-input key mirroring the platform-relation resolver's
+/// `PlatformAppRelationMergeInput`: a walk over two roots plus a context tag.
+const TestMergeInput = struct {
+    platform: u8,
+    app: u8,
+    context: u8 = 0,
+};
+
+const CompositeEdge = struct {
+    key: TestMergeInput,
+    result: bool = false,
+    children: []const TestMergeInput = &.{},
+};
+
+const CompositePredicateContext = struct {
+    edges: []const CompositeEdge,
+    visits: *u32,
+
+    fn visit(self: *@This(), traversal: anytype, key: TestMergeInput) Allocator.Error!bool {
+        self.visits.* += 1;
+        const entry = self.findEdge(key);
+        if (entry.result) return true;
+        for (entry.children) |child| {
+            if (try traversal.visit(child)) return true;
+        }
+        return false;
+    }
+
+    fn findEdge(self: *const @This(), key: TestMergeInput) CompositeEdge {
+        for (self.edges) |entry| {
+            if (std.meta.eql(entry.key, key)) return entry;
+        }
+        unreachable;
+    }
+};
+
+test "BoolPredicateTraversal memoizes composite merge-input keys through a cycle" {
+    const a = TestMergeInput{ .platform = 1, .app = 10 };
+    const b = TestMergeInput{ .platform = 2, .app = 20 };
+    const children_a = [_]TestMergeInput{b};
+    const children_b = [_]TestMergeInput{a};
+    const edges = [_]CompositeEdge{
+        .{ .key = a, .children = &children_a },
+        .{ .key = b, .children = &children_b },
+    };
+    var visits: u32 = 0;
+    var context = CompositePredicateContext{ .edges = &edges, .visits = &visits };
+    var traversal = BoolPredicateTraversal(TestMergeInput, CompositePredicateContext).init(std.testing.allocator, &context);
+    defer traversal.deinit();
+
+    try std.testing.expect(!try traversal.visit(a));
+    try std.testing.expectEqual(@as(u32, 2), visits);
+}
+
+test "BoolPredicateTraversal finds a true branch beside a composite-key cycle" {
+    const a = TestMergeInput{ .platform = 1, .app = 10 };
+    const b = TestMergeInput{ .platform = 2, .app = 20 };
+    const c = TestMergeInput{ .platform = 3, .app = 30, .context = 1 };
+    const children_a = [_]TestMergeInput{ b, c };
+    const children_b = [_]TestMergeInput{a};
+    const edges = [_]CompositeEdge{
+        .{ .key = a, .children = &children_a },
+        .{ .key = b, .children = &children_b },
+        .{ .key = c, .result = true },
+    };
+    var visits: u32 = 0;
+    var context = CompositePredicateContext{ .edges = &edges, .visits = &visits };
+    var traversal = BoolPredicateTraversal(TestMergeInput, CompositePredicateContext).init(std.testing.allocator, &context);
+    defer traversal.deinit();
+
+    try std.testing.expect(try traversal.visit(a));
+}
+
+/// Composite finalize-input key mirroring `PlatformAppRelationFinalizeInput`.
+const TestFinalizeInput = struct {
+    root: u8,
+    context: u8 = 0,
+};
+
+const CompositeDigestEdge = struct {
+    key: TestFinalizeInput,
+    children: []const TestFinalizeInput = &.{},
+};
+
+const CompositeDigestContext = struct {
+    edges: []const CompositeDigestEdge,
+    bytes: std.ArrayList(u8),
+    traversal: ?*DigestTraversal(TestFinalizeInput, @This()) = null,
+
+    fn deinit(self: *@This(), allocator: Allocator) void {
+        self.bytes.deinit(allocator);
+    }
+
+    fn activeDepth(self: *@This()) u32 {
+        return self.traversal.?.activeCount();
+    }
+
+    fn visit(self: *@This(), traversal: anytype, key: TestFinalizeInput) Allocator.Error!void {
+        try self.bytes.append(std.testing.allocator, key.root);
+        const entry = self.findEdge(key);
+        for (entry.children) |child| try traversal.visit(child);
+    }
+
+    fn backEdge(self: *@This(), depth: u32) void {
+        self.bytes.append(std.testing.allocator, @as(u8, @intCast(depth)) | 0x80) catch unreachable;
+    }
+
+    fn findEdge(self: *const @This(), key: TestFinalizeInput) CompositeDigestEdge {
+        for (self.edges) |entry| {
+            if (std.meta.eql(entry.key, key)) return entry;
+        }
+        unreachable;
+    }
+};
+
+test "DigestTraversal emits active depth for a composite finalize-input back edge" {
+    const a = TestFinalizeInput{ .root = 1 };
+    const b = TestFinalizeInput{ .root = 2 };
+    const children_a = [_]TestFinalizeInput{b};
+    const children_b = [_]TestFinalizeInput{a};
+    const edges = [_]CompositeDigestEdge{
+        .{ .key = a, .children = &children_a },
+        .{ .key = b, .children = &children_b },
+    };
+    var context = CompositeDigestContext{ .edges = &edges, .bytes = .empty };
+    defer context.deinit(std.testing.allocator);
+    var traversal = DigestTraversal(TestFinalizeInput, CompositeDigestContext).init(std.testing.allocator, &context);
+    defer traversal.deinit();
+    context.traversal = &traversal;
+
+    try traversal.visit(a);
+    // node 1, node 2, then a back edge to the active root at depth 0.
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 0x80 }, context.bytes.items);
+}
+
+const StressNode = struct {
+    children: []const u32,
+    is_identity: bool = false,
+};
+
+const StressContext = struct {
+    nodes: []const StressNode,
+    steps: *u32,
+    budget: u32,
+    exceeded: *bool,
+
+    fn visit(self: *@This(), traversal: anytype, key: u32) Allocator.Error!bool {
+        if (self.steps.* >= self.budget) {
+            self.exceeded.* = true;
+            return false;
+        }
+        self.steps.* += 1;
+        const node = self.nodes[key];
+        if (node.is_identity) return true;
+        for (node.children) |child| {
+            if (try traversal.visit(child)) return true;
+        }
+        return false;
+    }
+};
+
+test "BoolPredicateTraversal stays within a step budget on deep chains and wide mutual recursion" {
+    const allocator = std.testing.allocator;
+
+    // Deep alias/backing chain flowing into a wide mutually-recursive
+    // tag-union family. A missing pre-descent memo write would livelock on the
+    // family's cycles; the step budget bounds and detects that, and the chain
+    // depth exercises genuine recursion without overflowing correct code.
+    const chain_len: u32 = 1000;
+    const family_size: u32 = 48;
+    const node_count: u32 = chain_len + family_size;
+
+    var child_lists = std.ArrayList([]u32).empty;
+    defer {
+        for (child_lists.items) |c| allocator.free(c);
+        child_lists.deinit(allocator);
+    }
+    const nodes = try allocator.alloc(StressNode, node_count);
+    defer allocator.free(nodes);
+
+    var i: u32 = 0;
+    while (i < chain_len) : (i += 1) {
+        const child = try allocator.alloc(u32, 1);
+        child[0] = if (i + 1 < chain_len) i + 1 else chain_len;
+        try child_lists.append(allocator, child);
+        nodes[i] = .{ .children = child };
+    }
+    var f: u32 = 0;
+    while (f < family_size) : (f += 1) {
+        const kids = try allocator.alloc(u32, family_size);
+        var k: u32 = 0;
+        while (k < family_size) : (k += 1) kids[k] = chain_len + k;
+        try child_lists.append(allocator, kids);
+        nodes[chain_len + f] = .{ .children = kids };
+    }
+
+    var steps: u32 = 0;
+    var exceeded = false;
+    var context = StressContext{
+        .nodes = nodes,
+        .steps = &steps,
+        .budget = node_count + 1,
+        .exceeded = &exceeded,
+    };
+    var traversal = BoolPredicateTraversal(u32, StressContext).init(allocator, &context);
+    defer traversal.deinit();
+
+    try std.testing.expect(!try traversal.visit(0));
+    try std.testing.expect(!exceeded);
+    // Correct memoization visits each reachable node exactly once.
+    try std.testing.expectEqual(node_count, steps);
 }

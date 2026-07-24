@@ -37,6 +37,8 @@ pub const Problem = union(enum) {
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
     recursive_alias: RecursiveAlias,
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
+    where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
     polymorphic_value: VarWithSnapshot,
@@ -57,6 +59,7 @@ pub const Problem = union(enum) {
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
     tuple_access_needs_annotation: TupleAccessNeedsAnnotation,
+    invalid_tuple_access: InvalidTupleAccess,
     literal_defaulted: LiteralDefaulted,
     non_exhaustive_match: NonExhaustiveMatch,
     non_exhaustive_destructure: NonExhaustiveDestructure,
@@ -182,6 +185,24 @@ pub const ComptimeEvalError = struct {
     region: base.Region,
 };
 
+// nominal declaration errors //
+
+/// A nominal type declaration whose backing recursion is invalid: the
+/// declaration graph contains a cycle that is either structurally infinite
+/// (never passes through a tag-union/record payload position) or anonymous
+/// (never passes back through a nominal declaration's backing).
+pub const InvalidNominalDeclRecursion = struct {
+    /// The declaration statement var (source of the report's region).
+    decl_var: Var,
+    /// Snapshot of the offending cyclic type for display.
+    snapshot: SnapshotContentIdx,
+    /// The declared type's name.
+    type_name: Ident.Idx,
+    kind: Kind,
+
+    pub const Kind = enum { infinite, anonymous };
+};
+
 // generic errors //
 
 /// A problem involving a single type variable, with a snapshot for error reporting.
@@ -220,6 +241,16 @@ pub const InvalidNumericLiteral = struct {
 pub const TupleAccessNeedsAnnotation = struct {
     region: base.Region,
     elem_index: u32,
+};
+
+/// Tuple access on a value whose resolved type proves the access is invalid.
+pub const InvalidTupleAccess = struct {
+    region: base.Region,
+    elem_index: u32,
+    reason: union(enum) {
+        not_tuple,
+        index_out_of_bounds: u32,
+    },
 };
 
 /// Warning (the Haskell §4.3.4 / `-Wtype-defaults` analogue): an open literal
@@ -345,6 +376,7 @@ pub const StaticDispatch = union(enum) {
     dispatcher_not_nominal: DispatcherNotNominal,
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
+    type_does_not_support_map: TypeDoesNotSupportMap,
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
 };
@@ -418,6 +450,14 @@ pub const TypeDoesNotSupportEquality = struct {
     fn_var: Var,
 };
 
+/// Error when compiler-derived `map`/`map!` cannot select one direct tag
+/// payload to transform under the language's zero-sized-payload rules.
+pub const TypeDoesNotSupportMap = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+};
+
 /// Error when satisfying a static-dispatch constraint immediately requires the
 /// same static-dispatch constraint again on the same dispatcher type.
 pub const RecursiveDispatch = struct {
@@ -466,5 +506,13 @@ pub const RecursiveAlias = struct {
 /// This syntax was used for abilities which have been removed from the language
 pub const UnsupportedAliasWhereClause = struct {
     alias_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where clause attempts to add a constraint to a rigid type
+/// variable introduced by a different annotation.
+pub const WhereClauseReceiverNotIntroduced = struct {
+    type_var_name: base.Ident.Idx,
+    method_name: base.Ident.Idx,
     region: base.Region,
 };

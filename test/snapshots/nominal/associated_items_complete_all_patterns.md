@@ -2,7 +2,7 @@
 ~~~ini
 description=Complete test - all ordering patterns at all depths, plus scoping violations
 type=file:Test.roc
-module_validation_diagnostics=true
+mod_validation_diagnostics=true
 ~~~
 # SOURCE
 ~~~roc
@@ -802,7 +802,7 @@ DUPLICATE DEFINITION - associated_items_complete_all_patterns.md:404:5:404:8
 NAME NOT IN SCOPE - associated_items_complete_all_patterns.md:404:11:404:22
 TYPE REDECLARED - associated_items_complete_all_patterns.md:408:5:418:6
 TYPE REDECLARED - associated_items_complete_all_patterns.md:422:5:432:6
-TYPE MODULE MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
+TYPE MOD MISSING MATCHING TYPE - associated_items_complete_all_patterns.md:2:1:433:2
 POLYMORPHIC VALUE - associated_items_complete_all_patterns.md:51:9:51:13
 MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 # PROBLEMS
@@ -1203,7 +1203,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.Inner` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -1350,7 +1350,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.Inner` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -1478,7 +1478,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.Inner` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -1751,7 +1751,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.InnerB` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -1791,7 +1791,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.InnerA` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -1938,7 +1938,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -1959,7 +1959,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -1980,7 +1980,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -2127,7 +2127,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2148,7 +2148,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2169,7 +2169,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -2568,7 +2568,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2589,7 +2589,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2610,7 +2610,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -2757,7 +2757,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2778,7 +2778,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2799,7 +2799,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -2946,7 +2946,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2967,7 +2967,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -2988,7 +2988,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -3135,7 +3135,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3156,7 +3156,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3177,7 +3177,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -3324,7 +3324,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3345,7 +3345,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3366,7 +3366,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -3513,7 +3513,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3534,7 +3534,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3555,7 +3555,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -3702,7 +3702,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3723,7 +3723,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3744,7 +3744,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -3891,7 +3891,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3912,7 +3912,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -3933,7 +3933,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -4458,7 +4458,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4479,7 +4479,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4500,7 +4500,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4521,7 +4521,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L5` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -4668,7 +4668,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4689,7 +4689,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4710,7 +4710,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4731,7 +4731,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L5` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -4878,7 +4878,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4899,7 +4899,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4920,7 +4920,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -4941,7 +4941,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L5` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -5088,7 +5088,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5109,7 +5109,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5130,7 +5130,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5151,7 +5151,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L5` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -5298,7 +5298,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5319,7 +5319,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5340,7 +5340,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5361,7 +5361,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L5` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -5508,7 +5508,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5529,7 +5529,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5550,7 +5550,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5571,7 +5571,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5592,7 +5592,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5613,7 +5613,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5634,7 +5634,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L2` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5655,7 +5655,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L3` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5676,7 +5676,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L4` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────────┐
@@ -5697,7 +5697,7 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
     I found `.L5` here.
     Names that start with uppercase letters are used for tags, type names, and
-    module names in Roc.
+    mod names in Roc.
 
 
 ┌──────────────────────┐
@@ -7501,8 +7501,8 @@ MISSING METHOD - associated_items_complete_all_patterns.md:51:16:51:39
 
 
 ┌───────────────────────────────────┐
-│ TYPE MODULE MISSING MATCHING TYPE ├─ Type modules must have a nominal ──────┐
-└┬──────────────────────────────────┘  type declaration matching the module   │
+│ TYPE MOD MISSING MATCHING TYPE ├─ Type mods must have a nominal ──────┐
+└┬──────────────────────────────────┘  type declaration matching the mod   │
  │                                     name.                                  │
  │                                                                            │
  │  d1_forward := [A].{                                                       │
@@ -8330,7 +8330,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -10167,7 +10167,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.InnerA.valA"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 653)
+		(e-dispatch-call (method "plus") (constraint-fn-var 685)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args
@@ -10182,7 +10182,7 @@ L2 := [DS].{
 				(e-runtime-error (tag "expr_not_canonicalized")))))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 757)
+		(e-dispatch-call (method "plus") (constraint-fn-var 711)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))

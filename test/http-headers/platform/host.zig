@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const host_alloc = @import("host_alloc");
 
 pub const std_options: std.Options = .{
     .allow_stack_tracing = false,
@@ -108,12 +109,14 @@ fn staticBorrowedDataPtr() [*]u8 {
 extern fn roc_main(headers: RocStr) callconv(.c) u64;
 
 comptime {
-    @export(&hostAlloc, .{ .name = "roc_alloc", .visibility = .hidden });
-    @export(&hostDealloc, .{ .name = "roc_dealloc", .visibility = .hidden });
-    @export(&hostRealloc, .{ .name = "roc_realloc", .visibility = .hidden });
-    @export(&hostDbg, .{ .name = "roc_dbg", .visibility = .hidden });
-    @export(&hostExpectFailed, .{ .name = "roc_expect_failed", .visibility = .hidden });
-    @export(&hostCrashed, .{ .name = "roc_crashed", .visibility = .hidden });
+    host_alloc.exportRuntimeFns(.{
+        .alloc = &hostAlloc,
+        .dealloc = &hostDealloc,
+        .realloc = &hostRealloc,
+        .dbg = &hostDbg,
+        .expect_failed = &hostExpectFailed,
+        .crashed = &hostCrashed,
+    });
 
     switch (builtin.os.tag) {
         .linux => {

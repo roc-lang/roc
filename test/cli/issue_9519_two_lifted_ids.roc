@@ -4,7 +4,9 @@
 # sites; flaky identity once assigned it two lifted function ids.
 main! = |_args| Ok({})
 
-Foo(a) := [Bar(a), Baz]
+Foo(a) := [Bar(a), Baz].{
+    is_eq : _
+}
 
 combine : Foo(a), Foo(b), (a, b -> c) -> Foo(c)
 combine = |ma, mb, f|

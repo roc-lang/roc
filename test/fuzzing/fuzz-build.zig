@@ -13,6 +13,7 @@
 //!   ./zig-out/AFLplusplus/bin/afl-fuzz -t 480000+ -i /tmp/roc-build-corpus -o /tmp/roc-build-out zig-out/bin/fuzz-build
 
 const std = @import("std");
+const build_options = @import("build_options");
 const builtin = @import("builtin");
 const base = @import("base");
 const check = @import("check");
@@ -33,10 +34,10 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 }
 
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
-    var gpa_impl = std.heap.DebugAllocator(.{}){};
+    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer {
         if (!builtin.fuzz or debug) {
-            _ = gpa_impl.deinit();
+            _ = build_options.debugGpaOk(gpa_impl.deinit());
         }
     }
     const gpa = if (builtin.fuzz and !debug) base.defaultGpa() else gpa_impl.allocator();
@@ -117,7 +118,6 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         .{ .requests = lir_roots },
         .{
             .target_usize = targetUsize(selected_target),
-            .inline_mode = .none,
             .list_in_place_map = false,
         },
     ) catch |err| switch (err) {

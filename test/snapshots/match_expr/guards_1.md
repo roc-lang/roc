@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "describe")
 			(ty-fn
@@ -105,12 +105,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_0"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 210)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 258)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 280)
+									(e-interpolation (constraint-fn-var 282) (dispatcher-var 20)
 										(first
 											(e-literal (string "positive: ")))
 										(parts
@@ -118,7 +118,7 @@ describe = |value| match value {
 												(p-assign (ident "#interp_0")))
 											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 121)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 235)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
@@ -132,12 +132,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 407)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 315)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 477)
+									(e-interpolation (constraint-fn-var 339) (dispatcher-var 35)
 										(first
 											(e-literal (string "negative: ")))
 										(parts
@@ -145,7 +145,7 @@ describe = |value| match value {
 												(p-assign (ident "#interp_1")))
 											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 318)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 292)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))

@@ -4,14 +4,16 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
-			Done => Err(MissingRequired)
+			Done => Err(FormatError)
 		}
 
-	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
@@ -19,7 +21,7 @@ Format := [Default].{
 			Continue({ rest : State }),
 			Done({ rest : State }),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
 	parse_record_field = |_, _, state|
 		match state {
@@ -27,17 +29,13 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, _| Ok(Done)
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Present(Str), Done]
 
 Token := { raw : Str }.{
-	parser_for : Format -> (State -> Try({ value : Token, rest : State }, [MissingRequired]))
 	parser_for = |format| |state| {
 		parsed = Format.parse_str(format, state)?
 		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
@@ -47,9 +45,9 @@ Token := { raw : Str }.{
 	count_utf8_bytes = |token| Str.count_utf8_bytes(token.raw)
 }
 
-parse : State -> Try(a, [MissingRequired])
+parse : State -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -59,7 +57,7 @@ parse = |input| {
 }
 
 expect {
-	result : Try({ token : Token }, [MissingRequired])
+	result : Try({ token : Token }, [FormatError, MissingRequiredField(Str)])
 	result = parse(State.Present("wire-token"))
 
 	match result {

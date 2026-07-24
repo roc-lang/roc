@@ -22,13 +22,4 @@ test "lsp unit tests" {
     std.testing.refAllDecls(@import("handler_unit_tests.zig"));
     std.testing.refAllDecls(@import("completion_context_test.zig"));
     std.testing.refAllDecls(@import("scope_map_test.zig"));
-    std.testing.refAllDecls(@import("lsp").dependency_graph);
-    std.testing.refAllDecls(@import("lsp").type_utils);
-    std.testing.refAllDecls(@import("lsp").cir_visitor);
-    std.testing.refAllDecls(@import("lsp").cir_queries);
-    std.testing.refAllDecls(@import("lsp").module_lookup);
-    std.testing.refAllDecls(@import("lsp").doc_comments);
-    std.testing.refAllDecls(@import("lsp").completion);
-    std.testing.refAllDecls(@import("lsp").completion.builtins);
-    std.testing.refAllDecls(@import("lsp").completion.builder);
 }

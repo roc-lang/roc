@@ -7,7 +7,7 @@ OpaqueAutoToken :: { raw : Str, count : U64 }.{
 
 opaque_auto_token_encodes : Str -> Bool
 opaque_auto_token_encodes = |json| {
-	parsed : Try(OpaqueAutoToken, Json.ParseErr)
+	parsed : Try(OpaqueAutoToken, [InvalidJson(Str), MissingRequiredField(Str)])
 	parsed = Json.parse(json)
 
 	match parsed {

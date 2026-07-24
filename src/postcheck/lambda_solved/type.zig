@@ -168,6 +168,40 @@ pub const Store = struct {
         return self.get(self.root(id));
     }
 
+    pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
+        var current = id;
+        while (true) {
+            switch (self.get(current)) {
+                .link => |next| current = next,
+                else => break,
+            }
+        }
+
+        const root_id = current;
+        current = id;
+        while (current != root_id) {
+            switch (self.get(current)) {
+                .link => |next| {
+                    self.set(current, .{ .link = root_id });
+                    current = next;
+                },
+                else => break,
+            }
+        }
+
+        return root_id;
+    }
+
+    pub fn rootContentCompressed(self: *Store, id: TypeVarId) Content {
+        return self.get(self.rootCompressed(id));
+    }
+
+    pub fn compressAllRoots(self: *Store) void {
+        for (0..self.vars.items.len) |index| {
+            _ = self.rootCompressed(@enumFromInt(@as(u32, @intCast(index))));
+        }
+    }
+
     pub fn addSpan(self: *Store, values: []const TypeVarId) std.mem.Allocator.Error!Span {
         if (values.len == 0) return .empty();
         const start: u32 = @intCast(self.spans.items.len);

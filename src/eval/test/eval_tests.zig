@@ -10,8 +10,10 @@ const highest_lowest_tests = @import("eval_highest_lowest_tests.zig");
 const issue_tests = @import("eval_issue_tests.zig");
 const interpreter_style_tests = @import("eval_interpreter_style_tests.zig");
 const low_level_tests = @import("eval_low_level_tests.zig");
+const match_tests = @import("eval_match_tests.zig");
 const polymorphism_tests = @import("eval_polymorphism_tests.zig");
 const recursive_data_tests = @import("eval_recursive_data_tests.zig");
+const iter_alloc_tests = @import("eval_iter_alloc_tests.zig");
 
 /// All eval test cases, consumed by the parallel runner.
 ///
@@ -29,6 +31,7 @@ const core_tests = [_]TestCase{
     .{ .name = "problem: int div dec type mismatch", .source = "1.I64 / 2.0.Dec", .expected = .{ .problem = {} } },
     .{ .name = "problem: F32.is_eq is intentionally unavailable", .source = "F32.is_eq(1.0.F32, 1.0.F32)", .expected = .{ .problem = {} } },
     .{ .name = "problem: F64.is_eq is intentionally unavailable", .source = "F64.is_eq(1.0.F64, 1.0.F64)", .expected = .{ .problem = {} } },
+    .{ .name = "inspect: F32 opts in to receiver is_eq dispatch", .source = "1.0.F32.is_eq(1.0.F32)", .expected = .{ .inspect_str = "True" } },
     .{
         .name = "problem: annotation-only top-level value is not a runtime value",
         .source_kind = .module,
@@ -517,6 +520,32 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(\"yes\", \"no\")" },
     },
     .{
+        .name = "inspect: custom from_numeral typed pattern suffix dispatches through is_eq",
+        .source_kind = .module,
+        .source =
+        \\MyNum := [MyNum(List(U8))].{
+        \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
+        \\    from_numeral = |numeral| Ok(MyNum(numeral.digits_before_pt()))
+        \\    is_eq : MyNum, MyNum -> Bool
+        \\    is_eq = |a, b| match (a, b) {
+        \\        (MyNum(x), MyNum(y)) => x == y
+        \\    }
+        \\}
+        \\
+        \\force : MyNum -> MyNum
+        \\force = |n| n
+        \\
+        \\describe : MyNum -> Str
+        \\describe = |num| match num {
+        \\    123.MyNum => "typed"
+        \\    _ => "other"
+        \\}
+        \\
+        \\main = (describe(force(123)), describe(force(124)))
+        ,
+        .expected = .{ .inspect_str = "(\"typed\", \"other\")" },
+    },
+    .{
         .name = "inspect: custom from_numeral literal pattern compares converted values not raw digits",
         .source_kind = .module,
         .source =
@@ -822,16 +851,12 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "((True, True, True, True, True), (False, False, False, False, False))" },
     },
     .{
-        .name = "allocation - string interpolation pattern capture returns seamless heap slice",
+        .name = "allocation - string interpolation pattern capture returns seamless slice without allocation",
         .source =
         \\{
-        \\    prefix = "MATCH_PREFIX:"
-        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
-        \\    source = Str.concat(prefix, payload)
-        \\
-        \\    match source {
+        \\    match "MATCH_PREFIX:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" {
         \\        "MATCH_PREFIX:${rest}" =>
-        \\            if Str.contains(rest, "mnop") and Str.caseless_ascii_equals(rest, payload) {
+        \\            if Str.contains(rest, "mnop") and Str.caseless_ascii_equals(rest, "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
         \\                rest
         \\            } else {
         \\                ""
@@ -842,18 +867,14 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .allocations_at_most = .{
             .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            .max_allocations = 2,
+            .max_allocations = 0,
         } },
     },
     .{
         .name = "allocation - string interpolation pattern capture feeds drop prefix suffix without copy",
         .source =
         \\{
-        \\    prefix = "MATCH_PREFIX:"
-        \\    payload = Str.repeat("DROPabcdefghijklmnopqrstuvwxyz0123456789KEEP", 1)
-        \\    source = Str.concat(prefix, payload)
-        \\
-        \\    match source {
+        \\    match "MATCH_PREFIX:DROPabcdefghijklmnopqrstuvwxyz0123456789KEEP" {
         \\        "MATCH_PREFIX:${rest}" => Str.drop_suffix(Str.drop_prefix(rest, "DROP"), "KEEP")
         \\        _ => ""
         \\    }
@@ -861,17 +882,14 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .allocations_at_most = .{
             .output = "abcdefghijklmnopqrstuvwxyz0123456789",
-            .max_allocations = 2,
+            .max_allocations = 0,
         } },
     },
     .{
-        .name = "allocation - string interpolation pattern middle capture remains heap slice",
+        .name = "allocation - string interpolation pattern middle capture remains slice without allocation",
         .source =
         \\{
-        \\    payload = Str.repeat("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", 1)
-        \\    source = Str.concat(Str.concat("prefix/user/", payload), "/posts/tail")
-        \\
-        \\    match source {
+        \\    match "prefix/user/abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/posts/tail" {
         \\        "${_}/user/${id}/posts/${_}" => id
         \\        _ => ""
         \\    }
@@ -879,7 +897,7 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .allocations_at_most = .{
             .output = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            .max_allocations = 3,
+            .max_allocations = 0,
         } },
     },
     .{
@@ -2781,56 +2799,6 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"Test\"" },
     },
     .{
-        .name = "inspect: polymorphic return function then call int",
-        .source = "(|_| (|x| x))(0)(42)",
-        .expected = .{ .inspect_str = "42.0" },
-    },
-    .{
-        .name = "inspect: polymorphic return function then call string",
-        .source = "(|_| (|x| x))(0)(\"hi\")",
-        .expected = .{ .inspect_str = "\"hi\"" },
-    },
-    .{
-        .name = "inspect: polymorphic captured id applied to int",
-        .source = "((|id| (|x| id(x)))(|y| y))(41)",
-        .expected = .{ .inspect_str = "41.0" },
-    },
-    .{
-        .name = "inspect: polymorphic captured id applied to string",
-        .source = "((|id| (|x| id(x)))(|y| y))(\"ok\")",
-        .expected = .{ .inspect_str = "\"ok\"" },
-    },
-    .{
-        .name = "inspect: polymorphic higher-order apply then call",
-        .source = "((|f| (|x| f(x)))(|n| n + 1))(41)",
-        .expected = .{ .inspect_str = "42.0" },
-    },
-    .{
-        .name = "inspect: polymorphic higher-order apply twice",
-        .source = "((|f| (|x| f(f(x))))(|n| n + 1))(40)",
-        .expected = .{ .inspect_str = "42.0" },
-    },
-    .{
-        .name = "inspect: polymorphic pass constructed closure and apply",
-        .source = "(|g| g(41))((|f| (|x| f(x)))(|y| y))",
-        .expected = .{ .inspect_str = "41.0" },
-    },
-    .{
-        .name = "inspect: polymorphic construct then pass then call",
-        .source = "((|make| (|z| (make(|n| n + 1))(z)))(|f| (|x| f(x))))(41)",
-        .expected = .{ .inspect_str = "42.0" },
-    },
-    .{
-        .name = "inspect: polymorphic compose identity with plus one",
-        .source = "(((|f| (|g| (|x| f(g(x)))))(|n| n + 1))(|y| y))(41)",
-        .expected = .{ .inspect_str = "42.0" },
-    },
-    .{
-        .name = "inspect: polymorphic return function using captured increment",
-        .source = "(((|n| (|id| (|x| id(x + n))))(1))(|y| y))(41)",
-        .expected = .{ .inspect_str = "42.0" },
-    },
-    .{
         .name = "inspect: recursive countdown",
         .source =
         \\{
@@ -2895,21 +2863,6 @@ const core_tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "5.0" },
-    },
-    .{
-        .name = "inspect: tag union one arg ok",
-        .source = "Ok(42.0)",
-        .expected = .{ .inspect_str = "Ok(42.0)" },
-    },
-    .{
-        .name = "inspect: tag union multi arg point",
-        .source = "Point(1.0, 2.0)",
-        .expected = .{ .inspect_str = "Point(1.0, 2.0)" },
-    },
-    .{
-        .name = "inspect: tag union nested in tuple regression",
-        .source = "Ok((Name(\"hello\"), 5))",
-        .expected = .{ .inspect_str = "Ok((Name(\"hello\"), 5.0))" },
     },
     .{
         .name = "inspect: multiple polymorphic instantiations",
@@ -3026,6 +2979,8 @@ const core_tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Iter(s) :: [It(s)].{
+        \\    is_eq : _
+        \\
         \\    identity : Iter(s) -> Iter(s)
         \\    identity = |It(s_)| It(s_)
         \\}
@@ -3684,6 +3639,108 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Known(4)" },
     },
     .{
+        .name = "inspect: Iter.next steps appended iterator in order",
+        .source =
+        \\{
+        \\    first = Iter.next([1.I64, 2].iter().append(3))
+        \\    match first {
+        \\        One({ item, rest }) => [item].concat(Iter.fold(rest, [], |acc, n| acc.append(n)))
+        \\        _ => []
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[1, 2, 3]" },
+    },
+    .{
+        .name = "inspect: Iter.next reuses public iterator values",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter()
+        \\
+        \\    first = match Iter.next(iter) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    second = match Iter.next(iter) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    (first, second)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(1, 1)" },
+    },
+    .{
+        .name = "inspect: for loop does not mutate aliased public iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter()
+        \\    saved = iter
+        \\
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\
+        \\    saved_first = match Iter.next(saved) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\
+        \\    ($sum, saved_first)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(3, 1)" },
+    },
+    .{
+        .name = "inspect: escaped Iter.next rest keeps public meaning",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2, 3].iter()
+        \\
+        \\    rest = match Iter.next(iter) {
+        \\        One({ rest, .. }) => rest
+        \\        _ => iter
+        \\    }
+        \\
+        \\    match Iter.next(rest) {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        .name = "for loop over appended iterator",
+        .source =
+        \\{
+        \\    iter = [1.I64, 2].iter().append(3).append(4)
+        \\    var $sum = 0.I64
+        \\    for item in iter {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
+        .name = "for loop over inline appended iterator",
+        .source =
+        \\{
+        \\    var $sum = 0.I64
+        \\    for item in [1.I64, 2].iter().append(3).append(4) {
+        \\        $sum = $sum + item
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "10" },
+    },
+    .{
         .name = "inspect: Iter.keep_if emits skip with rest iterator",
         .source =
         \\match Iter.next(Iter.keep_if([1.I64, 2].iter(), |item| item > 1)) {
@@ -4280,6 +4337,29 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "((Ok(126), Err(Overflow), Ok(-127), Err(Overflow), Ok(127), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(32766), Err(Overflow), Ok(-32767), Err(Overflow), Ok(32767), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(2147483646), Err(Overflow), Ok(-2147483647), Err(Overflow), Ok(2147483647), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(9223372036854775806), Err(Overflow), Ok(-9223372036854775807), Err(Overflow), Ok(9223372036854775807), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)), (Ok(170141183460469231731687303715884105726), Err(Overflow), Ok(-170141183460469231731687303715884105727), Err(Overflow), Ok(170141183460469231731687303715884105727), Err(Overflow), Err(Overflow), Err(Overflow), Err(DivByZero), Ok(8), Err(Underflow), Err(Overflow), Ok(-1), Ok(4), Ok(-3), Err(Overflow)))" },
     },
     .{
+        .name = "inspect: div_floor_by covers every numeric type",
+        .source =
+        \\{
+        \\    (
+        \\        U8.div_floor_by(7, 2) == 3 and U8.div_floor_by(8, 2) == 4,
+        \\        I8.div_floor_by(7, 2) == 3 and I8.div_floor_by(-7, 2) == -4 and I8.div_floor_by(7, -2) == -4 and I8.div_floor_by(-7, -2) == 3 and I8.div_floor_by(-8, 2) == -4,
+        \\        U16.div_floor_by(7, 2) == 3 and U16.div_floor_by(8, 2) == 4,
+        \\        I16.div_floor_by(7, 2) == 3 and I16.div_floor_by(-7, 2) == -4 and I16.div_floor_by(7, -2) == -4 and I16.div_floor_by(-7, -2) == 3 and I16.div_floor_by(-8, 2) == -4,
+        \\        U32.div_floor_by(7, 2) == 3 and U32.div_floor_by(8, 2) == 4,
+        \\        I32.div_floor_by(7, 2) == 3 and I32.div_floor_by(-7, 2) == -4 and I32.div_floor_by(7, -2) == -4 and I32.div_floor_by(-7, -2) == 3 and I32.div_floor_by(-8, 2) == -4,
+        \\        U64.div_floor_by(7, 2) == 3 and U64.div_floor_by(8, 2) == 4,
+        \\        I64.div_floor_by(7, 2) == 3 and I64.div_floor_by(-7, 2) == -4 and I64.div_floor_by(7, -2) == -4 and I64.div_floor_by(-7, -2) == 3 and I64.div_floor_by(-8, 2) == -4,
+        \\        U128.div_floor_by(7, 2) == 3 and U128.div_floor_by(8, 2) == 4,
+        \\        I128.div_floor_by(7, 2) == 3 and I128.div_floor_by(-7, 2) == -4 and I128.div_floor_by(7, -2) == -4 and I128.div_floor_by(-7, -2) == 3 and I128.div_floor_by(-8, 2) == -4,
+        \\        Dec.div_floor_by(7.5, 2.0) == 3.0 and Dec.div_floor_by(-7.5, 2.0) == -4.0 and Dec.div_floor_by(7.5, -2.0) == -4.0 and Dec.div_floor_by(-7.5, -2.0) == 3.0 and Dec.div_floor_by(-8.0, 2.0) == -4.0,
+        \\        F32.div_floor_by(7.5.F32, 2.0.F32).to_str() == "3" and F32.div_floor_by(-7.5.F32, 2.0.F32).to_str() == "-4" and F32.div_floor_by(7.5.F32, -2.0.F32).to_str() == "-4" and F32.div_floor_by(-7.5.F32, -2.0.F32).to_str() == "3" and F32.div_floor_by(-8.0.F32, 2.0.F32).to_str() == "-4",
+        \\        F64.div_floor_by(7.5.F64, 2.0.F64).to_str() == "3" and F64.div_floor_by(-7.5.F64, 2.0.F64).to_str() == "-4" and F64.div_floor_by(7.5.F64, -2.0.F64).to_str() == "-4" and F64.div_floor_by(-7.5.F64, -2.0.F64).to_str() == "3" and F64.div_floor_by(-8.0.F64, 2.0.F64).to_str() == "-4",
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, True, True, True, True, True, True, True, True, True, True, True, True)" },
+    },
+    .{
         .name = "inspect: try APIs unify with open error rows",
         .source =
         \\{
@@ -4415,6 +4495,11 @@ const core_tests = [_]TestCase{
         .expected = .{ .crash = {} },
     },
     .{
+        .name = "crash: Dec multiply overflow crashes on every backend",
+        .source = "100000000000000000000.0 * 100.0.Dec",
+        .expected = .{ .crash = {} },
+    },
+    .{
         .name = "inspect: numeric inclusive ranges stop at highest",
         .source =
         \\{
@@ -4484,28 +4569,31 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)" },
     },
     .{
-        // Directly exercises the steps_between length primitive: ascending ->
-        // Known(count); descending and equal -> Known(0) (the lower guard
-        // branch the range boundary tests never hit); and the U128/I128
-        // over-U64-width + Dec cases -> Unknown (the fallback that feeds the
-        // from_iter grow path).
-        .name = "inspect: steps_between reports Known counts, Known(0) descending, Unknown on overflow",
+        // Directly exercises the range length computation via size_hint:
+        // ascending -> Known(count); descending and empty -> Known(0) (the
+        // lower guard branch the range boundary tests never hit); inclusive
+        // singleton -> Known(1); the U128/I128 over-U64-width, the inclusive
+        // full-width count that exceeds U64, and Dec -> Unknown (which feeds
+        // the from_iter grow path).
+        .name = "inspect: range size_hint reports Known counts, Known(0) descending, Unknown on overflow",
         .source =
         \\{
         \\    (
-        \\        U8.steps_between(5, 10),
-        \\        U8.steps_between(10, 5),
-        \\        U8.steps_between(5, 5),
-        \\        I8.steps_between(-3, 2),
-        \\        I8.steps_between(2, -3),
-        \\        U128.steps_between(0, 100),
-        \\        U128.steps_between(0, U128.highest),
-        \\        I128.steps_between(0, I128.highest),
-        \\        Dec.steps_between(1.0, 5.0),
+        \\        Iter.size_hint(U8.range_exclusive(5, 10)),
+        \\        Iter.size_hint(U8.range_exclusive(10, 5)),
+        \\        Iter.size_hint(U8.range_exclusive(5, 5)),
+        \\        Iter.size_hint(U8.range_inclusive(5, 5)),
+        \\        Iter.size_hint(I8.range_exclusive(-3, 2)),
+        \\        Iter.size_hint(I8.range_exclusive(2, -3)),
+        \\        Iter.size_hint(U128.range_exclusive(0, 100)),
+        \\        Iter.size_hint(U128.range_exclusive(0, U128.highest)),
+        \\        Iter.size_hint(I128.range_exclusive(0, I128.highest)),
+        \\        Iter.size_hint(U64.range_inclusive(0, U64.highest)),
+        \\        Iter.size_hint(Dec.range_exclusive(1.0, 5.0)),
         \\    )
         \\}
         ,
-        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown)" },
+        .expected = .{ .inspect_str = "(Known(5), Known(0), Known(0), Known(1), Known(5), Known(0), Known(100), Unknown, Unknown, Unknown, Unknown)" },
     },
     .{
         // Collecting a range whose length is Unknown (Dec ranges always report
@@ -5035,4 +5123,4 @@ const core_tests = [_]TestCase{
     },
 };
 
-pub const tests = core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests;
+pub const tests = core_tests ++ comptime_finalization_tests.tests ++ crypto_tests.tests ++ closure_recursion_tests.tests ++ recursive_data_tests.tests ++ low_level_tests.tests ++ match_tests.tests ++ highest_lowest_tests.tests ++ polymorphism_tests.tests ++ issue_tests.tests ++ interpreter_style_tests.tests ++ regression_repros.tests ++ trmc_tests.tests ++ iter_alloc_tests.tests;

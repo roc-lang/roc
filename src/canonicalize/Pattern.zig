@@ -196,6 +196,11 @@ pub const Pattern = union(enum) {
         value: f64,
     },
 
+    /// Pattern for a numeric literal whose exact value is stored in
+    /// ModuleEnv's numeral table because it does not fit the compact builtin
+    /// literal payloads (huge magnitudes, deep fractional scales). Checking
+    /// and lowering consume the recorded digit facts.
+    num_from_numeral_literal: struct {},
     /// Pattern that matches a specific string literal exactly.
     /// Used for exact string matching in pattern expressions.
     ///
@@ -511,6 +516,13 @@ pub const Pattern = union(enum) {
                 const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], p.value);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .num_from_numeral_literal => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("p-num-from-numeral");
+                try ir.appendRegionInfoToSExprTree(tree, pattern_idx);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

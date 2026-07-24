@@ -19,7 +19,7 @@ DECLARATION HAS NO VALUE - fmt_record_type_extension_trailing_comma_issue_9374.m
  │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
  └──────────────── fmt_record_type_extension_trailing_comma_issue_9374.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -30,7 +30,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "x")
 			(ty-record

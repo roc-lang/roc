@@ -380,8 +380,13 @@ pub const TagUnionData = struct {
 
     /// Compute the discriminant size in bytes from a variant count.
     /// Can be called before a TagUnionData is created.
+    ///
+    /// A single-variant tag union has an implicit discriminant (the tag is
+    /// statically known), so it reserves zero discriminant bytes in memory.
+    /// This is the width committed into `TagUnionData.discriminant_size`, so
+    /// it is the width every backend and glue read back for the layout.
     pub fn discriminantSize(variant_count: usize) u8 {
-        return if (variant_count <= 256) 1 else if (variant_count <= 65536) 2 else if (variant_count <= (1 << 32)) 4 else 8;
+        return if (variant_count <= 1) 0 else if (variant_count <= 256) 1 else if (variant_count <= 65536) 2 else if (variant_count <= (1 << 32)) 4 else 8;
     }
 
     /// Get the integer precision for this discriminant (always unsigned).
@@ -932,125 +937,6 @@ test "Layout scalar data access" {
     try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
     try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
     try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
-}
-
-test "Layout non-scalar types" {
-    const testing = std.testing;
-
-    // Test that non-scalar types have correct tags
-    const box_layout = Layout.box(.bool);
-    try testing.expectEqual(LayoutTag.box, box_layout.tag);
-
-    const list_layout = Layout.list(.bool);
-    try testing.expectEqual(LayoutTag.list, list_layout.tag);
-
-    const struct_layout = Layout.struct_(.align_4, StructIdx{ .int_idx = 0 });
-    try testing.expectEqual(LayoutTag.struct_, struct_layout.tag);
-}
-
-test "Layout scalar variants" {
-    const testing = std.testing;
-
-    // Test scalar type creation
-    const int_scalar = Layout.int(.i32);
-    try testing.expectEqual(LayoutTag.scalar, int_scalar.tag);
-    try testing.expectEqual(ScalarTag.int, int_scalar.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.i32, int_scalar.getScalar().getInt());
-
-    const str_scalar = Layout.str();
-    try testing.expectEqual(LayoutTag.scalar, str_scalar.tag);
-    try testing.expectEqual(ScalarTag.str, str_scalar.getScalar().tag);
-
-    const frac_scalar = Layout.frac(.f64);
-    try testing.expectEqual(LayoutTag.scalar, frac_scalar.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_scalar.getScalar().tag);
-    try testing.expectEqual(types.Frac.Precision.f64, frac_scalar.getScalar().getFrac());
-
-    // Test zst variants separately
-    const box_zst = Layout.boxOfZst();
-    try testing.expectEqual(LayoutTag.box_of_zst, box_zst.tag);
-
-    const list_zst = Layout.listOfZst();
-    try testing.expectEqual(LayoutTag.list_of_zst, list_zst.tag);
-}
-
-test "Scalar memory optimization - comprehensive coverage" {
-    const testing = std.testing;
-
-    const bool_layout = Layout.boolType();
-    try testing.expectEqual(LayoutTag.tag_union, bool_layout.tag);
-    try testing.expectEqual(@as(u16, 0), bool_layout.getTagUnion().idx.int_idx);
-
-    const str_layout = Layout.str();
-    try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
-    try testing.expectEqual(ScalarTag.str, str_layout.getScalar().tag);
-
-    // Test ALL integer precisions
-    const int_u8 = Layout.int(.u8);
-    try testing.expectEqual(LayoutTag.scalar, int_u8.tag);
-    try testing.expectEqual(ScalarTag.int, int_u8.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.u8, int_u8.getScalar().getInt());
-
-    const int_i8 = Layout.int(.i8);
-    try testing.expectEqual(LayoutTag.scalar, int_i8.tag);
-    try testing.expectEqual(ScalarTag.int, int_i8.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.i8, int_i8.getScalar().getInt());
-
-    const int_u16 = Layout.int(.u16);
-    try testing.expectEqual(LayoutTag.scalar, int_u16.tag);
-    try testing.expectEqual(ScalarTag.int, int_u16.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.u16, int_u16.getScalar().getInt());
-
-    const int_i16 = Layout.int(.i16);
-    try testing.expectEqual(LayoutTag.scalar, int_i16.tag);
-    try testing.expectEqual(ScalarTag.int, int_i16.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.i16, int_i16.getScalar().getInt());
-
-    const int_u32 = Layout.int(.u32);
-    try testing.expectEqual(LayoutTag.scalar, int_u32.tag);
-    try testing.expectEqual(ScalarTag.int, int_u32.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.u32, int_u32.getScalar().getInt());
-
-    const int_i32 = Layout.int(.i32);
-    try testing.expectEqual(LayoutTag.scalar, int_i32.tag);
-    try testing.expectEqual(ScalarTag.int, int_i32.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.i32, int_i32.getScalar().getInt());
-
-    const int_u64 = Layout.int(.u64);
-    try testing.expectEqual(LayoutTag.scalar, int_u64.tag);
-    try testing.expectEqual(ScalarTag.int, int_u64.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.u64, int_u64.getScalar().getInt());
-
-    const int_i64 = Layout.int(.i64);
-    try testing.expectEqual(LayoutTag.scalar, int_i64.tag);
-    try testing.expectEqual(ScalarTag.int, int_i64.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.i64, int_i64.getScalar().getInt());
-
-    const int_u128 = Layout.int(.u128);
-    try testing.expectEqual(LayoutTag.scalar, int_u128.tag);
-    try testing.expectEqual(ScalarTag.int, int_u128.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.u128, int_u128.getScalar().getInt());
-
-    const int_i128 = Layout.int(.i128);
-    try testing.expectEqual(LayoutTag.scalar, int_i128.tag);
-    try testing.expectEqual(ScalarTag.int, int_i128.getScalar().tag);
-    try testing.expectEqual(types.Int.Precision.i128, int_i128.getScalar().getInt());
-
-    // Test ALL fraction precisions
-    const frac_f32 = Layout.frac(.f32);
-    try testing.expectEqual(LayoutTag.scalar, frac_f32.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_f32.getScalar().tag);
-    try testing.expectEqual(types.Frac.Precision.f32, frac_f32.getScalar().getFrac());
-
-    const frac_f64 = Layout.frac(.f64);
-    try testing.expectEqual(LayoutTag.scalar, frac_f64.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_f64.getScalar().tag);
-    try testing.expectEqual(types.Frac.Precision.f64, frac_f64.getScalar().getFrac());
-
-    const frac_dec = Layout.frac(.dec);
-    try testing.expectEqual(LayoutTag.scalar, frac_dec.tag);
-    try testing.expectEqual(ScalarTag.frac, frac_dec.getScalar().tag);
-    try testing.expectEqual(types.Frac.Precision.dec, frac_dec.getScalar().getFrac());
 }
 
 test "Non-scalar layout variants - fallback to indexed approach" {

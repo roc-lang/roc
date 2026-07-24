@@ -43,7 +43,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "fold")
 			(ty-fn
@@ -143,7 +143,7 @@ expect sumResult == 10
 					(e-block
 						(s-reassign
 							(p-assign (ident "$state"))
-							(e-call (constraint-fn-var 220)
+							(e-call (constraint-fn-var 286)
 								(e-lookup-local
 									(p-assign (ident "step")))
 								(e-lookup-local
@@ -166,7 +166,7 @@ expect sumResult == 10
 				(ty-rigid-var-lookup (ty-rigid-var (name "state"))))))
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call (constraint-fn-var 402)
+		(e-call (constraint-fn-var 332)
 			(e-lookup-local
 				(p-assign (ident "fold")))
 			(e-list
@@ -180,7 +180,7 @@ expect sumResult == 10
 				(args
 					(p-assign (ident "acc"))
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 400)
+				(e-dispatch-call (method "plus") (constraint-fn-var 330)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "acc"))))

@@ -1,5 +1,5 @@
 ## A glue script for generating a C header file.
-app [make_glue] { pf: platform "../platform/main.roc" }
+app [make_glue] { pf: platform glue }
 
 import pf.Types exposing [Types]
 import pf.File exposing [File]
@@ -118,28 +118,7 @@ c_record_fields_decl = |type_table, duplicate_record_names, duplicate_tag_names,
 }
 
 duplicate_record_names : TypeTable -> List(Str)
-duplicate_record_names = |type_table| {
-	var $seen_names = []
-	var $duplicates = []
-
-	for type_info in type_table.entries() {
-		match type_info.repr {
-			RocRecord(rec) =>
-				if rec.name != "" {
-					if List.contains($seen_names, rec.name) {
-						if !(List.contains($duplicates, rec.name)) {
-							$duplicates = $duplicates.append(rec.name)
-						}
-					} else {
-						$seen_names = $seen_names.append(rec.name)
-					}
-				}
-			_ => {}
-		}
-	}
-
-	$duplicates
-}
+duplicate_record_names = |type_table| type_table.duplicate_record_names()
 
 record_struct_name : List(Str), U64, RecordRepr -> Str
 record_struct_name = |duplicate_names, type_id, rec| {
@@ -908,9 +887,9 @@ core_types_section : Str
 core_types_section = {
 	roc_dec_def = "typedef struct {\n    __int128 num;\n} RocDec;\n\nROC_STATIC_ASSERT(sizeof(RocDec) == 16, \"RocDec must be sixteen bytes\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocDec) == 16, \"RocDec must be 16-byte aligned\");\n\n"
 
-	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\nROC_STATIC_ASSERT(sizeof(RocStr) == 3 * sizeof(size_t), \"RocStr must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocStr) == ROC_ALIGNOF(size_t), \"RocStr must be pointer-word aligned\");\n\n"
+	roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t capacity_or_alloc_ptr;\n    size_t length;\n} RocStr;\n\nROC_STATIC_ASSERT(sizeof(RocStr) == 3 * sizeof(size_t), \"RocStr must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocStr) == ROC_ALIGNOF(size_t), \"RocStr must be pointer-word aligned\");\nROC_STATIC_ASSERT(offsetof(RocStr, bytes) == 0, \"RocStr.bytes offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocStr, capacity_or_alloc_ptr) == sizeof(size_t), \"RocStr.capacity_or_alloc_ptr offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocStr, length) == 2 * sizeof(size_t), \"RocStr.length offset mismatch\");\n\n"
 
-	roc_list_def = "typedef struct {\n    void* elements;\n    size_t length;\n    size_t capacity_or_alloc_ptr;\n} RocList;\n\nROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), \"RocList must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), \"RocList must be pointer-word aligned\");\n\n"
+	roc_list_def = "typedef struct {\n    void* elements;\n    size_t length;\n    size_t capacity_or_alloc_ptr;\n} RocList;\n\nROC_STATIC_ASSERT(sizeof(RocList) == 3 * sizeof(size_t), \"RocList must be three pointer-sized words\");\nROC_STATIC_ASSERT(ROC_ALIGNOF(RocList) == ROC_ALIGNOF(size_t), \"RocList must be pointer-word aligned\");\nROC_STATIC_ASSERT(offsetof(RocList, elements) == 0, \"RocList.elements offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocList, length) == sizeof(size_t), \"RocList.length offset mismatch\");\nROC_STATIC_ASSERT(offsetof(RocList, capacity_or_alloc_ptr) == 2 * sizeof(size_t), \"RocList.capacity_or_alloc_ptr offset mismatch\");\n\n"
 
 	roc_box_def = "typedef void* RocBox;\n\n"
 
@@ -919,6 +898,8 @@ core_types_section = {
 			.concat("typedef void (*RocErasedCallableFn)(struct RocOps* ops, uint8_t* ret, const uint8_t* args, uint8_t* capture, const void** ret_desc);\n")
 			.concat("typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);\n")
 			.concat("typedef struct {\n    RocErasedCallableFn callable_fn_ptr;\n    RocErasedCallableOnDrop on_drop;\n} RocErasedCallablePayload;\n")
+			.concat("ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, callable_fn_ptr) == 0, \"RocErasedCallablePayload.callable_fn_ptr offset mismatch\");\n")
+			.concat("ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, on_drop) == sizeof(RocErasedCallableFn), \"RocErasedCallablePayload.on_drop offset mismatch\");\n")
 			.concat("typedef uint8_t* RocErasedCallable;\n")
 			.concat("#define ROC_ERASED_CALLABLE_CAPTURE_ALIGNMENT 16u\n")
 			.concat("#define ROC_ERASED_CALLABLE_PAYLOAD_ALIGNMENT 16u\n")

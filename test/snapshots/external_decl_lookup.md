@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=External declaration lookup from json module
+description=External declaration lookup from json mod
 type=file
 ~~~
 # SOURCE
@@ -12,7 +12,7 @@ import json.Json
 
 main! = |_| {
     # This should create an external declaration for json.Json.utf8
-    result = Json.utf8("Hello from external module!")
+    result = Json.utf8("Hello from external mod!")
     Stdout.line!(result)
 }
 ~~~
@@ -41,7 +41,7 @@ NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
 │ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
 └┬──────────────────┘                                                         │
  │                                                                            │
- │  result = Json.utf8("Hello from external module!")                         │
+ │  result = Json.utf8("Hello from external mod!")                            │
  │           ‾‾‾‾‾‾‾‾‾                                                        │
  └────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
 
@@ -98,7 +98,7 @@ EndOfFile,
 							(e-apply
 								(e-ident (raw "Json.utf8"))
 								(e-string
-									(e-string-part (raw "Hello from external module!")))))
+									(e-string-part (raw "Hello from external mod!")))))
 						(e-apply
 							(e-ident (raw "Stdout.line!"))
 							(e-ident (raw "result")))))))))
@@ -112,7 +112,7 @@ import json.Json
 
 main! = |_| {
 	# This should create an external declaration for json.Json.utf8
-	result = Json.utf8("Hello from external module!")
+	result = Json.utf8("Hello from external mod!")
 	Stdout.line!(result)
 }
 ~~~
@@ -130,14 +130,14 @@ main! = |_| {
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string
-							(e-literal (string "Hello from external module!")))))
+							(e-literal (string "Hello from external mod!")))))
 				(e-call
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-lookup-local
 						(p-assign (ident "result")))))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes)))
 ~~~
 # TYPES

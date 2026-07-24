@@ -11,6 +11,6 @@ main! = |_args| {
 		$count = $count + 1
 	}
 
-	echo!($sum.to_str())
+	echo!("${$sum.to_str()}\n")
 	Ok({})
 }

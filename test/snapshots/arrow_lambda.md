@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "test1"))
@@ -77,11 +77,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 111)
+		(e-call (constraint-fn-var 220)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 76)
+				(e-dispatch-call (method "plus") (constraint-fn-var 211)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
@@ -90,7 +90,7 @@ NO CHANGE
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test2"))
-		(e-call (constraint-fn-var 144)
+		(e-call (constraint-fn-var 237)
 			(e-lambda
 				(args
 					(p-underscore))
@@ -100,14 +100,14 @@ NO CHANGE
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test3"))
-		(e-call (constraint-fn-var 198)
+		(e-call (constraint-fn-var 265)
 			(e-lambda
 				(args
 					(p-assign (ident "s")))
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_empty") (constraint-fn-var 145)
+							(e-dispatch-call (method "is_empty") (constraint-fn-var 238)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

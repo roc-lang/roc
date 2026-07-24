@@ -10,6 +10,7 @@ const ModuleEnv = @import("can").ModuleEnv;
 const types_mod = @import("types").types;
 
 const DocModel = @import("DocModel.zig");
+const render_type = @import("render_type.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -31,11 +32,41 @@ pub const DocCommentExtract = struct {
     start_line: u32,
 };
 
+/// Precomputed index of newline byte positions for O(log n) byte-to-line lookup.
+pub const LineIndex = struct {
+    /// Sorted array of byte offsets where each `\n` occurs.
+    newline_offsets: []const u32,
+
+    pub fn build(allocator: Allocator, source: []const u8) Allocator.Error!LineIndex {
+        var list = std.ArrayList(u32).empty;
+        errdefer list.deinit(allocator);
+        for (source, 0..) |byte, i| {
+            if (byte == '\n') {
+                try list.append(allocator, @intCast(i));
+            }
+        }
+        return .{ .newline_offsets = try list.toOwnedSlice(allocator) };
+    }
+
+    pub fn deinit(self: LineIndex, allocator: Allocator) void {
+        allocator.free(self.newline_offsets);
+    }
+
+    /// Convert a byte offset to a 1-based line number using binary search.
+    pub fn lineOf(self: LineIndex, offset: u32) u32 {
+        return @intCast(std.sort.lowerBound(u32, self.newline_offsets, offset, struct {
+            fn compare(context: u32, item: u32) std.math.Order {
+                return std.math.order(context, item);
+            }
+        }.compare) + 1);
+    }
+};
+
 /// Extract the module-level doc comment from the top of a source file.
 ///
 /// Module doc comments are consecutive `##` lines at the very beginning of the
 /// file, before any non-comment content. Returns null if none found.
-pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) Allocator.Error!?DocCommentExtract {
+pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: LineIndex) Allocator.Error!?DocCommentExtract {
     var lines = std.ArrayList([]const u8).empty;
     defer lines.deinit(gpa);
 
@@ -50,7 +81,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) Allocator.Err
         }
 
         // Check for ## doc comment
-        if (pos + 2 <= source.len and source[pos] == '#' and source[pos + 1] == '#') {
+        if (base.doc_comment.startsWithHashHash(source[pos..])) {
             if (lines.items.len == 0) {
                 first_line_byte = @intCast(line_start);
             }
@@ -91,7 +122,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) Allocator.Err
 
     return .{
         .text = try joinLines(gpa, lines.items),
-        .start_line = byteOffsetToLine(source, first_line_byte),
+        .start_line = line_index.lineOf(first_line_byte),
     };
 }
 
@@ -99,7 +130,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8) Allocator.Err
 ///
 /// Scans backwards from `def_start_offset` to find consecutive `##` lines.
 /// Returns null if no doc comment is found.
-pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32) Allocator.Error!?DocCommentExtract {
+pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32, line_index: LineIndex) Allocator.Error!?DocCommentExtract {
     if (def_start_offset == 0 or def_start_offset > source.len) return null;
 
     var lines = std.ArrayList([]const u8).empty;
@@ -130,17 +161,13 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
         const line = source[line_start..pos];
         const trimmed = trimLeft(line);
 
-        if (trimmed.len >= 2 and trimmed[0] == '#' and trimmed[1] == '#') {
+        if (base.doc_comment.startsWithHashHash(trimmed)) {
             // Track the earliest doc-comment line we've seen so far. Since we
             // scan bottom-up and lines are added in reverse, the most recent
             // assignment to this is the topmost ## line of the block.
             first_line_byte = @intCast(line_start);
             // It's a doc comment line
-            var content = trimmed[2..];
-            // Skip optional leading space after ##
-            if (content.len > 0 and content[0] == ' ') {
-                content = content[1..];
-            }
+            const content = base.doc_comment.stripPrefix(trimmed);
             try lines.append(gpa, content);
         } else if (trimmed.len == 0) {
             // Empty/whitespace line — stop looking if we already have doc lines
@@ -167,19 +194,8 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
 
     return .{
         .text = try joinLines(gpa, lines.items),
-        .start_line = byteOffsetToLine(source, first_line_byte),
+        .start_line = line_index.lineOf(first_line_byte),
     };
-}
-
-/// Convert a byte offset within `source` into a 1-based source line number.
-fn byteOffsetToLine(source: []const u8, offset: u32) u32 {
-    var line: u32 = 1;
-    const end = @min(@as(usize, offset), source.len);
-    var i: usize = 0;
-    while (i < end) : (i += 1) {
-        if (source[i] == '\n') line += 1;
-    }
-    return line;
 }
 
 /// Extract documentation for all exported definitions in a module.
@@ -201,9 +217,11 @@ pub fn extractModuleDocs(
     source_path: ?[]const u8,
 ) Allocator.Error!DocModel.ModuleDocs {
     const source = module_env.getSourceAll();
+    const line_index = try LineIndex.build(gpa, source);
+    defer line_index.deinit(gpa);
 
     // Extract module-level doc comment
-    const module_doc_extract = try extractModuleDocComment(gpa, source);
+    const module_doc_extract = try extractModuleDocComment(gpa, source, line_index);
     errdefer if (module_doc_extract) |d| gpa.free(d.text);
     const module_doc: ?[]const u8 = if (module_doc_extract) |d| d.text else null;
     const module_doc_start_line: u32 = if (module_doc_extract) |d| d.start_line else 0;
@@ -218,6 +236,11 @@ pub fn extractModuleDocs(
     // Dupe package name
     const pkg_name = try gpa.dupe(u8, package_name);
     errdefer gpa.free(pkg_name);
+
+    // Display-qualified path for local type refs ("app.Geometry"): docs must
+    // never render identity keys (URLs, canonical paths) as module paths.
+    const local_module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ package_name, module_env.module_name });
+    defer gpa.free(local_module_path);
 
     // Collect entries from exported defs
     var entries_list = std.ArrayList(DocModel.DocEntry).empty;
@@ -242,7 +265,7 @@ pub fn extractModuleDocs(
     };
 
     for (defs_slice) |def_idx| {
-        if (try extractDefEntry(gpa, module_env, def_idx, source)) |entry| {
+        if (try extractDefEntry(gpa, module_env, local_module_path, def_idx, source, line_index)) |entry| {
             // Skip internal Builtin functions
             if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry.name)) {
                 var mutable_entry = entry;
@@ -268,10 +291,10 @@ pub fn extractModuleDocs(
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_extract = try extractDocComment(gpa, source, region.start.offset);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -300,10 +323,10 @@ pub fn extractModuleDocs(
                 if (std.mem.eql(u8, package_name, "Builtin") and isInternalBuiltin(entry_name)) continue;
 
                 const region = module_env.store.getStatementRegion(stmt_idx);
-                const doc_extract = try extractDocComment(gpa, source, region.start.offset);
+                const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                 errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
                 errdefer if (type_sig) |s| {
                     s.deinit(gpa);
                     gpa.destroy(s);
@@ -312,11 +335,15 @@ pub fn extractModuleDocs(
                 const duped_name = try gpa.dupe(u8, entry_name);
                 errdefer gpa.free(duped_name);
 
+                const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                errdefer gpa.free(type_header);
+
                 const empty_children = try gpa.alloc(DocModel.DocEntry, 0);
                 errdefer gpa.free(empty_children);
 
                 try entries_list.append(gpa, DocModel.DocEntry{
                     .name = duped_name,
+                    .type_header = type_header,
                     .kind = if (decl.is_opaque) .@"opaque" else .nominal,
                     .type_signature = type_sig,
                     .doc_comment = if (doc_extract) |d| d.text else null,
@@ -417,15 +444,10 @@ fn filterTypeModuleEntries(
     var idx: usize = 0;
     while (idx < entries_list.items.len) {
         const entry = &entries_list.items[idx];
-        // Keep the main type entry (name matches the module name) and any entries
-        // that are prefixed with the module name (e.g. "Color.helper" which would
-        // have been a method moved under Color by the hierarchical pass, but if not
-        // yet moved, we still keep it).
-        if (std.mem.eql(u8, entry.name, module_name) or
-            (std.mem.startsWith(u8, entry.name, module_name) and
-                entry.name.len > module_name.len and
-                entry.name[module_name.len] == '.'))
-        {
+        // At this point the hierarchical pass has already moved associated
+        // entries under their parent. Anything still at top level is a sibling
+        // declaration, so a type module keeps only its main type entry.
+        if (std.mem.eql(u8, entry.name, module_name)) {
             idx += 1;
         } else {
             var removed = entries_list.orderedRemove(idx);
@@ -645,8 +667,10 @@ fn reparentDottedChildInto(
 fn extractDefEntry(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     def_idx: CIR.Def.Idx,
     source: []const u8,
+    line_index: LineIndex,
 ) Allocator.Error!?DocModel.DocEntry {
     const def = module_env.store.getDef(def_idx);
     const pattern = module_env.store.getPattern(def.pattern);
@@ -659,7 +683,7 @@ fn extractDefEntry(
 
             // Get the byte offset for doc comment scanning
             const offset = getDefSourceOffset(module_env, def);
-            const doc_extract = try extractDocComment(gpa, source, offset);
+            const doc_extract = try extractDocComment(gpa, source, offset, line_index);
             errdefer if (doc_extract) |d| gpa.free(d.text);
 
             // For annotated definitions, render the checked source annotation.
@@ -668,8 +692,7 @@ fn extractDefEntry(
             // is already available in CIR.
             const type_sig: ?*const DocType = blk: {
                 if (def.annotation) |anno_idx| {
-                    const annotation = module_env.store.getAnnotation(anno_idx);
-                    break :blk try extractAnnotationAsDocType(gpa, module_env, annotation);
+                    break :blk try extractAnnotationAsDocType(gpa, module_env, local_module_path, anno_idx);
                 }
 
                 const def_var = ModuleEnv.varFrom(def_idx);
@@ -707,12 +730,15 @@ fn extractDefEntry(
                     const duped_name = try gpa.dupe(u8, entry_name);
                     errdefer gpa.free(duped_name);
 
+                    const type_header = try render_type.renderTypeHeaderToString(gpa, module_env, decl.header);
+                    errdefer gpa.free(type_header);
+
                     // Use the statement region for doc comment scanning
                     const region = module_env.store.getStatementRegion(n.nominal_type_decl);
-                    const doc_extract = try extractDocComment(gpa, source, region.start.offset);
+                    const doc_extract = try extractDocComment(gpa, source, region.start.offset, line_index);
                     errdefer if (doc_extract) |d| gpa.free(d.text);
 
-                    const type_sig = try extractDeclTypeSig(gpa, module_env, decl.anno);
+                    const type_sig = try extractDeclTypeSig(gpa, module_env, local_module_path, decl.anno);
                     errdefer if (type_sig) |s| {
                         s.deinit(gpa);
                         gpa.destroy(s);
@@ -727,6 +753,7 @@ fn extractDefEntry(
 
                     return DocModel.DocEntry{
                         .name = duped_name,
+                        .type_header = type_header,
                         .kind = if (decl.is_opaque) .@"opaque" else .nominal,
                         .type_signature = type_sig,
                         .doc_comment = if (doc_extract) |d| d.text else null,
@@ -821,20 +848,23 @@ fn extractRecordChildren(
 fn extractDeclTypeSig(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!?*const DocType {
     // Extract the backing type from the CIR annotation. The inferred type for a
     // nominal resolves to the nominal itself, so we use the annotation instead.
     // DocEntry.writeToSExpr generates the declaration prefix from kind + name.
-    return try extractTypeAnnoAsDocType(gpa, module_env, anno_idx);
+    return try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, anno_idx);
 }
 
 fn extractAnnotationAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
-    annotation: CIR.Annotation,
+    local_module_path: []const u8,
+    annotation_idx: CIR.Annotation.Idx,
 ) Allocator.Error!?*const DocType {
-    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, annotation.anno) orelse return null;
+    const annotation = module_env.store.getAnnotation(annotation_idx);
+    const base_type = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, annotation.anno) orelse return null;
     var base_type_moved = false;
     errdefer if (!base_type_moved) {
         base_type.deinit(gpa);
@@ -857,7 +887,7 @@ fn extractAnnotationAsDocType(
         const where_clause = module_env.store.getWhereClause(where_idx);
         switch (where_clause) {
             .w_method => |method| {
-                const constraint = try extractWhereMethodConstraint(gpa, module_env, method);
+                const constraint = try extractWhereMethodConstraint(gpa, module_env, local_module_path, method);
                 errdefer {
                     constraint.signature.deinit(gpa);
                     gpa.destroy(constraint.signature);
@@ -889,6 +919,7 @@ fn extractAnnotationAsDocType(
     const wrapped = try allocDocType(gpa, .{ .where_clause = .{
         .type = base_type,
         .constraints = owned_constraints,
+        .layout = sourceWhereClauseLayout(module_env, where_span),
     } });
     base_type_moved = true;
     constraints_moved = true;
@@ -898,6 +929,7 @@ fn extractAnnotationAsDocType(
 fn extractWhereMethodConstraint(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!DocType.Constraint {
     const type_var = try extractWhereTypeVarName(gpa, module_env, method.var_);
@@ -906,7 +938,7 @@ fn extractWhereMethodConstraint(
     const method_name = try gpa.dupe(u8, module_env.getIdentText(method.method_name));
     errdefer gpa.free(method_name);
 
-    const signature = try extractWhereMethodSignature(gpa, module_env, method);
+    const signature = try extractWhereMethodSignature(gpa, module_env, local_module_path, method);
     errdefer {
         signature.deinit(gpa);
         gpa.destroy(signature);
@@ -922,6 +954,7 @@ fn extractWhereMethodConstraint(
 fn extractWhereMethodSignature(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     method: @TypeOf(@as(CIR.WhereClause, undefined).w_method),
 ) Allocator.Error!*const DocType {
     const args_slice = module_env.store.sliceTypeAnnos(method.args);
@@ -937,12 +970,12 @@ fn extractWhereMethodSignature(
     };
 
     for (args_slice) |arg_idx| {
-        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, arg_idx) orelse
+        args[args_len] = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, arg_idx) orelse
             try allocDocType(gpa, .@"error");
         args_len += 1;
     }
 
-    const ret = try extractTypeAnnoAsDocType(gpa, module_env, method.ret) orelse
+    const ret = try extractTypeAnnoAsDocType(gpa, module_env, local_module_path, method.ret) orelse
         try allocDocType(gpa, .@"error");
     var ret_moved = false;
     errdefer if (!ret_moved) {
@@ -953,7 +986,7 @@ fn extractWhereMethodSignature(
     const signature = try allocDocType(gpa, .{ .function = .{
         .args = args,
         .ret = ret,
-        .effectful = false,
+        .effectful = method.effectful,
     } });
     args_moved = true;
     ret_moved = true;
@@ -978,12 +1011,16 @@ fn extractWhereTypeVarName(
 /// Resolve the module path from a CIR TypeAnno's LocalOrExternal base.
 fn resolveModulePathFromBase(
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     local_or_ext: TypeAnno.LocalOrExternal,
 ) []const u8 {
     return switch (local_or_ext) {
         .builtin => "", // Don't expose "Builtin" module as it's an implementation detail
+        // Local refs render the display-qualified path ("app.Geometry"), not
+        // the identity-qualified ident (which may embed a URL or canonical
+        // filesystem path); identity strings are cache keys, not presentation.
         .local => if (!module_env.qualified_module_ident.isNone())
-            module_env.getIdentText(module_env.qualified_module_ident)
+            local_module_path
         else
             module_env.module_name,
         .external => |ext| blk: {
@@ -1011,10 +1048,86 @@ fn isAnonymousOpenExt(module_env: *const ModuleEnv, ext_idx: CIR.TypeAnno.Idx) b
     return name.len > 0 and name[0] == '#';
 }
 
+/// Recover the parser's explicit collection-layout choice from a CIR source
+/// region. A trailing comma requests expanded formatting; line breaks alone do
+/// not. Comments after the comma are ignored, matching the parser's token-based
+/// decision.
+fn sourceCollectionLayout(module_env: *const ModuleEnv, region: base.Region) DocType.Layout {
+    return collectionLayoutFromSource(module_env.getSourceAll(), region);
+}
+
+fn collectionLayoutFromSource(source: []const u8, region: base.Region) DocType.Layout {
+    const start: usize = @min(region.start.offset, source.len);
+    const end: usize = @min(region.end.offset, source.len);
+    if (start >= end) return .compact;
+
+    var last_significant: ?u8 = null;
+    var in_comment = false;
+    for (source[start..end]) |byte| {
+        if (in_comment) {
+            if (byte == '\n' or byte == '\r') in_comment = false;
+            continue;
+        }
+        if (byte == '#') {
+            in_comment = true;
+            continue;
+        }
+        if (!std.ascii.isWhitespace(byte) and byte != ')' and byte != ']' and byte != '}') {
+            last_significant = byte;
+        }
+    }
+
+    return if (last_significant == ',') .multiline else .compact;
+}
+
+fn sourceWhereClauseLayout(module_env: *const ModuleEnv, where_span: CIR.WhereClause.Span) DocType.Layout {
+    const clauses = module_env.store.sliceWhereClauses(where_span);
+    if (clauses.len == 0) return .compact;
+
+    const last_node: CIR.Node.Idx = @enumFromInt(@intFromEnum(clauses[clauses.len - 1]));
+    const last_region = module_env.store.getNodeRegion(last_node);
+    const source = module_env.getSourceAll();
+    const start: usize = @min(last_region.end.offset, source.len);
+
+    var in_comment = false;
+    for (source[start..]) |byte| {
+        if (in_comment) {
+            if (byte == '\n' or byte == '\r') in_comment = false;
+            continue;
+        }
+        if (byte == '#') {
+            in_comment = true;
+            continue;
+        }
+        if (std.ascii.isWhitespace(byte)) continue;
+        return if (byte == ',') .multiline else .compact;
+    }
+    return .compact;
+}
+
+test "collection layout follows trailing commas rather than source newlines" {
+    const compact_source = "List(\n    U8\n)";
+    try std.testing.expectEqual(
+        DocType.Layout.compact,
+        collectionLayoutFromSource(compact_source, base.Region.from_raw_offsets(0, compact_source.len)),
+    );
+
+    const multiline_source = "List(U8, # preserve expanded layout\n)";
+    try std.testing.expectEqual(
+        DocType.Layout.multiline,
+        collectionLayoutFromSource(multiline_source, base.Region.from_raw_offsets(0, multiline_source.len)),
+    );
+}
+
+fn sourceTypeLayout(module_env: *const ModuleEnv, anno_idx: CIR.TypeAnno.Idx) DocType.Layout {
+    return sourceCollectionLayout(module_env, module_env.store.getTypeAnnoRegion(anno_idx));
+}
+
 /// Extract a CIR TypeAnno as a structured DocType.
 fn extractTypeAnnoAsDocType(
     gpa: Allocator,
     module_env: *const ModuleEnv,
+    local_module_path: []const u8,
     type_anno_idx: CIR.TypeAnno.Idx,
 ) Allocator.Error!?*const DocType {
     const BuildFrame = union(enum) {
@@ -1024,21 +1137,28 @@ fn extractTypeAnnoAsDocType(
             name: []const u8,
             module_path: []const u8,
             arg_count: usize,
+            layout: DocType.Layout,
         },
         finish_tag: struct {
             name: []const u8,
             arg_count: usize,
+            layout: DocType.Layout,
         },
         finish_tag_union: struct {
             tag_count: usize,
             has_ext: bool,
             is_open: bool,
+            layout: DocType.Layout,
         },
-        finish_tuple: usize,
+        finish_tuple: struct {
+            elem_count: usize,
+            layout: DocType.Layout,
+        },
         finish_record: struct {
             fields: []CIR.TypeAnno.RecordField.Idx,
             has_ext: bool,
             is_open: bool,
+            layout: DocType.Layout,
         },
         finish_fn: struct {
             arg_count: usize,
@@ -1105,7 +1225,7 @@ fn extractTypeAnnoAsDocType(
                     .apply => |a| {
                         const args_slice = module_env.store.sliceTypeAnnos(a.args);
                         const name = module_env.getIdentText(a.name);
-                        const module_path = resolveModulePathFromBase(module_env, a.base);
+                        const module_path = resolveModulePathFromBase(module_env, local_module_path, a.base);
                         if (args_slice.len == 0) {
                             try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
                                 .module_path = try gpa.dupe(u8, module_path),
@@ -1116,6 +1236,7 @@ fn extractTypeAnnoAsDocType(
                                 .name = name,
                                 .module_path = module_path,
                                 .arg_count = args_slice.len,
+                                .layout = sourceTypeLayout(module_env, idx),
                             } });
                             try Builder.pushVisitsReversed(&frames, gpa, args_slice);
                         }
@@ -1133,7 +1254,7 @@ fn extractTypeAnnoAsDocType(
                     },
                     .lookup => |t| {
                         const name = module_env.getIdentText(t.name);
-                        const module_path = resolveModulePathFromBase(module_env, t.base);
+                        const module_path = resolveModulePathFromBase(module_env, local_module_path, t.base);
                         try Builder.pushResult(&results, gpa, try allocDocType(gpa, .{ .type_ref = .{
                             .module_path = try gpa.dupe(u8, module_path),
                             .type_name = try gpa.dupe(u8, name),
@@ -1146,6 +1267,7 @@ fn extractTypeAnnoAsDocType(
                             .tag_count = tags_slice.len,
                             .has_ext = has_ext,
                             .is_open = tu.ext != null,
+                            .layout = sourceTypeLayout(module_env, idx),
                         } });
                         if (has_ext) {
                             try frames.append(gpa, .{ .visit = tu.ext.? });
@@ -1160,6 +1282,7 @@ fn extractTypeAnnoAsDocType(
                                     try frames.append(gpa, .{ .finish_tag = .{
                                         .name = module_env.getIdentText(t.name),
                                         .arg_count = tag_args_slice.len,
+                                        .layout = sourceTypeLayout(module_env, tags_slice[i]),
                                     } });
                                     try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
                                 },
@@ -1174,12 +1297,16 @@ fn extractTypeAnnoAsDocType(
                         try frames.append(gpa, .{ .finish_tag = .{
                             .name = module_env.getIdentText(t.name),
                             .arg_count = tag_args_slice.len,
+                            .layout = sourceTypeLayout(module_env, idx),
                         } });
                         try Builder.pushVisitsReversed(&frames, gpa, tag_args_slice);
                     },
                     .tuple => |t| {
                         const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
-                        try frames.append(gpa, .{ .finish_tuple = elems_slice.len });
+                        try frames.append(gpa, .{ .finish_tuple = .{
+                            .elem_count = elems_slice.len,
+                            .layout = sourceTypeLayout(module_env, idx),
+                        } });
                         try Builder.pushVisitsReversed(&frames, gpa, elems_slice);
                     },
                     .record => |r| {
@@ -1189,6 +1316,7 @@ fn extractTypeAnnoAsDocType(
                             .fields = fields_slice,
                             .has_ext = has_ext,
                             .is_open = r.ext != null,
+                            .layout = sourceTypeLayout(module_env, idx),
                         } });
                         if (has_ext) {
                             try frames.append(gpa, .{ .visit = r.ext.? });
@@ -1235,6 +1363,7 @@ fn extractTypeAnnoAsDocType(
                 tags[0] = .{
                     .name = try gpa.dupe(u8, "?"),
                     .args = tag_args,
+                    .layout = .compact,
                 };
                 tags_len = 1;
                 tag_args_moved = true;
@@ -1272,6 +1401,7 @@ fn extractTypeAnnoAsDocType(
                 const app = try allocDocType(gpa, .{ .apply = .{
                     .constructor = constructor,
                     .args = args,
+                    .layout = finish.layout,
                 } });
                 args_moved = true;
                 constructor_moved = true;
@@ -1301,6 +1431,7 @@ fn extractTypeAnnoAsDocType(
                 tags[0] = .{
                     .name = try gpa.dupe(u8, finish.name),
                     .args = tag_args,
+                    .layout = finish.layout,
                 };
                 tags_len = 1;
                 tag_args_moved = true;
@@ -1357,15 +1488,16 @@ fn extractTypeAnnoAsDocType(
                     .tags = tags,
                     .ext = ext,
                     .is_open = finish.is_open,
+                    .layout = finish.layout,
                 } });
                 tags_moved = true;
                 ext_moved = true;
                 try Builder.pushResult(&results, gpa, tag_union);
             },
-            .finish_tuple => |elem_count| {
-                std.debug.assert(results.items.len >= elem_count);
-                const start = results.items.len - elem_count;
-                const elems = try gpa.alloc(*const DocType, elem_count);
+            .finish_tuple => |finish| {
+                std.debug.assert(results.items.len >= finish.elem_count);
+                const start = results.items.len - finish.elem_count;
+                const elems = try gpa.alloc(*const DocType, finish.elem_count);
                 var elems_moved = false;
                 errdefer if (!elems_moved) {
                     Builder.cleanupDocTypes(gpa, elems);
@@ -1374,7 +1506,10 @@ fn extractTypeAnnoAsDocType(
                 @memcpy(elems, results.items[start..]);
                 results.shrinkRetainingCapacity(start);
 
-                const tuple = try allocDocType(gpa, .{ .tuple = .{ .elems = elems } });
+                const tuple = try allocDocType(gpa, .{ .tuple = .{
+                    .elems = elems,
+                    .layout = finish.layout,
+                } });
                 elems_moved = true;
                 try Builder.pushResult(&results, gpa, tuple);
             },
@@ -1430,6 +1565,7 @@ fn extractTypeAnnoAsDocType(
                     .fields = fields,
                     .ext = ext,
                     .is_open = finish.is_open,
+                    .layout = finish.layout,
                 } });
                 fields_moved = true;
                 ext_moved = true;
@@ -1621,6 +1757,7 @@ fn extractDocType(
         return try allocDocType(gpa, .{ .where_clause = .{
             .type = base_type.?,
             .constraints = owned_constraints,
+            .layout = .multiline,
         } });
     }
 
@@ -1759,6 +1896,7 @@ fn extractDocTypeInner(
                 return try allocDocType(gpa, .{ .apply = .{
                     .constructor = constructor,
                     .args = args_slice,
+                    .layout = .multiline,
                 } });
             } else {
                 // Simple type reference
@@ -1812,6 +1950,7 @@ fn extractFlatType(
                 .fields = try gpa.alloc(DocType.Field, 0),
                 .ext = null,
                 .is_open = false,
+                .layout = .multiline,
             } });
         },
         .empty_tag_union => {
@@ -1819,6 +1958,7 @@ fn extractFlatType(
                 .tags = try gpa.alloc(DocType.Tag, 0),
                 .ext = null,
                 .is_open = false,
+                .layout = .multiline,
             } });
         },
     }
@@ -1885,6 +2025,7 @@ fn extractNominalType(
         return try allocDocType(gpa, .{ .apply = .{
             .constructor = constructor,
             .args = args_slice,
+            .layout = .multiline,
         } });
     } else {
         return try allocDocType(gpa, .{ .type_ref = .{
@@ -2015,6 +2156,7 @@ fn extractRecord(
         .fields = doc_fields,
         .ext = ext_doc_type,
         .is_open = is_open,
+        .layout = .multiline,
     } });
 }
 
@@ -2029,6 +2171,7 @@ fn extractRecordUnbound(
             .fields = try gpa.alloc(DocType.Field, 0),
             .ext = null,
             .is_open = false,
+            .layout = .multiline,
         } });
     }
 
@@ -2055,6 +2198,7 @@ fn extractRecordUnbound(
         .fields = fields,
         .ext = null,
         .is_open = false,
+        .layout = .multiline,
     } });
 }
 
@@ -2069,7 +2213,10 @@ fn extractTuple(
         elems[i] = try extractDocTypeInner(ctx, elem_var) orelse
             try allocDocType(gpa, .@"error");
     }
-    return try allocDocType(gpa, .{ .tuple = .{ .elems = elems } });
+    return try allocDocType(gpa, .{ .tuple = .{
+        .elems = elems,
+        .layout = .multiline,
+    } });
 }
 
 fn extractTagUnion(
@@ -2102,7 +2249,11 @@ fn extractTagUnion(
                 try allocDocType(gpa, .@"error");
         }
 
-        try tags.append(gpa, .{ .name = tag_name, .args = tag_args });
+        try tags.append(gpa, .{
+            .name = tag_name,
+            .args = tag_args,
+            .layout = .multiline,
+        });
     }
 
     // Handle extension variable
@@ -2165,6 +2316,7 @@ fn extractTagUnion(
         .tags = tags_slice,
         .ext = ext_type,
         .is_open = is_open,
+        .layout = .multiline,
     } });
 }
 
@@ -2296,6 +2448,7 @@ fn moveEntryForReparenting(
     moved.name = new_name;
 
     entry.children = empty_children;
+    entry.type_header = null;
     entry.type_signature = null;
     entry.doc_comment = null;
     entry.doc_refs = &.{};
@@ -2309,4 +2462,85 @@ fn trimLeft(s: []const u8) []const u8 {
         i += 1;
     }
     return s[i..];
+}
+
+/// Reference implementation of the old byteOffsetToLine for test comparison.
+fn oldByteOffsetToLine(source: []const u8, offset: u32) u32 {
+    var line: u32 = 1;
+    const end = @min(@as(usize, offset), source.len);
+    var i: usize = 0;
+    while (i < end) : (i += 1) {
+        if (source[i] == '\n') line += 1;
+    }
+    return line;
+}
+
+fn expectLineIndexMatches(source: []const u8) Allocator.Error!void {
+    const gpa = std.testing.allocator;
+    const index = try LineIndex.build(gpa, source);
+    defer index.deinit(gpa);
+
+    const end: u32 = @intCast(source.len);
+    var offset: u32 = 0;
+    while (offset <= end) : (offset += 1) {
+        const expected = oldByteOffsetToLine(source, offset);
+        const actual = index.lineOf(offset);
+        if (expected != actual) {
+            std.debug.panic("lineOf({d}): expected {d}, got {d}", .{ offset, expected, actual });
+        }
+    }
+}
+
+test "LineIndex: empty source" {
+    try expectLineIndexMatches("");
+}
+
+test "LineIndex: single line, no newline" {
+    try expectLineIndexMatches("hello world");
+}
+
+test "LineIndex: single trailing newline" {
+    try expectLineIndexMatches("hello\n");
+}
+
+test "LineIndex: two lines" {
+    try expectLineIndexMatches("hello\nworld");
+}
+
+test "LineIndex: two lines with trailing newline" {
+    try expectLineIndexMatches("hello\nworld\n");
+}
+
+test "LineIndex: multiple lines" {
+    try expectLineIndexMatches("line1\nline2\nline3\nline4");
+}
+
+test "LineIndex: consecutive newlines" {
+    try expectLineIndexMatches("a\n\n\nb\n");
+}
+
+test "LineIndex: offset at newline byte" {
+    try expectLineIndexMatches("abc\ndef\nghi");
+}
+
+test "LineIndex: offset beyond source length clamps to line count" {
+    const gpa = std.testing.allocator;
+    const source = "one\ntwo\nthree";
+    const index = try LineIndex.build(gpa, source);
+    defer index.deinit(gpa);
+
+    // Offset past end of source should still return the last line
+    const beyond: u32 = @intCast(source.len + 100);
+    const expected = oldByteOffsetToLine(source, beyond);
+    const actual = index.lineOf(beyond);
+    try std.testing.expectEqual(expected, actual);
+}
+
+test "LineIndex: offset zero" {
+    const gpa = std.testing.allocator;
+    const source = "first\nsecond\nthird";
+    const index = try LineIndex.build(gpa, source);
+    defer index.deinit(gpa);
+
+    try std.testing.expectEqual(@as(u32, 1), index.lineOf(0));
 }

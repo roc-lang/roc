@@ -316,6 +316,11 @@ pub const StrLiteral = struct {
     len: u32,
 };
 
+/// Identifier for one readonly data object emitted by static-data materialization.
+pub const StaticDataId = enum(u32) {
+    _,
+};
+
 /// How a string interpolation pattern must finish after its last step.
 pub const StrPatternEnd = enum {
     exact,
@@ -468,6 +473,7 @@ pub const LiteralValue = union(enum) {
         /// payload layout.
         default_layout: layout.Idx,
     },
+    static_data: StaticDataId,
     bytes_literal: StrLiteral,
     null_ptr,
     proc_ref: LirProcSpecId,
@@ -669,6 +675,15 @@ pub const CFStmt = union(enum) {
         /// Exact descriptor of the worker result stored in compiler-private
         /// callable metadata. Host-created callables carry no such metadata.
         result_desc: ?BoxyDescRef = null,
+        /// Optional consumed erased callable allocation to repack.
+        ///
+        /// When present, this statement returns a unique erased callable with
+        /// the new proc/drop/capture. If `reuse_unique` is true, ARC proved the
+        /// consumed allocation is uniquely owned at the statement. Otherwise,
+        /// consumers must runtime-check uniqueness and take the fresh allocate
+        /// path when the old allocation is shared.
+        reuse: ?LocalId = null,
+        reuse_unique: bool = false,
         next: CFStmtId,
     },
     assign_boxy_desc_ref: struct {
@@ -823,6 +838,20 @@ pub const CFStmt = union(enum) {
         payload: ?LocalId,
         next: CFStmtId,
     },
+    store_struct: struct {
+        dest: LocalId,
+        struct_layout: layout.Idx,
+        fields: LocalSpan,
+        next: CFStmtId,
+    },
+    store_tag: struct {
+        dest: LocalId,
+        tag_layout: layout.Idx,
+        variant_index: u16,
+        discriminant: u16,
+        payload: ?LocalId,
+        next: CFStmtId,
+    },
     set_local: struct {
         target: LocalId,
         value: LocalId,
@@ -897,9 +926,12 @@ pub const CFStmt = union(enum) {
         /// expected to be cold. Backends may use this for branch weights or
         /// block placement, but must not infer it from source names or shapes.
         default_is_cold: bool = false,
-        /// Common continuation used by structured branch-result switches, when
-        /// the branch bodies flow back to a shared suffix. ARC insertion uses
-        /// this to release branch-local owned values before the shared suffix.
+        /// Common continuation used by structured branch-result switches. Direct
+        /// lowering must provide this when branch bodies reach one exact shared
+        /// suffix within the same control-flow region. `null` means there is no
+        /// such same-region suffix; branches may still converge across a join.
+        /// ARC insertion uses the continuation to release branch-local owned
+        /// values before the shared suffix.
         continuation: ?CFStmtId = null,
     },
     /// Branch on a condition that is compiler-proven to describe whether
@@ -997,6 +1029,10 @@ pub const LirProcSpec = struct {
     /// normal Roc root runs, so its entry must initialize the embedded Boxy
     /// runtime before executing the body.
     boxy_runtime_entry: bool = false,
+    /// This closed proc exists only so target static-data materialization can
+    /// execute its exact post-layout construction. Runtime backends register
+    /// and emit only ordinary procedures.
+    is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.

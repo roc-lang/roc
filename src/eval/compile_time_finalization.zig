@@ -12,6 +12,7 @@ const builtins = @import("builtins");
 const check = @import("check");
 const collections = @import("collections");
 const lir = @import("lir");
+const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
 const checked = check.CheckedArtifact;
@@ -21,6 +22,7 @@ const ConstStoreWriter = @import("const_store_writer.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const boxy_abi = @import("boxy_abi.zig");
 const interpreter_mod = @import("interpreter.zig");
+const static_data_exports = @import("static_data");
 const Interpreter = interpreter_mod.Interpreter;
 const ExpectFailure = interpreter_mod.ExpectFailure;
 const FinalizeError = checked.CompileTimeFinalizer.Error;
@@ -393,11 +395,7 @@ const RootCompletionState = struct {
         const_use: checked.ConstUseTemplate,
     ) bool {
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
-        const own_hoisted_root = switch (const_use.const_ref.owner) {
-            .hoisted_expr => true,
-            .top_level_binding => false,
-        };
-        if (self.current_root_id != null and root_id == self.current_root_id.? and own_hoisted_root) return true;
+        if (self.current_root_id != null and root_id == self.current_root_id.?) return true;
         return !self.requested_roots[@intFromEnum(root_id)] or self.isDone(root_id);
     }
 
@@ -450,6 +448,7 @@ const RootCompletionState = struct {
             .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
             .callable_eval_template => |template_id| blk: {
                 const template = self.module.callable_eval_templates.get(template_id);
+                if (self.current_root_id != null and template.root == self.current_root_id.?) break :blk true;
                 break :blk !self.requested_roots[@intFromEnum(template.root)] or self.isDone(template.root);
             },
         };
@@ -495,7 +494,7 @@ fn lowerEvalAndFinishRoots(
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
     }
 
-    if (comptime !compilerHostMustUseInterpreterForCtfe()) {
+    if (!compilerHostMustUseInterpreterForCtfe()) {
         if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
         return lowerDevEvalAndFinishRoots(
             allocator,
@@ -526,6 +525,98 @@ fn lowerEvalAndFinishRoots(
     );
     defer lowered.deinit();
 
+    const materialized_static_data = static_data_exports.buildStaticData(
+        allocator,
+        .{
+            .root = checked.loweringViewWithRelations(module, relation_modules),
+            .imports = lowering_imports,
+        },
+        &lowered,
+        roc_target.RocTarget.detectNative(),
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.UnsupportedPlatform,
+    };
+    defer static_data_exports.deinitStaticData(allocator, materialized_static_data);
+
+    var static_data_image = backend.StaticDataImage.init(allocator, materialized_static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("invalid interpreter static-data image during compile-time finalization"),
+    };
+    defer static_data_image.deinit();
+
+    const interpreter_static_data = static_data_image.lirValueAddresses(
+        allocator,
+        lowered.lir_result.static_data_values.items.len,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("materialized interpreter static data omitted an LIR static-data symbol"),
+    };
+    defer allocator.free(interpreter_static_data);
+
+    var static_erased_callable_count: usize = 0;
+    for (materialized_static_data) |static_export| {
+        for (static_export.relocations) |relocation| {
+            if (relocation.callable_capture_offset != null) static_erased_callable_count += 1;
+        }
+    }
+    const static_erased_callables = try allocator.alloc(Interpreter.StaticErasedCallable, static_erased_callable_count);
+    defer allocator.free(static_erased_callables);
+    var static_erased_callable_index: usize = 0;
+    for (materialized_static_data) |static_export| {
+        const symbol_address = static_data_image.symbolAddress(static_export.symbol_name) orelse
+            finalizationInvariant("interpreter static-data image omitted a materialized export symbol");
+        const allocation_address = std.math.sub(usize, symbol_address, static_export.symbol_offset) catch
+            finalizationInvariant("interpreter static-data symbol offset exceeded its allocation address");
+        for (static_export.relocations) |relocation| {
+            const capture_offset = relocation.callable_capture_offset orelse continue;
+            if (relocation.kind != .function_pointer or relocation.rc_helper != null) {
+                finalizationInvariant("interpreter static callable relocation had inconsistent function metadata");
+            }
+            const callable_address = std.math.add(usize, allocation_address, @intCast(relocation.offset)) catch
+                finalizationInvariant("interpreter static callable address overflowed");
+            const capture_address = std.math.add(usize, callable_address, capture_offset) catch
+                finalizationInvariant("interpreter static callable capture address overflowed");
+            static_erased_callables[static_erased_callable_index] = .{
+                .capture_ptr = @ptrFromInt(capture_address),
+                .proc_id = relocation.procedure orelse
+                    finalizationInvariant("interpreter static callable relocation omitted its LIR procedure"),
+            };
+            static_erased_callable_index += 1;
+        }
+    }
+
+    const InterpreterStaticFunctionResolver = struct {
+        fn resolve(_: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+            if (relocation.rc_helper != null) return Interpreter.staticErasedCallableOnDropAddress();
+            if (relocation.callable_capture_offset == null) return null;
+            _ = relocation.procedure orelse return null;
+            return Interpreter.staticErasedCallableTrampolineAddress();
+        }
+    };
+    static_data_image.resolveFunctionRelocations(.{
+        .resolve = InterpreterStaticFunctionResolver.resolve,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("interpreter static data referenced an unresolved LIR procedure"),
+    };
+
     var host = CompilerHost.init(allocator);
     defer host.deinit();
 
@@ -535,8 +626,10 @@ fn lowerEvalAndFinishRoots(
         &lowered.lir_result.layouts,
         Interpreter.BoxyTables.fromResult(&lowered.lir_result),
         host.ops(),
+        .normalize,
     );
     defer interpreter.deinit();
+    interpreter.setStaticData(interpreter_static_data, static_erased_callables);
 
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
@@ -599,7 +692,15 @@ fn lowerEvalAndFinishRoots(
         }
 
         module.compile_time_roots.fillPayload(root_id, payload);
-        finishConstRoot(module, compile_time_root, payload);
+        const stored_root_type = switch (compile_time_root.kind) {
+            .constant, .hoisted_constant => try writer.storeRootType(root),
+            .callable_binding,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            => null,
+        };
+        finishConstRoot(module, compile_time_root, payload, stored_root_type);
         state.markDone(root_id);
     }
 
@@ -913,15 +1014,57 @@ fn lowerDevEvalAndFinishRoots(
     var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
     defer static_strings.deinit();
 
-    var codegen = try backend.HostLirCodeGen.init(
+    const materialized_static_data = static_data_exports.buildStaticData(
+        allocator,
+        .{
+            .root = checked.loweringViewWithRelations(module, relation_modules),
+            .imports = lowering_imports,
+        },
+        &lowered,
+        backend.dev.LirCodeGenMod.host_lir_codegen_target,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.UnsupportedPlatform,
+    };
+    defer static_data_exports.deinitStaticData(allocator, materialized_static_data);
+
+    var static_data_image = backend.StaticDataImage.init(allocator, materialized_static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("invalid native static-data image during compile-time finalization"),
+    };
+    defer static_data_image.deinit();
+
+    const native_static_data = static_data_image.lirValueAddresses(
+        allocator,
+        lowered.lir_result.static_data_values.items.len,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("materialized compile-time static data omitted an LIR static-data symbol"),
+    };
+    defer allocator.free(native_static_data);
+
+    var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         static_strings.entries,
         lowered.lir_result.boxy_erased_arg_desc_offsets.items,
         lowered.lir_result.boxy_erased_arg_desc_params.items,
+        .normalize,
     );
     defer codegen.deinit();
+    codegen.setNativeStaticData(native_static_data);
     codegen.setComptimeHooks(.{
         .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
         .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
@@ -932,6 +1075,9 @@ fn lowerDevEvalAndFinishRoots(
     var native_fns = boxyNativeFnTable();
     codegen.boxy_native_fns = &native_fns;
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
+    const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized_static_data);
+    defer allocator.free(static_rc_helpers);
+    try codegen.compileStaticDataRcHelpers(static_rc_helpers);
 
     var host_allocator_impl = ThreadSafeAllocator.init(allocator);
     const host_allocator = host_allocator_impl.allocator();
@@ -989,7 +1135,7 @@ fn lowerDevEvalAndFinishRoots(
     }
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
-    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntime();
+    const boxy_global_installed = jobs_len != 0 and boxy_tables.needsRuntimeForStore(&lowered.lir_result.store);
     if (boxy_global_installed) {
         boxy_abi.deinitGlobal();
         boxy_abi.initGlobal(
@@ -1007,6 +1153,39 @@ fn lowerDevEvalAndFinishRoots(
 
     var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
     defer executable.deinit();
+
+    const StaticFunctionResolver = struct {
+        codegen: *const backend.HostLirCodeGen,
+        executable: *const backend.ExecutableMemory,
+
+        fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            if (relocation.rc_helper) |helper| {
+                const offset = self.codegen.compiledStaticDataRcHelperOffset(helper) orelse return null;
+                return @intFromPtr(self.executable.codePtr() + offset);
+            }
+            if (relocation.callable_capture_offset == null) return null;
+            const proc_id = relocation.procedure orelse return null;
+            const compiled = self.codegen.compiledProcSymbol(proc_id) orelse return null;
+            return @intFromPtr(self.executable.codePtr() + compiled.code_start);
+        }
+    };
+    var static_function_resolver = StaticFunctionResolver{
+        .codegen = &codegen,
+        .executable = &executable,
+    };
+    static_data_image.resolveFunctionRelocations(.{
+        .context = @ptrCast(&static_function_resolver),
+        .resolve = StaticFunctionResolver.resolve,
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.DuplicateStaticDataSymbol,
+        error.InvalidStaticDataAlignment,
+        error.InvalidStaticDataRelocation,
+        error.MissingStaticDataSymbol,
+        error.UnresolvedStaticFunction,
+        => finalizationInvariant("compile-time static data referenced an unresolved generated function"),
+    };
 
     var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
     defer progress.deinit();
@@ -1121,7 +1300,15 @@ fn lowerDevEvalAndFinishRoots(
         }
 
         module.compile_time_roots.fillPayload(job.root_id, payload);
-        finishConstRoot(module, job.compile_time_root, payload);
+        const stored_root_type = switch (job.compile_time_root.kind) {
+            .constant, .hoisted_constant => try writer.storeRootType(job.root),
+            .callable_binding,
+            .expect,
+            .numeral_conversion,
+            .quote_conversion,
+            => null,
+        };
+        finishConstRoot(module, job.compile_time_root, payload, stored_root_type);
         state.markDone(job.root_id);
     }
 
@@ -1720,6 +1907,7 @@ fn finishConstRoot(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
+    root_type: ?check.ConstStore.ConstTypeId,
 ) void {
     if (root.kind != .constant and root.kind != .hoisted_constant) return;
     const node = switch (payload) {
@@ -1750,7 +1938,10 @@ fn finishConstRoot(
         .quote_conversion,
         => unreachable,
     };
-    const stored = checked.StoredConstTemplate{ .node = node };
+    const stored = checked.StoredConstTemplate{
+        .node = node,
+        .root_type = root_type orelse finalizationInvariant("constant root finalized without exact Monotype representation evidence"),
+    };
     module.const_templates.fillStoredConst(const_ref, stored);
     if (root.kind == .constant) {
         module.exported_const_templates.fillStoredConst(const_ref, stored);

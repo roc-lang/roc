@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Headerless module with no type and no main! reports invalid type module
+description=Headerless mod with no type and no main! reports invalid type mod
 type=file
 ~~~
 # SOURCE
@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))

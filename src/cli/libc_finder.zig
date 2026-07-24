@@ -10,6 +10,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
+const roc_target = @import("roc_target");
+const ld_so = roc_target.ld_so;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
@@ -47,15 +49,15 @@ fn validatePath(path: []const u8) bool {
 /// Get the dynamic linker name for the given architecture
 fn getDynamicLinkerName(arch: []const u8) []const u8 {
     if (std.mem.eql(u8, arch, "x86_64")) {
-        return "ld-linux-x86-64.so.2";
+        return ld_so.glibc_x86_64;
     } else if (std.mem.eql(u8, arch, "aarch64")) {
-        return "ld-linux-aarch64.so.1";
+        return ld_so.glibc_aarch64;
     } else if (std.mem.startsWith(u8, arch, "arm")) {
-        return "ld-linux-armhf.so.3";
+        return ld_so.glibc_arm;
     } else if (std.mem.eql(u8, arch, "i686") or std.mem.eql(u8, arch, "i386")) {
-        return "ld-linux.so.2";
+        return ld_so.glibc_x86;
     } else {
-        return "ld-linux.so.2";
+        return ld_so.glibc_x86;
     }
 }
 
@@ -177,13 +179,13 @@ fn findViaFilesystem(arena: std.mem.Allocator, std_io: std.Io) FindLibcError!Lib
 fn findDynamicLinker(arena: std.mem.Allocator, std_io: std.Io, arch: []const u8, lib_dir: []const u8) Allocator.Error!?[]const u8 {
     // Map architecture to dynamic linker names (including musl)
     const ld_names = if (std.mem.eql(u8, arch, "x86_64"))
-        &[_][]const u8{ "ld-linux-x86-64.so.2", "ld-musl-x86_64.so.1", "ld-linux.so.2" }
+        &[_][]const u8{ ld_so.glibc_x86_64, ld_so.musl_x86_64, "ld-linux.so.2" }
     else if (std.mem.eql(u8, arch, "aarch64"))
-        &[_][]const u8{ "ld-linux-aarch64.so.1", "ld-musl-aarch64.so.1", "ld-linux.so.1" }
+        &[_][]const u8{ ld_so.glibc_aarch64, ld_so.musl_aarch64, "ld-linux.so.1" }
     else if (std.mem.startsWith(u8, arch, "arm"))
-        &[_][]const u8{ "ld-linux-armhf.so.3", "ld-musl-arm.so.1", "ld-linux.so.3" }
+        &[_][]const u8{ ld_so.glibc_arm, ld_so.musl_arm, "ld-linux.so.3" }
     else if (std.mem.eql(u8, arch, "i686") or std.mem.eql(u8, arch, "i386"))
-        &[_][]const u8{ "ld-linux.so.2", "ld-musl-i386.so.1" }
+        &[_][]const u8{ ld_so.glibc_x86, ld_so.musl_x86 }
     else
         &[_][]const u8{ "ld-linux.so.2", "ld.so.1" };
 

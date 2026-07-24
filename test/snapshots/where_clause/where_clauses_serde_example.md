@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Module dispatch in where clause
+description=Mod dispatch in where clause
 type=snippet
 ~~~
 # SOURCE
@@ -23,7 +23,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "deserialize")
 			(ty-fn
@@ -37,7 +37,7 @@ EndOfFile,
 						(tags
 							(ty (name "DecodeErr"))))))
 			(where
-				(method (module-of "a") (name "decode")
+				(method (mod-of "a") (name "decode")
 					(args
 						(ty-apply
 							(ty (name "List"))

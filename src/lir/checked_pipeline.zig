@@ -12,6 +12,9 @@ const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
 const Trmc = @import("trmc.zig");
+const BoxReuse = @import("box_reuse.zig");
+const ReturnSlot = @import("return_slot.zig");
+const StrAppend = @import("str_append.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
@@ -25,6 +28,8 @@ const checked = check.CheckedModule;
 
 /// Resource failure while lowering checked modules to LIR.
 pub const LowerResourceError = Allocator.Error;
+/// An explicit checked constant requested for target static-data materialization.
+pub const StaticDataRequest = postcheck.Common.StaticDataRequest;
 
 pub const SpecializationStrategy = base.SpecializationStrategy;
 
@@ -38,7 +43,13 @@ pub const CheckedModuleSet = struct {
 pub const RootRequestSet = struct {
     requests: []const checked.RootRequest = &.{},
     layout_requests: []const checked.CheckedTypeId = &.{},
-    include_static_data_exports: bool = false,
+    /// Explicit checked constants to restore as readonly target data.
+    static_data_requests: []const postcheck.Common.StaticDataRequest = &.{},
+    /// Request layouts and materialization roots for host-visible provided data.
+    include_provided_data_exports: bool = false,
+    /// Restore eligible stored constants as internal readonly static values.
+    include_internal_static_data: bool = false,
+    test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
 };
 
 /// Target settings and checked module state for the checked-to-LIR pipeline.
@@ -65,6 +76,10 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     tag_reachability: bool = false,
+    /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
+    /// so a differential harness can execute the Debug verifier's materialized
+    /// Lambda Mono program. The slot receives a value only in Debug builds.
+    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
 };
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -80,6 +95,10 @@ pub const RuntimeTagUnionSchema = postcheck.SolvedLirLower.RuntimeTagUnionSchema
 pub const InlineMode = postcheck.SolvedInline.Mode;
 pub const InlineExpectMode = postcheck.SolvedLirLower.InlineExpectMode;
 pub const MonotypeCacheControl = postcheck.Monotype.Lower.SpecializationCacheControl;
+
+/// Materialized Lambda Mono program type, re-exported for harnesses that
+/// receive one through `TargetConfig.debug_materialized_out`.
+pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -203,14 +222,16 @@ pub fn lowerCheckedModulesToLir(
 ) LowerResourceError!LoweredProgram {
     try verifyCheckedBoundary(modules, target);
 
-    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_static_data_exports);
+    const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = switch (target.checked_module_state) {
-        .complete => if (roots.include_static_data_exports)
-            try collectStaticDataRequests(allocator, modules.root.module)
-        else
-            try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
-        .checking_finalization => try allocator.alloc(postcheck.Common.StaticDataRequest, 0),
+        .complete => try collectStaticDataRequests(
+            allocator,
+            modules.root.module,
+            roots.static_data_requests,
+            roots.include_provided_data_exports,
+        ),
+        .checking_finalization => try allocator.dupe(postcheck.Common.StaticDataRequest, roots.static_data_requests),
     };
     defer allocator.free(static_data_requests);
 
@@ -233,6 +254,8 @@ pub fn lowerCheckedModulesToLir(
         .{
             .proc_debug_names = target.proc_debug_names,
             .specialization_cache = target.monotype_cache,
+            .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
+            .target_usize = target.target_usize,
             .inline_expects = switch (target.inline_expects) {
                 .run => .run,
                 .omit => .omit,
@@ -266,8 +289,14 @@ pub fn lowerCheckedModulesToLir(
         .inline_plan = inline_plan.view(),
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
+        .dict_seed_mode = switch (target.checked_module_state) {
+            .complete => .runtime,
+            .checking_finalization => .comptime_zero,
+        },
         .proc_debug_names = target.proc_debug_names,
         .layout_request_const_plans = target.layout_request_const_plans,
+        .test_plan_metadata = roots.test_plan_metadata,
+        .debug_materialized_out = target.debug_materialized_out,
     });
     solved_owned = false;
     solved = undefined;
@@ -287,6 +316,9 @@ fn finishLoweredOutput(
     // statements (see src/lir/trmc.zig).
     try Trmc.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     try ScalarizeJoins.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try BoxReuse.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
+    try StrAppend.run(&lowered.lir_result.store);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
@@ -380,32 +412,20 @@ fn rootRequests(
         .requests = roots.requests,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
+        .test_plan_metadata = roots.test_plan_metadata,
     };
 }
 
 fn collectLayoutRequests(
     allocator: Allocator,
-    root: *const checked.Module,
+    _: *const checked.Module,
     explicit: []const checked.CheckedTypeId,
-    include_static_data_exports: bool,
+    _: bool,
 ) Allocator.Error![]checked.CheckedTypeId {
     var requests = std.ArrayList(checked.CheckedTypeId).empty;
     errdefer requests.deinit(allocator);
 
     try requests.appendSlice(allocator, explicit);
-    if (!include_static_data_exports) return try requests.toOwnedSlice(allocator);
-
-    const types = root.checked_types.view();
-    for (root.provided_exports.exports) |provided| {
-        switch (provided) {
-            .data => |data| {
-                if (!try checkedTypeContainsFunction(allocator, types, data.checked_type)) {
-                    try requests.append(allocator, data.checked_type);
-                }
-            },
-            .procedure => {},
-        }
-    }
     return try requests.toOwnedSlice(allocator);
 }
 
@@ -448,97 +468,29 @@ pub fn selectPlatformEntrypointRoots(
 fn collectStaticDataRequests(
     allocator: Allocator,
     root: *const checked.Module,
+    explicit: []const postcheck.Common.StaticDataRequest,
+    include_provided: bool,
 ) Allocator.Error![]postcheck.Common.StaticDataRequest {
     var requests = std.ArrayList(postcheck.Common.StaticDataRequest).empty;
     errdefer requests.deinit(allocator);
 
+    try requests.appendSlice(allocator, explicit);
+
+    if (!include_provided) return try requests.toOwnedSlice(allocator);
+
     for (root.provided_exports.exports) |provided| {
         switch (provided) {
             .data => |data| {
-                if (try checkedTypeContainsFunction(allocator, root.checked_types.view(), data.checked_type)) {
-                    try requests.append(allocator, .{ .data = data });
-                }
+                try requests.append(allocator, .{
+                    .const_locator = data.const_ref,
+                    .checked_type = data.checked_type,
+                });
             },
             .procedure => {},
         }
     }
 
     return try requests.toOwnedSlice(allocator);
-}
-
-fn checkedTypeContainsFunction(
-    allocator: Allocator,
-    types: checked.CheckedTypeStoreView,
-    root: checked.CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(checked.CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    return try checkedTypeContainsFunctionInner(types, root, &active);
-}
-
-fn checkedTypeContainsFunctionInner(
-    types: checked.CheckedTypeStoreView,
-    root: checked.CheckedTypeId,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    if (active.contains(root)) return false;
-    try active.put(root, {});
-    defer _ = active.remove(root);
-
-    const index: usize = @intFromEnum(root);
-    if (index >= types.payloadCount()) checkedPipelineInvariant("checked type function scan referenced a missing type");
-    return switch (types.payload(root)) {
-        .pending => checkedPipelineInvariant("checked type function scan reached a pending type"),
-        .function => true,
-        .alias => |alias| (try checkedTypeContainsFunctionInner(types, alias.backing, active)) or
-            try checkedTypeSliceContainsFunction(types, alias.args, active),
-        .nominal => |nominal| (try checkedTypeSliceContainsFunction(types, nominal.args, active)) or
-            try checkedTypeContainsFunctionInner(types, nominal.backing, active),
-        .record => |record| (try checkedFieldsContainFunction(types, record.fields, active)) or
-            try checkedTypeContainsFunctionInner(types, record.ext, active),
-        .record_unbound => |fields| checkedFieldsContainFunction(types, fields, active),
-        .tuple => |items| checkedTypeSliceContainsFunction(types, items, active),
-        .tag_union => |tag_union| (try checkedTagsContainFunction(types, tag_union.tags, active)) or
-            try checkedTypeContainsFunctionInner(types, tag_union.ext, active),
-        .flex,
-        .rigid,
-        .empty_record,
-        .empty_tag_union,
-        => false,
-    };
-}
-
-fn checkedTypeSliceContainsFunction(
-    types: checked.CheckedTypeStoreView,
-    items: []const checked.CheckedTypeId,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (items) |item| {
-        if (try checkedTypeContainsFunctionInner(types, item, active)) return true;
-    }
-    return false;
-}
-
-fn checkedFieldsContainFunction(
-    types: checked.CheckedTypeStoreView,
-    fields: []const checked.CheckedRecordField,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (fields) |field| {
-        if (try checkedTypeContainsFunctionInner(types, field.ty, active)) return true;
-    }
-    return false;
-}
-
-fn checkedTagsContainFunction(
-    types: checked.CheckedTypeStoreView,
-    tags: []const checked.CheckedTag,
-    active: *std.AutoHashMap(checked.CheckedTypeId, void),
-) Allocator.Error!bool {
-    for (tags) |tag| {
-        if (try checkedTypeSliceContainsFunction(types, tag.argsSlice(types), active)) return true;
-    }
-    return false;
 }
 
 fn convertRuntimeSchemas(

@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Comprehensive import test with various module access patterns
+description=Comprehensive import test with various mod access patterns
 type=snippet
 ~~~
 # SOURCE
@@ -14,13 +14,13 @@ main = {
     parser = Json.utf8
     helper = Str.trim
 
-    # Test direct module access
+    # Test direct mod access
     result1 = Json.parse
 
-    # Test aliased module access
+    # Test aliased mod access
     result2 = Http.post
 
-    # Test exposed items (should work without module prefix)
+    # Test exposed items (should work without mod prefix)
     result3 = get
     result4 = post
 
@@ -199,7 +199,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json"))
 		(s-import (raw "http.Client") (alias "Http")
@@ -258,13 +258,13 @@ main = {
 	parser = Json.utf8
 	helper = Str.trim
 
-	# Test direct module access
+	# Test direct mod access
 	result1 = Json.parse
 
-	# Test aliased module access
+	# Test aliased mod access
 	result2 = Http.post
 
-	# Test exposed items (should work without module prefix)
+	# Test exposed items (should work without mod prefix)
 	result3 = get
 	result4 = post
 
@@ -331,13 +331,13 @@ main = {
 						(p-assign (ident "result4")))
 					(e-lookup-local
 						(p-assign (ident "combined")))))))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes
 			(exposed (name "get") (wildcard false))
 			(exposed (name "post") (wildcard false))))
-	(s-import (module "utils.String")
+	(s-import (mod "utils.String")
 		(exposes)))
 ~~~
 # TYPES

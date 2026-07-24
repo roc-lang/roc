@@ -354,7 +354,7 @@ CliHostManyResult roc_cli_many(
     return result;
 }
 
-CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, AnonStruct22 arg1) {
+CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, CliHostShapeArg1 arg1) {
     (void)arg0;
     (void)arg1;
     record_failure("roc_cli_shape was called");
@@ -362,12 +362,12 @@ CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, AnonStruct22 arg1) {
     return result;
 }
 
-AnonStruct25 roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
+CliHostWide roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
     (void)arg0;
     (void)arg1;
     (void)arg2;
     record_failure("roc_cli_wide was called");
-    AnonStruct25 result = {{0}};
+    CliHostWide result = {{0}};
     return result;
 }
 

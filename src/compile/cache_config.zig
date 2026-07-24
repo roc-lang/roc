@@ -40,7 +40,23 @@ pub const Constants = struct {
     /// 15: Checked encoder_for runtime representation changed serialized compiler state.
     /// 16: Static dispatch constraints carry introducing-site provenance.
     /// 17: Numeral literals carry materialization metadata.
-    pub const CACHE_VERSION = 18;
+    /// 18: Exact-numeral pipeline: parser-owned numeral digit tables, the
+    ///     exact-numeral pattern node, and NumeralInfo constraint payloads.
+    /// 19: Annotation node payload records a precomputed `contains_underscore` flag.
+    /// 20: Static-data roots and iterator representation metadata changed serialized state.
+    /// 21: Nominal declaration table serialized with the type store.
+    /// 22: Checked function serialization no longer carries instantiation stamps.
+    /// 23: Stored nested functions carry durable local-procedure context identity.
+    /// 24: CommonIdents carries the range_exclusive/range_inclusive method idents.
+    /// 25: Canonical node storage records where-clause rigid ownership.
+    /// 26: ModuleEnv scheme instantiation evidence was renamed to scheme-use evidence.
+    /// 27: Field access canonicalization no longer contains method or qualified-dispatch fallbacks.
+    /// 28: String interpolation constraint metadata moved into the type store.
+    /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
+    /// 31: Canonical expression storage includes compiler-derived method nodes.
+    /// 32: Builtin indices include width-specific f32 conversion and math wrappers.
+    /// 33: Checked dispatch evidence and Boxy runtime metadata changed serialized compiler state.
+    pub const CACHE_VERSION = 33;
 };
 
 /// Configuration for the Roc cache system.

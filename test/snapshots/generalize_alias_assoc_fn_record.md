@@ -12,19 +12,19 @@ FooBar := {}.{
 
 bag = { run: FooBar.myfunc }
 
-main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
+main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 ~~~
 # EXPECTED
-TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:38:8:41
+TYPE MISMATCH - generalize_alias_assoc_fn_record.md:8:42:8:45
 # PROBLEMS
 
 ┌───────────────┐
 │ TYPE MISMATCH ├─ This string literal is being used where a non-string ──────┐
 └┬──────────────┘  type is needed.                                            │
  │                                                                            │
- │  main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))                          │
- │                                       ‾‾‾                                  │
- └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:38 ┘
+ │  main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))                      │
+ │                                           ‾‾‾                              │
+ └────────────────────────────────── generalize_alias_assoc_fn_record.md:8:42 ┘
 
     The type was determined to be:
 
@@ -37,13 +37,13 @@ LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpArrow,Upp
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,
 CloseCurly,
 LowerIdent,OpAssign,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceDotLowerIdent,CloseCurly,
-LowerIdent,OpAssign,OpenRound,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,CloseRound,Comma,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,OpenSquare,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,CloseSquare,CloseRound,CloseRound,
+LowerIdent,OpAssign,OpenRound,NoSpaceOpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,NoSpaceOpenRound,OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,CloseRound,Comma,OpenRound,LowerIdent,NoSpaceDotLowerIdent,CloseRound,NoSpaceOpenRound,OpenSquare,StringStart,StringPart,StringEnd,Comma,StringStart,StringPart,StringEnd,CloseSquare,CloseRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "FooBar")
@@ -73,23 +73,25 @@ EndOfFile,
 		(s-decl
 			(p-ident (raw "main"))
 			(e-tuple
-				(e-method-call (method ".run")
-					(receiver
-						(e-ident (raw "bag")))
-					(args
-						(e-list
-							(e-int (raw "1"))
-							(e-int (raw "2"))
-							(e-int (raw "3")))))
-				(e-method-call (method ".run")
-					(receiver
-						(e-ident (raw "bag")))
-					(args
-						(e-list
-							(e-string
-								(e-string-part (raw "a")))
-							(e-string
-								(e-string-part (raw "b"))))))))))
+				(e-apply
+					(e-tuple
+						(e-field-access
+							(e-ident (raw "bag"))
+							(e-ident (raw "run"))))
+					(e-list
+						(e-int (raw "1"))
+						(e-int (raw "2"))
+						(e-int (raw "3"))))
+				(e-apply
+					(e-tuple
+						(e-field-access
+							(e-ident (raw "bag"))
+							(e-ident (raw "run"))))
+					(e-list
+						(e-string
+							(e-string-part (raw "a")))
+						(e-string
+							(e-string-part (raw "b")))))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -100,7 +102,7 @@ FooBar := {}.{
 
 bag = { run: FooBar.myfunc }
 
-main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
+main = ((bag.run)([1, 2, 3]), (bag.run)(["a", "b"]))
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -110,7 +112,7 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 		(e-lambda
 			(args
 				(p-assign (ident "list")))
-			(e-dispatch-call (method "len") (constraint-fn-var 74)
+			(e-dispatch-call (method "len") (constraint-fn-var 219)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "list"))))
@@ -131,7 +133,7 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 200)
+				(e-call (constraint-fn-var 257)
 					(e-field-access (field "run")
 						(receiver
 							(e-lookup-local
@@ -141,7 +143,7 @@ main = (bag.run([1, 2, 3]), bag.run(["a", "b"]))
 							(e-num (value "1"))
 							(e-num (value "2"))
 							(e-num (value "3")))))
-				(e-call (constraint-fn-var 238)
+				(e-call (constraint-fn-var 277)
 					(e-field-access (field "run")
 						(receiver
 							(e-lookup-local

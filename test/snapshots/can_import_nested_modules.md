@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Nested module qualification
+description=Nested mod qualification
 type=snippet
 ~~~
 # SOURCE
@@ -31,28 +31,28 @@ validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)
 validateAuth = |creds| HttpAuth.validate(creds)
 ~~~
 # EXPECTED
-MODULE NOT IMPORTED - can_import_nested_modules.md:6:15:6:30
-DOES NOT EXIST - can_import_nested_modules.md:7:26:7:41
-MODULE NOT FOUND - can_import_nested_modules.md:10:36:10:42
-NAME NOT IN SCOPE - can_import_nested_modules.md:11:29:11:43
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:15:14:37
-MODULE NOT IMPORTED - can_import_nested_modules.md:14:55:14:74
-DOES NOT EXIST - can_import_nested_modules.md:16:5:16:37
-NAME NOT IN SCOPE - can_import_nested_modules.md:20:23:20:30
-DOES NOT EXIST - can_import_nested_modules.md:20:37:20:58
-MODULE NOT FOUND - can_import_nested_modules.md:23:24:23:36
-MODULE NOT FOUND - can_import_nested_modules.md:23:52:23:58
-MODULE NOT FOUND - can_import_nested_modules.md:23:68:23:74
-NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
+MOD NOT IMPORTED - can_import_nested_mods.md:6:15:6:30
+DOES NOT EXIST - can_import_nested_mods.md:7:26:7:41
+MOD NOT FOUND - can_import_nested_mods.md:10:36:10:42
+NAME NOT IN SCOPE - can_import_nested_mods.md:11:29:11:43
+MOD NOT IMPORTED - can_import_nested_mods.md:14:15:14:37
+MOD NOT IMPORTED - can_import_nested_mods.md:14:55:14:74
+DOES NOT EXIST - can_import_nested_mods.md:16:5:16:37
+NAME NOT IN SCOPE - can_import_nested_mods.md:20:23:20:30
+DOES NOT EXIST - can_import_nested_mods.md:20:37:20:58
+MOD NOT FOUND - can_import_nested_mods.md:23:24:23:36
+MOD NOT FOUND - can_import_nested_mods.md:23:52:23:58
+MOD NOT FOUND - can_import_nested_mods.md:23:68:23:74
+NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 # PROBLEMS
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `Config` imported ──┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `Config` imported ──┐
 └┬────────────────────┘  into this Roc file.                                  │
  │                                                                            │
  │  parseConfig : Config.Settings -> Str                                      │
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                             │
- └───────────────────────────────────────── can_import_nested_modules.md:6:15 ┘
+ └───────────────────────────────────────── can_import_nested_mods.md:6:15 ┘
 
 
 
@@ -62,17 +62,17 @@ NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
  │                                                                            │
  │  parseConfig = |settings| Config.toString(settings)                        │
  │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └───────────────────────────────────────── can_import_nested_modules.md:7:26 ┘
+ └───────────────────────────────────────── can_import_nested_mods.md:7:26 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
+│ MOD NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  authenticate : Str, Str -> HttpAuth.Token                                 │
  │                                     ‾‾‾‾‾‾                                 │
- └──────────────────────────────────────── can_import_nested_modules.md:10:36 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:10:36 ┘
 
 
 
@@ -82,28 +82,28 @@ NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
  │                                                                            │
  │  authenticate = |user, pass| HttpAuth.login(user, pass)                    │
  │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └──────────────────────────────────────── can_import_nested_modules.md:11:29 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:11:29 ┘
 
     Is it misspelled, or is there an import missing?
 
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `Config.Parser` ────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `Config.Parser` ────┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
  │                ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                      │
- └──────────────────────────────────────── can_import_nested_modules.md:14:15 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:14:15 ┘
 
 
 
 ┌─────────────────────┐
-│ MODULE NOT IMPORTED ├─ There is no module with the name `Config.Parser` ────┐
+│ MOD NOT IMPORTED ├─ There is no mod with the name `Config.Parser` ────┐
 └┬────────────────────┘  imported into this Roc file.                         │
  │                                                                            │
  │  processData : Config.Parser.Advanced, Str -> Try(Str, Config.Parser.Error)│
  │                                                        ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾ │
- └──────────────────────────────────────── can_import_nested_modules.md:14:55 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:14:55 ┘
 
 
 
@@ -113,7 +113,7 @@ NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
  │                                                                            │
  │  Config.Parser.Advanced.parseWith(advancedConfig, input)                   │
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └───────────────────────────────────────── can_import_nested_modules.md:16:5 ┘
+ └───────────────────────────────────────── can_import_nested_mods.md:16:5 ┘
 
 
 
@@ -123,7 +123,7 @@ NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
  │                                                                            │
  │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
  │                        ‾‾‾‾‾‾‾                                             │
- └──────────────────────────────────────── can_import_nested_modules.md:20:23 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:20:23 ┘
 
     Is it misspelled, or is there an import missing?
 
@@ -134,37 +134,37 @@ NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
  │                                                                            │
  │  formatOutput = |text| padLeft(text, Config.defaultPadding)                │
  │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                 │
- └──────────────────────────────────────── can_import_nested_modules.md:20:37 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:20:37 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Credentials` type is declared to be in ───────────┐
+│ MOD NOT FOUND ├─ This `Credentials` type is declared to be in ───────────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾                                       │
- └──────────────────────────────────────── can_import_nested_modules.md:23:24 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:23:24 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
+│ MOD NOT FOUND ├─ This `Token` type is declared to be in `http.Client`, ──┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                                                     ‾‾‾‾‾‾                 │
- └──────────────────────────────────────── can_import_nested_modules.md:23:52 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:23:52 ┘
 
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Error` type is declared to be in `http.Client`, ──┐
+│ MOD NOT FOUND ├─ This `Error` type is declared to be in `http.Client`, ──┐
 └┬─────────────────┘  which does not exist.                                   │
  │                                                                            │
  │  validateAuth : HttpAuth.Credentials -> Try(HttpAuth.Token, HttpAuth.Error)│
  │                                                                     ‾‾‾‾‾‾ │
- └──────────────────────────────────────── can_import_nested_modules.md:23:68 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:23:68 ┘
 
 
 
@@ -174,7 +174,7 @@ NAME NOT IN SCOPE - can_import_nested_modules.md:24:24:24:41
  │                                                                            │
  │  validateAuth = |creds| HttpAuth.validate(creds)                           │
  │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └──────────────────────────────────────── can_import_nested_modules.md:24:24 ┘
+ └──────────────────────────────────────── can_import_nested_mods.md:24:24 ┘
 
     Is it misspelled, or is there an import missing?
 
@@ -199,7 +199,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Parser")
 			(exposing
@@ -391,12 +391,12 @@ validateAuth = |creds| HttpAuth.validate(creds)
 				(ty-apply (name "Try") (builtin)
 					(ty-malformed)
 					(ty-malformed)))))
-	(s-import (module "json.Parser")
+	(s-import (mod "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes))
-	(s-import (module "utils.String")
+	(s-import (mod "utils.String")
 		(exposes
 			(exposed (name "padLeft") (wildcard false)))))
 ~~~

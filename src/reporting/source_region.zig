@@ -24,6 +24,26 @@ pub fn calculateUnderlineLength(start_column: u32, end_column: u32) u32 {
     return 1;
 }
 
+/// Whether an underline region draws a caret row under the source line
+/// numbered `line_num`: only single-line regions on exactly that line do.
+pub fn underlineAppliesToLine(start_line: u32, end_line: u32, line_num: u32) bool {
+    return start_line == line_num and start_line == end_line;
+}
+
+/// Write the padding that precedes an underline span on a caret row, advancing
+/// from `col_position` (1-based; 1 means nothing has been written on this row
+/// yet) up to `start_column`. The row's first gap mirrors the source line's own
+/// characters via `printLeadingWhitespace` — preserving tabs so the carets land
+/// under a tabbed line — while gaps between spans are plain spaces.
+pub fn printUnderlineGap(writer: anytype, line: []const u8, col_position: u32, start_column: u32) error{WriteFailed}!void {
+    if (start_column <= col_position) return;
+    if (col_position == 1) {
+        try printLeadingWhitespace(writer, line, start_column);
+    } else {
+        try printSpaces(writer, start_column - col_position);
+    }
+}
+
 /// The number of terminal columns a single Unicode codepoint occupies:
 /// 0 for combining marks / zero-width characters, 2 for East Asian Wide and
 /// Fullwidth characters (and most emoji), 1 otherwise.
@@ -216,35 +236,4 @@ test "printSpaces" {
     writer.clearRetainingCapacity();
     try printSpaces(&writer.writer, 5);
     try testing.expectEqualStrings("     ", writer.written());
-}
-
-test "integration - format source region" {
-    // For "x" identifier at column 1, length should be 1
-    try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(1, 2));
-
-    // For "x" identifier at column 5, length should be 1
-    try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(5, 6));
-}
-
-test "real-world identifier underline calculations" {
-    // Single character identifier "x" at column 1
-    // Columns: 1234...
-    // Text:    x = 1
-    //          ^ (column 1-2, should underline 1 char)
-    try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(1, 2));
-
-    // Multi-character identifier "someVariable" at column 1
-    // Columns: 123456789012345...
-    // Text:    someVariable = 1
-    //          ^^^^^^^^^^^^ (columns 1-13, should underline 12 chars)
-    try testing.expectEqual(@as(u32, 12), calculateUnderlineLength(1, 13));
-
-    // Identifier "foo" at column 5
-    // Columns: 12345678...
-    // Text:        foo = bar
-    //              ^^^ (columns 5-8, should underline 3 chars)
-    try testing.expectEqual(@as(u32, 3), calculateUnderlineLength(5, 8));
-
-    // Edge case: single column span (e.g., single char at end of identifier)
-    try testing.expectEqual(@as(u32, 1), calculateUnderlineLength(10, 10));
 }

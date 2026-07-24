@@ -31,7 +31,7 @@ greet_for_host = greet
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)

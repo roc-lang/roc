@@ -14,8 +14,6 @@ Hop := [Mk(U64)].{
 
 alpha = |h, k| h.once(k)
 
-# NOTE: check-only for now — see DispatchCyclePhantomMerge.roc (pre-existing
-# postcheck evidence bug on recursive dispatch, reproduces on main).
 main! = |args| {
     result = alpha(Hop.Mk(11), List.len(args) + 4)
     if result != 11 {

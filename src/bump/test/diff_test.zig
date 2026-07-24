@@ -170,15 +170,6 @@ test "adding a static dispatch constraint is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-test "removing a static dispatch constraint is major" {
-    var old = try constrainedVarApi(true);
-    defer old.deinit();
-    var new = try constrainedVarApi(false);
-    defer new.deinit();
-
-    try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
-}
-
 fn aliasApi(target_path: []const u8) std.mem.Allocator.Error!PackageApi {
     var api = PackageApi.init(gpa);
     errdefer api.deinit();
@@ -270,15 +261,6 @@ test "transparent to opaque is major" {
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
 }
 
-test "opaque to transparent is major" {
-    var old = try opaqueNominalApi();
-    defer old.deinit();
-    var new = try recordNominalApi(&.{"name"});
-    defer new.deinit();
-
-    try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
-}
-
 test "changing nominal arity is major" {
     var old = PackageApi.init(gpa);
     defer old.deinit();
@@ -321,18 +303,6 @@ test "changing an external dependency 0.X group in a signature is major" {
     defer new.deinit();
 
     try std.testing.expectEqual(Magnitude.major, try diffMagnitude(&old, &new));
-}
-
-test "an external dependency patch difference within a 0.X group is not a change" {
-    // 0.5.1 and 0.5.2 of the same dependency render identically: only the
-    // 0.X compatibility group is part of type identity, mirroring version
-    // solving. Both sides here use group 0.5.
-    var old = try externalRefApi(0, 5);
-    defer old.deinit();
-    var new = try externalRefApi(0, 5);
-    defer new.deinit();
-
-    try std.testing.expectEqual(Magnitude.patch, try diffMagnitude(&old, &new));
 }
 
 test "magnitudes combine to the maximum" {

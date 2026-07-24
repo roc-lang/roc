@@ -39,7 +39,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "scopedTypeVarInternal")
 			(ty-fn
@@ -98,7 +98,7 @@ NO CHANGE
 									(p-assign (ident "c"))))
 							(e-lookup-local
 								(p-assign (ident "d"))))))
-				(e-call (constraint-fn-var 48)
+				(e-call (constraint-fn-var 210)
 					(e-lookup-local
 						(p-assign (ident "b")))
 					(e-lookup-local

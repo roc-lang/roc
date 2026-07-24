@@ -17,7 +17,7 @@ UNEXPECTED STATEMENT - fuzz_crash_059.md:2:9:2:13
 UNEXPECTED STATEMENT - fuzz_crash_059.md:2:13:2:14
 UNEXPECTED STATEMENT - fuzz_crash_059.md:2:14:2:15
 UNEXPECTED STATEMENT - fuzz_crash_059.md:2:15:2:16
-MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
+MOD NOT FOUND - fuzz_crash_059.md:1:20:2:2
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -163,7 +163,7 @@ MODULE NOT FOUND - fuzz_crash_059.md:1:20:2:2
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `B` was not found in this Roc project. ──────┐
+│ MOD NOT FOUND ├─ The mod `B` was not found in this Roc project. ──────┐
 └┬─────────────────┘                                                          │
  │                                                                            │
  │  app[]{f:platform""}import B as                                            │
@@ -209,7 +209,7 @@ import B as G
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "B")
+	(s-import (mod "B")
 		(exposes)))
 ~~~
 # TYPES

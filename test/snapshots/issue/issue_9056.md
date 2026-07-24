@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Formatter should preserve all module qualifiers in imports
+description=Formatter should preserve all mod qualifiers in imports
 type=snippet
 ~~~
 # SOURCE
@@ -19,7 +19,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "a.B.C") (alias "D")
 			(exposing
@@ -32,7 +32,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "a.B")
+	(s-import (mod "a.B")
 		(exposes
 			(exposed (name "E") (wildcard false)))))
 ~~~

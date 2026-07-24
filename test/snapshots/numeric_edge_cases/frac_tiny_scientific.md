@@ -8,9 +8,21 @@ type=expr
 1.0e-100
 ~~~
 # EXPECTED
-NIL
+INVALID NUMBER - frac_tiny_scientific.md:1:1:1:9
 # PROBLEMS
-NIL
+
+┌────────────────┐
+│ INVALID NUMBER ├─ This number literal does not fit in the inferred type. ───┐
+└┬───────────────┘                                                            │
+ │                                                                            │
+ │  1.0e-100                                                                  │
+ │  ‾‾‾‾‾‾‾‾                                                                  │
+ └─────────────────────────────────────────────── frac_tiny_scientific.md:1:1 ┘
+
+    The inferred type is:
+
+        Dec
+
 # TOKENS
 ~~~zig
 Float,
@@ -26,9 +38,9 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dec-small (numerator "1") (denominator-power-of-ten "100") (value "9.999999999999998e-101"))
+(e-num-from-numeral)
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "Error"))
 ~~~

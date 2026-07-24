@@ -25,8 +25,10 @@ pub const LowLevel = enum(u16) {
     str_drop_prefix,
     str_drop_prefix_caseless_ascii,
     str_drop_suffix,
-    str_find_first,
+    str_split_first,
     str_count_utf8_bytes,
+    str_get_utf8_byte_unsafe,
+    str_substring_unsafe,
     str_with_capacity,
     str_reserve,
     str_release_excess_capacity,
@@ -170,8 +172,13 @@ pub const LowLevel = enum(u16) {
     num_bitwise_xor,
     num_bitwise_not,
 
+    // Bit-counting operations (integer types only). Each takes an integer
+    // operand and returns a U8, regardless of the operand's width.
+    num_count_one_bits,
+    num_count_leading_zero_bits,
+    num_count_trailing_zero_bits,
+
     // Numeric parsing operations
-    num_from_numeral,
     u8_from_str,
     i8_from_str,
     u16_from_str,
@@ -461,6 +468,11 @@ pub const LowLevel = enum(u16) {
     // Box operations
     box_box,
     box_unbox,
+    /// Box(T) -> Box(T): consume a box and return a unique box containing the
+    /// same payload. Reuses the allocation when uniqueness is known or the
+    /// runtime check succeeds; otherwise copies the payload into a fresh box,
+    /// retains nested payload children, and releases the consumed input.
+    box_prepare_update,
     erased_capture_load,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
@@ -671,10 +683,11 @@ pub const LowLevel = enum(u16) {
 
             .str_drop_prefix,
             .str_drop_suffix,
+            .str_substring_unsafe,
             => RcEffect.retainsSharingArgs(argMask(&.{0})),
 
             .str_drop_prefix_caseless_ascii,
-            .str_find_first,
+            .str_split_first,
             => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
@@ -767,6 +780,8 @@ pub const LowLevel = enum(u16) {
 
             .box_unbox => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
 
+            .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
+
             // The capture environment is read through the executing frame's
             // closure, not through an explicit refcounted argument, so the
             // result cannot name a lender to borrow from.
@@ -792,6 +807,7 @@ pub const LowLevel = enum(u16) {
             .str_starts_with,
             .str_ends_with,
             .str_count_utf8_bytes,
+            .str_get_utf8_byte_unsafe,
             .list_len,
             .list_capacity,
             .bool_not,
@@ -860,7 +876,9 @@ pub const LowLevel = enum(u16) {
             .num_bitwise_or,
             .num_bitwise_xor,
             .num_bitwise_not,
-            .num_from_numeral,
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
             .u8_from_str,
             .i8_from_str,
             .u16_from_str,

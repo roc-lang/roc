@@ -28,7 +28,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "sum"))
@@ -41,7 +41,7 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 80)
+		(e-dispatch-call (method "plus") (constraint-fn-var 190)
 			(receiver
 				(e-num (value "1")))
 			(args

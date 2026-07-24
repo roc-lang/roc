@@ -266,7 +266,7 @@ The condition must be a valid expression that evaluates to a `Bool` value (`Bool
  │                 ‾‾‾‾‾‾‾‾‾‾‾                                                │
  └──────────────────────────────────────────────────── fuzz_crash_022.md:1:16 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -278,7 +278,7 @@ The condition must be a valid expression that evaluates to a `Bool` value (`Bool
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                       │
  └───────────────────────────────────────────────────── fuzz_crash_022.md:5:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS

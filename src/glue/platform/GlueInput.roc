@@ -9,9 +9,8 @@ import Types exposing [Types]
 ## hosted functions, the reflected type table, and provides metadata, then render
 ## their language-specific files locally.
 ##
-## Authoritative compiler sources:
-## - src/glue/glue.zig produces the reflected Types payload.
-## - src/glue/platform/host.zig marshals that payload into these Roc records.
+## Authoritative compiler source: src/glue/glue.zig produces the reflected
+## Types payload and marshals it into these Roc records.
 ##
 ## This helper only qualifies hosted function names with their module names and
 ## sorts by HostedFunctionInfo.index, matching the compiler-emitted index order.

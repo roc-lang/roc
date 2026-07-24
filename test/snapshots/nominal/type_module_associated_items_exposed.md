@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Type module with associated items should not report unused variables
+description=Type mod with associated items should not report unused variables
 type=file:Foo.roc
 ~~~
 # SOURCE
@@ -30,7 +30,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")

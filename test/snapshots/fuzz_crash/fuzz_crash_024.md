@@ -116,7 +116,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "var_only_allowed_in_a_body"))
 		(s-decl

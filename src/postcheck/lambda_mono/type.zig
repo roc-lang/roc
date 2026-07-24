@@ -277,6 +277,10 @@ pub const Store = struct {
                 writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
                 writeOptionalU32(hasher, named.def.source_decl);
                 writeBytes(hasher, name_store.typeNameText(named.def.type_name));
+                writeOptionalDigest(hasher, named.def.generated);
+                writeBytes(hasher, @tagName(named.def.iterator_representation));
+                writeBytes(hasher, @tagName(named.def.iterator_kind));
+                writeU32(hasher, named.def.iterator_depth);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -390,6 +394,15 @@ fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
     if (value) |v| {
         hasher.update(&[_]u8{1});
         writeU32(hasher, v);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
+}
+
+fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeDigest) void {
+    if (value) |digest| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&digest.bytes);
     } else {
         hasher.update(&[_]u8{0});
     }

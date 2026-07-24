@@ -33,5 +33,5 @@ describe = |result|
 	}
 
 main! = || {
-	Stdout.line!(describe(cli_parser.parser(["prog", "alpha", "beta"])))
+	Stdout.line!(describe((cli_parser.parser)(["prog", "alpha", "beta"])))
 }

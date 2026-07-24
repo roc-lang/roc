@@ -46,7 +46,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json")
 			(exposing
@@ -91,7 +91,7 @@ main = {
 					(p-assign (ident "parse"))))
 			(e-lookup-local
 				(p-assign (ident "result")))))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "parse") (wildcard false)))))
 ~~~

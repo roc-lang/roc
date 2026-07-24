@@ -83,50 +83,115 @@ const setupSearch = () => {
 
     searchForm.addEventListener("keydown", searchKeyDown);
 
+    function addLangRefSearchEntries() {
+      if (searchTypeAhead.dataset.langRefReady === "true") return;
+
+      document
+        .querySelectorAll("#sidebar-nav .langref-articles a[href]")
+        .forEach((sidebarLink) => {
+          const name = sidebarLink.textContent.replace(/\s+/g, " ").trim();
+          if (name === "") return;
+
+          const item = document.createElement("li");
+          item.classList.add("hidden");
+
+          const link = document.createElement("a");
+          link.classList.add("type-ahead-link", "type-ahead-langref");
+          link.href = sidebarLink.getAttribute("href");
+
+          const defName = document.createElement("span");
+          defName.classList.add("type-ahead-def-name", "type-ahead-langref-title");
+          defName.textContent = name;
+
+          const context = document.createElement("span");
+          context.classList.add("type-ahead-langref-context");
+          context.textContent = "Language Reference";
+
+          const signature = document.createElement("span");
+          signature.classList.add("type-ahead-signature");
+          signature.textContent = "Language Reference";
+          signature.hidden = true;
+
+          link.append(defName, " in ", context, signature);
+          item.appendChild(link);
+          searchTypeAhead.appendChild(item);
+        });
+
+      searchTypeAhead.dataset.langRefReady = "true";
+    }
+
+    addLangRefSearchEntries();
+
+    // Precompute a lowercase search haystack for every entry once. The old code
+    // re-read the DOM (querySelector + textContent) for all ~1500 entries on
+    // every keystroke, which was needless work per input. The entry <li>s are
+    // static (server-rendered, plus the langref entries appended above) and
+    // persist across soft navigations, so this only has to happen once.
+    const searchEntries = Array.from(
+      searchTypeAhead.querySelectorAll("li"),
+    ).map((li) => {
+      const entryModule =
+        li.querySelector(".type-ahead-module-name")?.textContent?.toLowerCase() ??
+        "";
+      const entryName =
+        li.querySelector(".type-ahead-def-name")?.textContent?.toLowerCase() ?? "";
+      const signature =
+        li
+          .querySelector(".type-ahead-signature")
+          ?.textContent?.toLowerCase()
+          ?.replace(/\s+/g, "") ?? "";
+      const qualifiedName = entryModule ? `${entryModule}.${entryName}` : entryName;
+      return { li, qualifiedName, signature };
+    });
+
+    // Cap how many results we reveal at once. Broad queries (e.g. a single "m")
+    // match well over a thousand entries, and laying out and painting that many
+    // list items is what made the first keystroke freeze. The dropdown scrolls
+    // and typing more characters narrows things down fast, so a modest cap keeps
+    // the type-ahead responsive without meaningfully hurting usability.
+    const MAX_RESULTS = 50;
+
+    // The entries currently revealed, so each search only re-hides the handful it
+    // previously showed instead of touching every entry in the list.
+    let shownItems = [];
+
     function search() {
       topSearchResultListItem = undefined;
-      let text = searchBox.value.toLowerCase(); // Search is case-insensitive.
+      const text = searchBox.value.toLowerCase(); // Search is case-insensitive.
+
+      // Hide whatever the previous search revealed before revealing new matches.
+      for (const li of shownItems) {
+        li.classList.add("hidden");
+      }
+      shownItems = [];
 
       if (text === "") {
         searchTypeAhead.classList.add("hidden");
-      } else {
-        let totalResults = 0;
-        // Show/hide all the sub-entries within each module (top-level functions etc.)
-        searchTypeAhead.querySelectorAll("li").forEach((entry) => {
-          const entryModule = entry
-            .querySelector(".type-ahead-module-name")
-            ?.textContent?.toLowerCase() ?? "";
-          const entryName = entry
-            .querySelector(".type-ahead-def-name")
-            .textContent.toLowerCase();
-          const entrySignature = entry
-            .querySelector(".type-ahead-signature")
-            ?.textContent?.toLowerCase()
-            ?.replace(/\s+/g, "");
+        return;
+      }
 
-          const qualifiedEntryName = entryModule
-            ? `${entryModule}.${entryName}`
-            : entryName;
-
-          if (
-            qualifiedEntryName.includes(text) ||
-            entrySignature?.includes(text.replace(/\s+/g, ""))
-          ) {
-            totalResults++;
-            entry.classList.remove("hidden");
-            if (topSearchResultListItem === undefined) {
-              topSearchResultListItem = entry;
-            }
-          } else {
-            entry.classList.add("hidden");
-            searchTypeAhead.scrollTop = 0;
+      const signatureText = text.replace(/\s+/g, "");
+      for (const entry of searchEntries) {
+        if (
+          entry.qualifiedName.includes(text) ||
+          (signatureText !== "" && entry.signature.includes(signatureText))
+        ) {
+          entry.li.classList.remove("hidden");
+          shownItems.push(entry.li);
+          if (topSearchResultListItem === undefined) {
+            topSearchResultListItem = entry.li;
           }
-        });
-        if (totalResults < 1) {
-          searchTypeAhead.classList.add("hidden");
-        } else {
-          searchTypeAhead.classList.remove("hidden");
+          if (shownItems.length >= MAX_RESULTS) {
+            break;
+          }
         }
+      }
+
+      if (shownItems.length === 0) {
+        searchTypeAhead.classList.add("hidden");
+      } else {
+        searchTypeAhead.scrollTop = 0;
+        searchTypeAhead.classList.remove("hidden");
       }
     }
 
@@ -237,11 +302,14 @@ const setupCopyButtonActions = () => {
 const setupSidebarToggle = () => {
   let body = document.body;
   const sidebarOpen = "sidebar-open";
-  const removeOpenClass = () => {
+  const removeOpenClass = (event) => {
+    // Toggling a module's disclosure triangle only expands/collapses that
+    // entry's sub-list; it must not also close the whole mobile sidebar, so
+    // ignore clicks that landed on a toggle rather than outside the sidebar.
+    if (closestElement(event.target, ".sidebar-module-summary")) return;
+
     body.classList.remove(sidebarOpen);
-    document.body
-      .querySelector("main")
-      .removeEventListener("click", removeOpenClass);
+    document.body.removeEventListener("click", removeOpenClass);
   };
   Array.from(document.body.querySelectorAll(".menu-toggle")).forEach(
     (menuToggle) => {
@@ -276,6 +344,9 @@ const setupDocsSoftNavigation = () => {
   let mainScrollBox = document.querySelector(mainSelector);
   let cachedMainScrollTop = mainScrollBox?.scrollTop ?? 0;
   let cachedSidebarScrollTop = 0;
+  const pageCache = new Map();
+  const pageCacheOrder = [];
+  const maxCachedPages = 32;
 
   if (!mainScrollBox?.querySelector(".main-content") || !window.DOMParser) return;
 
@@ -304,10 +375,36 @@ const setupDocsSoftNavigation = () => {
     return key.href;
   };
 
+  const cachedPage = (url) => pageCache.get(fetchKey(url));
+
+  const rememberPage = (url, page) => {
+    const key = fetchKey(url);
+    if (!pageCache.has(key)) {
+      pageCacheOrder.push(key);
+    }
+
+    pageCache.set(key, page);
+
+    while (pageCacheOrder.length > maxCachedPages) {
+      const oldestKey = pageCacheOrder.shift();
+      pageCache.delete(oldestKey);
+    }
+  };
+
   const canonicalDocsPath = (pathname) =>
     pathname
       .replace(/\/index\.html$/, "")
       .replace(/\/$/, "");
+
+  // The docs landing page (this site's root, e.g. "/docs/main/" with nothing
+  // after it) shows the guide links (Tutorial, FAQ, Language Reference) above
+  // the search bar, in addition to the sidebar; every other docs page (a
+  // module, or a langref article) hides those guide links. The server already
+  // renders the right state into the initial HTML (see the "docs-index" body
+  // class in render_html.zig); this mirrors that check so soft navigation
+  // keeps it in sync without a full page load.
+  const isDocsIndexPath = (pathname) =>
+    canonicalDocsPath(pathname) === canonicalDocsPath(docsRootPath);
 
   const fragmentKey = (url) =>
     `${url.origin}${canonicalDocsPath(url.pathname)}${url.search}`;
@@ -529,6 +626,57 @@ const setupDocsSoftNavigation = () => {
       });
   };
 
+  const appendMainHtmlChunk = (html, url, content) => {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    template.content.querySelectorAll("script").forEach((script) => script.remove());
+    normalizeDocsLinks(template.content, fetchKey(url));
+    setupCodeBlocks(template.content);
+    const nodes = Array.from(template.content.childNodes);
+    content.appendChild(template.content);
+    return nodes;
+  };
+
+  const renderMainHtmlChunk = async (html, url, content, signal) => {
+    if (html.length === 0) return { appendMs: 0, highlightMs: 0 };
+
+    const appendStart = performance.now();
+    const nodes = appendMainHtmlChunk(html, url, content);
+    const appendMs = performance.now() - appendStart;
+
+    const highlightStart = performance.now();
+    window.rocSyntax?.highlightNodes?.(nodes);
+    const highlightMs = performance.now() - highlightStart;
+
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    if (signal.aborted) {
+      throw new DOMException("Navigation aborted", "AbortError");
+    }
+
+    return { appendMs, highlightMs };
+  };
+
+  const renderCachedMainContent = async (page, url, content, signal) => {
+    let appendMs = 0;
+    let highlightMs = 0;
+
+    for (const html of page.htmlChunks) {
+      const stats = await renderMainHtmlChunk(html, url, content, signal);
+      appendMs += stats.appendMs;
+      highlightMs += stats.highlightMs;
+    }
+
+    return {
+      title: page.title,
+      chunks: page.htmlChunks.length,
+      bytesDecoded: page.bytesDecoded,
+      appendMs,
+      highlightMs,
+      fromCache: true,
+    };
+  };
+
   const streamMainContent = async (response, url, content, signal) => {
     if (!response.body) {
       throw new Error("Readable response streams are not available");
@@ -545,6 +693,7 @@ const setupDocsSoftNavigation = () => {
     let bytesDecoded = 0;
     let appendMs = 0;
     let highlightMs = 0;
+    const htmlChunks = [];
 
     const readBodyPart = (bytes) => {
       if (bytes.length === 0) return;
@@ -564,26 +713,11 @@ const setupDocsSoftNavigation = () => {
 
       if (html.length === 0) return;
 
-      const appendStart = performance.now();
-      const template = document.createElement("template");
-      template.innerHTML = html;
-      template.content.querySelectorAll("script").forEach((script) => script.remove());
-      normalizeDocsLinks(template.content, fetchKey(url));
-      setupCodeBlocks(template.content);
-      const nodes = Array.from(template.content.childNodes);
-      content.appendChild(template.content);
-      appendMs += performance.now() - appendStart;
-
-      const highlightStart = performance.now();
-      window.rocSyntax?.highlightNodes?.(nodes);
-      highlightMs += performance.now() - highlightStart;
+      htmlChunks.push(html);
+      const stats = await renderMainHtmlChunk(html, url, content, signal);
+      appendMs += stats.appendMs;
+      highlightMs += stats.highlightMs;
       chunks += 1;
-
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-
-      if (signal.aborted) {
-        throw new DOMException("Navigation aborted", "AbortError");
-      }
     };
 
     while (true) {
@@ -631,7 +765,7 @@ const setupDocsSoftNavigation = () => {
         } else if (marker.type === "end") {
           await flushChunk();
           await reader.cancel();
-          return { title, chunks, bytesDecoded, appendMs, highlightMs };
+          return { title, chunks, bytesDecoded, appendMs, highlightMs, htmlChunks };
         }
       }
     }
@@ -642,7 +776,24 @@ const setupDocsSoftNavigation = () => {
 
     readBodyPart(pending);
     await flushChunk();
-    return { title, chunks, bytesDecoded, appendMs, highlightMs };
+    return { title, chunks, bytesDecoded, appendMs, highlightMs, htmlChunks };
+  };
+
+  const loadMainContent = async (url, content, signal) => {
+    const page = cachedPage(url);
+    if (page) {
+      return renderCachedMainContent(page, url, content, signal);
+    }
+
+    const response = await fetchDocsResponse(url, signal);
+    const stats = await streamMainContent(response, url, content, signal);
+    rememberPage(url, {
+      title: stats.title,
+      bytesDecoded: stats.bytesDecoded,
+      htmlChunks: stats.htmlChunks,
+    });
+
+    return stats;
   };
 
   const syncSidebarForUrl = (targetUrl) => {
@@ -658,11 +809,14 @@ const setupDocsSoftNavigation = () => {
         const linkUrl = docsUrl(link.getAttribute("href"), window.location.href);
         if (!linkUrl) return;
 
-        link.classList.toggle(
-          "active",
+        const isActive =
           linkUrl.pathname === targetUrl.pathname &&
-            linkUrl.search === targetUrl.search,
-        );
+          linkUrl.search === targetUrl.search;
+
+        link.classList.toggle("active", isActive);
+
+        const details = link.parentElement?.querySelector(":scope > details");
+        if (details) details.open = isActive;
       });
 
     currentSidebar.querySelectorAll(".sidebar-value[href]").forEach((link) => {
@@ -728,6 +882,48 @@ const setupDocsSoftNavigation = () => {
     // console.log(`[docs-nav] ${label} ${(performance.now() - start).toFixed(1)}ms`);
   };
 
+  const createMainShell = (oldMain, oldContent, includePersistentUi) => {
+    const nextMain = oldMain.cloneNode(false);
+    const nextContent = oldContent.cloneNode(false);
+    const currentGuideLinks = document.getElementById("index-guide-links");
+    const currentSearch = document.getElementById("module-search-form");
+
+    nextContent.textContent = "";
+    nextContent.removeAttribute("data-roc-highlight-id");
+
+    // Carried forward like the search form below: both are positioned via
+    // explicit CSS grid-row (not DOM order), so visibility is what determines
+    // whether the guide links show, not append order.
+    if (includePersistentUi && currentGuideLinks) {
+      nextMain.appendChild(currentGuideLinks);
+    }
+
+    if (includePersistentUi && currentSearch) {
+      nextMain.appendChild(currentSearch);
+    }
+
+    nextMain.appendChild(nextContent);
+
+    if (includePersistentUi) {
+      ensureLoader(nextMain);
+    }
+
+    return { nextMain, nextContent };
+  };
+
+  const activateMainShell = (oldMain, oldContent, nextMain, nextContent, url) => {
+    window.rocSyntax?.clear(oldContent, false);
+    oldMain.replaceWith(nextMain);
+    bindMainScrollBox();
+    activeDocumentKey = fragmentKey(url);
+    document.body.classList.toggle("docs-index", isDocsIndexPath(url.pathname));
+    syncSidebarForUrl(url);
+    hideSearchResults();
+    closeSidebar();
+    nextContent.setAttribute("tabindex", "-1");
+    nextContent.focus({ preventScroll: true });
+  };
+
   const navigate = async (href, options = {}) => {
     const url = docsUrl(href);
     if (!url) {
@@ -753,49 +949,26 @@ const setupDocsSoftNavigation = () => {
     const totalStart = performance.now();
     // console.log(`[docs-nav] start ${url.pathname}${url.hash}`);
 
-    startLoader();
-    oldMain?.setAttribute("aria-busy", "true");
-
     try {
-      let phaseStart = performance.now();
-      const response = await fetchDocsResponse(url, signal);
-      logTiming("fetch response", phaseStart);
-      if (thisNavigation !== navigationId) return;
-
       if (!oldMain || !oldContent) {
         throw new Error(`Could not find docs main content`);
       }
 
-      phaseStart = performance.now();
-      const nextMain = oldMain.cloneNode(false);
-      const nextContent = oldContent.cloneNode(false);
-      const currentSearch = document.getElementById("module-search-form");
-      nextContent.textContent = "";
-      nextContent.removeAttribute("data-roc-highlight-id");
-      nextMain.appendChild(nextContent);
-      if (!stageUntilReady) {
-        const loader = ensureLoader();
-        if (currentSearch) nextMain.insertBefore(currentSearch, nextContent);
-        nextMain.appendChild(loader);
-      }
+      startLoader();
+      oldMain.setAttribute("aria-busy", "true");
+
+      let phaseStart = performance.now();
+      const { nextMain, nextContent } = createMainShell(
+        oldMain,
+        oldContent,
+        !stageUntilReady,
+      );
       logTiming("create shell", phaseStart);
 
       if (!stageUntilReady) {
         phaseStart = performance.now();
-        window.rocSyntax?.clear(oldContent, false);
-        logTiming("clear highlights", phaseStart);
-
-        phaseStart = performance.now();
-        oldMain.replaceWith(nextMain);
-        bindMainScrollBox();
-        activeDocumentKey = fragmentKey(url);
-        logTiming("swap shell", phaseStart);
-
-        phaseStart = performance.now();
-        syncSidebarForUrl(url);
-        hideSearchResults();
-        closeSidebar();
-        logTiming("sidebar", phaseStart);
+        activateMainShell(oldMain, oldContent, nextMain, nextContent, url);
+        logTiming("activate shell", phaseStart);
       }
 
       if (options.history === "push") {
@@ -806,56 +979,40 @@ const setupDocsSoftNavigation = () => {
         logTiming("push state", phaseStart);
       }
 
-      if (!stageUntilReady) {
-        phaseStart = performance.now();
-        nextContent.setAttribute("tabindex", "-1");
-        logTiming("focus prep", phaseStart);
-
-        phaseStart = performance.now();
-        nextContent.focus({ preventScroll: true });
-        logTiming("focus content", phaseStart);
-      }
-
       phaseStart = performance.now();
-      const streamStats = await streamMainContent(response, url, nextContent, signal);
+      const streamStats = await loadMainContent(url, nextContent, signal);
+      if (thisNavigation !== navigationId) return;
       if (streamStats.title) document.title = streamStats.title;
       // console.log(
-      //   `[docs-nav] stream chunks=${streamStats.chunks} bytes=${streamStats.bytesDecoded} append=${streamStats.appendMs.toFixed(1)}ms highlight=${streamStats.highlightMs.toFixed(1)}ms`,
+      //   `[docs-nav] stream chunks=${streamStats.chunks} cache=${streamStats.fromCache === true} bytes=${streamStats.bytesDecoded} append=${streamStats.appendMs.toFixed(1)}ms highlight=${streamStats.highlightMs.toFixed(1)}ms`,
       // );
-      logTiming("stream content", phaseStart);
+      logTiming("load content", phaseStart);
 
       if (stageUntilReady) {
         phaseStart = performance.now();
-        window.rocSyntax?.clear(oldContent, false);
-        logTiming("clear highlights", phaseStart);
-
-        phaseStart = performance.now();
+        // Mirrors createMainShell's persistent-UI handling above: staged
+        // navigations skip that step (includePersistentUi is false while
+        // content streams into a still-hidden shell) and instead move these
+        // elements over here, once, right before the shell swap.
+        const currentGuideLinksAfterStream =
+          document.getElementById("index-guide-links");
+        if (currentGuideLinksAfterStream) {
+          nextMain.insertBefore(currentGuideLinksAfterStream, nextContent);
+        }
         const currentSearchAfterStream =
           document.getElementById("module-search-form");
-        const loader = ensureLoader();
         if (currentSearchAfterStream) {
           nextMain.insertBefore(currentSearchAfterStream, nextContent);
         }
-        nextMain.appendChild(loader);
-        oldMain.replaceWith(nextMain);
-        bindMainScrollBox();
-        activeDocumentKey = fragmentKey(url);
+        ensureLoader(nextMain);
         logTiming("swap restored shell", phaseStart);
 
         phaseStart = performance.now();
-        syncSidebarForUrl(url);
-        hideSearchResults();
-        closeSidebar();
-        logTiming("sidebar", phaseStart);
-
-        phaseStart = performance.now();
-        nextContent.setAttribute("tabindex", "-1");
-        logTiming("focus prep", phaseStart);
-
-        phaseStart = performance.now();
-        nextContent.focus({ preventScroll: true });
-        logTiming("focus content", phaseStart);
+        activateMainShell(oldMain, oldContent, nextMain, nextContent, url);
+        logTiming("activate restored shell", phaseStart);
       }
+
+      nextMain.removeAttribute("aria-busy");
 
       phaseStart = performance.now();
       scrollToDestination(url, options.scrollY);

@@ -38,7 +38,7 @@ ServerConfig : {
     defaultResponse : Response,
 }
 
-# Test exposed types with module-qualified usage
+# Test exposed types with mod-qualified usage
 createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
 
@@ -78,7 +78,7 @@ UNDECLARED TYPE - can_import_exposing_types.md:29:18:29:24
 UNDECLARED TYPE - can_import_exposing_types.md:30:18:30:24
 UNDECLARED TYPE - can_import_exposing_types.md:31:23:31:31
 UNDECLARED TYPE - can_import_exposing_types.md:35:16:35:22
-MODULE NOT FOUND - can_import_exposing_types.md:35:30:35:37
+MOD NOT FOUND - can_import_exposing_types.md:35:30:35:37
 NAME NOT IN SCOPE - can_import_exposing_types.md:36:25:36:40
 UNDECLARED TYPE - can_import_exposing_types.md:39:18:39:26
 NAME NOT IN SCOPE - can_import_exposing_types.md:42:23:42:42
@@ -293,7 +293,7 @@ NAME NOT IN SCOPE - can_import_exposing_types.md:50:33:50:44
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Client` type is declared to be in ────────────────┐
+│ MOD NOT FOUND ├─ This `Client` type is declared to be in ────────────────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  createClient : Config -> Http.Client                                      │
@@ -449,7 +449,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json")
 			(exposing
@@ -662,7 +662,7 @@ ServerConfig : {
 	defaultResponse : Response,
 }
 
-# Test exposed types with module-qualified usage
+# Test exposed types with mod-qualified usage
 createClient : Config -> Http.Client
 createClient = |config| Http.clientWith(config)
 
@@ -868,17 +868,17 @@ combineTrys = |jsonTry, httpStatus|
 				(ty-apply (name "Try") (builtin)
 					(ty-malformed)
 					(ty-malformed)))))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes
 			(exposed (name "Value") (wildcard false))
 			(exposed (name "Error") (wildcard false))
 			(exposed (name "Config") (wildcard false))))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes
 			(exposed (name "Request") (wildcard false))
 			(exposed (name "Response") (wildcard false))
 			(exposed (name "Status") (wildcard false))))
-	(s-import (module "utils.Try")
+	(s-import (mod "utils.Try")
 		(exposes
 			(exposed (name "Try") (wildcard false))))
 	(s-alias-decl

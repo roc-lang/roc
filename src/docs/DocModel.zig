@@ -384,6 +384,12 @@ const ModuleDocRefResolver = struct {
             return .{ .builtin_type = try gpa.dupe(u8, label) };
         }
 
+        // A handful of builtin tag names have no doc entry of their own, so
+        // resolve them via their owning nominal type's page instead.
+        if (builtinTagOwner(label)) |owner| {
+            return self.resolveLabel(gpa, owner);
+        }
+
         return .{ .unresolved_anchor = try unresolvedAnchor(gpa, self.module.name, label) };
     }
 
@@ -541,6 +547,19 @@ fn isBuiltinDocTypeName(name: []const u8) bool {
         if (std.mem.eql(u8, name, builtin)) return true;
     }
     return false;
+}
+
+/// Maps the well-known builtin tag names that lack their own doc entry to the
+/// nominal type that owns them, so a bare `[True]`/`[Ok]`/etc. reference can be
+/// resolved through that type's docs. Returns null for any other label.
+fn builtinTagOwner(label: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, label, "True") or std.mem.eql(u8, label, "False")) {
+        return "Bool";
+    }
+    if (std.mem.eql(u8, label, "Ok") or std.mem.eql(u8, label, "Err")) {
+        return "Try";
+    }
+    return null;
 }
 
 /// Short (final dotted segment) of a possibly-qualified name.
@@ -980,6 +999,11 @@ pub const DocType = union(enum) {
     /// Error/unknown type
     @"error",
 
+    pub const Layout = enum {
+        compact,
+        multiline,
+    };
+
     pub const TypeRef = struct {
         /// Module path where this type is defined, as provided by the compiler.
         /// Currently basenames like "Builtin", "Counter", "Num".
@@ -1004,6 +1028,7 @@ pub const DocType = union(enum) {
         ext: ?*const DocType,
         /// True when the record is open (`..` or `..name`).
         is_open: bool,
+        layout: Layout = .compact,
     };
 
     pub const Field = struct {
@@ -1018,25 +1043,30 @@ pub const DocType = union(enum) {
         ext: ?*const DocType,
         /// True when the union is open (`..` or `..name`).
         is_open: bool,
+        layout: Layout = .compact,
     };
 
     pub const Tag = struct {
         name: []const u8,
         args: []const *const DocType,
+        layout: Layout = .compact,
     };
 
     pub const Tuple = struct {
         elems: []const *const DocType,
+        layout: Layout = .compact,
     };
 
     pub const Apply = struct {
         constructor: *const DocType, // the type being applied (e.g., List)
         args: []const *const DocType,
+        layout: Layout = .compact,
     };
 
     pub const WhereClause = struct {
         type: *const DocType,
         constraints: []const Constraint,
+        layout: Layout = .compact,
     };
 
     pub const Constraint = struct {
@@ -1291,6 +1321,10 @@ pub const DocType = union(enum) {
 /// Documentation for a single exported definition.
 pub const DocEntry = struct {
     name: []const u8,
+    /// The declaration header, including any type parameters (e.g. `List(a)`).
+    /// This is distinct from `name` so opaque declarations can expose their
+    /// public shape without exposing their backing type.
+    type_header: ?[]const u8 = null,
     kind: DocEntryKind,
     type_signature: ?*const DocType,
     doc_comment: ?[]const u8,
@@ -1305,6 +1339,7 @@ pub const DocEntry = struct {
             child.deinit(gpa);
         }
         gpa.free(self.children);
+        if (self.type_header) |header| gpa.free(header);
         if (self.type_signature) |sig| {
             sig.deinit(gpa);
             gpa.destroy(sig);
@@ -1390,4 +1425,132 @@ fn writeEscaped(writer: anytype, s: []const u8) (Allocator.Error || error{WriteF
             else => try writer.writeAll(&[_]u8{c}),
         }
     }
+}
+
+test "doc shorthand tag refs resolve to owning builtin types in package docs" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // A third-party package with no `Bool`/`Try` modules of its own: `[True]`
+    // and `[Ok]` should resolve through their owning nominal type to the
+    // published builtin docs (`Bool` / `Try`) rather than staying unresolved.
+    const entry = DocEntry{
+        .name = try gpa.dupe(u8, "any_thing"),
+        .kind = .value,
+        .type_signature = null,
+        .doc_comment = try gpa.dupe(u8, "Returns [True] on success and [Ok] otherwise."),
+        .children = try gpa.alloc(DocEntry, 0),
+        .doc_comment_start_line = 1,
+    };
+
+    const entries = try gpa.alloc(DocEntry, 1);
+    entries[0] = entry;
+
+    var module = ModuleDocs{
+        .name = try gpa.dupe(u8, "Thing"),
+        .package_name = try gpa.dupe(u8, "roc-thing"),
+        .kind = .type_module,
+        .module_doc = null,
+        .entries = entries,
+        .source_path = try gpa.dupe(u8, "/fake/roc-thing/package/Thing.roc"),
+    };
+    defer module.deinit(gpa);
+
+    const modules = try gpa.alloc(ModuleDocs, 1);
+    modules[0] = module;
+    defer gpa.free(modules);
+
+    var package_docs = PackageDocs{
+        .name = try gpa.dupe(u8, "roc-thing"),
+        .modules = modules,
+    };
+    defer gpa.free(package_docs.name);
+
+    try package_docs.resolveDocRefs(gpa);
+
+    const refs = package_docs.modules[0].entries[0].doc_refs;
+    try testing.expectEqual(@as(usize, 2), refs.len);
+
+    try testing.expectEqualStrings("True", refs[0].label);
+    try testing.expect(refs[0].target == .builtin_type);
+    try testing.expectEqualStrings("Bool", refs[0].target.builtin_type);
+
+    try testing.expectEqualStrings("Ok", refs[1].label);
+    try testing.expect(refs[1].target == .builtin_type);
+    try testing.expectEqualStrings("Try", refs[1].target.builtin_type);
+}
+
+test "doc shorthand tag refs resolve to owning type module pages when present" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // When the package itself publishes the owning type as a module (as the
+    // builtin docs do after `Bool`/`Try` are promoted), `[True]`/`[Ok]` should
+    // resolve to those module pages.
+    const referring_entry = DocEntry{
+        .name = try gpa.dupe(u8, "helper"),
+        .kind = .value,
+        .type_signature = null,
+        .doc_comment = try gpa.dupe(u8, "Uses [True] and [Ok]."),
+        .children = try gpa.alloc(DocEntry, 0),
+        .doc_comment_start_line = 1,
+    };
+
+    const thing_entries = try gpa.alloc(DocEntry, 1);
+    thing_entries[0] = referring_entry;
+
+    var thing_module = ModuleDocs{
+        .name = try gpa.dupe(u8, "Thing"),
+        .package_name = try gpa.dupe(u8, "roc-thing"),
+        .kind = .type_module,
+        .module_doc = null,
+        .entries = thing_entries,
+        .source_path = try gpa.dupe(u8, "/fake/roc-thing/package/Thing.roc"),
+    };
+
+    var bool_module = ModuleDocs{
+        .name = try gpa.dupe(u8, "Bool"),
+        .package_name = try gpa.dupe(u8, "roc-thing"),
+        .kind = .type_module,
+        .module_doc = null,
+        .entries = try gpa.alloc(DocEntry, 0),
+        .source_path = try gpa.dupe(u8, "/fake/roc-thing/package/Bool.roc"),
+    };
+
+    var try_module = ModuleDocs{
+        .name = try gpa.dupe(u8, "Try"),
+        .package_name = try gpa.dupe(u8, "roc-thing"),
+        .kind = .type_module,
+        .module_doc = null,
+        .entries = try gpa.alloc(DocEntry, 0),
+        .source_path = try gpa.dupe(u8, "/fake/roc-thing/package/Try.roc"),
+    };
+
+    const modules = try gpa.alloc(ModuleDocs, 3);
+    modules[0] = thing_module;
+    modules[1] = bool_module;
+    modules[2] = try_module;
+    defer {
+        thing_module.deinit(gpa);
+        bool_module.deinit(gpa);
+        try_module.deinit(gpa);
+        gpa.free(modules);
+    }
+
+    var package_docs = PackageDocs{
+        .name = try gpa.dupe(u8, "roc-thing"),
+        .modules = modules,
+    };
+    defer gpa.free(package_docs.name);
+
+    try package_docs.resolveDocRefs(gpa);
+
+    const refs = package_docs.modules[0].entries[0].doc_refs;
+    try testing.expectEqual(@as(usize, 2), refs.len);
+
+    try testing.expect(refs[0].target == .module_page);
+    try testing.expectEqualStrings("Bool", refs[0].target.module_page);
+
+    try testing.expect(refs[1].target == .module_page);
+    try testing.expectEqualStrings("Try", refs[1].target.module_page);
 }

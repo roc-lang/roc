@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=
+description=if expression without an else branch produces a parse error
 type=snippet
 ~~~
 # SOURCE
@@ -43,7 +43,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "foo"))

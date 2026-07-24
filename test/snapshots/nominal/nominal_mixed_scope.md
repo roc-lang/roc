@@ -36,7 +36,7 @@ UNDECLARED TYPE - nominal_mixed_scope.md:12:9:12:12
  │  ‾‾‾‾‾‾                                                                    │
  └──────────────────────────────────────────────── nominal_mixed_scope.md:7:5 ┘
 
-    Move this import after the module header and before declarations or
+    Move this import after the mod header and before declarations or
     executable statements.
 
     For example:
@@ -105,7 +105,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "LocalStatus")

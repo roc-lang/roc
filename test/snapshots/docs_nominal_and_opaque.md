@@ -35,7 +35,7 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)

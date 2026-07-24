@@ -83,7 +83,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "MyType")
@@ -189,7 +189,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 653)
+		(e-dispatch-call (method "plus") (constraint-fn-var 368)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "c"))))

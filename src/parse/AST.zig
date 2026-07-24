@@ -52,40 +52,15 @@ pub fn regionIsMultiline(self: *AST, region: TokenizedRegion) bool {
     const source_start = start_region.start.offset;
     const source_end = end_region.end.offset;
 
-    // Look for newlines in the source text
+    // Look for line breaks in the source text. A carriage return is invalid
+    // Roc source, but formatting a comment terminated by one emits a newline,
+    // so it must make the same multiline layout decision on the first pass.
     for (self.env.source[source_start..source_end]) |c| {
-        if (c == '\n') {
+        if (c == '\n' or c == '\r') {
             return true;
         }
     }
 
-    // Also check for trailing comma patterns that indicate multiline
-    var i = region.start;
-    const tags = self.tokens.tokens.items(.tag);
-    while (i < region.end) {
-        if (tags[i] == .Comma and i + 1 < self.tokens.tokens.len) {
-            const next_tag = tags[i + 1];
-            if (next_tag == .CloseSquare or next_tag == .CloseRound or next_tag == .CloseCurly) {
-                return true;
-            }
-            // For OpBar, we need to distinguish between:
-            // - Closing bar (trailing comma): |x, y,| body
-            // - Opening bar (NOT trailing): fn(a, |x| body)
-            // Check the token after the bar to determine which case this is
-            if (next_tag == .OpBar and i + 2 < self.tokens.tokens.len) {
-                const after_bar = tags[i + 2];
-                // If what follows is a lambda parameter, the bar is opening (not a trailing comma)
-                const is_opening_bar = switch (after_bar) {
-                    .LowerIdent, .UpperIdent, .Underscore, .OpenRound, .OpenSquare, .OpenCurly => true,
-                    else => false,
-                };
-                if (!is_opening_bar) {
-                    return true;
-                }
-            }
-        }
-        i += 1;
-    }
     return false;
 }
 
@@ -477,7 +452,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_platform_name_end => reportParseProblem(ctx, "Expected Closing Quote", "I was parsing a platform name, and I expected the closing quote.", "Platform headers start with a quoted platform name. Finish the string before writing the `requires` section.", .{ .example = "platform \"basic-cli\"" }),
         .expected_platform_name_start => reportParseProblem(ctx, "Expected Platform Name", "I was parsing a platform header, and I expected a quoted platform name.", "Put the platform name in double quotes immediately after the `platform` keyword.", .{ .example = "platform \"basic-cli\"" }),
         .expected_platform_name_string => reportParseProblem(ctx, "Expected Platform Name Text", "I was parsing a platform name, and I expected text inside the quotes.", "A platform name cannot be empty. Put the platform name between the opening and closing quotes.", .{ .example = "platform \"basic-cli\"" }),
-        .expected_platform_string => reportParseProblem(ctx, "Expected Platform Path", "I was parsing a platform dependency, and I expected a string path after `platform`.", "A platform entry uses the `platform` keyword followed by a string path to the platform file.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
+        .expected_platform_string => reportParseProblem(ctx, "Expected Platform Reference", "I was parsing a platform dependency, and I expected a string path or compiler-owned platform after `platform`.", "A platform entry uses the `platform` keyword followed by a string path to the platform file, or by the compiler-owned `glue` platform.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
         .expected_provides => reportParseProblem(ctx, "Expected Provides", "I was parsing a platform header, and I expected the `provides` section.", "A platform header must map host symbols to Roc functions in a `provides` record.", .{ .example = "provides { \"roc_main\": main }" }),
         .expected_provides_open_square => reportParseProblem(ctx, "Expected Provides List", "I was parsing a package or app header, and I expected an opening `[` for the provided names.", "The names provided by this module go in square brackets after the header keyword.", .{ .example = "package [Parser, parse]" }),
         .expected_provides_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a `provides` symbol map, and I expected a closing `}`.", "Close the provides record after the final host-symbol mapping.", .{ .example = "provides { \"roc_main\": main }" }),
@@ -497,8 +472,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .expected_for_keyword => reportParseProblem(ctx, "Expected For", "I was parsing type aliases in a `requires` entry, and I expected the `for` keyword.", "After the alias list, write `for` before the required entrypoint name.", .{ .example = "[Arg : a] for main : a -> I32" }),
         .expected_for_clause_entrypoint_name => reportParseProblem(ctx, "Expected Entrypoint Name", "I was parsing a `requires` entry, and I expected a lowercase entrypoint name.", "Required entrypoint names are lowercase value names.", .{ .example = "main : {} => I32" }),
         .expected_for_clause_type_colon => reportParseProblem(ctx, "Expected Entrypoint Type", "I was parsing a `requires` entry, and I expected `:` before the type.", "Use a colon between the required entrypoint name and its type annotation.", .{ .example = "main : {} => I32" }),
-        .header_expected_open_square => reportParseProblem(ctx, "Expected Exposing List", "I was parsing a module or hosted header, and I expected an opening `[`.", "The names exposed by this module are written in square brackets after the header keyword.", .{ .example = "module [main, helper]" }),
-        .header_expected_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing a header exposing list, and I expected a closing `]`.", "Close the list after the final exposed name.", .{ .example = "module [main, helper]" }),
+        .header_expected_open_square => reportParseProblem(ctx, "Expected Exposing List", "I was parsing a package, app, platform, or hosted header, and I expected an opening `[`.", "The names exposed by this header are written in square brackets after the header keyword.", .{ .example = "package [Parser, parse]" }),
+        .header_expected_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing a header exposing list, and I expected a closing `]`.", "Close the list after the final exposed name.", .{ .example = "package [Parser, parse]" }),
         .pattern_unexpected_token => reportParseProblem(ctx, "Unexpected Pattern Syntax", "I was parsing a pattern, and this token cannot start a pattern here.", "Patterns can be lowercase names, tags, literals, lists, records, tuples, underscores, or nested patterns.", .{ .example = "{ name, age }" }),
         .pattern_list_rest_old_syntax => reportParseProblem(ctx, "Old List Rest Pattern", "I was parsing a list pattern, and this uses the old rest syntax.", "List rest patterns now use `.. as name`. The name is optional, but if it is present it must come after `as`.", .{ .example = "[first, .. as rest]", .show_found = false }),
         .pattern_unexpected_eof => reportParseProblem(ctx, "Unfinished Pattern", "I was parsing a pattern, and the file ended before it was complete.", "Complete the pattern or remove the incomplete syntax.", .{ .example = "[first, second]" }),
@@ -517,9 +492,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .multi_arrow_needs_parens => reportParseProblem(ctx, "Ambiguous Function Type", "I was parsing a function type, and multiple arrows need parentheses.", "Use parentheses to say whether the function returns another function or takes a function as an argument.", .{ .example = "a -> (b -> c)\n(a -> b) -> c", .show_found = false }),
         .expected_ty_close_curly_or_comma => reportParseProblem(ctx, "Expected Record Type Separator", "I was parsing a record type, and I expected `,` or `}`.", "Separate record type fields with commas and close the record type with `}`.", .{ .example = "{ name : Str, age : U64 }" }),
         .expected_ty_close_square_or_comma => reportParseProblem(ctx, "Expected Tag Union Separator", "I was parsing a tag union type, and I expected `,` or `]`.", "Separate tag union alternatives with commas and close the tag union with `]`.", .{ .example = "[Ok(a), Err(Str)]" }),
-        .expected_lower_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Lowercase Alias", "I was parsing an exposed value alias, and I expected a lowercase name after `as`.", "Aliases for exposed lowercase values must also be lowercase value names.", .{ .example = "module [oldName as newName]" }),
-        .expected_upper_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Uppercase Alias", "I was parsing an exposed type or tag alias, and I expected an uppercase name after `as`.", "Aliases for exposed uppercase names must also start with an uppercase letter.", .{ .example = "module [Result as Outcome]" }),
-        .exposed_item_unexpected_token => reportParseProblem(ctx, "Expected Exposed Name", "I was parsing an exposing list, and I expected an exposed name.", "Exposing lists contain lowercase values, uppercase types or tags, and `Type.*` entries.", .{ .example = "module [main, Result, Result.*]" }),
+        .expected_lower_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Lowercase Alias", "I was parsing an exposed value alias, and I expected a lowercase name after `as`.", "Aliases for exposed lowercase values must also be lowercase value names.", .{ .example = "package [oldName as newName]" }),
+        .expected_upper_name_after_exposed_item_as => reportParseProblem(ctx, "Expected Uppercase Alias", "I was parsing an exposed type or tag alias, and I expected an uppercase name after `as`.", "Aliases for exposed uppercase names must also start with an uppercase letter.", .{ .example = "package [Result as Outcome]" }),
+        .exposed_item_unexpected_token => reportParseProblem(ctx, "Expected Exposed Name", "I was parsing an exposing list, and I expected an exposed name.", "Exposing lists contain lowercase values, uppercase types or tags, and `Type.*` entries.", .{ .example = "package [main, Result, Result.*]" }),
         .expected_upper_name_after_import_as => reportParseProblem(ctx, "Expected Import Alias", "I was parsing an import alias, and I expected an uppercase module name after `as`.", "Import aliases rename modules, so they must start with an uppercase letter.", .{ .example = "import Json.Decode as Decode" }),
         .expected_colon_after_type_annotation => reportParseProblem(ctx, "Type Application Needs Parentheses", "I was parsing a type annotation, and I found a type argument without parentheses.", "Roc type applications use parentheses around their arguments. Write `List(U8)`, not `List U8`.", .{ .example = "List(U8)" }),
         .expected_lower_ident_pat_field_name => reportParseProblem(ctx, "Expected Pattern Field", "I was parsing a record pattern, and I expected a lowercase field name.", "Record pattern fields start with lowercase names. You can bind the field directly or write `name: pattern`.", .{ .example = "{ name, age: years }" }),
@@ -1323,6 +1298,9 @@ pub const Pattern = union(enum) {
         tag_tok: Token.Idx,
         args: Pattern.Span,
         qualifiers: Token.Span,
+        /// True when the tag was written with an argument list, including an
+        /// empty argument list such as `Tag()`.
+        has_args: bool = false,
         /// True when written as `Type.(pattern)` — a nominal-value destructure
         /// (the inverse of `Type.(value)` construction), where `tag_tok` is the
         /// nominal type and `args` is the backing pattern. False for ordinary
@@ -1716,9 +1694,17 @@ pub const Unary = struct {
 };
 
 /// Represents a delimited collection of other nodes
+/// Records the source-requested layout of a comma-separated construct.
+pub const CollectionLayout = enum(u8) {
+    compact,
+    expanded,
+};
+
+/// A delimited span of AST nodes and its explicitly requested layout.
 pub const Collection = struct {
     span: base.DataSpan,
     region: TokenizedRegion,
+    layout: CollectionLayout = .compact,
 
     pub const Idx = enum(u32) { _ };
 };
@@ -2036,7 +2022,7 @@ pub const Header = union(enum) {
             },
             .type_module => |a| {
                 const begin = tree.beginNode();
-                try tree.pushStaticAtom("type-module");
+                try tree.pushStaticAtom("type-mod");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -2089,6 +2075,7 @@ pub const ExposedItem = union(enum) {
     },
     upper_ident_star: struct {
         ident: Token.Idx,
+        qualifiers: Token.Span,
         region: TokenizedRegion,
     },
     malformed: struct {
@@ -2163,8 +2150,8 @@ pub const ExposedItem = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, i.region);
 
                 // text attribute
-                const token = ast.tokens.tokens.get(i.ident);
-                const text = env.getIdent(token.extra.interned);
+                const strip_tokens = [_]Token.Tag{ .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent };
+                const text = ast.resolveQualifiedName(i.qualifiers, i.ident, &strip_tokens);
                 try tree.pushStringPair("text", text);
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
@@ -2222,6 +2209,7 @@ pub const SymbolMapEntry = struct {
     pub const Span = struct {
         span: base.DataSpan,
         region: TokenizedRegion = TokenizedRegion.empty(),
+        layout: CollectionLayout = .compact,
     };
 };
 
@@ -2237,7 +2225,7 @@ pub const TargetEntry = struct {
 
 /// File item in target list
 pub const TargetFile = union(enum) {
-    string_literal: Token.Idx, // "crt1.o"
+    string_literal: ?Token.Idx, // Content token for "crt1.o"; null for ""
     special_ident: Token.Idx, // app, win_gui
     malformed: struct { reason: Diagnostic.Tag, region: TokenizedRegion },
 
@@ -2266,7 +2254,7 @@ pub const TargetConfigEntry = struct {
 /// Literal or top-level identifier syntax accepted in target configuration.
 pub const TargetConfigValue = union(enum) {
     int_literal: Token.Idx,
-    string_literal: Token.Idx,
+    string_literal: ?Token.Idx,
     tag_literal: Token.Idx,
     ident: Token.Idx,
     list: TargetConfigValue.Span,
@@ -2625,6 +2613,7 @@ pub const WhereClause = union(enum) {
         name_tok: Token.Idx,
         args: Collection.Idx,
         ret_anno: TypeAnno.Idx,
+        effectful: bool,
         region: TokenizedRegion,
     },
 
@@ -2664,6 +2653,7 @@ pub const WhereClause = union(enum) {
                 // remove preceding dot
                 const method_name = ast.resolve(m.name_tok)[1..];
                 try tree.pushStringPair("name", method_name);
+                if (m.effectful) try tree.pushBoolPair("effectful", true);
                 const attrs = tree.beginNode();
 
                 const args_begin = tree.beginNode();
@@ -2786,7 +2776,11 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
+    /// Record field access, written `receiver.field` with no argument list.
+    /// Calling a function stored in the field is a separate ordinary apply,
+    /// written `(receiver.field)(args)`.
     field_access: BinOp,
+    /// Attached method call, written `receiver.method(args)`.
     method_call: struct {
         receiver: Expr.Idx,
         method_token: Token.Idx,

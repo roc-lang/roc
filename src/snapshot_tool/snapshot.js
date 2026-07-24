@@ -193,39 +193,16 @@ function updateDomFromSegments(container, newSegments) {
   addSourceEventListeners(container);
 }
 
-// Token category mapping
+// Token category mapping.
+//
+// This is the browser-side counterpart to `Token.Tag.highlightCategory` in
+// `src/parse/tokenize.zig`, which is the single source of truth for token
+// highlight categories. Keyword tags all share the `Kw` prefix and are detected
+// generically below so this file never needs per-keyword maintenance; the
+// remaining categories are listed explicitly because they cannot be derived from
+// the tag name. Keep these lists in sync with `highlightCategory` when tags in
+// those categories change.
 function getTokenClass(tokenKind) {
-  const keywords = [
-    "KwApp",
-    "KwAs",
-    "KwCrash",
-    "KwDbg",
-    "KwElse",
-    "KwExpect",
-    "KwExposes",
-    "KwExposing",
-    "KwFor",
-    "KwGenerates",
-    "KwHas",
-    "KwHosted",
-    "KwIf",
-    "KwImplements",
-    "KwImport",
-    "KwImports",
-    "KwIn",
-    "KwInterface",
-    "KwMatch",
-    "KwModule",
-    "KwPackage",
-    "KwPackages",
-    "KwPlatform",
-    "KwProvides",
-    "KwRequires",
-    "KwReturn",
-    "KwVar",
-    "KwWhere",
-    "KwWith",
-  ];
   const identifiers = [
     "UpperIdent",
     "LowerIdent",
@@ -296,7 +273,7 @@ function getTokenClass(tokenKind) {
   ];
   const punctuation = ["Comma", "Dot", "DoubleDot", "TripleDot", "Underscore"];
 
-  if (keywords.includes(tokenKind)) return "token-keyword";
+  if (tokenKind.startsWith("Kw")) return "token-keyword";
   if (identifiers.includes(tokenKind)) return "token-identifier";
   if (strings.includes(tokenKind)) return "token-string";
   if (numbers.includes(tokenKind)) return "token-number";

@@ -29,3 +29,5 @@ main = {
 
 	encode(value)
 }
+
+expect main == Ok(0)

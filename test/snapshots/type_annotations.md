@@ -78,7 +78,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │  ‾‾‾‾‾‾‾‾‾                                                                 │
  └─────────────────────────────────────────────────── type_annotations.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -90,7 +90,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                    │
  └─────────────────────────────────────────────────── type_annotations.md:3:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -102,7 +102,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                        │
  └─────────────────────────────────────────────────── type_annotations.md:5:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -114,7 +114,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                                │
  └─────────────────────────────────────────────────── type_annotations.md:7:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -126,7 +126,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                        │
  └─────────────────────────────────────────────────── type_annotations.md:9:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -138,7 +138,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                           │
  └────────────────────────────────────────────────── type_annotations.md:11:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -152,7 +152,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │                                                                            │
  └────────────────────────────────────────────────── type_annotations.md:13:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -167,7 +167,7 @@ DECLARATION HAS NO VALUE - type_annotations.md:17:1:20:2
  │                                                                            │
  └────────────────────────────────────────────────── type_annotations.md:17:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -190,7 +190,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "foo")
 			(ty (name "U64")))

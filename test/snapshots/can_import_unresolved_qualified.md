@@ -22,10 +22,10 @@ processRequest = |req| Http.Server.defaultResponse
 # Test typo in qualified name
 result = Json.prase("test")
 
-# Test unknown module qualification
-config = Unknown.Module.config
+# Test unknown mod qualification
+config = Unknown.Mod.config
 
-# Test valid module but invalid member
+# Test valid mod but invalid member
 client = Http.invalidMethod
 
 # Test deeply nested invalid qualification
@@ -34,14 +34,14 @@ parser = Json.Parser.Advanced.NonExistent.create
 # EXPECTED
 DUPLICATE DEFINITION - can_import_unresolved_qualified.md:1:1:1:17
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:5:8:5:31
-MODULE NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
+MOD NOT FOUND - can_import_unresolved_qualified.md:8:17:8:29
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:9:20:9:34
-MODULE NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
-MODULE NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
+MOD NOT FOUND - can_import_unresolved_qualified.md:12:29:12:37
+MOD NOT FOUND - can_import_unresolved_qualified.md:12:52:12:61
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:13:24:13:51
 UNUSED VARIABLE - can_import_unresolved_qualified.md:13:19:13:22
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:16:10:16:20
-DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:31
+DOES NOT EXIST - can_import_unresolved_qualified.md:19:10:19:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:22:10:22:28
 NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 # PROBLEMS
@@ -73,7 +73,7 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `InvalidType` type is declared to be in ───────────┐
+│ MOD NOT FOUND ├─ This `InvalidType` type is declared to be in ───────────┐
 └┬─────────────────┘  `json.Json`, which does not exist.                      │
  │                                                                            │
  │  parseData : Json.InvalidType -> Str                                       │
@@ -94,7 +94,7 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Server.Request` type is declared to be in ────────┐
+│ MOD NOT FOUND ├─ This `Server.Request` type is declared to be in ────────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  processRequest : Http.Server.Request -> Http.Server.Response              │
@@ -104,7 +104,7 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ This `Server.Response` type is declared to be in ───────┐
+│ MOD NOT FOUND ├─ This `Server.Response` type is declared to be in ───────┐
 └┬─────────────────┘  `http.Client`, which does not exist.                    │
  │                                                                            │
  │  processRequest : Http.Server.Request -> Http.Server.Response              │
@@ -148,11 +148,11 @@ NAME NOT IN SCOPE - can_import_unresolved_qualified.md:25:10:25:49
 
 
 ┌────────────────┐
-│ DOES NOT EXIST ├─ `Unknown.Module.config` does not exist. ──────────────────┐
+│ DOES NOT EXIST ├─ `Unknown.Mod.config` does not exist. ─────────────────────┐
 └┬───────────────┘                                                            │
  │                                                                            │
- │  config = Unknown.Module.config                                            │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
+ │  config = Unknown.Mod.config                                               │
+ │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
  └────────────────────────────────── can_import_unresolved_qualified.md:19:10 ┘
 
 
@@ -196,7 +196,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "json.Json"))
 		(s-import (raw "http.Client") (alias "Http"))
@@ -233,7 +233,7 @@ EndOfFile,
 					(e-string-part (raw "test")))))
 		(s-decl
 			(p-ident (raw "config"))
-			(e-ident (raw "Unknown.Module.config")))
+			(e-ident (raw "Unknown.Mod.config")))
 		(s-decl
 			(p-ident (raw "client"))
 			(e-ident (raw "Http.invalidMethod")))
@@ -289,9 +289,9 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "parser"))
 		(e-runtime-error (tag "ident_not_in_scope")))
-	(s-import (module "json.Json")
+	(s-import (mod "json.Json")
 		(exposes))
-	(s-import (module "http.Client")
+	(s-import (mod "http.Client")
 		(exposes)))
 ~~~
 # TYPES

@@ -382,10 +382,6 @@ pub const Module = struct {
         return ModuleEnv.varFrom(idx);
     }
 
-    pub fn exprNeedsInstantiation(self: @This(), idx: CIR.Expr.Idx) bool {
-        return self.typeStoreConst().needsInstantiation(self.exprType(idx));
-    }
-
     pub fn exprHasErrType(self: @This(), idx: CIR.Expr.Idx) bool {
         return self.typeStoreConst().resolveVar(self.exprType(idx)).desc.content == .err;
     }

@@ -31,13 +31,13 @@ EXPECTED IMPORT ALIAS - fuzz_crash_038.md:1:2:1:8
 
 ┌───────────────────────┐
 │ EXPECTED IMPORT ALIAS ├─ I was parsing an import alias, and I expected an ──┐
-└┬──────────────────────┘  uppercase module name after `as`.                  │
+└┬──────────────────────┘  uppercase mod name after `as`.                  │
  │                                                                            │
  │  *import B as                                                              │
  │   ‾‾‾‾‾‾                                                                   │
  └───────────────────────────────────────────────────── fuzz_crash_038.md:1:2 ┘
 
-    Import aliases rename modules, so they must start with an uppercase letter.
+    Import aliases rename mods, so they must start with an uppercase letter.
 
     For example:
         import Json.Decode as Decode
@@ -54,7 +54,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "expected_upper_name_after_import_as"))))

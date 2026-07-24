@@ -111,6 +111,7 @@ pub const Tag = enum {
     expr_block,
     expr_ellipsis,
     expr_anno_only,
+    expr_derived_method,
     expr_hosted_lambda,
     expr_low_level,
     expr_run_low_level,
@@ -141,6 +142,7 @@ pub const Tag = enum {
     ty_malformed,
     // Where clause
     where_method,
+    where_method_effectful,
     where_alias,
     where_malformed,
     // Patterns
@@ -154,6 +156,7 @@ pub const Tag = enum {
     pattern_tuple,
     pattern_num_literal,
     pattern_dec_literal,
+    pattern_num_from_numeral_literal,
     pattern_f32_literal,
     pattern_f64_literal,
     pattern_small_dec_literal,
@@ -253,6 +256,7 @@ pub const Tag = enum {
     diag_too_many_exports,
     diag_nominal_type_redeclared,
     diag_type_shadowed_warning,
+    diag_builtin_type_shadowed_warning,
     diag_type_parameter_conflict,
     diag_unused_variable,
     diag_used_underscore_variable,
@@ -352,6 +356,7 @@ pub const Payload = extern union {
     expr_dbg: ExprDbg,
     expr_expect_err: ExprExpectErr,
     expr_anno_only: ExprAnnoOnly,
+    expr_derived_method: ExprDerivedMethod,
     expr_return: ExprReturn,
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
@@ -365,6 +370,7 @@ pub const Payload = extern union {
     pattern_nominal_external: PatternNominalExternal,
     pattern_small_dec_literal: PatternSmallDecLiteral,
     pattern_dec_literal: PatternDecLiteral,
+    pattern_num_from_numeral_literal: PatternNumFromNumeralLiteral,
     pattern_str_literal: PatternStrLiteral,
     pattern_str_interpolation: PatternStrInterpolation,
     pattern_frac_f32: PatternFracF32,
@@ -499,7 +505,7 @@ pub const Payload = extern union {
     pub const StatementTypeAnno = extern struct {
         anno: u32,
         name: u32,
-        where_span2_idx_plus_one: u32, // 0 means no where clause, else index+1 into span2_data
+        where_span2_idx_plus_one: u32, // 0 means no where clause, else index+1 into span_with_node_data
     };
 
     /// statement_type_var_alias: alias_name + type_var_name + type_var_anno
@@ -536,6 +542,7 @@ pub const Payload = extern union {
         denom_power: u32,
         has_suffix: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const ExprTuple = extern struct {
@@ -615,7 +622,8 @@ pub const Payload = extern union {
     pub const ExprFracF32 = extern struct {
         value: u32,
         has_suffix: bool,
-        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
+        _padding: [3]u8 = .{ 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const ExprFracF64 = extern struct {
@@ -623,6 +631,7 @@ pub const Payload = extern union {
         value_hi: u32,
         has_suffix: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     /// expr_num: numeric literal with kind and value in int128_values
@@ -630,23 +639,26 @@ pub const Payload = extern union {
         kind: u32,
         val_kind: u32,
         int128_idx: u32,
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     /// expr_dec: decimal literal with value in int128_values
     pub const ExprDec = extern struct {
         int128_idx: u32,
         has_suffix: bool,
-        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
+        _padding: [3]u8 = .{ 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const ExprNumFromNumeral = extern struct {
-        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprString = extern struct {
         segments_start: u32,
         segments_len: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const ExprFieldAccess = extern struct {
@@ -670,9 +682,8 @@ pub const Payload = extern union {
 
     pub const ExprInterpolation = extern struct {
         first: u32,
-        parts_step_fn_idx: u32, // Index into span_with_node_data: (parts.start, parts.len, step_fn_var_plus_one)
-        method_name_region_span2_idx: u32,
-        constraint_fn_var_plus_one: u32,
+        interpolation_data_idx: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprStructuralEq = extern struct {
@@ -746,6 +757,7 @@ pub const Payload = extern union {
         type_name: u32,
         val_kind: u32,
         int128_idx: u32,
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     /// expr_typed_frac: typed fraction with type name and value in int128_values
@@ -753,11 +765,13 @@ pub const Payload = extern union {
         type_name: u32,
         val_kind: u32,
         int128_idx: u32,
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const ExprTypedNumFromNumeral = extern struct {
         type_name: u32,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_string_segment: string segment reference
@@ -803,6 +817,13 @@ pub const Payload = extern union {
     pub const ExprAnnoOnly = extern struct {
         ident: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// expr_derived_method: compiler-derived associated method marker
+    pub const ExprDerivedMethod = extern struct {
+        ident: u32,
+        kind: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_return: return expression
@@ -853,6 +874,7 @@ pub const Payload = extern union {
         kind: u32,
         value_kind: u32,
         int128_idx: u32,
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const PatternNominal = extern struct {
@@ -872,17 +894,25 @@ pub const Payload = extern union {
         denominator_power: u32,
         has_suffix: bool,
         _padding: [3]u8 = .{ 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     /// pattern_dec_literal: decimal pattern with value in int128_values
     pub const PatternDecLiteral = extern struct {
         int128_idx: u32,
         has_suffix: bool,
-        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
+        _padding: [3]u8 = .{ 0, 0, 0 },
+        literal_dispatch_plan_plus_one: u32 = 0,
     };
 
     pub const PatternStrLiteral = extern struct {
         literal: u32,
+        literal_dispatch_plan_plus_one: u32 = 0,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    pub const PatternNumFromNumeralLiteral = extern struct {
+        literal_dispatch_plan_plus_one: u32 = 0,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
@@ -1001,6 +1031,7 @@ pub const Payload = extern union {
         var_idx: u32,
         name: u32,
         args_ret_idx: u32, // Index into span_with_node_data: (args.start, args.len, ret)
+        effectful: u32,
     };
 
     pub const WhereMalformed = extern struct {
@@ -1039,7 +1070,9 @@ pub const Payload = extern union {
         /// Whether the annotation *introduces* a type variable (`.rigid_var`), as
         /// opposed to only referencing one from an enclosing scope.
         introduces_type_var: bool,
-        _padding: [1]u8 = .{0},
+        /// Whether the annotation (its type tree or any where-clause method
+        /// signature) contains an `_` inference hole.
+        contains_underscore: bool,
     };
 
     // === Diagnostic payload structs ===
@@ -1081,7 +1114,7 @@ pub const Payload = extern union {
     };
 
     /// Diagnostics with an identifier and inline region offsets.
-    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, diag_duplicate_tag, etc.
+    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_type_shadowed_warning, diag_duplicate_record_field, diag_duplicate_tag, etc.
     pub const DiagIdentWithRegion = extern struct {
         ident: u32, // @bitCast(Ident.Idx)
         region_start: u32, // offset
@@ -1089,7 +1122,7 @@ pub const Payload = extern union {
     };
 
     /// Diagnostics with two values plus region stored in span2_data.
-    /// Used by: diag_type_shadowed_warning, diag_type_parameter_conflict, diag_mutually_recursive_type_aliases
+    /// Used by: diag_type_parameter_conflict, diag_mutually_recursive_type_aliases
     pub const DiagTwoIdentsExtra = extern struct {
         ident1: u32, // @bitCast(Ident.Idx) or value
         ident2: u32, // @bitCast(Ident.Idx) or bool flag
@@ -1145,9 +1178,9 @@ pub const Payload = extern union {
     // Compile-time size verification
     comptime {
         std.debug.assert(@sizeOf(Payload) == 16);
-        // anno + where_span2_idx (2 x u32) + 3 bool flags + 1 byte padding. The
-        // explicit `_padding` keeps the trailing byte defined for deterministic
-        // serialization; assert the size so a stray field can't silently grow it.
+        // anno + where_span2_idx (2 x u32) + 4 bool flags. The four bools fill
+        // the trailing 4 bytes exactly (no padding); assert the size so a stray
+        // field can't silently grow it.
         std.debug.assert(@sizeOf(Annotation) == 12);
     }
 };

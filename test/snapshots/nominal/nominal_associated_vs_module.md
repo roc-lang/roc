@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Qualified names should be checked locally before treating as module references
+description=Qualified names should be checked locally before treating as mod references
 type=file
 ~~~
 # SOURCE
@@ -9,7 +9,7 @@ Foo := [Whatever].{
     Bar := [Something]
 }
 
-# This should resolve to the local Foo.Bar, not try to import from a Foo module
+# This should resolve to the local Foo.Bar, not try to import from a Foo mod
 useBar : Foo.Bar
 useBar = Something
 ~~~
@@ -29,7 +29,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Foo")
@@ -56,7 +56,7 @@ Foo := [Whatever].{
 	Bar := [Something]
 }
 
-# This should resolve to the local Foo.Bar, not try to import from a Foo module
+# This should resolve to the local Foo.Bar, not try to import from a Foo mod
 useBar : Foo.Bar
 useBar = Something
 ~~~
@@ -73,7 +73,7 @@ useBar = Something
 		(ty-tag-union
 			(ty-tag-name (name "Whatever"))))
 	(s-nominal-decl
-		(ty-header (name "nominal_associated_vs_module.Foo.Bar"))
+		(ty-header (name "nominal_associated_vs_mod.Foo.Bar"))
 		(ty-tag-union
 			(ty-tag-name (name "Something")))))
 ~~~
@@ -86,7 +86,7 @@ useBar = Something
 		(nominal (type "Foo")
 			(ty-header (name "Foo")))
 		(nominal (type "Foo.Bar")
-			(ty-header (name "nominal_associated_vs_module.Foo.Bar"))))
+			(ty-header (name "nominal_associated_vs_mod.Foo.Bar"))))
 	(expressions
 		(expr (type "Foo.Bar"))))
 ~~~

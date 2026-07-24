@@ -52,10 +52,13 @@ const TestSetup = struct {
 
 fn customInspectProc(
     ops: *builtins.host_abi.RocOps,
+    test_context: ?*anyopaque,
     _: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
+    const context_observed: *bool = @ptrCast(@alignCast(test_context.?));
+    context_observed.* = true;
     const rendered = builtins.str.RocStr.fromSlice("custom inspect result stored outside the small-string representation", ops);
     const out: *align(1) builtins.str.RocStr = @ptrCast(ret.?);
     out.* = rendered;
@@ -66,6 +69,7 @@ var expectedInspectArgDesc: ?*const BoxyTypeDesc = null;
 
 fn customInspectChecksArgDesc(
     ops: *builtins.host_abi.RocOps,
+    _: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
@@ -82,6 +86,7 @@ var reentrantInspectTargetDescs: [2]?*const BoxyTypeDesc = .{ null, null };
 
 fn customInspectSpecializesDescriptor(
     ops: *builtins.host_abi.RocOps,
+    _: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
@@ -189,6 +194,7 @@ test "boxy abi inspect renders a scalar through its descriptor" {
     var rendered: builtins.str.RocStr = undefined;
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
+        null,
         @ptrCast(&value),
         @intFromEnum(layout_mod.Idx.u64),
         &descs[0],
@@ -228,12 +234,15 @@ test "boxy abi inspect dispatches descriptor method and releases its owned resul
 
     var value: u64 = 42;
     var rendered: builtins.str.RocStr = undefined;
+    var context_observed = false;
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
+        @ptrCast(&context_observed),
         @ptrCast(&value),
         @intFromEnum(layout_mod.Idx.u64),
         &descs[0],
     );
+    try std.testing.expect(context_observed);
     try std.testing.expectEqualStrings("custom inspect result stored outside the small-string representation", rendered.asSlice());
     rendered.decref(setup.env.get_ops());
     try setup.env.checkForLeaks();
@@ -289,6 +298,7 @@ test "boxy abi reentrant inspect specialization keeps descriptors outside per-ca
         var rendered: builtins.str.RocStr = undefined;
         boxy_abi.roc_boxy_inspect(
             @ptrCast(&rendered),
+            null,
             @ptrCast(value),
             @intFromEnum(layout_mod.Idx.u64),
             &descs[index],
@@ -349,6 +359,7 @@ test "boxy abi custom inspect preserves a full descriptor across a payload-shape
     var rendered: builtins.str.RocStr = undefined;
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
+        null,
         @ptrCast(&value),
         @intFromEnum(aggregate_layout),
         &descs[0],
@@ -373,6 +384,7 @@ test "boxy abi custom inspect preserves a full descriptor across a payload-shape
 
     boxy_abi.roc_boxy_inspect(
         @ptrCast(&rendered),
+        null,
         @ptrCast(&boxed),
         @intFromEnum(box_layout),
         boxed_desc.?,
@@ -1637,10 +1649,13 @@ test "boxy abi descriptor copy materializes a template with local captures" {
 
 fn sumTwoU64s(
     _: *builtins.host_abi.RocOps,
+    test_context: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
 ) callconv(.c) void {
+    const context_observed: *bool = @ptrCast(@alignCast(test_context.?));
+    context_observed.* = true;
     const a: *align(1) const u64 = @ptrCast(args[0].?);
     const b: *align(1) const u64 = @ptrCast(args[1].?);
     const out: *align(1) u64 = @ptrCast(ret.?);
@@ -1652,6 +1667,7 @@ var expectedDictionaryArgDesc: ?*const BoxyTypeDesc = null;
 
 fn receivesExpectedDictionaryArgDesc(
     _: *builtins.host_abi.RocOps,
+    _: ?*anyopaque,
     args: [*]const ?*const anyopaque,
     ret: ?*anyopaque,
     ret_desc: *?*const anyopaque,
@@ -1691,9 +1707,11 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
     };
     var out: u64 = 0;
     var out_desc: ?*const BoxyTypeDesc = null;
+    var context_observed = false;
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
+        @ptrCast(&context_observed),
         &dicts[0],
         0,
         0,
@@ -1704,6 +1722,7 @@ test "boxy abi dictionary dispatch calls a registered native worker" {
         null,
         @intFromEnum(layout_mod.Idx.u64),
     );
+    try std.testing.expect(context_observed);
     try std.testing.expectEqual(@as(u64, 42), out);
     try std.testing.expectEqual(@as(?*const BoxyTypeDesc, null), out_desc);
 }
@@ -1765,6 +1784,7 @@ test "boxy abi dictionary call preserves a full descriptor across a payload-shap
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
+        null,
         &dicts[0],
         0,
         0,
@@ -1819,6 +1839,7 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
+        null,
         &dicts[0],
         0,
         0,
@@ -1835,6 +1856,7 @@ test "boxy abi dictionary dispatch runs structural equality slots inline" {
     boxy_abi.roc_boxy_call_dict(
         @ptrCast(&out),
         &out_desc,
+        null,
         &dicts[0],
         0,
         0,

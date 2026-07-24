@@ -1,0 +1,13 @@
+diff --git a/src/postcheck/solved_lir_lower.zig b/src/postcheck/solved_lir_lower.zig
+index 269f5e573e..e9087cd331 100644
+--- a/src/postcheck/solved_lir_lower.zig
++++ b/src/postcheck/solved_lir_lower.zig
+@@ -3448,7 +3448,7 @@ const Lowerer = struct {
+         var i = variants.len;
+         while (i > 0) {
+             i -= 1;
+-            const variant: Type.FnVariant = variants[i];
++            const variant: Type.FnVariant = variants[(i + 1) % variants.len];
+             const variant_index: u16 = @intCast(i);
+             const branch_done = try self.joinJump(done);
+             const branch_body = try self.lowerCallableVariantCallInto(target, result_ty, callee, variant, variant_index, arg_exprs, branch_done);

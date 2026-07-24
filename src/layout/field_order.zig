@@ -1,6 +1,7 @@
-//! Structural record/tuple field ordering, shared by the layout store and the
-//! `roc glue` generator so the two can never disagree on how a record lays out in
-//! memory.
+//! Structural record/tuple field ordering used by the layout store when it
+//! commits how a record lays out in memory. The `roc glue` generator does not
+//! reorder fields itself; it consumes the committed field order the layout store
+//! produced here, so both describe the same memory layout.
 //!
 //! Structural (anonymous) records and no-`_` nominal records lay their fields out
 //! by descending sort key, then ascending field name, so source order never

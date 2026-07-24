@@ -41,7 +41,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "a"))
@@ -54,7 +54,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = ()->b()()()
+a = ()->(b()())()
 ~~~
 # CANONICALIZE
 ~~~clojure

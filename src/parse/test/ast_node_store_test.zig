@@ -91,8 +91,8 @@ test "NodeStore round trip - Headers" {
             .exposes = rand_idx(random, AST.Collection.Idx),
             .name = rand_token_idx(random),
             .packages = rand_idx(random, AST.Collection.Idx),
-            .provides = .{ .span = rand_span(random) },
-            .hosted = .{ .span = rand_span(random) },
+            .provides = .{ .span = rand_span(random), .layout = .expanded },
+            .hosted = .{ .span = rand_span(random), .layout = .expanded },
             .requires_entries = .{ .span = .{ .start = 0, .len = 0 } },
             .targets = null,
             .region = rand_region(random),
@@ -125,6 +125,27 @@ test "NodeStore round trip - Headers" {
         std.debug.print("Please add test cases for missing header variants.\n", .{});
         return error.IncompleteHeaderTestCoverage;
     }
+}
+
+test "NodeStore preserves explicit collection layout" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 2);
+    defer store.deinit();
+
+    const collection = try store.addCollection(.collection_exposed, .{
+        .span = .{ .start = 0, .len = 0 },
+        .region = .{ .start = 1, .end = 3 },
+        .layout = .expanded,
+    });
+    try testing.expectEqual(AST.CollectionLayout.expanded, store.getCollection(collection).layout);
+
+    const expr = try store.addExpr(.{ .list = .{
+        .items = .{ .span = .{ .start = 0, .len = 0 } },
+        .region = .{ .start = 4, .end = 6 },
+    } });
+    try testing.expectEqual(AST.CollectionLayout.compact, store.getCollectionLayout(expr));
+    store.setCollectionLayout(expr, .expanded);
+    try testing.expectEqual(AST.CollectionLayout.expanded, store.getCollectionLayout(expr));
 }
 
 test "NodeStore round trip - Statement" {

@@ -109,8 +109,6 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/numeric_fold.roc",
         .io_spec = "1>Sum: 15.0",
         .description = "List.fold with numeric accumulators",
-        // TODO: Dec (i128) parameter passing in for-loop lambdas fails on Windows x86_64 dev backend
-        .skip_on_windows = true,
     },
     .{
         .roc_file = "test/fx/list_for_each.roc",
@@ -187,6 +185,16 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/dict_pseudo_seed_repro.roc",
         .io_spec = "1>b",
         .description = "Regression test: compiled Dict operations call the hasher builtins",
+    },
+    .{
+        .roc_file = "test/fx/issue_10038_top_level_dict.roc",
+        .io_spec = "0<a|1>b",
+        .description = "Regression test: runtime lookup honors a comptime Dict's deterministic seed",
+    },
+    .{
+        .roc_file = "test/fx/issue_10038_comptime_dict_transitions.roc",
+        .io_spec = "0<a|1>direct:A|1>insert-old:A|1>insert-new:C|1>update-new:D|1>release:A|1>keep:A|1>reserve:A|1>clear:refilled|1>map:A!|1>remove:B|1>nested:nested|1>runtime:runtime",
+        .description = "Regression test: comptime Dict lookup and runtime seed-domain transitions",
     },
     .{
         .roc_file = "test/fx/test_direct_string.roc",
@@ -525,6 +533,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/cross_module_recursive_nominal.roc",
         .io_spec = "1>Div (correct)",
         .description = "Cross-module recursive nominal types with pattern matching",
+    },
+    .{
+        .roc_file = "test/fx/issue_10203/main.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: boxed function values in cross-module recursive nominals lower to LIR",
     },
     .{
         .roc_file = "test/fx/transitive_import_nominal_equality/main.roc",

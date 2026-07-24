@@ -105,6 +105,7 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
             .symbol_offset = data_offset,
             .alignment = word_size,
             .is_global = false,
+            .is_exported = false,
             .relocations = relocations,
         });
         symbol_owned = false;

@@ -16,6 +16,20 @@ const roc_target = @import("roc_target");
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
 
+var shared_test_builtins: ?eval.BuiltinModules = null;
+var shared_test_builtins_mutex: std.Io.Mutex = .init;
+
+fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
+    shared_test_builtins_mutex.lockUncancelable(std.testing.io);
+    defer shared_test_builtins_mutex.unlock(std.testing.io);
+
+    if (shared_test_builtins == null) {
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+    }
+
+    return &shared_test_builtins.?;
+}
+
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     std.Io.Dir.CreateDirPathError ||
@@ -68,6 +82,7 @@ pub const LirInspectFn = *const fn (
 /// Options controlling how the harness lowers an app to LIR.
 pub const LirLoweringOptions = struct {
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    inline_mode: lir.CheckedPipeline.InlineMode = .none,
     list_in_place_map: bool = false,
 };
 
@@ -78,10 +93,29 @@ pub fn expectLowersToLir(app_body: []const u8) LowerToLirHarnessError!void {
     try runToLir(app_body, null, .{}, null);
 }
 
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options. Reaching the end without a panic means the program checked cleanly
+/// and passed ARC certification.
+pub fn expectLowersToLirWithOptions(app_body: []const u8, opts: LirLoweringOptions) LowerToLirHarnessError!void {
+    try runToLir(app_body, null, opts, null);
+}
+
 /// Lower an app at `app_path` to LIR. Reaching the end without a panic means
 /// the app checked cleanly and passed ARC certification.
 pub fn expectAppPathLowersToLir(app_path: []const u8) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, null);
+}
+
+/// Lower an app at `app_path` to LIR, then run a focused invariant check
+/// against the actual lowered store and layout store.
+pub fn expectAppPathLirInspection(app_path: []const u8, inspect: LirInspectFn) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, .{}, inspect);
+}
+
+/// Lower an app at `app_path` to LIR with explicit lowering options, then run
+/// a focused invariant check against the actual lowered store and layout store.
+pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
+    try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect);
 }
 
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
@@ -202,15 +236,14 @@ fn lowerAppPathToLir(
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
+    const builtin_modules = try sharedBuiltinModules();
 
     var coord = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_version,
         null,
         CoreCtx.default(gpa, arena, std.testing.io),
@@ -240,7 +273,11 @@ fn lowerAppPathToLir(
             .imports = imports,
         },
         .{ .requests = lir_roots },
-        .{ .target_usize = opts.target_usize, .list_in_place_map = opts.list_in_place_map },
+        .{
+            .target_usize = opts.target_usize,
+            .inline_mode = opts.inline_mode,
+            .list_in_place_map = opts.list_in_place_map,
+        },
     );
     defer lowered.deinit();
 

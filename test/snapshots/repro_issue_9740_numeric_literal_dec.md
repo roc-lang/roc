@@ -54,7 +54,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "slice")
 			(ty-fn
@@ -204,25 +204,25 @@ main! = |_| {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_gt") (constraint-fn-var 201)
+													(e-dispatch-call (method "is_gt") (constraint-fn-var 287)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "start"))))
 														(args
 															(e-num (value "0"))))
 													(e-block
-														(e-call (constraint-fn-var 520)
+														(e-call (constraint-fn-var 368)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
-															(e-dispatch-call (method "minus") (constraint-fn-var 327)
+															(e-dispatch-call (method "minus") (constraint-fn-var 321)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "start"))))
 																(args
 																	(e-num (value "1"))))
-															(e-dispatch-call (method "minus") (constraint-fn-var 440)
+															(e-dispatch-call (method "minus") (constraint-fn-var 348)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))
@@ -242,16 +242,16 @@ main! = |_| {
 																	(p-assign (ident "x"))))))))
 											(if-else
 												(e-block
-													(e-call (constraint-fn-var 885)
+													(e-call (constraint-fn-var 461)
 														(e-lookup-external
 															(builtin))
-														(e-call (constraint-fn-var 814)
+														(e-call (constraint-fn-var 446)
 															(e-lookup-local
 																(p-assign (ident "slice")))
 															(e-lookup-local
 																(p-assign (ident "rest")))
 															(e-num (value "0"))
-															(e-dispatch-call (method "minus") (constraint-fn-var 734)
+															(e-dispatch-call (method "minus") (constraint-fn-var 426)
 																(receiver
 																	(e-lookup-local
 																		(p-assign (ident "end"))))

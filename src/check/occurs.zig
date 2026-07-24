@@ -12,6 +12,7 @@
 //! chains. This is reset between runs. The check does not mutate the `Store`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
@@ -34,6 +35,21 @@ pub const Result = enum {
     infinite,
 };
 
+/// How the traversal reaches a nominal type's backing structure.
+pub const NominalBackingMode = enum {
+    /// Value-graph occurs: nominal applications contribute only their type
+    /// arguments. Backing structure belongs to the declaration graph, whose
+    /// recursion is validated separately (`occursDeclarationGraph`), so the
+    /// per-use instantiated backing is never traversed here.
+    args_only,
+    /// Declaration validation: resolve the application's declaration in the
+    /// store's declaration table by key and traverse the declaration's
+    /// backing template. Recursive references close cycles by identity, so
+    /// mutually recursive declarations are detected even though per-use
+    /// instantiation copies disconnect their embedded graphs.
+    declaration_table,
+};
+
 /// Check if a variable is recursive
 ///
 /// This uses `Scratch` as to hold intermediate values. `occurs` will reset it
@@ -44,12 +60,24 @@ pub const Result = enum {
 ///
 /// This function does not modify the `Store`.
 pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
+    return occursWithMode(types_store, scratch, var_, .args_only);
+}
+
+/// Check a nominal declaration for invalid recursion, resolving nominal
+/// backings through the store's declaration table (see
+/// `NominalBackingMode.declaration_table`). `var_` is the declaration's
+/// statement var, whose content is a nominal application of the declaration.
+pub fn occursDeclarationGraph(types_store: *Store, scratch: *Scratch, var_: Var) std.mem.Allocator.Error!Result {
+    return occursWithMode(types_store, scratch, var_, .declaration_table);
+}
+
+fn occursWithMode(types_store: *Store, scratch: *Scratch, var_: Var, mode: NominalBackingMode) std.mem.Allocator.Error!Result {
     scratch.reset();
 
     // Check for recursion. The root has no incoming edge, so it starts with the
     // empty edge. Whether the recursion is nominal/anonymous/infinite is decided
     // from the edges *within* the detected cycle, not from the root downward.
-    var check_occurs = CheckOccurs.init(types_store, scratch);
+    var check_occurs = CheckOccurs.init(types_store, scratch, mode);
     return try check_occurs.occurs(var_, Edge.none);
 }
 
@@ -70,12 +98,13 @@ const CheckOccurs = struct {
 
     types_store: *Store,
     scratch: *Scratch,
+    nominal_backing_mode: NominalBackingMode,
 
     /// Init CheckOccurs
     ///
     /// Note that this struct does not own any of it's fields
-    fn init(types_store: *Store, scratch: *Scratch) Self {
-        return .{ .types_store = types_store, .scratch = scratch };
+    fn init(types_store: *Store, scratch: *Scratch, nominal_backing_mode: NominalBackingMode) Self {
+        return .{ .types_store = types_store, .scratch = scratch, .nominal_backing_mode = nominal_backing_mode };
     }
 
     /// Iteratively check if a type is referenced by it's children
@@ -151,11 +180,34 @@ const CheckOccurs = struct {
                                         try self.pushVarsToProcess(elems, Edge.none);
                                     },
                                     .nominal_type => |nominal_type| {
-                                        const backing_var = self.types_store.getNominalBackingVar(nominal_type);
-                                        try self.pushVarToProcess(backing_var, Edge.nominal);
+                                        switch (self.nominal_backing_mode) {
+                                            .args_only => {
+                                                // Backing structure is declaration data,
+                                                // validated by the declaration-graph pass;
+                                                // the value graph sees identity + args only.
+                                            },
+                                            .declaration_table => {
+                                                // Resolve the declaration by key so recursive
+                                                // references land on the one backing template.
+                                                // Applications without a source declaration have
+                                                // no declaration graph to traverse.
+                                                if (self.types_store.lookupNominalDecl(nominal_type)) |decl_idx| {
+                                                    const decl = self.types_store.getNominalDecl(decl_idx);
+                                                    try self.pushVarToProcess(decl.backing, Edge.nominal);
+                                                } else if (nominal_type.sourceDecl().present) {
+                                                    if (builtin.mode == .Debug) {
+                                                        std.debug.panic(
+                                                            "occurs invariant violated: nominal application with source declaration has no declaration table entry",
+                                                            .{},
+                                                        );
+                                                    }
+                                                    unreachable;
+                                                }
+                                            },
+                                        }
 
                                         // Arguments are ordinary positions; only the backing
-                                        // var is "through" the nominal.
+                                        // template is "through" the nominal.
                                         var arg_iter = self.types_store.iterNominalArgs(nominal_type);
                                         while (arg_iter.next()) |arg_var| {
                                             try self.pushVarToProcess(arg_var, Edge.none);
@@ -416,10 +468,8 @@ test "occurs: no recursion through two levels (v1 = Box(v2), v2 = Str)" {
     const v2 = try types_store.fresh();
 
     // Create a nominal Box type wrapping v2
-    const backing_var = try types_store.freshFromContent(Content{ .structure = .empty_record });
     try types_store.setVarContent(v1, try types_store.mkNominal(
         undefined,
-        backing_var,
         &.{v2},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -562,10 +612,8 @@ test "occurs: nested recursive tag union (v = [ Cons(elem, Box(v)) ] )" {
 
     // Wrap the recursive var in a nominal Box to simulate nesting
     const boxed_linked_list = try types_store.fresh();
-    const box_backing_var = try types_store.freshFromContent(.{ .structure = .empty_record });
     try types_store.setVarContent(boxed_linked_list, try types_store.mkNominal(
         undefined,
-        box_backing_var,
         &.{linked_list},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -608,7 +656,6 @@ test "occurs: recursive tag union (v = List: [ Cons(Elem, List), Nil ])" {
     const backing_var = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
     try types_store.setVarContent(nominal_type, try types_store.mkNominal(
         undefined,
-        backing_var,
         &.{},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -648,7 +695,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     // Set up TypeB = [ Cons(Elem, TypeA), Nil ]
     try types_store.setVarContent(type_b_nominal, try types_store.mkNominal(
         undefined,
-        type_b_backing,
         &.{},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -657,7 +703,6 @@ test "occurs: recursive tag union with multiple nominals (TypeA := TypeB, TypeB 
     // Set up TypeA = Type B
     try types_store.setVarContent(type_a_nominal, try types_store.mkNominal(
         undefined,
-        type_b_nominal,
         &.{},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -691,16 +736,11 @@ test "occurs: valid nominal recursion does not hide later invalid recursion" {
     const invalid_tuple_elems = try types_store.appendVars(&[_]Var{invalid_inner});
     try types_store.setRootVarContent(invalid_inner, .{ .structure = .{ .tuple = .{ .elems = invalid_tuple_elems } } });
 
-    // Valid branch: List := [ Cons(List), Nil ].
+    // Valid branch: a nominal application (its declaration graph is not part
+    // of the value graph, so it is trivially acyclic here).
     const list_nominal = try types_store.fresh();
-    const ext = try types_store.fresh();
-    const cons_tag_args = try types_store.appendVars(&[_]Var{list_nominal});
-    const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
-    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
-    const list_backing = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
     try types_store.setVarContent(list_nominal, try types_store.mkNominal(
         undefined,
-        list_backing,
         &.{},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -730,16 +770,11 @@ test "occurs: valid nominal return recursion does not hide invalid argument recu
     const invalid_arg_tuple_elems = try types_store.appendVars(&[_]Var{invalid_arg});
     try types_store.setRootVarContent(invalid_arg, .{ .structure = .{ .tuple = .{ .elems = invalid_arg_tuple_elems } } });
 
-    // Valid return branch: List := [ Cons(List), Nil ].
+    // Valid return branch: a nominal application (trivially acyclic in the
+    // value graph).
     const list_nominal = try types_store.fresh();
-    const ext = try types_store.fresh();
-    const cons_tag_args = try types_store.appendVars(&[_]Var{list_nominal});
-    const cons_tag = types.Tag{ .name = undefined, .args = cons_tag_args };
-    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
-    const list_backing = try types_store.freshFromContent(try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
     try types_store.setVarContent(list_nominal, try types_store.mkNominal(
         undefined,
-        list_backing,
         &.{},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -752,7 +787,6 @@ test "occurs: valid nominal return recursion does not hide invalid argument recu
     const root = try types_store.freshFromContent(.{ .structure = .{ .fn_pure = types.Func{
         .args = args,
         .ret = list_nominal,
-        .needs_instantiation = false,
     } } });
 
     const result = occurs(&types_store, &scratch, root);
@@ -783,11 +817,9 @@ test "occurs: anonymous recursion in a nominal's type argument is not valid (reg
     try types_store.setRootVarContent(inner, try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
 
     // Wrapper(Inner) := {}  -- nominal with `inner` as its only type argument
-    const wrapper_backing = try types_store.freshFromContent(.{ .structure = .empty_record });
     const wrapper = try types_store.fresh();
     try types_store.setVarContent(wrapper, try types_store.mkNominal(
         undefined,
-        wrapper_backing,
         &.{inner},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -797,14 +829,15 @@ test "occurs: anonymous recursion in a nominal's type argument is not valid (reg
     try std.testing.expectEqual(.recursive_anonymous, result);
 }
 
-test "occurs: anonymous recursion below a buried nominal is not valid (regression)" {
+test "occurs: value graph never traverses a nominal's backing (args only)" {
     // Root = ( N, )   where   N := Inner   and   Inner = [ Cons(Inner), Nil ]
     //
-    // `Root` is a tuple, so no nominal edge is crossed at the root. The only
-    // nominal is `N`, buried one level down. The cycle is `Inner -> Cons ->
-    // Inner`, which does NOT pass through `N`. A buggy occurs check that lets the
-    // nominal marking from N's backing leak downward would wrongly classify this
-    // as valid. Correct answer: recursive_anonymous.
+    // The only cycle lives in N's backing structure. Backing structure is
+    // declaration data — its recursion is validated by the declaration-graph
+    // pass (`occursDeclarationGraph`), and the checker poisons invalid
+    // declarations before any use exists. The value-graph occurs check
+    // therefore does not traverse backings at all, and this graph is valid
+    // from the value graph's point of view.
     const gpa = std.testing.allocator;
     var types_store = try Store.init(gpa);
     defer types_store.deinit();
@@ -824,7 +857,6 @@ test "occurs: anonymous recursion below a buried nominal is not valid (regressio
     const n = try types_store.fresh();
     try types_store.setVarContent(n, try types_store.mkNominal(
         undefined,
-        inner,
         &.{},
         base.ModuleIdentity.Idx.NONE,
         false,
@@ -835,6 +867,166 @@ test "occurs: anonymous recursion below a buried nominal is not valid (regressio
     const root = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = elems_range } } });
 
     const result = occurs(&types_store, &scratch, root);
+    try std.testing.expectEqual(.valid, result);
+}
+
+/// Register a declaration-table entry plus a matching decl var for the tests
+/// of `occursDeclarationGraph`. Returns the decl var.
+fn testRegisterDecl(
+    types_store: *Store,
+    origin: base.ModuleIdentity.Idx,
+    statement: u32,
+    backing: Var,
+    args: []const Var,
+) std.mem.Allocator.Error!Var {
+    const content = try types_store.mkNominalWithSourceDecl(
+        .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        args,
+        origin,
+        statement,
+        false,
+    );
+    _ = try types_store.registerNominalDecl(.{
+        .ident = .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        .origin_module = origin,
+        .source = try types.NominalType.Source.initChecked(
+            try types.SourceDecl.fromStatementChecked(statement),
+            false,
+            false,
+        ),
+        .formals = try types_store.appendVars(args),
+        .backing = backing,
+        .flags = .{ .valid = true },
+    });
+    return try types_store.freshFromContent(content);
+}
+
+test "occursDeclarationGraph: valid recursion through a tag payload" {
+    // List := [ Nil, Cons(List) ] — the template's recursive reference is an
+    // application of the same declaration key.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+
+    const backing = try types_store.fresh();
+    // Recursive reference: an app of the same declaration inside the payload.
+    const rec_app = try types_store.freshFromContent(try types_store.mkNominalWithSourceDecl(
+        .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        &.{},
+        origin,
+        7,
+        false,
+    ));
+    const ext = try types_store.fresh();
+    const cons_args = try types_store.appendVars(&[_]Var{rec_app});
+    const cons_tag = types.Tag{ .name = undefined, .args = cons_args };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
+    try types_store.setRootVarContent(backing, try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
+
+    const decl_var = try testRegisterDecl(&types_store, origin, 7, backing, &.{});
+
+    const result = occursDeclarationGraph(&types_store, &scratch, decl_var);
+    try std.testing.expectEqual(.valid, result);
+}
+
+test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
+    // T := (T,) — the cycle never passes a recursion-allowed position.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+
+    const backing = try types_store.fresh();
+    const rec_app = try types_store.freshFromContent(try types_store.mkNominalWithSourceDecl(
+        .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        &.{},
+        origin,
+        7,
+        false,
+    ));
+    const elems = try types_store.appendVars(&[_]Var{rec_app});
+    try types_store.setRootVarContent(backing, .{ .structure = .{ .tuple = .{ .elems = elems } } });
+
+    const decl_var = try testRegisterDecl(&types_store, origin, 7, backing, &.{});
+
+    const result = occursDeclarationGraph(&types_store, &scratch, decl_var);
+    try std.testing.expectEqual(.infinite, result);
+}
+
+test "occursDeclarationGraph: mutual recursion closes by declaration key" {
+    // T := (U,)   U := (T,) — each template references the OTHER declaration
+    // by key. Per-use instantiation copies would disconnect this cycle; the
+    // declaration table closes it.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+
+    // Reserve backing vars for both declarations first.
+    const t_backing = try types_store.fresh();
+    const u_backing = try types_store.fresh();
+
+    // T's template: a tuple holding an app of U. The application carries no
+    // backing; only the declaration table can reach U's template.
+    const u_app = try types_store.freshFromContent(try types_store.mkNominalWithSourceDecl(
+        .{ .ident_idx = @bitCast(@as(u32, 2)) },
+        &.{},
+        origin,
+        9,
+        false,
+    ));
+    const t_elems = try types_store.appendVars(&[_]Var{u_app});
+    try types_store.setRootVarContent(t_backing, .{ .structure = .{ .tuple = .{ .elems = t_elems } } });
+
+    // U's template: a tuple holding an app of T.
+    const t_app = try types_store.freshFromContent(try types_store.mkNominalWithSourceDecl(
+        .{ .ident_idx = @bitCast(@as(u32, 1)) },
+        &.{},
+        origin,
+        7,
+        false,
+    ));
+    const u_elems = try types_store.appendVars(&[_]Var{t_app});
+    try types_store.setRootVarContent(u_backing, .{ .structure = .{ .tuple = .{ .elems = u_elems } } });
+
+    const t_decl_var = try testRegisterDecl(&types_store, origin, 7, t_backing, &.{});
+    _ = try testRegisterDecl(&types_store, origin, 9, u_backing, &.{});
+
+    const result = occursDeclarationGraph(&types_store, &scratch, t_decl_var);
+    try std.testing.expectEqual(.infinite, result);
+}
+
+test "occursDeclarationGraph: anonymous recursion inside a template is rejected" {
+    // N := Inner where Inner = [ Cons(Inner), Nil ] — the cycle inside the
+    // template passes a tag payload but never re-enters a nominal backing.
+    const gpa = std.testing.allocator;
+    var types_store = try Store.init(gpa);
+    defer types_store.deinit();
+    var scratch = try Scratch.init(gpa);
+    defer scratch.deinit();
+
+    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+
+    const inner = try types_store.fresh();
+    const ext = try types_store.fresh();
+    const cons_args = try types_store.appendVars(&[_]Var{inner});
+    const cons_tag = types.Tag{ .name = undefined, .args = cons_args };
+    const nil_tag = types.Tag{ .name = undefined, .args = Var.SafeList.Range.empty() };
+    try types_store.setRootVarContent(inner, try types_store.mkTagUnion(&.{ cons_tag, nil_tag }, ext));
+
+    const decl_var = try testRegisterDecl(&types_store, origin, 7, inner, &.{});
+
+    const result = occursDeclarationGraph(&types_store, &scratch, decl_var);
     try std.testing.expectEqual(.recursive_anonymous, result);
 }
 

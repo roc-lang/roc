@@ -4,14 +4,16 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| snake_to_camel(name)
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
-			Done => Err(MissingRequired)
+			Done => Err(FormatError)
 		}
 
-	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
@@ -19,7 +21,7 @@ Format := [Default].{
 			Continue({ rest : State }),
 			Done({ rest : State }),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
@@ -31,11 +33,8 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, _| Ok(Done)
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
 }
 
 State := [Present(Str), Done]
@@ -59,13 +58,13 @@ find_field = |fields, name| {
 
 			Done =>
 				return Err(NotFound)
-		}
+			}
 	}
 }
 
 snake_to_camel : Str -> Str
 snake_to_camel = |text|
-	match Str.find_first(text, "_") {
+	match Str.split_first(text, "_") {
 		Ok({ before, after }) =>
 			before.concat(upper_first_ascii(snake_to_camel(after)))
 
@@ -98,9 +97,9 @@ upper_first_ascii = |text| {
 	}
 }
 
-parser_for : () -> (Str -> Try(a, [MissingRequired]))
+parser_for : () -> (Str -> Try(a, [FormatError, ..errs]))
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parser_for = || {
 	Shape : a
@@ -112,7 +111,7 @@ parser_for = || {
 	}
 }
 
-parse_stored : Str -> Try({ foo_bar : Str }, [MissingRequired])
+parse_stored : Str -> Try({ foo_bar : Str }, [FormatError, MissingRequiredField(Str)])
 parse_stored = parser_for()
 
 expect {

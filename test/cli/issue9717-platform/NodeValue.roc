@@ -24,6 +24,32 @@ NodeValue := [
 	encode_bool : Bool, NodeValue -> Try(NodeValue, [])
 	encode_bool = |b, _state| Ok(NvBool(b))
 
+	encode_tag :
+		NodeValue,
+		Str,
+		U64,
+		(NodeValue, (NodeValue, (NodeValue -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)) -> Try(NodeValue, err)
+	encode_tag = |state, name, count, write_payloads|
+		if count == 0 {
+			NodeValue.encode_str(name, state)
+		} else {
+			NodeValue.encode_record(
+				state,
+				1,
+				|record_state, write_field|
+					write_field(
+						record_state,
+						name,
+						|payload_state|
+							if count == 1 {
+								write_payloads(payload_state, |item_state, write_value| write_value(item_state))
+							} else {
+								NodeValue.encode_tuple(payload_state, count, write_payloads)
+							},
+					),
+			)
+		}
+
 	encode_record :
 		NodeValue,
 		U64,

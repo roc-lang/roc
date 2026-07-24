@@ -10,12 +10,12 @@ package
 	{ somePkg: "../main.roc", }
 ~~~
 # EXPECTED
-MODULE NOT FOUND - package_header_nonempty_multiline_3.md:2:14:2:22
+MOD NOT FOUND - package_header_nonempty_multiline_3.md:2:14:2:22
 EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:3:2:12
 # PROBLEMS
 
 ┌──────────────────┐
-│ MODULE NOT FOUND ├─ The module `SomeType` was not found in this Roc ────────┐
+│ MOD NOT FOUND ├─ The mod `SomeType` was not found in this Roc ────────┐
 └┬─────────────────┘  project.                                                │
  │                                                                            │
  │  [something, SomeType,]                                                    │
@@ -25,15 +25,15 @@ EXPOSED BUT NOT DEFINED - package_header_nonempty_multiline_3.md:2:3:2:12
 
 
 ┌─────────────────────────┐
-│ EXPOSED BUT NOT DEFINED ├─ The module header says that `something` is ──────┐
+│ EXPOSED BUT NOT DEFINED ├─ The mod header says that `something` is ──────┐
 └┬────────────────────────┘  exposed, but it is not defined anywhere in       │
- │                           this module.                                     │
+ │                           this mod.                                     │
  │                                                                            │
  │  [something, SomeType,]                                                    │
  │   ‾‾‾‾‾‾‾‾‾                                                                │
  └──────────────────────────────── package_header_nonempty_multiline_3.md:2:3 ┘
 
-    You can fix this by either defining `something` in this module, or by
+    You can fix this by either defining `something` in this mod, or by
     removing it from the list of exposed values.
 
 # TOKENS
@@ -71,7 +71,7 @@ package
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "SomeType")
+	(s-import (mod "SomeType")
 		(exposes)))
 ~~~
 # TYPES

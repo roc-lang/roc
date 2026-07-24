@@ -200,8 +200,6 @@ test "double question shares try branch patterns without try suffix flag" {
 
 test "try suffix inside expect emits expect err" {
     const source =
-        \\module [main]
-        \\
         \\expect Try.Err("x")? == "ok"
         \\
         \\main = {}

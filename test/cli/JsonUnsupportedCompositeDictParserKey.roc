@@ -1,4 +1,4 @@
 JsonUnsupportedCompositeDictParserKey :: [].{}
 
-main : Try(Dict((Str, Str), U64), Json.ParseErr)
+main : Try(Dict((Str, Str), U64), [InvalidJson(Str)])
 main = Json.parse("{}")

@@ -8,12 +8,12 @@ Format := [Identity, Kebab].{
 			Kebab => underscores_to_dashes(name)
 		}
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			KebabFooValue => Ok({ value: "foo-kebab", rest: KebabDone })
 			IdentityFooValue => Ok({ value: "foo-identity", rest: IdentityDone })
-			KebabFooName | KebabDone | IdentityFooName | IdentityDone | Done => Err(MissingRequired)
+			KebabFooName | KebabDone | IdentityFooName | IdentityDone | Done => Err(FormatError)
 		}
 
 	parse_record_field : Format,
@@ -26,7 +26,7 @@ Format := [Identity, Kebab].{
 			Continue({ rest : State }),
 			Done({ rest : State }),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
@@ -37,19 +37,13 @@ Format := [Identity, Kebab].{
 			KebabFooValue | IdentityFooValue | Done => Ok(Done({ rest: Done }))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, state|
 		match state {
 			KebabFooName => Ok(KebabDone)
 			IdentityFooName => Ok(IdentityDone)
 			KebabFooValue | KebabDone | IdentityFooValue | IdentityDone | Done => Ok(Done)
 		}
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
-
-	missing_optional_field : Format, Str, State -> [Missing]
-	missing_optional_field = |_, _, _| Missing
 }
 
 State := [
@@ -73,7 +67,7 @@ State -> Try(
 		Continue({ rest : State }),
 		Done({ rest : State }),
 	],
-	[MissingRequired],
+	[FormatError, ..],
 )
 emit_field = |fields, name, value_state, next_state| {
 	name_len = Str.count_utf8_bytes(name)
@@ -113,21 +107,21 @@ find_field = |fields, name| {
 	}
 }
 
-parse_stored_kebab : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [MissingRequired])
+parse_stored_kebab : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [FormatError, MissingRequiredField(Str)])
 parse_stored_kebab = {
 	Shape : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	Shape.parser_for(Format.Kebab)
 }
 
-parse_stored_identity : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [MissingRequired])
+parse_stored_identity : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [FormatError, MissingRequiredField(Str)])
 parse_stored_identity = {
 	Shape : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	Shape.parser_for(Format.Identity)
 }
 
-parse_with_format : Format, State -> Try(a, [MissingRequired])
+parse_with_format : Format, State -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse_with_format = |format, input| {
 	Parsed : a
@@ -136,7 +130,7 @@ parse_with_format = |format, input| {
 	Ok(parsed.value)
 }
 
-parse_runtime : Format, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [MissingRequired])
+parse_runtime : Format, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [FormatError, MissingRequiredField(Str)])
 parse_runtime = |format, input| {
 	parsed : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	parsed = parse_with_format(format, input)?
@@ -144,7 +138,7 @@ parse_runtime = |format, input| {
 	Ok(parsed)
 }
 
-parse_runtime_from_flag : Bool, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [MissingRequired])
+parse_runtime_from_flag : Bool, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [FormatError, MissingRequiredField(Str)])
 parse_runtime_from_flag = |use_kebab, input| {
 	format = if use_kebab {
 		Format.Kebab
@@ -190,7 +184,7 @@ expect {
 
 underscores_to_dashes : Str -> Str
 underscores_to_dashes = |text|
-	match text.find_first("_") {
+	match text.split_first("_") {
 		Ok({ before, after }) =>
 			before.concat("-").concat(underscores_to_dashes(after))
 

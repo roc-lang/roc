@@ -9,7 +9,7 @@ Roc uses Hindley–Milner type inference with a few deliberate restrictions:
 
 - **Rank-1.** Quantification happens once per definition, at the outermost
   level. A definition can be polymorphic (`identity : a -> a`), but a function
-  argument is used at a single type. I.E. you can't take an `(a -> a)` argument
+  argument is used at a single type—i.e. you can't take an `(a -> a)` argument
   and apply it at several element types within one call (that needs rank-2).
 - **No higher-kinded polymorphism.** Type variables range over types
   (`Str`, `List(U64)`), never over type constructors — you can't abstract over
@@ -27,7 +27,7 @@ cases:
   types.
 - **Number literals** default rather than generalize: an unsuffixed literal
   resolves to a concrete type, ultimately falling back to `Dec`. See
-  [numbers](numbers.md).
+  [numbers](numbers).
 - **An explicitly annotated value** is generalized to its annotated scheme.
   Annotating a value with a free type variable opts into a type scheme, so
   the binding is generalized to it (`empty : List(a)` is then reusable at any
@@ -64,7 +64,7 @@ Capitalized declarations introduce *types* rather than values — see
 
 ### Where Clauses
 
-A `where` clause lists the [methods](static-dispatch.md) a type variable must
+A `where` clause lists the [methods](static-dispatch) a type variable must
 provide. Each constraint has the form `var.method : signature`:
 
 ```roc
@@ -83,9 +83,9 @@ items = []
 Structural types are defined by their shape: two of them are the same type when
 their shapes match, with no declaration required.
 
-- **Records** — `{ name : Str, age : U64 }`. See [records](records.md).
-- **Tag unions** — `[Ok(a), Err(e)]`. See [tag unions](tag-unions.md).
-- **Tuples** — `(Str, U64)`. See [tuples](tuples.md).
+- **Records** — `{ name : Str, age : U64 }`. See [records](records).
+- **Tag unions** — `[Ok(a), Err(e)]`. See [tag unions](tag-unions).
+- **Tuples** — `(Str, U64)`. See [tuples](tuples).
 
 Records and tag unions are either **closed** (exactly the listed fields or tags)
 or **open**, ending in an extension variable that stands for "and possibly
@@ -156,7 +156,7 @@ literal *is* the backing shape, so it lifts by unification.
 
 **Number and string** literals do not implicitly become a nominal. They coerce
 only into a builtin number/string type, or into a nominal that declares its own
-[`from_numeral` / `from_quote`](static-dispatch.md#literal-conversion). For
+[`from_numeral` / `from_quote`](static-dispatch#literal-conversion). For
 any other nominal — including a transparent newtype like `UserId := U64` — use
 explicit construction (`UserId.(0)`).
 
@@ -166,7 +166,7 @@ nominal.
 
 ### Destructuring Nominal Types
 
-Pattern can be destructured to access inner values.
+Nominal types can be destructured with patterns to access their inner values.
 
 ```roc
 Color := [Red, Green, Blue].{
@@ -175,8 +175,8 @@ Color := [Red, Green, Blue].{
     
     is_red : Color -> Bool
     is_red = |color| match color {
-        Red -> True
-        _ -> False
+        Red => True
+        _ => False
     }
 }
 
@@ -246,3 +246,7 @@ Pair : (U64, U64)
 Reach for an alias when you only want a shorter or clearer name; reach for a
 [nominal type](#nominal-types) when you want a genuinely distinct type the
 compiler keeps separate.
+
+## Mutually Recursive Types {#mutually-recursive}
+
+TODO

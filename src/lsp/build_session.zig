@@ -40,7 +40,7 @@ pub const BuildSession = struct {
     /// This handles:
     /// - URI to path conversion
     /// - File override setup
-    /// - Building
+    /// - Building (with owning main.roc / workspace package aliases when needed)
     /// - Report draining
     pub fn init(
         allocator: Allocator,
@@ -48,6 +48,7 @@ pub const BuildSession = struct {
         env: *BuildEnv,
         uri: []const u8,
         override_text: ?[]const u8,
+        workspace_root: ?[]const u8,
     ) Allocator.Error!BuildSession {
         // Convert URI to path
         const path = try uri_util.uriToPath(allocator, uri);
@@ -59,7 +60,7 @@ pub const BuildSession = struct {
 
         // Set up file override if override text provided.
         // SAFETY: override lives on the stack and its address is stored in env.filesystem.
-        // This is safe because env.build() is synchronous and we restore the Io before returning.
+        // This is safe because env.buildResolvingMain() is synchronous and we restore the Io before returning.
         var override: CoreCtx.ReadFileOverride = undefined;
         const saved_io = env.filesystem;
         if (override_text) |text| {
@@ -67,9 +68,12 @@ pub const BuildSession = struct {
             env.filesystem = override.io();
         }
 
+        const preferred_main = try preferredMainFromWorkspace(allocator, env.filesystem, workspace_root);
+        defer if (preferred_main) |main_path| allocator.free(main_path);
+
         // Build
         const build_succeeded = blk: {
-            env.build(absolute_path) catch {
+            env.buildResolvingMain(absolute_path, preferred_main) catch {
                 break :blk false;
             };
             break :blk true;
@@ -91,6 +95,20 @@ pub const BuildSession = struct {
             .build_succeeded = build_succeeded,
             .drained_reports = drained_reports,
         };
+    }
+
+    /// If the LSP workspace root contains `main.roc`, prefer it as the package-alias root.
+    fn preferredMainFromWorkspace(allocator: Allocator, filesystem: CoreCtx, workspace_root: ?[]const u8) Allocator.Error!?[]u8 {
+        const root = workspace_root orelse return null;
+        const candidate = try std.fs.path.join(allocator, &.{ root, "main.roc" });
+        errdefer allocator.free(candidate);
+        if (!filesystem.fileExists(candidate)) {
+            allocator.free(candidate);
+            return null;
+        }
+        const abs = try std.fs.path.resolve(allocator, &.{candidate});
+        allocator.free(candidate);
+        return abs;
     }
 
     /// Clean up the build session and free allocated memory.

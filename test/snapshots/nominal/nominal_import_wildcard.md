@@ -83,7 +83,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "Color"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -135,7 +135,7 @@ green = Green
 		(e-tag (name "Green"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "Color")
+	(s-import (mod "Color")
 		(exposes)))
 ~~~
 # TYPES

@@ -462,7 +462,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-decl
 			(p-ident (raw "x"))
@@ -489,23 +489,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-x = (
-	'a',
-	'é',
-	'🚀',
-	,
-	,
-	,
-	,
-	'\u(1F680)',
-	,
-	,
-	'\\',
-	'\'',
-	,
-	,
-	,
-)
+x = ('a', 'é', '🚀', , , , , '\u(1F680)', , , '\\', '\'', , , )
 
 y = 
 

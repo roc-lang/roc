@@ -24,7 +24,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "bytes")
 			(ty-apply
@@ -56,7 +56,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "bytes"))
-		(e-dispatch-call (method "to_utf8") (constraint-fn-var 65)
+		(e-dispatch-call (method "to_utf8") (constraint-fn-var 202)
 			(receiver
 				(e-string
 					(e-literal (string "hello"))))

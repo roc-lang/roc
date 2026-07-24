@@ -503,18 +503,28 @@ fn u128_to_f64_impl(x: u128) f64 {
     return @bitCast(bits);
 }
 
-/// Convert f64 to i128 (truncating toward zero) using only 64-bit operations.
-pub fn f64_to_i128(x: f64) i128 {
+/// Convert an IEEE binary float to i128 (truncating toward zero) using only
+/// integer operations after reading that float's own representation.
+fn float_to_i128(comptime Float: type, x: Float) i128 {
     if (std.math.isNan(x)) return 0;
 
-    const bits: u64 = @bitCast(x);
-    const sign = bits >> 63;
-    const raw_exp = (bits >> 52) & 0x7FF;
-    const mantissa = bits & ((@as(u64, 1) << 52) - 1);
+    const Bits = switch (Float) {
+        f32 => u32,
+        f64 => u64,
+        else => @compileError("float_to_i128 supports only f32 and f64"),
+    };
+    const fraction_bits: u6 = if (Float == f32) 23 else 52;
+    const exponent_bits: u6 = if (Float == f32) 8 else 11;
+    const exponent_bias: i64 = if (Float == f32) 127 else 1023;
+    const raw: Bits = @bitCast(x);
+    const bits: u64 = raw;
+    const sign = bits >> (@bitSizeOf(Bits) - 1);
+    const exponent_mask = (@as(u64, 1) << exponent_bits) - 1;
+    const raw_exp = (bits >> fraction_bits) & exponent_mask;
+    const mantissa = bits & ((@as(u64, 1) << fraction_bits) - 1);
 
-    // Exponent bias is 1023
     if (raw_exp == 0) return 0; // zero or subnormal
-    const exp: i64 = @as(i64, @intCast(raw_exp)) - 1023;
+    const exp: i64 = @as(i64, @intCast(raw_exp)) - exponent_bias;
 
     if (exp < 0) return 0; // |x| < 1
     if (exp >= 127) {
@@ -522,16 +532,13 @@ pub fn f64_to_i128(x: f64) i128 {
         return if (sign != 0) std.math.minInt(i128) else std.math.maxInt(i128);
     }
 
-    // Reconstruct the integer: (1.mantissa) << (exp - 52)
-    // Note: (1 << 52) | mantissa is comptime-width but only 53 bits, fits in u64 range.
-    // But the result type is u128 and the shift can go up to 75, so we need shl/shr.
-    const full_mantissa: u128 = (@as(u128, 1) << 52) | @as(u128, mantissa);
+    const full_mantissa: u128 = (@as(u128, 1) << fraction_bits) | @as(u128, mantissa);
     var result: u128 = undefined;
-    if (exp >= 52) {
-        const shift: u7 = @intCast(exp - 52);
+    if (exp >= fraction_bits) {
+        const shift: u7 = @intCast(exp - fraction_bits);
         result = shl(full_mantissa, shift);
     } else {
-        const shift: u7 = @intCast(52 - exp);
+        const shift: u7 = @intCast(fraction_bits - exp);
         result = shr(full_mantissa, shift);
     }
 
@@ -542,31 +549,62 @@ pub fn f64_to_i128(x: f64) i128 {
     }
 }
 
-/// Convert f64 to u128 (truncating toward zero) using only 64-bit operations.
-pub fn f64_to_u128(x: f64) u128 {
+/// Convert an IEEE binary float to u128 (truncating toward zero) using only
+/// integer operations after reading that float's own representation.
+fn float_to_u128(comptime Float: type, x: Float) u128 {
     if (std.math.isNan(x)) return 0;
 
-    const bits: u64 = @bitCast(x);
-    const sign = bits >> 63;
+    const Bits = switch (Float) {
+        f32 => u32,
+        f64 => u64,
+        else => @compileError("float_to_u128 supports only f32 and f64"),
+    };
+    const fraction_bits: u6 = if (Float == f32) 23 else 52;
+    const exponent_bits: u6 = if (Float == f32) 8 else 11;
+    const exponent_bias: i64 = if (Float == f32) 127 else 1023;
+    const raw: Bits = @bitCast(x);
+    const bits: u64 = raw;
+    const sign = bits >> (@bitSizeOf(Bits) - 1);
     if (sign != 0) return 0; // negative -> 0 for unsigned
 
-    const raw_exp = (bits >> 52) & 0x7FF;
-    const mantissa = bits & ((@as(u64, 1) << 52) - 1);
+    const exponent_mask = (@as(u64, 1) << exponent_bits) - 1;
+    const raw_exp = (bits >> fraction_bits) & exponent_mask;
+    const mantissa = bits & ((@as(u64, 1) << fraction_bits) - 1);
 
     if (raw_exp == 0) return 0;
-    const exp: i64 = @as(i64, @intCast(raw_exp)) - 1023;
+    const exp: i64 = @as(i64, @intCast(raw_exp)) - exponent_bias;
 
     if (exp < 0) return 0;
     if (exp >= 128) return std.math.maxInt(u128);
 
-    const full_mantissa: u128 = (@as(u128, 1) << 52) | @as(u128, mantissa);
-    if (exp >= 52) {
-        const shift: u7 = @intCast(exp - 52);
+    const full_mantissa: u128 = (@as(u128, 1) << fraction_bits) | @as(u128, mantissa);
+    if (exp >= fraction_bits) {
+        const shift: u7 = @intCast(exp - fraction_bits);
         return shl(full_mantissa, shift);
     } else {
-        const shift: u7 = @intCast(52 - exp);
+        const shift: u7 = @intCast(fraction_bits - exp);
         return shr(full_mantissa, shift);
     }
+}
+
+/// Convert F32 to I128 by decoding binary32 directly and truncating toward zero.
+pub fn f32_to_i128(x: f32) i128 {
+    return float_to_i128(f32, x);
+}
+
+/// Convert F64 to I128 by decoding binary64 directly and truncating toward zero.
+pub fn f64_to_i128(x: f64) i128 {
+    return float_to_i128(f64, x);
+}
+
+/// Convert F32 to U128 by decoding binary32 directly and truncating toward zero.
+pub fn f32_to_u128(x: f32) u128 {
+    return float_to_u128(f32, x);
+}
+
+/// Convert F64 to U128 by decoding binary64 directly and truncating toward zero.
+pub fn f64_to_u128(x: f64) u128 {
+    return float_to_u128(f64, x);
 }
 
 // Integer formatting (avoids Zig formatting helpers, which call @rem on u128)
@@ -684,16 +722,18 @@ pub fn formatFloatDecimal(buf: []u8, val_bits: u64, is_f32: bool) []u8 {
 
     // Handle special values (NaN, inf)
     if (d.exponent == 0x7fffffff) {
+        // NaN sign and payload are intentionally unobservable in Roc.
+        if (d.mantissa != 0) {
+            @memcpy(buf[0..3], "nan");
+            return buf[0..3];
+        }
+
         var pos: usize = 0;
         if (d.sign) {
             buf[0] = '-';
             pos = 1;
         }
-        if (d.mantissa != 0) {
-            @memcpy(buf[pos..][0..3], "nan");
-        } else {
-            @memcpy(buf[pos..][0..3], "inf");
-        }
+        @memcpy(buf[pos..][0..3], "inf");
         return buf[0 .. pos + 3];
     }
 

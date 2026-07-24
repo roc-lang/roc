@@ -62,8 +62,9 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 // Per-target C-ABI parameter/return classification.
 pub const abi = @import("abi/mod.zig");
 
-// Record field ordering, shared by the layout store and `roc glue` so the two
-// can never disagree on how a record lays out in memory.
+// Record field ordering used by the layout store when committing record
+// layouts. `roc glue` consumes the committed order rather than reordering
+// fields itself, so both describe the same memory layout.
 pub const field_order = @import("field_order.zig");
 
 // Re-export store functionality

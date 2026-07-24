@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Types from transitive module imports
+description=Types from transitive mod imports
 type=docs
 ~~~
 # SOURCE
@@ -59,10 +59,10 @@ main_for_host = main
 ~~~clojure
 (package-docs
   (name "test-app")
-  (module
+  (mod
     (name "Geometry")
     (package "app")
-    (kind type_module)
+    (kind type_mod)
     (entry
       (name "Geometry")
       (kind nominal)
@@ -71,27 +71,27 @@ main_for_host = main
       (entry
         (name "unit")
         (kind value)
-        (type (fn (record) (type-ref (module "app.Geometry") (name "Geometry"))))
+        (type (fn (record) (type-ref (mod "app.Geometry") (name "Geometry"))))
         (doc "A unit rectangle.")
       )
       (entry
         (name "area")
         (kind value)
-        (type (fn (type-ref (module "app.Geometry") (name "Geometry")) (type-ref (name "U64"))))
+        (type (fn (type-ref (mod "app.Geometry") (name "Geometry")) (type-ref (name "U64"))))
         (doc "Calculate the area of a rectangle.")
       )
       (entry
         (name "describe")
         (kind value)
-        (type (fn (type-ref (module "app.Geometry") (name "Geometry")) (type-ref (name "Str"))))
+        (type (fn (type-ref (mod "app.Geometry") (name "Geometry")) (type-ref (name "Str"))))
         (doc "Describe the area as a string.")
       )
     )
   )
-  (module
+  (mod
     (name "Helpers")
     (package "app")
-    (kind type_module)
+    (kind type_mod)
     (doc "String display utilities.")
     (entry
       (name "Helpers")
@@ -106,7 +106,7 @@ main_for_host = main
       )
     )
   )
-  (module
+  (mod
     (name "app")
     (package "app")
     (kind app)

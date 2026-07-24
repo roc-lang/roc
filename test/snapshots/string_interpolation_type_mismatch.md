@@ -40,7 +40,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "x")
 			(ty (name "U8")))
@@ -73,7 +73,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "x"))))
-			(e-interpolation (constraint-fn-var 192)
+			(e-interpolation (constraint-fn-var 226) (dispatcher-var 12)
 				(first
 					(e-literal (string "value: ")))
 				(parts

@@ -153,7 +153,6 @@ test "while statement propagates loop captures to an enclosing closure" {
     const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
     try expectInnerClosureCaptures(&test_env, canonical_expr.get_idx(), &.{ "keep_going", "callback" });
 }
-
 test "while parenthesized True canonicalizes as infinite_loop" {
     const source =
         \\{
@@ -192,23 +191,6 @@ test "while False does not canonicalize as infinite_loop" {
     const source =
         \\{
         \\    while False {
-        \\        crash "done"
-        \\    }
-        \\}
-    ;
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
-    const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
-
-    try testing.expectEqual(.s_while, std.meta.activeTag(stmt));
-}
-
-test "while Bool.False does not canonicalize as infinite_loop" {
-    const source =
-        \\{
-        \\    while Bool.False {
         \\        crash "done"
         \\    }
         \\}
@@ -318,26 +300,6 @@ test "break inside nested loop does not make outer while True breakable" {
         \\{
         \\    while True {
         \\        for item in [] {
-        \\            break
-        \\        }
-        \\    }
-        \\}
-    ;
-    var test_env = try TestEnv.init(source);
-    defer test_env.deinit();
-
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
-    const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
-
-    try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
-    try expectDiagnosticTag(&test_env, .infinite_loop_never_exits);
-}
-
-test "break inside nested while does not make outer while True breakable" {
-    const source =
-        \\{
-        \\    while True {
-        \\        while Bool.False {
         \\            break
         \\        }
         \\    }

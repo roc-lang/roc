@@ -38,7 +38,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-decl
 			(header (name "Thing")
@@ -135,11 +135,11 @@ main = ThingAlias.from_u64(41).value() + 1
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 297)
+		(e-dispatch-call (method "plus") (constraint-fn-var 278)
 			(receiver
-				(e-dispatch-call (method "value") (constraint-fn-var 262)
+				(e-dispatch-call (method "value") (constraint-fn-var 269)
 					(receiver
-						(e-call (constraint-fn-var 191)
+						(e-call (constraint-fn-var 254)
 							(e-lookup-local
 								(p-assign (ident "where_clause_alias_type_dispatch_issue_9875.Thing.from_u64")))
 							(e-num (value "41"))))

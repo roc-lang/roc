@@ -5,8 +5,8 @@ import TypeTable exposing [TypeTable]
 ## Shared traversal for generated type names and platform aliases.
 ##
 ## Authoritative compiler sources:
-## - src/glue/glue.zig emits the TypeRepr graph and hosted/provided root ids.
-## - src/glue/platform/host.zig marshals those ids into Roc glue records.
+## - src/glue/glue.zig emits the TypeRepr graph and hosted/provided root ids,
+##   and marshals those ids into Roc glue records.
 ##
 ## Target generators provide already-sanitized alias_base and module_base strings
 ## because language-specific escaping and reserved words stay local. This module

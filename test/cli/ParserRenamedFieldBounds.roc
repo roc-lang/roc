@@ -9,14 +9,16 @@ Format := [Default].{
 			name
 		}
 
-	parse_str : Format, State -> Try({ value : Str, rest : State }, [MissingRequired])
+	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError, ..])
 	parse_str = |_, state|
 		match state {
 			Present(value) => Ok({ value, rest: Done })
-			Done => Err(MissingRequired)
+			Done => Err(FormatError)
 		}
 
-	parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), State -> Try(
+	parse_record_field : Format,
+	Encoding.FieldName.FieldNames(_shape),
+	State -> Try(
 		[
 			Field({ field : Encoding.FieldName(_shape), rest : State }),
 			TryField({ name : Str, rest : State }),
@@ -24,7 +26,7 @@ Format := [Default].{
 			Continue({ rest : State }),
 			Done({ rest : State }),
 		],
-		[MissingRequired],
+		[FormatError, ..],
 	)
 	parse_record_field = |_, fields, state|
 		match state {
@@ -52,14 +54,8 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field : Format, State -> Try(State, [FormatError, ..])
 	skip_record_field = |_, _| Ok(Done)
-
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
-
-	missing_optional_field : Format, Str, State -> [Missing]
-	missing_optional_field = |_, _, _| Missing
 }
 
 State := [Present(Str), Done]
@@ -83,7 +79,7 @@ find_field = |fields, name| {
 
 			Done =>
 				return Err(NotFound)
-		}
+			}
 	}
 }
 
@@ -106,13 +102,13 @@ find_any_field = |fields, name| {
 
 			Done =>
 				return Err(NotFound)
-		}
+			}
 	}
 }
 
-parse : Str -> Try(a, [MissingRequired])
+parse : Str -> Try(a, [FormatError, ..errs])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
 	]
 parse = |input| {
 	Shape : a
@@ -122,14 +118,14 @@ parse = |input| {
 }
 
 expect {
-	result : Try({ long_name : Str }, [MissingRequired])
+	result : Try({ long_name : Str }, [FormatError, MissingRequiredField(Str)])
 	result = parse("bounded")
 
 	result == Ok({ long_name: "bounded" })
 }
 
 expect {
-	result : Try({ foo : Try(Str, [Missing]), long_name : Str }, [MissingRequired])
+	result : Try({ foo : Try(Str, [Missing]), long_name : Str }, [FormatError, MissingRequiredField(Str)])
 	result = parse("bounded")
 
 	result == Ok({ foo: Err(Missing), long_name: "bounded" })

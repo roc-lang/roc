@@ -24,17 +24,18 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
 const check = @import("check");
 const can = @import("can");
-const backend = @import("backend");
 const roc_target = @import("roc_target");
 const layout = @import("layout");
 const lir = @import("lir");
 const GuardedList = lir.LirStore.GuardedList;
+const llvm_compile = @import("llvm_compile");
 
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
@@ -54,7 +55,8 @@ const eval_mod = @import("eval");
 /// Backend used to execute the glue spec.
 pub const GlueOpt = enum {
     dev,
-    interpreter,
+    size,
+    speed,
 };
 
 /// Arguments for glue code generation.
@@ -63,6 +65,11 @@ pub const GlueArgs = struct {
     output_dir: []const u8,
     platform_path: []const u8,
     opt: GlueOpt = .dev,
+    no_cache: bool = false,
+    /// Prebuilt plugin dylib from a `roc install`ed glue spec. When set, it
+    /// is the only dylib considered: its stamp must verify, and a mismatch is
+    /// an explicit error (reinstall), never a rebuild fallback.
+    installed_dylib_path: ?[]const u8 = null,
 };
 
 /// Error types for glue generation operations.
@@ -73,10 +80,11 @@ pub const GlueError = error{
     ParseFailed,
     PlatformPathResolution,
     TempDirCreation,
-    SyntheticAppWrite,
     BuildEnvInit,
     CompilationFailed,
     DevBackendUnavailable,
+    GlueDylibUnavailable,
+    GlueDylibStampMismatch,
     ModuleRetrieval,
     OutOfMemory,
     WriteFailed,
@@ -84,8 +92,8 @@ pub const GlueError = error{
 
 /// Print platform glue information for a platform's main.roc file using the checked-artifact pipeline.
 /// Hosted function ordering comes from published `HostedProcTable` records.
-pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
-    rocGlueInner(gpa, stderr, stdout, args, temp_dir, std_io) catch |err| {
+pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
+    rocGlueInner(gpa, stderr, stdout, args, roc_ctx, std_io) catch |err| {
         (switch (err) {
             error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
             error.NotPlatformFile => blk: {
@@ -96,10 +104,11 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
             error.ParseFailed => stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}),
             error.PlatformPathResolution => stderr.print("Error: Could not resolve platform path\n", .{}),
             error.TempDirCreation => stderr.print("Error: Could not create temp directory\n", .{}),
-            error.SyntheticAppWrite => stderr.print("Error: Could not write synthetic app\n", .{}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
-            error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host. Use `roc glue --opt=interpreter ...`.\n", .{}),
+            error.DevBackendUnavailable => stderr.print("Error: The dev backend is not available for this host.\n", .{}),
+            error.GlueDylibUnavailable => stderr.print("Error: Could not load compiled glue dylib.\n", .{}),
+            error.GlueDylibStampMismatch => stderr.print("Error: Compiled glue dylib cache entry did not match this compiler.\n", .{}),
             error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
             error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
@@ -108,7 +117,7 @@ pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, a
     };
 }
 
-fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, temp_dir: []const u8, std_io: std.Io) GlueError!void {
+fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
 
     // 0. Validate glue spec file exists
     std.Io.Dir.cwd().access(std_io, args.glue_spec, .{}) catch {
@@ -128,66 +137,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
     defer platform_info.deinit(gpa);
 
-    // 2. Compile platform using BuildEnv by creating a synthetic app.
-    // BuildEnv publishes checked artifacts for both the synthetic app and the platform.
+    // 2. Compile the platform root relation-less. Glue consumes its declared
+    // checked surface directly; it does not need app values satisfying `requires`.
     const platform_abs_path = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.platform_path, gpa) catch {
         return error.PlatformPathResolution;
     };
     defer gpa.free(platform_abs_path);
-
-    var app_source = std.ArrayList(u8).empty;
-    defer app_source.deinit(gpa);
-    var aw: std.Io.Writer.Allocating = .fromArrayList(gpa, &app_source);
-    const w = &aw.writer;
-
-    try w.print("app [", .{});
-
-    for (platform_info.type_aliases, 0..) |alias_name, i| {
-        if (i > 0) try w.print(", ", .{});
-        try w.print("{s}", .{alias_name});
-    }
-
-    for (platform_info.requires_entries, 0..) |entry, i| {
-        if (platform_info.type_aliases.len > 0 or i > 0) {
-            try w.print(", ", .{});
-        }
-        try w.print("{s}", .{entry.name});
-    }
-
-    try w.print("] {{ pf: platform \"", .{});
-    for (platform_abs_path) |ch| {
-        if (ch == '\\') {
-            try w.print("\\\\", .{});
-        } else {
-            try w.print("{c}", .{ch});
-        }
-    }
-    try w.print("\" }}\n\n", .{});
-
-    for (platform_info.type_aliases) |alias_name| {
-        try w.print("{s} : {{}}\n", .{alias_name});
-    }
-    if (platform_info.type_aliases.len > 0) {
-        try w.print("\n", .{});
-    }
-
-    for (platform_info.requires_entries) |entry| {
-        try w.print("{s} = {s}\n", .{ entry.name, entry.stub_expr });
-    }
-
-    // Sync the writer back to app_source
-    app_source = aw.toArrayList();
-    const synthetic_app_path = std.fs.path.join(gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
-        return error.OutOfMemory;
-    };
-    defer gpa.free(synthetic_app_path);
-
-    std.Io.Dir.cwd().writeFile(std_io, .{
-        .sub_path = synthetic_app_path,
-        .data = app_source.items,
-    }) catch {
-        return error.SyntheticAppWrite;
-    };
 
     const cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
         return error.BuildEnvInit;
@@ -197,9 +152,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
-    build_env.setSyntheticRootPackageIdentity();
+    // Glue caches by default like every other pipeline; --no-cache opts out.
+    if (!args.no_cache) build_env.enableDefaultCacheManager(false) catch {
+        return error.BuildEnvInit;
+    };
 
-    build_env.build(synthetic_app_path) catch {
+    build_env.build(platform_abs_path) catch {
         _ = try build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
     };
@@ -255,7 +213,11 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         if (mod.is_platform_sibling or mod.is_platform_main) {
             const artifact = mod.semantic.checked_artifact orelse continue;
             type_table.clearVarMap();
-            if (try collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &hosted_symbols, &type_table)) |mod_info| {
+            const collected = collectModuleTypeInfo(gpa, artifact, mod.name, hosted_indices, &hosted_symbols, &type_table) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+            };
+            if (collected) |mod_info| {
                 var owned_mod_info = mod_info;
                 errdefer owned_mod_info.deinit(gpa);
                 try collected_modules.append(gpa, owned_mod_info);
@@ -294,7 +256,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         for (artifact.platform_required_declarations.declarations) |declaration| {
             const name = artifact.canonical_names.exportNameText(declaration.platform_name);
             const checked_type = platformRequiredEntrypointCheckedType(artifact, declaration);
-            const type_id = try type_table.getOrInsert(artifact, checked_type);
+            const type_id = type_table.getOrInsert(artifact, checked_type) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+            };
             try entrypoint_type_ids.put(name, type_id);
         }
 
@@ -304,7 +269,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
                 glueInvariant("provided entry has no top-level value", .{});
             const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
                 glueInvariant("provided entry has no checked type scheme", .{});
-            const type_id = try type_table.getOrInsert(artifact, scheme.root);
+            const type_id = type_table.getOrInsert(artifact, scheme.root) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnresolvedByValue => return reportUnresolvedTypeVariable(stderr, &type_table),
+            };
             const ffi_symbol = artifact.canonical_names.externalSymbolNameText(provides_entry.ffi_symbol);
             try provides_type_ids.put(ffi_symbol, type_id);
         }
@@ -316,74 +284,12 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
 
     // 5. Compile glue spec through checked artifacts and lower to LIR.
-    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(std_io, args.glue_spec, gpa) catch {
-        return error.GlueSpecNotFound;
-    };
-    defer gpa.free(glue_spec_abs);
-
-    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
-        return error.BuildEnvInit;
-    };
-    defer gpa.free(glue_cwd);
-    var glue_build_env = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd, std_io) catch {
-        return error.BuildEnvInit;
-    };
-    defer glue_build_env.deinit();
-
-    glue_build_env.build(glue_spec_abs) catch {
-        _ = try glue_build_env.renderDiagnostics(stderr);
-        return error.CompilationFailed;
-    };
-    _ = try glue_build_env.renderDiagnostics(stderr);
-
-    const root_artifact = glue_build_env.executableRootCheckedArtifact();
-    const imported_artifacts = glue_build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
-        return error.OutOfMemory;
-    };
-    defer gpa.free(imported_artifacts);
-    const relation_artifacts = glue_build_env.collectRelationArtifactViews(gpa, root_artifact) catch {
-        return error.OutOfMemory;
-    };
-    defer gpa.free(relation_artifacts);
-
-    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests) catch {
-        return error.OutOfMemory;
-    };
-    defer gpa.free(lir_roots);
-
-    // The width the glue *script* executes at on this machine. This is a runner
-    // implementation detail: the emitted ABI facts inside the Types payload were
-    // already fixed by attachAbiLayouts querying both widths explicitly.
-    const script_target_usize = base.target.TargetUsize.native;
-    var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
-        gpa,
-        .{
-            .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        .{ .requests = lir_roots },
-        .{
-            .target_usize = script_target_usize,
-        },
-    ) catch {
-        return error.OutOfMemory;
-    };
-    defer lowered.deinit();
-
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, "roc_make_glue") orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
-        }
-        unreachable;
-    };
-
-    const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
-        return error.OutOfMemory;
-    };
-    defer gpa.free(arg_layouts);
-    if (arg_layouts.len != 1) {
-        glueInvariant("make_glue expected one List(Types) argument, got {d}", .{arg_layouts.len});
-    }
+    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, std_io);
+    defer spec.deinit(gpa);
+    const lowered = &spec.lowered;
+    const root_artifact = spec.root_artifact;
+    const glue_proc = spec.glue_proc;
+    const arg_layouts = spec.arg_layouts;
 
     // 6. Construct List(Types) using the exact committed LIR layout and invoke the requested backend.
     var runtime_env = eval_mod.RuntimeHostEnv.init(gpa);
@@ -406,8 +312,20 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     if (result_buf.len > 0) @memset(result_buf, 0);
 
     switch (args.opt) {
-        .dev => try runGlueSpecDev(gpa, stderr, &lowered, glue_proc, arg_layouts, &types_list, result_buf.ptr, &runtime_env),
-        .interpreter => try runGlueSpecInterpreter(gpa, stderr, &lowered, glue_proc, arg_layouts, &types_list, result_buf.ptr, runtime_env.get_ops()),
+        .dev, .size, .speed => try runGlueSpecDylib(
+            gpa,
+            stderr,
+            lowered,
+            glue_proc,
+            arg_layouts,
+            &types_list,
+            result_buf.ptr,
+            &runtime_env,
+            root_artifact.key,
+            args,
+            roc_ctx,
+            std_io,
+        ),
     }
     try writeHostEvents(stderr, &runtime_env);
 
@@ -449,39 +367,215 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 }
 
-fn runGlueSpecInterpreter(
-    gpa: Allocator,
-    stderr: *std.Io.Writer,
-    lowered: *lir.CheckedPipeline.LoweredProgram,
+/// A glue spec compiled through checked artifacts and lowered to LIR:
+/// everything needed to build or invoke its plugin dylib. `lowered`,
+/// `arg_layouts`, and `root_artifact` borrow from `build_env`, so deinit
+/// tears down in reverse order.
+const CompiledGlueSpec = struct {
+    build_env: *BuildEnv,
+    imported_artifacts: []check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []check.CheckedArtifact.ImportedModuleView,
+    lir_roots: []check.CheckedModule.RootRequest,
+    lowered: lir.CheckedPipeline.LoweredProgram,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
-    types_list: *RocList,
-    result_ptr: [*]u8,
-    roc_ops: *builtins.host_abi.RocOps,
-) GlueError!void {
-    var interpreter = eval_mod.LirInterpreter.initWithBoxyTables(
-        gpa,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        eval_mod.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
-        roc_ops,
-    ) catch return error.OutOfMemory;
-    defer interpreter.deinit();
+    root_artifact: *const CheckedArtifact.CheckedModuleArtifact,
 
-    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
-    _ = interpreter.eval(.{
-        .proc_id = glue_proc,
-        .arg_layouts = arg_layouts,
-        .ret_layout = proc.ret_layout,
-        .arg_ptr = @ptrCast(types_list),
-        .ret_ptr = @ptrCast(result_ptr),
-    }) catch |err| {
-        stderr.print("Error running glue spec: {}\n", .{err}) catch {};
+    fn deinit(self: *CompiledGlueSpec, gpa: Allocator) void {
+        gpa.free(self.arg_layouts);
+        self.lowered.deinit();
+        gpa.free(self.lir_roots);
+        gpa.free(self.relation_artifacts);
+        gpa.free(self.imported_artifacts);
+        self.build_env.deinit();
+        gpa.destroy(self.build_env);
+    }
+};
+
+/// Compile a glue spec (an app on the compiler-owned glue platform) and
+/// lower it to LIR, ready for plugin-dylib codegen or interpretation.
+fn compileGlueSpec(gpa: Allocator, stderr: *std.Io.Writer, glue_spec: []const u8, no_cache: bool, std_io: std.Io) GlueError!CompiledGlueSpec {
+    std.Io.Dir.cwd().access(std_io, glue_spec, .{}) catch {
+        return error.GlueSpecNotFound;
+    };
+
+    const glue_spec_abs = std.Io.Dir.cwd().realPathFileAlloc(std_io, glue_spec, gpa) catch {
+        return error.GlueSpecNotFound;
+    };
+    defer gpa.free(glue_spec_abs);
+
+    const glue_cwd = std.Io.Dir.cwd().realPathFileAlloc(std_io, ".", gpa) catch {
+        return error.BuildEnvInit;
+    };
+    defer gpa.free(glue_cwd);
+
+    const build_env = gpa.create(BuildEnv) catch return error.OutOfMemory;
+    errdefer gpa.destroy(build_env);
+    build_env.* = BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), glue_cwd, std_io) catch {
+        return error.BuildEnvInit;
+    };
+    errdefer build_env.deinit();
+    if (!no_cache) build_env.enableDefaultCacheManager(false) catch {
+        return error.BuildEnvInit;
+    };
+
+    build_env.build(glue_spec_abs) catch {
+        _ = try build_env.renderDiagnostics(stderr);
         return error.CompilationFailed;
+    };
+    _ = try build_env.renderDiagnostics(stderr);
+    if (!build_env.executable_artifacts_finalized) {
+        return error.CompilationFailed;
+    }
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imported_artifacts = build_env.collectImportedArtifactViews(gpa, root_artifact) catch {
+        return error.OutOfMemory;
+    };
+    errdefer gpa.free(imported_artifacts);
+    const relation_artifacts = build_env.collectRelationArtifactViews(gpa, root_artifact) catch {
+        return error.OutOfMemory;
+    };
+    errdefer gpa.free(relation_artifacts);
+
+    const lir_roots = lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests) catch {
+        return error.OutOfMemory;
+    };
+    errdefer gpa.free(lir_roots);
+
+    // The width the glue *script* executes at on this machine. This is a runner
+    // implementation detail: the emitted ABI facts inside the Types payload were
+    // already fixed by attachAbiLayouts querying both widths explicitly.
+    const script_target_usize = base.target.TargetUsize.native;
+    var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        .{ .requests = lir_roots },
+        .{
+            .target_usize = script_target_usize,
+        },
+    ) catch {
+        return error.OutOfMemory;
+    };
+    errdefer lowered.deinit();
+
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
+        if (builtin.mode == .Debug) {
+            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
+        }
+        unreachable;
+    };
+
+    const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
+        return error.OutOfMemory;
+    };
+    errdefer gpa.free(arg_layouts);
+    if (arg_layouts.len != 1) {
+        glueInvariant("make_glue expected one List(Types) argument, got {d}", .{arg_layouts.len});
+    }
+
+    return .{
+        .build_env = build_env,
+        .imported_artifacts = imported_artifacts,
+        .relation_artifacts = relation_artifacts,
+        .lir_roots = lir_roots,
+        .lowered = lowered,
+        .glue_proc = glue_proc,
+        .arg_layouts = arg_layouts,
+        .root_artifact = root_artifact,
     };
 }
 
-fn runGlueSpecDev(
+/// Compile a glue spec and write its stamped plugin dylib to `output_path`.
+/// `roc install` uses this so installed glue specs ship a prebuilt optimized
+/// dylib that `roc glue <shorthand>` loads without compiling on the fly.
+/// Prints its own diagnostics like `rocGlue` does.
+pub fn buildGlueSpecDylibFile(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    glue_spec: []const u8,
+    output_path: []const u8,
+    opt: GlueOpt,
+    std_io: std.Io,
+) GlueError!void {
+    buildGlueSpecDylibFileInner(gpa, stderr, glue_spec, output_path, opt, std_io) catch |err| {
+        (switch (err) {
+            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{glue_spec}),
+            error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
+            error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
+            error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
+            error.WriteFailed => stderr.print("Error: Write failed\n", .{}),
+            else => stderr.print("Error: {s}\n", .{@errorName(err)}),
+        }) catch {};
+        return err;
+    };
+}
+
+fn buildGlueSpecDylibFileInner(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    glue_spec: []const u8,
+    output_path: []const u8,
+    opt: GlueOpt,
+    std_io: std.Io,
+) GlueError!void {
+    if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
+
+    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, std_io);
+    defer spec.deinit(gpa);
+
+    const stamp = gluePluginStamp(spec.root_artifact.key);
+    const temp_path = try buildGlueDylib(gpa, &spec.lowered, spec.glue_proc, spec.arg_layouts, stamp, opt, std_io);
+    defer {
+        std.Io.Dir.deleteFileAbsolute(std_io, std.mem.sliceTo(temp_path, 0)) catch {};
+        gpa.free(temp_path);
+    }
+
+    std.Io.Dir.cwd().copyFile(
+        std.mem.sliceTo(temp_path, 0),
+        std.Io.Dir.cwd(),
+        output_path,
+        std_io,
+        .{},
+    ) catch return error.CompilationFailed;
+}
+
+const glue_plugin_stamp_magic = [8]u8{ 'R', 'O', 'C', 'P', 'L', 'G', '1', 0 };
+const glue_plugin_abi_version: u32 = 1;
+var glue_cache_temp_counter = std.atomic.Value(usize).init(0);
+
+const GluePluginKind = enum(u32) {
+    glue = 1,
+};
+
+const GluePluginStampV1 = extern struct {
+    magic: [8]u8,
+    size: u32,
+    kind: u32,
+    abi_version: u32,
+    reserved: u32 = 0,
+    target_hash: [32]u8,
+    compiler_hash: [32]u8,
+    glue_platform_hash: [32]u8,
+    artifact_input_hash: [32]u8,
+};
+
+const BuiltGlueDylib = struct {
+    path: [:0]const u8,
+    delete_after_use: bool,
+
+    fn deinit(self: BuiltGlueDylib, allocator: Allocator, std_io: std.Io) void {
+        if (self.delete_after_use) {
+            std.Io.Dir.deleteFileAbsolute(std_io, std.mem.sliceTo(self.path, 0)) catch {};
+        }
+        allocator.free(self.path);
+    }
+};
+
+fn runGlueSpecDylib(
     gpa: Allocator,
     stderr: *std.Io.Writer,
     lowered: *lir.CheckedPipeline.LoweredProgram,
@@ -490,67 +584,354 @@ fn runGlueSpecDev(
     types_list: *RocList,
     result_ptr: [*]u8,
     runtime_env: *eval_mod.RuntimeHostEnv,
+    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    args: GlueArgs,
+    roc_ctx: compile.CoreCtx,
+    std_io: std.Io,
 ) GlueError!void {
-    if (comptime !backend.host_lir_codegen_available) {
-        return error.DevBackendUnavailable;
-    } else {
-        var static_strings = backend.StaticStringData.build(
-            gpa,
-            &lowered.lir_result.store,
-            backend.dev.LirCodeGenMod.host_lir_codegen_target,
-        ) catch return error.OutOfMemory;
-        defer static_strings.deinit();
+    if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
 
-        var codegen = backend.HostLirCodeGen.init(
-            gpa,
-            &lowered.lir_result.store,
-            &lowered.lir_result.layouts,
-            static_strings.entries,
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-        ) catch return error.OutOfMemory;
-        defer codegen.deinit();
+    const stamp = gluePluginStamp(root_artifact_key);
+    var dylib: ?BuiltGlueDylib = try getOrBuildGlueDylib(gpa, lowered, glue_proc, arg_layouts, root_artifact_key, stamp, args, roc_ctx, std_io);
+    defer if (dylib) |d| d.deinit(gpa, std_io);
 
-        codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs()) catch return error.OutOfMemory;
+    var lib = blk: {
+        const first = dylib.?;
+        break :blk openVerifiedGlueDylib(gpa, stderr, first, &stamp, args.no_cache) catch |err| {
+            switch (err) {
+                error.GlueDylibUnavailable, error.GlueDylibStampMismatch => {},
+                else => return err,
+            }
+            // An installed dylib is a managed artifact: never rebuild past a
+            // failure to load it — the remedy is reinstalling the shorthand.
+            if (args.no_cache or args.installed_dylib_path != null or first.delete_after_use) return err;
 
-        const proc = lowered.lir_result.store.getProcSpec(glue_proc);
-        const entrypoint = codegen.generateEntrypointWrapper(
-            "roc_make_glue",
-            glue_proc,
-            arg_layouts,
-            proc.ret_layout,
-        ) catch return error.OutOfMemory;
+            deleteGlueDylibCacheEntry(first, std_io);
+            first.deinit(gpa, std_io);
+            dylib = null;
 
-        var executable = backend.ExecutableMemory.initWithEntryOffset(
-            codegen.getGeneratedCode(),
-            entrypoint.offset,
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.CompilationFailed,
+            dylib = try getOrBuildGlueDylib(gpa, lowered, glue_proc, arg_layouts, root_artifact_key, stamp, args, roc_ctx, std_io);
+            break :blk try openVerifiedGlueDylib(gpa, stderr, dylib.?, &stamp, true);
         };
-        defer executable.deinit();
+    };
+    defer lib.close();
 
-        runtime_env.resetObservation();
-        var crash_boundary = runtime_env.enterCrashBoundary();
-        defer crash_boundary.deinit();
+    const GlueEntryFn = *const fn (*builtins.host_abi.RocOps, [*]u8, ?*anyopaque, *const eval_mod.boxy_abi.BoxyNativeFnTable) callconv(.c) void;
+    const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GlueDylibUnavailable;
 
-        const sj = crash_boundary.set();
-        if (sj == 0) {
-            executable.callRocABI(
-                @ptrCast(runtime_env.get_ops()),
-                @ptrCast(result_ptr),
-                @ptrCast(types_list),
-            );
-        }
-
-        switch (runtime_env.crashState()) {
-            .did_not_crash => {},
-            .crashed => |message| {
-                stderr.print("Error running glue spec: crashed with message: {s}\n", .{message}) catch {};
-                return error.CompilationFailed;
-            },
-        }
+    runtime_env.resetObservation();
+    if (builtin.target.cpu.arch == .aarch64 and builtin.target.os.tag == .linux) {
+        runtime_env.setLongjmpOnCrash(false);
     }
+    var crash_boundary = runtime_env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+
+    const boxy_tables = eval_mod.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result);
+    const boxy_runtime = try eval_mod.boxy_abi.createRuntimeFromStores(
+        gpa,
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        boxy_tables,
+        runtime_env.get_ops(),
+    );
+    defer eval_mod.boxy_abi.deinitRuntime(boxy_runtime);
+    const previous_boxy_runtime = eval_mod.boxy_abi.swapActiveRuntime(boxy_runtime);
+    defer _ = eval_mod.boxy_abi.swapActiveRuntime(previous_boxy_runtime);
+    const boxy_fns = eval_mod.boxy_abi.nativeFnTable();
+
+    const sj = crash_boundary.set();
+    if (sj == 0) {
+        entry(
+            @ptrCast(runtime_env.get_ops()),
+            @ptrCast(result_ptr),
+            @ptrCast(types_list),
+            &boxy_fns,
+        );
+    }
+
+    switch (runtime_env.crashState()) {
+        .did_not_crash => {},
+        .crashed => |message| {
+            stderr.print("Error running glue spec: crashed with message: {s}\n", .{message}) catch {};
+            return error.CompilationFailed;
+        },
+    }
+}
+
+fn getOrBuildGlueDylib(
+    gpa: Allocator,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    glue_proc: lir.LirProcSpecId,
+    arg_layouts: []const layout.Idx,
+    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    stamp: GluePluginStampV1,
+    args: GlueArgs,
+    roc_ctx: compile.CoreCtx,
+    std_io: std.Io,
+) GlueError!BuiltGlueDylib {
+    if (args.installed_dylib_path) |installed_path| {
+        const owned = gpa.dupeZ(u8, installed_path) catch return error.OutOfMemory;
+        return .{ .path = owned, .delete_after_use = false };
+    }
+
+    if (args.no_cache) {
+        const path = try buildGlueDylib(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io);
+        return .{ .path = path, .delete_after_use = true };
+    }
+
+    const cache_path = glueDylibCachePath(gpa, root_artifact_key, stamp, args.opt, roc_ctx) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.BuildEnvInit,
+    };
+    errdefer gpa.free(cache_path);
+
+    if (std.Io.Dir.cwd().access(std_io, std.mem.sliceTo(cache_path, 0), .{})) {
+        return .{ .path = cache_path, .delete_after_use = false };
+    } else |_| {}
+
+    const cache_dir = std.fs.path.dirname(std.mem.sliceTo(cache_path, 0)) orelse return error.BuildEnvInit;
+    std.Io.Dir.cwd().createDirPath(std_io, cache_dir) catch return error.BuildEnvInit;
+
+    const temp_path = try buildGlueDylib(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io);
+    defer {
+        std.Io.Dir.deleteFileAbsolute(std_io, std.mem.sliceTo(temp_path, 0)) catch {};
+        gpa.free(temp_path);
+    }
+
+    const cache_temp_path = glueDylibCacheTempPath(gpa, cache_path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    defer {
+        std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(cache_temp_path, 0)) catch {};
+        gpa.free(cache_temp_path);
+    }
+
+    std.Io.Dir.cwd().copyFile(
+        std.mem.sliceTo(temp_path, 0),
+        std.Io.Dir.cwd(),
+        std.mem.sliceTo(cache_temp_path, 0),
+        std_io,
+        .{},
+    ) catch return error.CompilationFailed;
+
+    std.Io.Dir.cwd().rename(
+        std.mem.sliceTo(cache_temp_path, 0),
+        std.Io.Dir.cwd(),
+        std.mem.sliceTo(cache_path, 0),
+        std_io,
+    ) catch {
+        if (std.Io.Dir.cwd().access(std_io, std.mem.sliceTo(cache_path, 0), .{})) {
+            return .{ .path = cache_path, .delete_after_use = false };
+        } else |_| {}
+        return error.CompilationFailed;
+    };
+
+    return .{ .path = cache_path, .delete_after_use = false };
+}
+
+fn buildGlueDylib(
+    gpa: Allocator,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    glue_proc: lir.LirProcSpecId,
+    arg_layouts: []const layout.Idx,
+    stamp: GluePluginStampV1,
+    opt: GlueOpt,
+    std_io: std.Io,
+) GlueError![:0]const u8 {
+    var codegen = llvm_compile.MonoLlvmCodeGen.init(
+        gpa,
+        &lowered.lir_result.store,
+        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+        lowered.lir_result.boxy_erased_arg_desc_params.items,
+    );
+    codegen.layout_store = &lowered.lir_result.layouts;
+    codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
+    codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
+    codegen.emit_debug_info = opt == .dev;
+    defer codegen.deinit();
+
+    const proc = lowered.lir_result.store.getProcSpec(glue_proc);
+    const entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
+        .symbol_name = builtins.shim_symbols.roc_make_glue,
+        .proc = glue_proc,
+        .arg_layouts = arg_layouts,
+        .ret_layout = proc.ret_layout,
+        .abi = .plugin,
+    }};
+    var bitcode = codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.CompilationFailed,
+    };
+    defer bitcode.deinit();
+
+    return llvm_compile.compileToSharedLibrary(gpa, std_io, bitcode.bitcode, glueLlvmCompileOptions(opt)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.CompilationFailed,
+    };
+}
+
+fn openVerifiedGlueDylib(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    dylib: BuiltGlueDylib,
+    expected: *const GluePluginStampV1,
+    report_errors: bool,
+) GlueError!eval_mod.DynLib {
+    var lib = eval_mod.DynLib.open(gpa, dylib.path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            if (report_errors) {
+                stderr.print("Error loading compiled glue dylib {s}: {s}\n", .{ dylib.path, @errorName(err) }) catch {};
+            }
+            return error.GlueDylibUnavailable;
+        },
+    };
+    errdefer lib.close();
+
+    verifyGluePluginStamp(&lib, expected) catch |err| {
+        if (report_errors) {
+            stderr.print("Error verifying compiled glue dylib stamp {s}: {s}\n", .{ dylib.path, @errorName(err) }) catch {};
+        }
+        return err;
+    };
+
+    return lib;
+}
+
+fn verifyGluePluginStamp(lib: *eval_mod.DynLib, expected: *const GluePluginStampV1) GlueError!void {
+    const StampFn = *const fn () callconv(.c) *const GluePluginStampV1;
+    const stamp_fn = lib.lookup(StampFn, "roc_plugin_stamp_v1") orelse return error.GlueDylibStampMismatch;
+    const actual = stamp_fn();
+    if (!std.mem.eql(u8, std.mem.asBytes(actual), std.mem.asBytes(expected))) {
+        return error.GlueDylibStampMismatch;
+    }
+}
+
+fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
+    return .{
+        .function_sections = false,
+        .use_module_target_triple = true,
+        .optimization = switch (opt) {
+            .dev => .O0,
+            .size => .Oz,
+            .speed => .O3,
+        },
+        .debug = opt == .dev,
+        .target_ptr_width_bits = targetPtrWidthBits(base.target.TargetUsize.native),
+    };
+}
+
+fn targetPtrWidthBits(target_usize: base.target.TargetUsize) u8 {
+    return @intCast(target_usize.size() * 8);
+}
+
+fn glueDylibCachePath(
+    allocator: Allocator,
+    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    stamp: GluePluginStampV1,
+    opt: GlueOpt,
+    roc_ctx: compile.CoreCtx,
+) (Allocator.Error || error{NoHomeDirectory})![:0]u8 {
+    const config = compile.CacheConfig{ .roc_ctx = roc_ctx };
+    const version_dir = try config.getVersionCacheDir(allocator);
+    defer allocator.free(version_dir);
+
+    const digest = glueDylibOutputHash(root_artifact_key, stamp);
+    const digest_hex = std.fmt.bytesToHex(digest, .lower);
+    const filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ digest_hex[0..], sharedLibraryExtension() });
+    defer allocator.free(filename);
+
+    return std.fs.path.joinZ(allocator, &.{
+        version_dir,
+        "glue-dylib",
+        RocTarget.detectNative().toName(),
+        @tagName(opt),
+        filename,
+    });
+}
+
+fn glueDylibCacheTempPath(allocator: Allocator, cache_path: [:0]const u8) Allocator.Error![:0]u8 {
+    const counter = glue_cache_temp_counter.fetchAdd(1, .monotonic);
+    const pid: u64 = if (builtin.os.tag == .windows)
+        std.os.windows.GetCurrentProcessId()
+    else
+        @intCast(std.c.getpid());
+    const path = try std.fmt.allocPrint(allocator, "{s}.{x}.{x}.tmp", .{
+        std.mem.sliceTo(cache_path, 0),
+        pid,
+        counter,
+    });
+    defer allocator.free(path);
+    return try allocator.dupeZ(u8, path);
+}
+
+fn deleteGlueDylibCacheEntry(dylib: BuiltGlueDylib, std_io: std.Io) void {
+    if (dylib.delete_after_use) return;
+    std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(dylib.path, 0)) catch {};
+}
+
+fn glueDylibOutputHash(root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey, stamp: GluePluginStampV1) [32]u8 {
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    hashTaggedBytes(&hasher, "purpose", "roc-glue-dylib-output-v1");
+    hashTaggedBytes(&hasher, "root-artifact-key", &root_artifact_key.bytes);
+    hashTaggedBytes(&hasher, "stamp", std.mem.asBytes(&stamp));
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return digest;
+}
+
+fn gluePluginStamp(root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey) GluePluginStampV1 {
+    return .{
+        .magic = glue_plugin_stamp_magic,
+        .size = @sizeOf(GluePluginStampV1),
+        .kind = @intFromEnum(GluePluginKind.glue),
+        .abi_version = glue_plugin_abi_version,
+        .target_hash = hashTarget(),
+        .compiler_hash = hashCompiler(),
+        .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),
+        .artifact_input_hash = root_artifact_key.bytes,
+    };
+}
+
+fn hashTarget() [32]u8 {
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    hashTaggedBytes(&hasher, "roc-target", RocTarget.detectNative().toName());
+    hashTaggedBytes(&hasher, "cpu-arch", @tagName(builtin.target.cpu.arch));
+    hashTaggedBytes(&hasher, "os", @tagName(builtin.target.os.tag));
+    hashTaggedBytes(&hasher, "abi", @tagName(builtin.target.abi));
+    hashTaggedBytes(&hasher, "endian", @tagName(builtin.target.cpu.arch.endian()));
+    var ptr_width: [1]u8 = .{@sizeOf(usize) * 8};
+    hashTaggedBytes(&hasher, "ptr-width", &ptr_width);
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return digest;
+}
+
+fn hashCompiler() [32]u8 {
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_version);
+    hashTaggedBytes(&hasher, "compiler-artifact-hash", &build_options.compiler_artifact_hash);
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return digest;
+}
+
+fn hashTaggedBytes(hasher: *std.crypto.hash.Blake3, tag: []const u8, bytes: []const u8) void {
+    hasher.update(tag);
+    hasher.update(&[_]u8{0});
+    var len_buf: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len_buf, @intCast(bytes.len), .little);
+    hasher.update(&len_buf);
+    hasher.update(bytes);
+    hasher.update(&[_]u8{0});
+}
+
+fn sharedLibraryExtension() []const u8 {
+    return switch (builtin.os.tag) {
+        .windows => ".dll",
+        .macos => ".dylib",
+        else => ".so",
+    };
 }
 
 fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeHostEnv) GlueError!void {
@@ -575,6 +956,16 @@ fn checkedArtifactKeysEqual(
     b: CheckedArtifact.CheckedModuleArtifactKey,
 ) bool {
     return std.mem.eql(u8, &a.bytes, &b.bytes);
+}
+
+/// Report the type table's recorded unresolved-type-variable error to stderr and
+/// map it to a compilation failure, so `roc glue` exits nonzero with a message
+/// naming the offending type instead of crashing on a missing committed layout.
+fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeTable) GlueError {
+    const message = type_table.unresolved_error orelse
+        "a glue-visible type has no committed memory layout because it holds an unresolved type variable by value";
+    stderr.print("Error: {s}\n", .{message}) catch {};
+    return error.CompilationFailed;
 }
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
@@ -810,12 +1201,9 @@ fn argLayoutsForProc(
 pub const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
     hosted_entries: []HostedEntry,
-    type_aliases: [][]const u8,
 
     pub const RequiresEntry = struct {
         name: []const u8,
-        type_str: []const u8,
-        stub_expr: []const u8,
     };
 
     pub const HostedEntry = struct {
@@ -831,15 +1219,12 @@ pub const PlatformHeaderInfo = struct {
     pub fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
         deinitPlatformRequiresEntries(gpa, self.requires_entries);
         deinitPlatformHostedEntries(gpa, self.hosted_entries);
-        deinitPlatformTypeAliases(gpa, self.type_aliases);
     }
 };
 
 fn deinitPlatformRequiresEntries(gpa: std.mem.Allocator, entries: []const PlatformHeaderInfo.RequiresEntry) void {
     for (entries) |entry| {
         gpa.free(entry.name);
-        gpa.free(entry.type_str);
-        gpa.free(entry.stub_expr);
     }
     gpa.free(entries);
 }
@@ -850,13 +1235,6 @@ fn deinitPlatformHostedEntries(gpa: std.mem.Allocator, entries: []const Platform
         gpa.free(entry.ffi_symbol);
     }
     gpa.free(entries);
-}
-
-fn deinitPlatformTypeAliases(gpa: std.mem.Allocator, aliases: []const []const u8) void {
-    for (aliases) |alias_name| {
-        gpa.free(alias_name);
-    }
-    gpa.free(aliases);
 }
 
 fn hostedEntryLocalNameAlloc(
@@ -940,8 +1318,6 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
             errdefer {
                 for (requires_entries.items) |entry| {
                     gpa.free(entry.name);
-                    gpa.free(entry.type_str);
-                    gpa.free(entry.stub_expr);
                 }
                 requires_entries.deinit(gpa);
             }
@@ -973,72 +1349,25 @@ fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io
                 };
             }
 
-            // Use a hash set to deduplicate type aliases across requires entries
-            var type_alias_set = std.StringHashMap(void).init(gpa);
-            defer type_alias_set.deinit();
-
             for (requires_entries_ast) |entry_idx| {
                 const entry = parse_ast.store.getRequiresEntry(entry_idx);
 
-                // Extract type aliases from for-clause
-                const type_aliases_ast = parse_ast.store.forClauseTypeAliasSlice(entry.type_aliases);
-                for (type_aliases_ast) |alias_idx| {
-                    const alias = parse_ast.store.getForClauseTypeAlias(alias_idx);
-                    if (parse_ast.tokens.resolveIdentifier(alias.alias_name)) |ident_idx| {
-                        const alias_name = env.common.getIdent(ident_idx);
-                        if (!type_alias_set.contains(alias_name)) {
-                            try type_alias_set.put(try gpa.dupe(u8, alias_name), {});
-                        }
-                    }
-                }
-
                 if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
                     const name = env.common.getIdent(ident_idx);
-
-                    // Format type annotation to string
-                    var type_buf = std.ArrayList(u8).empty;
-                    defer type_buf.deinit(gpa);
-
-                    try printTypeAnnoToBuf(gpa, &env, parse_ast, entry.type_anno, &type_buf);
-
-                    // Generate stub expression from type annotation
-                    var stub_buf = std.ArrayList(u8).empty;
-                    defer stub_buf.deinit(gpa);
-
-                    try generateStubExprFromTypeAnno(gpa, &env, parse_ast, entry.type_anno, &stub_buf);
-
                     try requires_entries.append(gpa, .{
                         .name = try gpa.dupe(u8, name),
-                        .type_str = try type_buf.toOwnedSlice(gpa),
-                        .stub_expr = try stub_buf.toOwnedSlice(gpa),
                     });
                 }
-            }
-
-            // Convert type alias set to owned slice
-            var type_aliases = std.ArrayList([]const u8).empty;
-            errdefer {
-                for (type_aliases.items) |alias_name| {
-                    gpa.free(alias_name);
-                }
-                type_aliases.deinit(gpa);
-            }
-            var alias_iter = type_alias_set.keyIterator();
-            while (alias_iter.next()) |key| {
-                try type_aliases.append(gpa, key.*);
             }
 
             const requires_entries_owned = try requires_entries.toOwnedSlice(gpa);
             errdefer deinitPlatformRequiresEntries(gpa, requires_entries_owned);
             const hosted_entries_owned = try hosted_entries.toOwnedSlice(gpa);
             errdefer deinitPlatformHostedEntries(gpa, hosted_entries_owned);
-            const type_aliases_owned = try type_aliases.toOwnedSlice(gpa);
-            errdefer deinitPlatformTypeAliases(gpa, type_aliases_owned);
 
             return PlatformHeaderInfo{
                 .requires_entries = requires_entries_owned,
                 .hosted_entries = hosted_entries_owned,
-                .type_aliases = type_aliases_owned,
             };
         },
         else => return error.NotPlatformFile,
@@ -1235,15 +1564,90 @@ const TypeTableKey = struct {
 };
 
 /// Builds a type table from artifact-owned checked type payloads.
+/// Error set for building the glue type table: allocation failures plus a
+/// glue-visible type whose committed memory layout cannot be determined because
+/// it still holds an unresolved (flex/rigid) type variable by value. The latter
+/// is a user-facing glue error, not an internal invariant.
+const TypeTableError = Allocator.Error || error{UnresolvedByValue};
+
 const TypeTable = struct {
     entries: std.ArrayList(CollectedTypeInfo),
     var_map: std.AutoHashMap(TypeTableKey, u64),
+    /// Declaration-formal -> application-argument substitutions for the nominal
+    /// backing opening(s) in flight (issue #9983 / Option A): a nominal
+    /// application carries no backing, so its ABI structure is the declaration's
+    /// backing TEMPLATE with formals replaced by the application's args. Empty
+    /// unless a backing is being opened. Bindings accumulate across nested opens.
+    template_bindings: std.AutoHashMap(TypeTableKey, BoundSource),
+    /// Non-zero while opening a backing; identifies the current open so its
+    /// entries memoize separately from the global `var_map` and from sibling
+    /// opens at different arguments (which convert to different structures).
+    open_ctx: u32 = 0,
+    next_open_ctx: u32 = 0,
+    /// Stable open-context ids keyed by open identity (declaration + resolved
+    /// args), so the same concrete backing opened at multiple use sites shares
+    /// one context and its per-open entries deduplicate (a monotonic counter
+    /// would mint duplicate anonymous structs that the ABI emitter can't
+    /// reconcile).
+    open_ctxs: std.ArrayList(OpenCtxEntry) = .empty,
+    /// Per-open memo (keyed by open ctx + checked type) providing dedup for
+    /// non-nominal declaration-space types while `var_map` is bypassed.
+    open_memo: std.AutoHashMap(OpenMemoKey, u64),
+    /// Nominal backings currently being opened, so a recursive backing
+    /// reference to the same (declaration, args) resolves to the in-progress
+    /// type-table entry instead of opening forever.
+    active_opens: std.ArrayList(ActiveOpen) = .empty,
     gpa: std.mem.Allocator,
     layouts: *const layout.Store,
     layout_resolver: *CheckedArtifactLayoutResolver,
     /// Lookup from checked artifact key to artifact. Borrowed; not owned by the
     /// type table.
     artifacts_by_key: *const ArtifactKeyMap,
+    /// User-facing message for the first glue-visible type found to have no
+    /// committed memory layout because it holds an unresolved (flex/rigid) type
+    /// variable by value. Set alongside `error.UnresolvedByValue`; owned here
+    /// and freed in `deinit`.
+    unresolved_error: ?[]const u8 = null,
+
+    /// A checked type resolved through the active formal bindings: the artifact
+    /// and checked type to actually convert (an application argument for a
+    /// declaration formal, or the input unchanged).
+    const BoundSource = struct {
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    };
+
+    const BoundRecordField = struct {
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        field: CheckedArtifact.CheckedRecordField,
+    };
+
+    const HostedFunctionTypeMetadata = struct {
+        arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo,
+        ret_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo,
+        arg_type_ids: []const u64,
+        ret_type_id: u64,
+    };
+
+    const OpenMemoKey = struct {
+        ctx: u32,
+        artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    };
+
+    const ActiveOpen = struct {
+        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+        source_statement: u32,
+        arg_keys: []const TypeTableKey,
+        entry_idx: u64,
+    };
+
+    const OpenCtxEntry = struct {
+        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+        source_statement: u32,
+        arg_keys: []const TypeTableKey,
+        ctx: u32,
+    };
 
     fn init(
         gpa: std.mem.Allocator,
@@ -1254,6 +1658,10 @@ const TypeTable = struct {
         return .{
             .entries = std.ArrayList(CollectedTypeInfo).empty,
             .var_map = std.AutoHashMap(TypeTableKey, u64).init(gpa),
+            .template_bindings = std.AutoHashMap(TypeTableKey, BoundSource).init(gpa),
+            .open_memo = std.AutoHashMap(OpenMemoKey, u64).init(gpa),
+            .active_opens = .empty,
+            .open_ctxs = .empty,
             .gpa = gpa,
             .layouts = layouts,
             .layout_resolver = layout_resolver,
@@ -1262,11 +1670,449 @@ const TypeTable = struct {
     }
 
     fn deinit(self: *TypeTable) void {
+        if (self.unresolved_error) |msg| self.gpa.free(msg);
         for (self.entries.items) |entry| {
             self.freeEntry(entry);
         }
         self.entries.deinit(self.gpa);
         self.var_map.deinit();
+        self.template_bindings.deinit();
+        self.open_memo.deinit();
+        for (self.active_opens.items) |open| self.gpa.free(open.arg_keys);
+        self.active_opens.deinit(self.gpa);
+        for (self.open_ctxs.items) |entry| self.gpa.free(entry.arg_keys);
+        self.open_ctxs.deinit(self.gpa);
+    }
+
+    /// Find or assign a stable open-context id for an open identity.
+    fn ctxForOpen(
+        self: *TypeTable,
+        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+        source_statement: u32,
+        arg_keys: []const TypeTableKey,
+    ) Allocator.Error!u32 {
+        for (self.open_ctxs.items) |entry| {
+            if (!checkedArtifactKeysEqual(entry.decl_artifact_key, decl_artifact_key)) continue;
+            if (entry.source_statement != source_statement) continue;
+            if (!typeTableKeysEqual(entry.arg_keys, arg_keys)) continue;
+            return entry.ctx;
+        }
+        self.next_open_ctx += 1;
+        const ctx = self.next_open_ctx;
+        const owned = try self.gpa.dupe(TypeTableKey, arg_keys);
+        errdefer self.gpa.free(owned);
+        try self.open_ctxs.append(self.gpa, .{
+            .decl_artifact_key = decl_artifact_key,
+            .source_statement = source_statement,
+            .arg_keys = owned,
+            .ctx = ctx,
+        });
+        return ctx;
+    }
+
+    /// Resolve a checked type through the active formal bindings.
+    fn substituteFormal(
+        self: *const TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) BoundSource {
+        var cur = BoundSource{ .artifact = artifact, .checked_type = checked_type };
+        // Follow the binding chain: a nested opening can bind a formal to an
+        // outer formal, which is bound in turn to a concrete argument.
+        while (self.template_bindings.count() != 0) {
+            const key = TypeTableKey{ .artifact_key = cur.artifact.key, .checked_type = cur.checked_type };
+            const bound = self.template_bindings.get(key) orelse break;
+            cur = bound;
+        }
+        return cur;
+    }
+
+    fn bindNominalFormals(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        nominal: CheckedArtifact.CheckedNominalType,
+        lookup: NominalDeclarationLookup,
+        saved: []?BoundSource,
+        bound_formals: []bool,
+    ) Allocator.Error!void {
+        const formals = lookup.declaration.formalArgs(&lookup.artifact.checked_types);
+        if (formals.len != nominal.args.len) glueInvariant("nominal application arity disagreed with its declaration in glue metadata opening", .{});
+
+        for (formals, nominal.args, saved, bound_formals) |formal, arg, *slot, *is_bound| {
+            const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
+            const resolved = self.substituteFormal(artifact, arg);
+            if (checkedArtifactKeysEqual(resolved.artifact.key, fkey.artifact_key) and resolved.checked_type == fkey.checked_type) {
+                is_bound.* = false;
+                continue;
+            }
+            is_bound.* = true;
+            slot.* = self.template_bindings.get(fkey);
+            try self.template_bindings.put(fkey, .{ .artifact = resolved.artifact, .checked_type = resolved.checked_type });
+        }
+    }
+
+    fn restoreNominalFormals(
+        self: *TypeTable,
+        lookup: NominalDeclarationLookup,
+        saved: []const ?BoundSource,
+        bound_formals: []const bool,
+    ) void {
+        const formals = lookup.declaration.formalArgs(&lookup.artifact.checked_types);
+        for (formals, saved, bound_formals) |formal, slot, is_bound| {
+            if (!is_bound) continue;
+            const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
+            if (slot) |prev| {
+                self.template_bindings.put(fkey, prev) catch unreachable;
+            } else {
+                _ = self.template_bindings.remove(fkey);
+            }
+        }
+    }
+
+    fn collectHostedFunctionMetadata(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) TypeTableError!?HostedFunctionTypeMetadata {
+        const src = self.substituteFormal(artifact, checked_type);
+        return switch (checkedTypePayload(src.artifact, src.checked_type)) {
+            .function => |func| try self.metadataForFunctionPayload(src.artifact, func),
+            .alias => |alias| try self.collectHostedFunctionMetadata(src.artifact, alias.backing),
+            .nominal => |nominal| blk: {
+                const lookup = self.nominalDeclarationFor(src.artifact, nominal) orelse break :blk null;
+                const saved = try self.gpa.alloc(?BoundSource, nominal.args.len);
+                defer self.gpa.free(saved);
+                const bound_formals = try self.gpa.alloc(bool, nominal.args.len);
+                defer self.gpa.free(bound_formals);
+                try self.bindNominalFormals(src.artifact, nominal, lookup, saved, bound_formals);
+                defer self.restoreNominalFormals(lookup, saved, bound_formals);
+                break :blk try self.collectHostedFunctionMetadata(lookup.artifact, lookup.declaration.backing);
+            },
+            else => null,
+        };
+    }
+
+    fn metadataForFunctionPayload(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        func: CheckedArtifact.CheckedFunctionType,
+    ) TypeTableError!HostedFunctionTypeMetadata {
+        const ret_fields = try self.extractRecordFieldsBound(artifact, func.ret);
+        errdefer self.freeRecordFieldInfo(ret_fields);
+
+        var arg_fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo = &.{};
+        errdefer self.freeRecordFieldInfo(arg_fields);
+        if (func.args.len == 1) {
+            arg_fields = try self.extractRecordFieldsBound(artifact, func.args[0]);
+        }
+
+        const ret_type_id = try self.getOrInsert(artifact, func.ret);
+        var arg_type_ids: []const u64 = &.{};
+        errdefer if (arg_type_ids.len > 0) self.gpa.free(arg_type_ids);
+        if (func.args.len > 0) {
+            const ids = try self.gpa.alloc(u64, func.args.len);
+            for (func.args, 0..) |arg, i| {
+                ids[i] = try self.getOrInsert(artifact, arg);
+            }
+            arg_type_ids = ids;
+        }
+
+        return .{
+            .arg_fields = arg_fields,
+            .ret_fields = ret_fields,
+            .arg_type_ids = arg_type_ids,
+            .ret_type_id = ret_type_id,
+        };
+    }
+
+    fn freeRecordFieldInfo(self: *TypeTable, fields: []const CollectedModuleTypeInfo.CollectedRecordFieldInfo) void {
+        for (fields) |field| {
+            self.gpa.free(field.name);
+            self.gpa.free(field.type_str);
+        }
+        if (fields.len > 0) self.gpa.free(fields);
+    }
+
+    fn extractRecordFieldsBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error![]const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
+        var fields = std.ArrayList(BoundRecordField).empty;
+        defer fields.deinit(self.gpa);
+        if (!(try self.collectRecordFieldsForRootBound(artifact, checked_type, &fields))) {
+            return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
+        }
+
+        var indices = try self.gpa.alloc(usize, fields.items.len);
+        defer self.gpa.free(indices);
+        for (0..fields.items.len) |i| indices[i] = i;
+
+        const SortCtx = struct {
+            fields: []const BoundRecordField,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                return std.mem.lessThan(
+                    u8,
+                    ctx.fields[a].artifact.canonical_names.recordFieldLabelText(ctx.fields[a].field.name),
+                    ctx.fields[b].artifact.canonical_names.recordFieldLabelText(ctx.fields[b].field.name),
+                );
+            }
+        };
+        std.mem.sort(usize, indices, SortCtx{ .fields = fields.items }, SortCtx.lessThan);
+
+        var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
+        errdefer {
+            for (result_list.items) |item| {
+                self.gpa.free(item.name);
+                self.gpa.free(item.type_str);
+            }
+            result_list.deinit(self.gpa);
+        }
+        for (indices) |idx| {
+            const entry = fields.items[idx];
+            const field = entry.field;
+            const name = try self.gpa.dupe(u8, entry.artifact.canonical_names.recordFieldLabelText(field.name));
+            errdefer self.gpa.free(name);
+            const type_str = try self.typeStringAllocBound(entry.artifact, field.ty);
+            errdefer self.gpa.free(type_str);
+            try result_list.append(self.gpa, .{
+                .name = name,
+                .type_str = type_str,
+            });
+        }
+        return result_list.toOwnedSlice(self.gpa);
+    }
+
+    fn collectRecordFieldsForRootBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+        fields: *std.ArrayList(BoundRecordField),
+    ) Allocator.Error!bool {
+        const src = self.substituteFormal(artifact, checked_type);
+        switch (checkedTypePayload(src.artifact, src.checked_type)) {
+            .alias => |alias| return try self.collectRecordFieldsForRootBound(src.artifact, alias.backing, fields),
+            .nominal => |nominal| {
+                const lookup = self.nominalDeclarationFor(src.artifact, nominal) orelse return false;
+                const saved = try self.gpa.alloc(?BoundSource, nominal.args.len);
+                defer self.gpa.free(saved);
+                const bound_formals = try self.gpa.alloc(bool, nominal.args.len);
+                defer self.gpa.free(bound_formals);
+                try self.bindNominalFormals(src.artifact, nominal, lookup, saved, bound_formals);
+                defer self.restoreNominalFormals(lookup, saved, bound_formals);
+                return try self.collectRecordFieldsForRootBound(lookup.artifact, lookup.declaration.backing, fields);
+            },
+            .record => |record| {
+                for (record.fields) |field| try fields.append(self.gpa, .{ .artifact = src.artifact, .field = field });
+                return try self.collectRecordFieldsForRootBound(src.artifact, record.ext, fields);
+            },
+            .record_unbound => |unbound| {
+                for (unbound) |field| try fields.append(self.gpa, .{ .artifact = src.artifact, .field = field });
+                return true;
+            },
+            .empty_record => return true,
+            else => return false,
+        }
+    }
+
+    fn typeStringAllocBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error![]const u8 {
+        var buf = std.ArrayList(u8).empty;
+        errdefer buf.deinit(self.gpa);
+        var active = std.AutoHashMap(TypeTableKey, void).init(self.gpa);
+        defer active.deinit();
+        try self.writeTypeStringBound(artifact, checked_type, &buf, &active);
+        return buf.toOwnedSlice(self.gpa);
+    }
+
+    fn writeTypeStringBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+        buf: *std.ArrayList(u8),
+        active: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!void {
+        const src = self.substituteFormal(artifact, checked_type);
+        const key = TypeTableKey{ .artifact_key = src.artifact.key, .checked_type = src.checked_type };
+        if (active.contains(key)) {
+            try buf.appendSlice(self.gpa, "<cycle>");
+            return;
+        }
+        try active.put(key, {});
+        defer _ = active.remove(key);
+
+        switch (checkedTypePayload(src.artifact, src.checked_type)) {
+            .pending => glueInvariant("pending checked type reached glue bound type string", .{}),
+            .err => glueInvariant("erroneous checked type reached glue bound type string", .{}),
+            .flex => try buf.appendSlice(self.gpa, "flex"),
+            .rigid => try buf.appendSlice(self.gpa, "rigid"),
+            .alias => |alias| try self.writeTypeStringBound(src.artifact, alias.backing, buf, active),
+            .record => |record| try self.writeRecordTypeStringBound(src.artifact, record.fields, record.ext, buf, active),
+            .record_unbound => |fields| try self.writeRecordTypeStringBound(src.artifact, fields, null, buf, active),
+            .tuple => |items| try self.writeTupleTypeStringBound(src.artifact, items, buf, active),
+            .nominal => |nominal| try self.writeNominalTypeStringBound(src.artifact, nominal, buf, active),
+            .function => |func| try self.writeFunctionTypeStringBound(src.artifact, func, buf, active),
+            .empty_record => try buf.appendSlice(self.gpa, "{}"),
+            .tag_union => |tag_union| try self.writeTagUnionTypeStringBound(src.artifact, tag_union.tags, tag_union.ext, buf, active),
+            .empty_tag_union => try buf.appendSlice(self.gpa, "[]"),
+        }
+    }
+
+    fn writeNominalTypeStringBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        nominal: CheckedArtifact.CheckedNominalType,
+        buf: *std.ArrayList(u8),
+        active: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!void {
+        const name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
+        try buf.appendSlice(self.gpa, name);
+        if (nominal.args.len == 0) return;
+        try buf.append(self.gpa, '(');
+        for (nominal.args, 0..) |arg, i| {
+            if (i > 0) try buf.appendSlice(self.gpa, ", ");
+            try self.writeTypeStringBound(artifact, arg, buf, active);
+        }
+        try buf.append(self.gpa, ')');
+    }
+
+    fn writeFunctionTypeStringBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        func: CheckedArtifact.CheckedFunctionType,
+        buf: *std.ArrayList(u8),
+        active: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!void {
+        if (func.args.len == 0) {
+            try buf.appendSlice(self.gpa, "{}");
+        } else {
+            for (func.args, 0..) |arg, i| {
+                if (i > 0) try buf.appendSlice(self.gpa, ", ");
+                try self.writeTypeStringBound(artifact, arg, buf, active);
+            }
+        }
+        try buf.appendSlice(self.gpa, if (func.kind == .effectful) " => " else " -> ");
+        try self.writeTypeStringBound(artifact, func.ret, buf, active);
+    }
+
+    fn writeRecordTypeStringBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        fields: []const CheckedArtifact.CheckedRecordField,
+        ext: ?CheckedArtifact.CheckedTypeId,
+        buf: *std.ArrayList(u8),
+        active: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!void {
+        var all_fields = std.ArrayList(BoundRecordField).empty;
+        defer all_fields.deinit(self.gpa);
+        for (fields) |field| try all_fields.append(self.gpa, .{ .artifact = artifact, .field = field });
+        if (ext) |ext_id| _ = try self.collectRecordFieldsForRootBound(artifact, ext_id, &all_fields);
+
+        if (all_fields.items.len == 0) {
+            try buf.appendSlice(self.gpa, "{}");
+            return;
+        }
+
+        var indices = try self.gpa.alloc(usize, all_fields.items.len);
+        defer self.gpa.free(indices);
+        for (0..all_fields.items.len) |i| indices[i] = i;
+        const SortCtx = struct {
+            fields: []const BoundRecordField,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                return std.mem.lessThan(
+                    u8,
+                    ctx.fields[a].artifact.canonical_names.recordFieldLabelText(ctx.fields[a].field.name),
+                    ctx.fields[b].artifact.canonical_names.recordFieldLabelText(ctx.fields[b].field.name),
+                );
+            }
+        };
+        std.mem.sort(usize, indices, SortCtx{ .fields = all_fields.items }, SortCtx.lessThan);
+
+        try buf.appendSlice(self.gpa, "{ ");
+        for (indices, 0..) |src_idx, i| {
+            if (i > 0) try buf.appendSlice(self.gpa, ", ");
+            const field = all_fields.items[src_idx];
+            try buf.appendSlice(self.gpa, field.artifact.canonical_names.recordFieldLabelText(field.field.name));
+            try buf.appendSlice(self.gpa, " : ");
+            try self.writeTypeStringBound(field.artifact, field.field.ty, buf, active);
+        }
+        try buf.appendSlice(self.gpa, " }");
+    }
+
+    fn writeTupleTypeStringBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        items: []const CheckedArtifact.CheckedTypeId,
+        buf: *std.ArrayList(u8),
+        active: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!void {
+        try buf.append(self.gpa, '(');
+        for (items, 0..) |item, i| {
+            if (i > 0) try buf.appendSlice(self.gpa, ", ");
+            try self.writeTypeStringBound(artifact, item, buf, active);
+        }
+        try buf.append(self.gpa, ')');
+    }
+
+    fn writeTagUnionTypeStringBound(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        tags: []const CheckedArtifact.CheckedTag,
+        ext: CheckedArtifact.CheckedTypeId,
+        buf: *std.ArrayList(u8),
+        active: *std.AutoHashMap(TypeTableKey, void),
+    ) Allocator.Error!void {
+        var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
+        defer all_tags.deinit(self.gpa);
+        try appendTagRowTags(self.gpa, artifact, tags, ext, &all_tags);
+
+        try buf.append(self.gpa, '[');
+        for (all_tags.items, 0..) |tag, i| {
+            if (i > 0) try buf.appendSlice(self.gpa, ", ");
+            try buf.appendSlice(self.gpa, artifact.canonical_names.tagLabelText(tag.name));
+            const tag_args = tag.argsSlice(&artifact.checked_types);
+            if (tag_args.len > 0) {
+                try buf.append(self.gpa, '(');
+                for (tag_args, 0..) |arg, arg_i| {
+                    if (arg_i > 0) try buf.appendSlice(self.gpa, ", ");
+                    try self.writeTypeStringBound(artifact, arg, buf, active);
+                }
+                try buf.append(self.gpa, ')');
+            }
+        }
+        try buf.append(self.gpa, ']');
+    }
+
+    /// If a checked type is a non-builtin nominal application with a resolvable
+    /// declaration, return the identity (declaration + resolved args) used to
+    /// detect recursive backing references during opening. Caller owns arg_keys.
+    fn nominalOpenIdentity(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error!?struct { decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey, source_statement: u32, arg_keys: []TypeTableKey } {
+        const nominal = switch (checkedTypePayload(artifact, checked_type)) {
+            .nominal => |nominal| nominal,
+            else => return null,
+        };
+        if (nominal.builtin != null) return null;
+        const lookup = self.nominalDeclarationFor(artifact, nominal) orelse return null;
+        const arg_keys = try self.gpa.alloc(TypeTableKey, nominal.args.len);
+        errdefer self.gpa.free(arg_keys);
+        for (nominal.args, arg_keys) |arg, *arg_key| {
+            const resolved = self.substituteFormal(artifact, arg);
+            arg_key.* = .{ .artifact_key = resolved.artifact.key, .checked_type = resolved.checked_type };
+        }
+        return .{
+            .decl_artifact_key = lookup.artifact.key,
+            .source_statement = lookup.declaration.source_statement,
+            .arg_keys = arg_keys,
+        };
     }
 
     fn freeEntry(self: *TypeTable, entry: CollectedTypeInfo) void {
@@ -1369,14 +2215,61 @@ const TypeTable = struct {
         };
     }
 
+    /// Record the user-facing glue error for a glue-visible type that holds an
+    /// unresolved (flex/rigid) type variable by value, naming the type and its
+    /// declaring module. Keeps the first message; the whole glue run aborts on
+    /// the first such type, so later ones are never inspected.
+    fn recordUnresolvedByValue(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) Allocator.Error!void {
+        if (self.unresolved_error != null) return;
+        const type_name = try self.typeStringAllocBound(artifact, checked_type);
+        defer self.gpa.free(type_name);
+        const module_name = artifact.moduleEnvConst().module_name;
+        self.unresolved_error = try std.fmt.allocPrint(
+            self.gpa,
+            "The type `{s}` from module `{s}` still has an unresolved type variable, so it has no committed memory layout and glue cannot generate bindings for it. Give the type a concrete layout (for example, box the value across the host boundary) so its size is known.",
+            .{ type_name, module_name },
+        );
+    }
+
     fn layoutFactsForCheckedType(
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!CollectedLayoutFacts {
-        const layout_idx = self.layout_resolver.resolve(artifact, checked_type) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.UnresolvedByValue => glueInvariant("type with no committed layout reached glue type table", .{}),
+    ) TypeTableError!CollectedLayoutFacts {
+        const layout_idx = if (self.template_bindings.count() == 0)
+            self.layout_resolver.resolve(artifact, checked_type) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnresolvedByValue => {
+                    try self.recordUnresolvedByValue(artifact, checked_type);
+                    return error.UnresolvedByValue;
+                },
+            }
+        else layout_with_bindings: {
+            // Under a backing opening, layout facts for backing subtypes must
+            // resolve the declaration's formals to the application's args.
+            var bindings = std.ArrayList(CheckedArtifactLayoutResolver.FormalArgBinding).empty;
+            defer bindings.deinit(self.gpa);
+            var it = self.template_bindings.iterator();
+            while (it.next()) |entry| {
+                const formal_artifact = self.artifacts_by_key.get(entry.key_ptr.artifact_key) orelse continue;
+                try bindings.append(self.gpa, .{
+                    .formal_artifact = formal_artifact,
+                    .formal = entry.key_ptr.checked_type,
+                    .arg_artifact = entry.value_ptr.artifact,
+                    .arg = entry.value_ptr.checked_type,
+                });
+            }
+            break :layout_with_bindings self.layout_resolver.resolveWithFormalBindings(artifact, checked_type, bindings.items) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.UnresolvedByValue => {
+                    try self.recordUnresolvedByValue(artifact, checked_type);
+                    return error.UnresolvedByValue;
+                },
+            };
         };
         return self.layoutFactsForIdx(layout_idx);
     }
@@ -1386,20 +2279,71 @@ const TypeTable = struct {
     /// on cyclic types (the placeholder is updated in-place after conversion).
     fn getOrInsert(
         self: *TypeTable,
-        artifact: *const CheckedArtifact.CheckedModuleArtifact,
-        checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!u64 {
-        const key = TypeTableKey{ .artifact_key = artifact.key, .checked_type = checked_type };
-        if (self.var_map.get(key)) |idx| {
-            return idx;
+        artifact_in: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type_in: CheckedArtifact.CheckedTypeId,
+    ) TypeTableError!u64 {
+        const src = self.substituteFormal(artifact_in, checked_type_in);
+        const artifact = src.artifact;
+        const checked_type = src.checked_type;
+
+        // A recursive backing reference to a nominal currently being opened (same
+        // declaration + resolved args) resolves to that open's in-progress entry.
+        const open_identity = try self.nominalOpenIdentity(artifact, checked_type);
+        var open_arg_keys: ?[]TypeTableKey = if (open_identity) |ident| ident.arg_keys else null;
+        defer if (open_arg_keys) |keys| self.gpa.free(keys);
+        if (open_identity) |ident| {
+            for (self.active_opens.items) |open| {
+                if (!checkedArtifactKeysEqual(open.decl_artifact_key, ident.decl_artifact_key)) continue;
+                if (open.source_statement != ident.source_statement) continue;
+                if (!typeTableKeysEqual(open.arg_keys, ident.arg_keys)) continue;
+                return open.entry_idx;
+            }
         }
 
-        const idx: u64 = @intCast(self.entries.items.len);
-        try self.entries.append(self.gpa, .{
-            .repr = .{ .unknown = .{ .name = "", .layout = self.layoutFactsForIdx(.opaque_ptr) } },
-            .source = .{ .artifact = artifact, .checked_type = checked_type },
-        });
-        try self.var_map.put(key, idx);
+        // While opening a backing, non-nominal declaration-space entries memoize
+        // in the per-open table (keyed by open ctx) rather than the global
+        // `var_map`, so the same structure opened at different arguments does
+        // not alias.
+        const idx: u64 = idx: {
+            if (self.open_ctx != 0) {
+                const mkey = OpenMemoKey{ .ctx = self.open_ctx, .artifact_key = artifact.key, .checked_type = checked_type };
+                if (self.open_memo.get(mkey)) |existing| return existing;
+                const reserved: u64 = @intCast(self.entries.items.len);
+                try self.entries.append(self.gpa, .{
+                    .repr = .{ .unknown = .{ .name = "", .layout = self.layoutFactsForIdx(.opaque_ptr) } },
+                    .source = .{ .artifact = artifact, .checked_type = checked_type },
+                });
+                try self.open_memo.put(mkey, reserved);
+                break :idx reserved;
+            }
+            const key = TypeTableKey{ .artifact_key = artifact.key, .checked_type = checked_type };
+            if (self.var_map.get(key)) |existing| return existing;
+            const reserved: u64 = @intCast(self.entries.items.len);
+            try self.entries.append(self.gpa, .{
+                .repr = .{ .unknown = .{ .name = "", .layout = self.layoutFactsForIdx(.opaque_ptr) } },
+                .source = .{ .artifact = artifact, .checked_type = checked_type },
+            });
+            try self.var_map.put(key, reserved);
+            break :idx reserved;
+        };
+
+        // Register this nominal as an active open (transferring ownership of
+        // arg_keys) so its backing's recursive references resolve to `idx`.
+        var pushed_open = false;
+        if (open_identity) |ident| {
+            try self.active_opens.append(self.gpa, .{
+                .decl_artifact_key = ident.decl_artifact_key,
+                .source_statement = ident.source_statement,
+                .arg_keys = ident.arg_keys,
+                .entry_idx = idx,
+            });
+            open_arg_keys = null; // ownership moved to active_opens
+            pushed_open = true;
+        }
+        defer if (pushed_open) {
+            const popped = self.active_opens.pop().?;
+            self.gpa.free(popped.arg_keys);
+        };
 
         const repr = try self.convertCheckedType(artifact, checked_type);
 
@@ -1408,8 +2352,21 @@ const TypeTable = struct {
         switch (repr) {
             .record => |rec| {
                 if (rec.name.len == 0) {
+                    // Name anonymous structs by a STRUCTURAL content hash (field
+                    // names + each field's structural identity), not the volatile
+                    // type-table index. This keeps host-facing names stable across
+                    // any change that reorders the type table (issue #9983's
+                    // backing opening inserts entries), and deduplicates
+                    // structurally identical anonymous structs.
+                    var hasher = std.hash.Wyhash.init(0);
+                    for (rec.fields) |field| {
+                        hasher.update(field.name);
+                        hasher.update(&[_]u8{0});
+                        self.hashStructuralId(&hasher, field.type_id);
+                        hasher.update(&[_]u8{0});
+                    }
                     self.entries.items[@intCast(idx)].repr = .{ .record = .{
-                        .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct{d}", .{idx}),
+                        .name = try std.fmt.allocPrint(self.gpa, "__AnonStruct_{x}", .{hasher.final()}),
                         .anonymous = true,
                         .fields = rec.fields,
                         .layout = rec.layout,
@@ -1422,6 +2379,33 @@ const TypeTable = struct {
         return idx;
     }
 
+    /// Mix a checked type's STABLE structural identity into `hasher` for naming
+    /// anonymous structs independently of type-table entry order. Named types
+    /// (record/tag/unknown) contribute their name; list/box recurse into their
+    /// element; everything else contributes its variant tag. Recursion
+    /// terminates at named types (a recursive structure routes through a named
+    /// nominal), so this never loops.
+    fn hashStructuralId(self: *const TypeTable, hasher: *std.hash.Wyhash, type_id: u64) void {
+        if (type_id >= self.entries.items.len) {
+            hasher.update("?");
+            return;
+        }
+        switch (self.entries.items[@intCast(type_id)].repr) {
+            .record => |r| hasher.update(r.name),
+            .tag_union => |t| hasher.update(t.name),
+            .unknown => |u| hasher.update(u.name),
+            .list => |l| {
+                hasher.update("list:");
+                self.hashStructuralId(hasher, l.elem_id);
+            },
+            .box => |b| {
+                hasher.update("box:");
+                self.hashStructuralId(hasher, b.inner_id);
+            },
+            else => |r| hasher.update(@tagName(r)),
+        }
+    }
+
     /// Insert a Unit type and return its index.
     fn insertUnit(self: *TypeTable) Allocator.Error!u64 {
         const idx: u64 = @intCast(self.entries.items.len);
@@ -1429,44 +2413,42 @@ const TypeTable = struct {
         return idx;
     }
 
-    /// Target-independent `SortKey` for a type table entry (see `layout.SortKey`).
-    /// Mirrors `layout.Store.layoutSortKey` over glue's own type representation so
-    /// `roc glue` orders structural records/tuples identically to the layout store
-    /// on both 32-bit and 64-bit targets.
-    fn getSortKey(self: *const TypeTable, type_id: u64) layout.SortKey {
-        if (type_id >= self.entries.items.len) {
-            glueInvariant("type id {d} out of bounds while reading layout sort key", .{type_id});
-        }
-        return self.getSortKeyForRepr(self.entries.items[@intCast(type_id)].repr);
+    /// Insert the ABI representation of a function stored inside another
+    /// value. Such a field is an opaque callable pointer; its source-level
+    /// argument and return graph does not participate in the containing value's
+    /// memory layout and may legitimately mention for-clause rigids.
+    fn insertOpaqueCallable(
+        self: *TypeTable,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) TypeTableError!u64 {
+        const unit_id = try self.insertUnit();
+        const arg_ids = try self.gpa.alloc(u64, 0);
+        errdefer self.gpa.free(arg_ids);
+        const idx: u64 = @intCast(self.entries.items.len);
+        try self.entries.append(self.gpa, .{
+            .repr = .{ .function = .{
+                .arg_ids = arg_ids,
+                .ret_id = unit_id,
+                .layout = try self.layoutFactsForCheckedType(artifact, checked_type),
+            } },
+            .source = .{ .artifact = artifact, .checked_type = checked_type },
+        });
+        return idx;
     }
 
-    fn getSortKeyForRepr(self: *const TypeTable, repr: CollectedTypeRepr) layout.SortKey {
-        return switch (repr) {
-            .bool_, .u8_, .i8_, .unit, .unknown => .align_1,
-            .u16_, .i16_ => .align_2,
-            .u32_, .i32_, .f32_ => .align_4,
-            .u64_, .i64_, .f64_ => .align_8,
-            .u128_, .i128_, .dec => .align_16,
-            .box, .str_, .list, .function => .pointer,
-            .record => |rec| blk: {
-                var key: layout.SortKey = .align_1;
-                for (rec.fields) |field| {
-                    if (field.is_padding) continue;
-                    key = key.max(self.getSortKey(field.type_id));
-                }
-                break :blk key;
-            },
-            .tag_union => |tu| blk: {
-                const disc_size = layout.TagUnionData.discriminantSize(tu.tags.len);
-                var key = layout.SortKey.fromAlignBytes(
-                    layout.TagUnionData.alignmentForDiscriminantSize(disc_size).toByteUnits(),
-                );
-                for (tu.tags) |tag| {
-                    for (tag.payload_ids) |pid| key = key.max(self.getSortKey(pid));
-                }
-                break :blk key;
-            },
-        };
+    fn checkedTypeResolvesToFunction(
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        checked_type: CheckedArtifact.CheckedTypeId,
+    ) bool {
+        var current = checked_type;
+        while (true) {
+            switch (checkedTypePayload(artifact, current)) {
+                .alias => |alias| current = alias.backing,
+                .function => return true,
+                else => return false,
+            }
+        }
     }
 
     fn attachAbiLayouts(self: *TypeTable, build_env: *BuildEnv) Allocator.Error!void {
@@ -1837,10 +2819,11 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         const payload = checkedTypePayload(artifact, checked_type);
         return switch (payload) {
             .pending => glueInvariant("pending checked type reached glue type table", .{}),
+            .err => glueInvariant("erroneous checked type reached glue type table", .{}),
             .flex => .{ .unknown = .{ .name = try self.gpa.dupe(u8, "flex"), .layout = self.layoutFactsForIdx(.opaque_ptr) } },
             .rigid => .{ .unknown = .{ .name = try self.gpa.dupe(u8, "rigid"), .layout = self.layoutFactsForIdx(.opaque_ptr) } },
             .alias => |alias| try self.getAliasBackingRepr(artifact, alias.backing),
@@ -1858,7 +2841,7 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         backing: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         return self.convertCheckedType(artifact, backing);
     }
 
@@ -1867,7 +2850,7 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
         nominal: CheckedArtifact.CheckedNominalType,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         const display_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(nominal.name));
         const nominal_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
 
@@ -1916,7 +2899,60 @@ const TypeTable = struct {
             }
         }
 
-        const backing_repr = try self.convertCheckedType(artifact, nominal.backing);
+        const backing_repr = if (self.nominalDeclarationFor(artifact, nominal)) |lookup| open_blk: {
+            // Open the declaration's backing TEMPLATE with the application's
+            // args substituted for the declaration's formals (issue #9983).
+            const decl = lookup.declaration;
+            const formals = decl.formalArgs(&lookup.artifact.checked_types);
+            if (formals.len != nominal.args.len) glueInvariant("nominal application arity disagreed with its declaration in glue backing opening", .{});
+
+            // Resolve the application's args through the CURRENT (outer)
+            // bindings before this open's bindings shadow anything, giving the
+            // open its concrete identity.
+            const resolved_arg_keys = try self.gpa.alloc(TypeTableKey, nominal.args.len);
+            defer self.gpa.free(resolved_arg_keys);
+            for (nominal.args, resolved_arg_keys) |arg, *arg_key| {
+                const resolved = self.substituteFormal(artifact, arg);
+                arg_key.* = .{ .artifact_key = resolved.artifact.key, .checked_type = resolved.checked_type };
+            }
+
+            const saved = try self.gpa.alloc(?BoundSource, formals.len);
+            defer self.gpa.free(saved);
+            const bound_formals = try self.gpa.alloc(bool, formals.len);
+            defer self.gpa.free(bound_formals);
+            for (formals, nominal.args, saved, bound_formals) |formal, arg, *slot, *is_bound| {
+                const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
+                // A polymorphic application binds a formal to itself (arg == formal,
+                // a bare rigid). Skip it: leaving the formal unbound resolves it as
+                // a rigid in-context and avoids a self-referential binding cycle.
+                const resolved = self.substituteFormal(artifact, arg);
+                if (std.meta.eql(resolved.artifact.key, fkey.artifact_key) and resolved.checked_type == fkey.checked_type) {
+                    is_bound.* = false;
+                    continue;
+                }
+                is_bound.* = true;
+                slot.* = self.template_bindings.get(fkey);
+                try self.template_bindings.put(fkey, .{ .artifact = artifact, .checked_type = arg });
+            }
+            defer {
+                for (formals, saved, bound_formals) |formal, slot, is_bound| {
+                    if (!is_bound) continue;
+                    const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
+                    if (slot) |prev| {
+                        self.template_bindings.put(fkey, prev) catch unreachable;
+                    } else {
+                        _ = self.template_bindings.remove(fkey);
+                    }
+                }
+            }
+
+            const prev_ctx = self.open_ctx;
+            self.open_ctx = try self.ctxForOpen(lookup.artifact.key, decl.source_statement, resolved_arg_keys);
+            defer self.open_ctx = prev_ctx;
+
+            break :open_blk try self.convertCheckedType(lookup.artifact, decl.backing);
+        } else glueInvariant("nominal glue conversion could not find declaration backing", .{});
+
         return switch (backing_repr) {
             .record => |rec| blk: {
                 // The backing record `rec.fields` is in the structural (sorted)
@@ -1962,6 +2998,21 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         nominal: CheckedArtifact.CheckedNominalType,
     ) ?NominalDeclarationLookup {
+        // Self-contained artifacts embed a copy of every imported/builtin
+        // nominal declaration they use, keyed by content identity. Resolve
+        // locally first so no owner artifact must be loaded.
+        const local_key = check.CanonicalNames.NominalTypeKey{
+            .module = nominal.origin_module,
+            .type_name = nominal.name,
+            .source_decl = nominal.source_decl,
+        };
+        if (artifact.checked_types.nominalDeclaration(local_key)) |declaration| {
+            return .{
+                .artifact = artifact,
+                .declaration = declaration,
+                .padding_field_types = declaration.paddingFieldTypes(&artifact.checked_types),
+            };
+        }
         return switch (nominal.representation) {
             .local_declaration => |declaration_id| .{
                 .artifact = artifact,
@@ -2136,7 +3187,7 @@ const TypeTable = struct {
         checked_type: CheckedArtifact.CheckedTypeId,
         fields: []const CheckedArtifact.CheckedRecordField,
         ext: ?CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         var all_fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
         defer all_fields.deinit(self.gpa);
         try appendRecordRowFields(self.gpa, artifact, fields, ext, &all_fields);
@@ -2149,14 +3200,17 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
         fields: []const CheckedArtifact.CheckedRecordField,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         if (fields.len == 0) return .{ .unit = self.layoutFactsForIdx(.zst) };
         const record_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
 
         const field_type_ids = try self.gpa.alloc(u64, fields.len);
         defer self.gpa.free(field_type_ids);
         for (fields, 0..) |field, i| {
-            field_type_ids[i] = try self.getOrInsert(artifact, field.ty);
+            field_type_ids[i] = if (checkedTypeResolvesToFunction(artifact, field.ty))
+                try self.insertOpaqueCallable(artifact, field.ty)
+            else
+                try self.getOrInsert(artifact, field.ty);
         }
 
         const record_layout_value = self.layouts.getLayout(record_layout.layout_idx);
@@ -2199,7 +3253,7 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
         elems: []const CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         if (elems.len == 0) return .{ .unit = self.layoutFactsForIdx(.zst) };
         const tuple_layout = try self.layoutFactsForCheckedType(artifact, checked_type);
 
@@ -2251,7 +3305,7 @@ const TypeTable = struct {
         checked_type: CheckedArtifact.CheckedTypeId,
         tags: []const CheckedArtifact.CheckedTag,
         ext: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         var all_tags = std.ArrayList(CheckedArtifact.CheckedTag).empty;
         defer all_tags.deinit(self.gpa);
         try appendTagRowTags(self.gpa, artifact, tags, ext, &all_tags);
@@ -2338,7 +3392,7 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
         func: CheckedArtifact.CheckedFunctionType,
-    ) Allocator.Error!CollectedTypeRepr {
+    ) TypeTableError!CollectedTypeRepr {
         const arg_ids = try self.gpa.alloc(u64, func.args.len);
         for (func.args, 0..) |arg, i| {
             arg_ids[i] = try self.getOrInsert(artifact, arg);
@@ -3085,6 +4139,15 @@ fn extractGlueResult(
     glueInvariant("glue result Try discriminant {d} was neither Ok nor Err", .{discriminant});
 }
 
+fn typeTableKeysEqual(a: []const TypeTableKey, b: []const TypeTableKey) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!checkedArtifactKeysEqual(x.artifact_key, y.artifact_key)) return false;
+        if (x.checked_type != y.checked_type) return false;
+    }
+    return true;
+}
+
 fn checkedTypePayload(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
@@ -3218,6 +4281,7 @@ fn writeTypeString(
 
     switch (checkedTypePayload(artifact, checked_type)) {
         .pending => glueInvariant("pending checked type reached glue type string", .{}),
+        .err => glueInvariant("erroneous checked type reached glue type string", .{}),
         .flex => try buf.appendSlice(gpa, "flex"),
         .rigid => try buf.appendSlice(gpa, "rigid"),
         .alias => |alias| try writeTypeString(gpa, artifact, alias.backing, buf, active),
@@ -3358,92 +4422,6 @@ fn writeTagUnionTypeString(
     try buf.append(gpa, ']');
 }
 
-fn functionPayloadForRoot(
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    checked_type: CheckedArtifact.CheckedTypeId,
-) ?CheckedArtifact.CheckedFunctionType {
-    return switch (checkedTypePayload(artifact, checked_type)) {
-        .function => |func| func,
-        .alias => |alias| functionPayloadForRoot(artifact, alias.backing),
-        .nominal => |nominal| functionPayloadForRoot(artifact, nominal.backing),
-        else => null,
-    };
-}
-
-/// Extract record fields from artifact-owned checked type payloads.
-fn extractRecordFields(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    checked_type: CheckedArtifact.CheckedTypeId,
-) Allocator.Error![]const CollectedModuleTypeInfo.CollectedRecordFieldInfo {
-    var fields = std.ArrayList(CheckedArtifact.CheckedRecordField).empty;
-    defer fields.deinit(gpa);
-    if (!(try collectRecordFieldsForRoot(gpa, artifact, checked_type, &fields))) {
-        return &[_]CollectedModuleTypeInfo.CollectedRecordFieldInfo{};
-    }
-
-    var indices = try gpa.alloc(usize, fields.items.len);
-    defer gpa.free(indices);
-    for (0..fields.items.len) |i| indices[i] = i;
-
-    const SortCtx = struct {
-        fields: []const CheckedArtifact.CheckedRecordField,
-        names: *const CanonicalNameStore,
-
-        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-            return std.mem.lessThan(
-                u8,
-                ctx.names.recordFieldLabelText(ctx.fields[a].name),
-                ctx.names.recordFieldLabelText(ctx.fields[b].name),
-            );
-        }
-    };
-    std.mem.sort(usize, indices, SortCtx{ .fields = fields.items, .names = &artifact.canonical_names }, SortCtx.lessThan);
-
-    var result_list = std.ArrayList(CollectedModuleTypeInfo.CollectedRecordFieldInfo).empty;
-    errdefer {
-        for (result_list.items) |item| {
-            gpa.free(item.name);
-            gpa.free(item.type_str);
-        }
-        result_list.deinit(gpa);
-    }
-    for (indices) |idx| {
-        const field = fields.items[idx];
-        const name = try gpa.dupe(u8, artifact.canonical_names.recordFieldLabelText(field.name));
-        errdefer gpa.free(name);
-        const type_str = try typeStringAlloc(gpa, artifact, field.ty);
-        errdefer gpa.free(type_str);
-        try result_list.append(gpa, .{
-            .name = name,
-            .type_str = type_str,
-        });
-    }
-    return result_list.toOwnedSlice(gpa);
-}
-
-fn collectRecordFieldsForRoot(
-    gpa: std.mem.Allocator,
-    artifact: *const CheckedArtifact.CheckedModuleArtifact,
-    checked_type: CheckedArtifact.CheckedTypeId,
-    fields: *std.ArrayList(CheckedArtifact.CheckedRecordField),
-) Allocator.Error!bool {
-    switch (checkedTypePayload(artifact, checked_type)) {
-        .alias => |alias| return try collectRecordFieldsForRoot(gpa, artifact, alias.backing, fields),
-        .nominal => |nominal| return try collectRecordFieldsForRoot(gpa, artifact, nominal.backing, fields),
-        .record => |record| {
-            try appendRecordRowFields(gpa, artifact, record.fields, record.ext, fields);
-            return true;
-        },
-        .record_unbound => |unbound| {
-            try fields.appendSlice(gpa, unbound);
-            return true;
-        },
-        .empty_record => return true,
-        else => return false,
-    }
-}
-
 /// Collect type information from a published checked artifact.
 fn collectModuleTypeInfo(
     gpa: Allocator,
@@ -3452,7 +4430,7 @@ fn collectModuleTypeInfo(
     hosted_indices: []const HostedProcGlobalIndex,
     hosted_symbols: *const std.StringHashMap([]const u8),
     type_table: *TypeTable,
-) Allocator.Error!?CollectedModuleTypeInfo {
+) TypeTableError!?CollectedModuleTypeInfo {
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
     for (artifact.checked_types.nominal_declarations.items) |declaration| {
@@ -3538,19 +4516,11 @@ fn collectModuleTypeInfo(
             errdefer if (arg_type_ids.len > 0) gpa.free(arg_type_ids);
             var ret_type_id: u64 = 0;
 
-            if (functionPayloadForRoot(artifact, checked_type)) |func| {
-                ret_fields = try extractRecordFields(gpa, artifact, func.ret);
-                if (func.args.len == 1) {
-                    arg_fields = try extractRecordFields(gpa, artifact, func.args[0]);
-                }
-                ret_type_id = try type_table.getOrInsert(artifact, func.ret);
-                if (func.args.len > 0) {
-                    const ids = try gpa.alloc(u64, func.args.len);
-                    for (func.args, 0..) |arg, i| {
-                        ids[i] = try type_table.getOrInsert(artifact, arg);
-                    }
-                    arg_type_ids = ids;
-                }
+            if (try type_table.collectHostedFunctionMetadata(artifact, checked_type)) |metadata| {
+                ret_fields = metadata.ret_fields;
+                arg_fields = metadata.arg_fields;
+                ret_type_id = metadata.ret_type_id;
+                arg_type_ids = metadata.arg_type_ids;
             } else {
                 ret_type_id = try type_table.insertUnit();
             }
@@ -3603,182 +4573,4 @@ fn moduleLocalMemberName(
     if (source_name.len == module_name.len) return try allocator.dupe(u8, source_name);
     if (source_name[module_name.len] != '.') return try allocator.dupe(u8, source_name);
     return try allocator.dupe(u8, source_name[module_name.len + 1 ..]);
-}
-
-/// Print a type annotation to a buffer (for requires entries which use AST types)
-fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) Allocator.Error!void {
-    const type_anno = ast.store.getTypeAnno(type_anno_idx);
-
-    switch (type_anno) {
-        .@"fn" => |f| {
-            const arrow = if (f.effectful) "=>" else "->";
-            const args = ast.store.typeAnnoSlice(f.args);
-            if (args.len == 0) {
-                try buf.appendSlice(gpa, "()");
-            } else {
-                for (args, 0..) |arg_idx, i| {
-                    if (i > 0) try buf.appendSlice(gpa, ", ");
-                    try printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
-                }
-            }
-            try buf.appendSlice(gpa, " ");
-            try buf.appendSlice(gpa, arrow);
-            try buf.appendSlice(gpa, " ");
-            try printTypeAnnoToBuf(gpa, env, ast, f.ret, buf);
-        },
-        .ty => |t| {
-            // Print qualified type name
-            const qualifiers = ast.store.tokenSlice(t.qualifiers);
-            for (qualifiers) |qual_tok_idx| {
-                const qual_tok: parse.tokenize.Token.Idx = @intCast(qual_tok_idx);
-                if (ast.tokens.resolveIdentifier(qual_tok)) |ident_idx| {
-                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
-                    try buf.append(gpa, '.');
-                }
-            }
-            if (ast.tokens.resolveIdentifier(t.token)) |ident_idx| {
-                try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
-            }
-        },
-        .ty_var => |tv| {
-            if (ast.tokens.resolveIdentifier(tv.tok)) |ident_idx| {
-                try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
-            }
-        },
-        .record => |r| {
-            try buf.appendSlice(gpa, "{ ");
-            const fields = ast.store.annoRecordFieldSlice(r.fields);
-            for (fields, 0..) |field_idx, i| {
-                if (i > 0) try buf.appendSlice(gpa, ", ");
-                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
-                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
-                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
-                    try buf.appendSlice(gpa, " : ");
-                }
-                try printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
-            }
-            switch (r.ext) {
-                .closed => {},
-                .open => try buf.appendSlice(gpa, ", .."),
-                .named => |named| {
-                    try buf.appendSlice(gpa, ", ..");
-                    try printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
-                },
-            }
-            try buf.appendSlice(gpa, " }");
-        },
-        .tag_union => |tu| {
-            try buf.append(gpa, '[');
-            const tags = ast.store.typeAnnoSlice(tu.tags);
-            for (tags, 0..) |tag_idx, i| {
-                if (i > 0) try buf.appendSlice(gpa, ", ");
-                try printTypeAnnoToBuf(gpa, env, ast, tag_idx, buf);
-            }
-            switch (tu.ext) {
-                .closed => {},
-                .open => try buf.appendSlice(gpa, ", .."),
-                .named => |named| {
-                    try buf.appendSlice(gpa, ", ..");
-                    try printTypeAnnoToBuf(gpa, env, ast, named.anno, buf);
-                },
-            }
-            try buf.append(gpa, ']');
-        },
-        .tuple => |t| {
-            try buf.append(gpa, '(');
-            const annos = ast.store.typeAnnoSlice(t.annos);
-            for (annos, 0..) |anno_idx, i| {
-                if (i > 0) try buf.appendSlice(gpa, ", ");
-                try printTypeAnnoToBuf(gpa, env, ast, anno_idx, buf);
-            }
-            try buf.append(gpa, ')');
-        },
-        .apply => |a| {
-            const args = ast.store.typeAnnoSlice(a.args);
-            if (args.len > 0) {
-                try printTypeAnnoToBuf(gpa, env, ast, args[0], buf);
-                if (args.len > 1) {
-                    try buf.append(gpa, ' ');
-                    for (args[1..], 0..) |arg_idx, i| {
-                        if (i > 0) try buf.append(gpa, ' ');
-                        try printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
-                    }
-                }
-            }
-        },
-        .parens => |p| {
-            try buf.append(gpa, '(');
-            try printTypeAnnoToBuf(gpa, env, ast, p.anno, buf);
-            try buf.append(gpa, ')');
-        },
-        .underscore => {
-            try buf.append(gpa, '_');
-        },
-        .underscore_type_var => {
-            try buf.append(gpa, '_');
-        },
-        .malformed => {
-            try buf.appendSlice(gpa, "<malformed>");
-        },
-    }
-}
-
-/// Generate a stub expression from a type annotation.
-/// This produces valid Roc expressions that will crash at runtime rather than compile-time.
-/// Uses `...` inside lambdas to defer the crash to runtime.
-fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) Allocator.Error!void {
-    const type_anno = ast.store.getTypeAnno(type_anno_idx);
-
-    switch (type_anno) {
-        .@"fn" => |f| {
-            // Generate lambda stub
-            const args = ast.store.typeAnnoSlice(f.args);
-            if (args.len == 0) {
-                // No args: || body
-                try buf.appendSlice(gpa, "|| ");
-            } else {
-                // Has args: |_, _, ...| body
-                try buf.append(gpa, '|');
-                for (0..args.len) |i| {
-                    if (i > 0) try buf.appendSlice(gpa, ", ");
-                    try buf.append(gpa, '_');
-                }
-                try buf.appendSlice(gpa, "| ");
-            }
-
-            // Check if return type is unit {}
-            const ret_anno = ast.store.getTypeAnno(f.ret);
-            if (ret_anno == .record) {
-                const record = ret_anno.record;
-                const fields = ast.store.annoRecordFieldSlice(record.fields);
-                if (fields.len == 0 and record.ext == .closed) {
-                    // Return type is {} (unit) - return empty record
-                    try buf.appendSlice(gpa, "{}");
-                    return;
-                }
-            }
-
-            // Non-unit return type - use { ... } to crash at runtime (not compile-time)
-            // The block syntax is required for single-line lambdas
-            try buf.appendSlice(gpa, "{ ... }");
-        },
-        .record => |r| {
-            try buf.appendSlice(gpa, "{ ");
-            const fields = ast.store.annoRecordFieldSlice(r.fields);
-            for (fields, 0..) |field_idx, i| {
-                if (i > 0) try buf.appendSlice(gpa, ", ");
-                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
-                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
-                    try buf.appendSlice(gpa, env.common.getIdent(ident_idx));
-                    try buf.appendSlice(gpa, ": ");
-                }
-                try generateStubExprFromTypeAnno(gpa, env, ast, field.ty, buf);
-            }
-            try buf.appendSlice(gpa, " }");
-        },
-        else => {
-            // For all other types, use { ... } to crash at runtime
-            try buf.appendSlice(gpa, "{ ... }");
-        },
-    }
 }

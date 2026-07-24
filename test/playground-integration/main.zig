@@ -1164,8 +1164,8 @@ fn matchesAnyFilter(name: []const u8, filters: []const []const u8) bool {
 pub fn main(init: std.process.Init) anyerror!void {
     const std_io = init.io;
     // Setup gpa allocator used for bytebox WASM VM
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer _ = build_options.debugGpaOk(gpa.deinit());
 
     // Setup arena allocator used for test harness
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());

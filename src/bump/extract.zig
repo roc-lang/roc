@@ -256,13 +256,18 @@ const Extractor = struct {
                 } };
             },
             .nominal => |nominal| {
+                const backing = if (nominal.is_opaque)
+                    null
+                else
+                    view.nominalBackingTemplateForPayload(nominal) orelse
+                        return self.fail(.unpublished_public_type, "transparent exposed nominal type has no published declaration backing");
                 return .{ .nominal = .{
                     .arity = @intCast(nominal.args.len),
                     .is_opaque = nominal.is_opaque,
-                    .backing = if (nominal.is_opaque)
-                        null
+                    .backing = if (backing) |backing_ty|
+                        try self.convertType(view, names, backing_ty, &memo)
                     else
-                        try self.convertType(view, names, nominal.backing, &memo),
+                        null,
                 } };
             },
             else => return self.fail(.unpublished_public_type, "exposed type declaration root is not an alias or nominal type"),
@@ -286,6 +291,7 @@ const Extractor = struct {
 
         switch (view.payload(id)) {
             .pending => return self.fail(.unpublished_public_type, "public type contains an unresolved (pending) checked type"),
+            .err => return self.fail(.unpublished_public_type, "public type contains an erroneous checked type"),
             .record_unbound => return self.fail(.unpublished_public_type, "public type contains an unbound record type"),
             .flex, .rigid => |variable| {
                 // Insert the memo entry before converting constraints so a

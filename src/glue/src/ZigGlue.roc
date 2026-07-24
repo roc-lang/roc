@@ -1,5 +1,5 @@
 ## A glue script for generating a Zig source file with hosted function bindings.
-app [make_glue] { pf: platform "../platform/main.roc" }
+app [make_glue] { pf: platform glue }
 
 import pf.Types exposing [Types]
 import pf.File exposing [File]

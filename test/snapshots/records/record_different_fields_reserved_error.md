@@ -9,7 +9,7 @@ type=expr
     if: "conditional",
     when: "pattern match",
     expect: "test assertion",
-    import: "module load",
+    import: "mod load",
     and: Bool.true,
     or: Bool.false,
 }
@@ -25,14 +25,14 @@ UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:4:11:4:
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:4:29:4:30
 IMPORT MUST BE TOP LEVEL - record_different_fields_reserved_error.md:5:5:5:11
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:5:11:5:12
-UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:5:26:5:27
+UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:5:23:5:24
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:5:6:8
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:6:19:6:20
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:5:7:7
 UNEXPECTED EXPRESSION SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 DECLARATION HAS NO VALUE - record_different_fields_reserved_error.md:3:5:3:12
 MISSING METHOD - record_different_fields_reserved_error.md:4:13:4:29
-MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
+MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:23
 # PROBLEMS
 
 ┌──────────────────────────────┐
@@ -178,11 +178,11 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │ IMPORT MUST BE TOP LEVEL ├─ I was parsing an import, but imports are only ──┐
 └┬─────────────────────────┘  allowed at the top level.                       │
  │                                                                            │
- │  import: "module load",                                                    │
+ │  import: "mod load",                                                       │
  │  ‾‾‾‾‾‾                                                                    │
  └───────────────────────────── record_different_fields_reserved_error.md:5:5 ┘
 
-    Move this import after the module header and before declarations or
+    Move this import after the mod header and before declarations or
     executable statements.
 
     For example:
@@ -199,7 +199,7 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
 └┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
- │  import: "module load",                                                    │
+ │  import: "mod load",                                                       │
  │        ‾                                                                   │
  └──────────────────────────── record_different_fields_reserved_error.md:5:11 ┘
 
@@ -216,9 +216,9 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │ UNEXPECTED EXPRESSION SYNTAX ├─ I was parsing an expression, and this ──────┐
 └┬─────────────────────────────┘  token cannot start an expression here.      │
  │                                                                            │
- │  import: "module load",                                                    │
- │                       ‾                                                    │
- └──────────────────────────── record_different_fields_reserved_error.md:5:26 ┘
+ │  import: "mod load",                                                       │
+ │                    ‾                                                       │
+ └──────────────────────────── record_different_fields_reserved_error.md:5:23 ┘
 
     Expressions can be names, literals, tags, records, lists, tuples, lambdas,
     blocks, conditionals, matches, or function calls.
@@ -308,7 +308,7 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
  │  ‾‾‾‾‾‾‾                                                                   │
  └───────────────────────────── record_different_fields_reserved_error.md:3:5 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -329,8 +329,8 @@ MISSING METHOD - record_different_fields_reserved_error.md:5:13:5:26
 │ MISSING METHOD ├─ This `from_quote` method is being called on a value ──────┐
 └┬───────────────┘  whose type doesn't have that method.                      │
  │                                                                            │
- │  import: "module load",                                                    │
- │          ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
+ │  import: "mod load",                                                       │
+ │          ‾‾‾‾‾‾‾‾‾‾                                                        │
  └──────────────────────────── record_different_fields_reserved_error.md:5:13 ┘
 
     The value's type, which does not have a method named `from_quote`, is:
@@ -371,7 +371,7 @@ EndOfFile,
 		(s-malformed (tag "import_must_be_top_level"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-string
-			(e-string-part (raw "module load")))
+			(e-string-part (raw "mod load")))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-malformed (reason "expr_unexpected_token"))
 		(e-ident (raw "Bool.true"))
@@ -390,7 +390,7 @@ EndOfFile,
 	expect 
 	"test assertion"
 	
-			"module load"
+			"mod load"
 	
 		Bool.true
 	
@@ -425,7 +425,7 @@ EndOfFile,
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-string
-			(e-literal (string "module load"))))
+			(e-literal (string "mod load"))))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr

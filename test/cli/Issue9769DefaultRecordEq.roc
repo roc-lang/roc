@@ -1,6 +1,8 @@
 Issue9769DefaultRecordEq :: [].{}
 
 Rational := { num : I64, den : I64 }.{
+    is_eq : _
+
     new : { num : I64, den : I64 } -> Rational
     new = |{ num, den }| {
         { num, den }->reduce()

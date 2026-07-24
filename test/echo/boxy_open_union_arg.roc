@@ -20,8 +20,8 @@ color_to_str = |color| match color {
 
 main! = |_args| {
 	_ = question_postfix(["1", "not a number", "100"])
-	echo!(color_to_str(Blue))
-	echo!(color_to_str(Red))
-	echo!(color_to_str(Green))
+	echo!("${color_to_str(Blue)}\n")
+	echo!("${color_to_str(Red)}\n")
+	echo!("${color_to_str(Green)}\n")
 	Ok({})
 }

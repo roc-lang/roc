@@ -22,7 +22,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "pf.Stdout")
 			(exposing
@@ -44,7 +44,7 @@ NO CHANGE
 	(d-let
 		(p-assign (ident "main"))
 		(e-num (value "42")))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes
 			(exposed (name "line!") (wildcard false))
 			(exposed (name "write!") (wildcard false)))))

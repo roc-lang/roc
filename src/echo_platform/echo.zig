@@ -122,7 +122,7 @@ export fn allocateBuffer(size: usize) ?[*]u8 {
     return buf.ptr;
 }
 
-/// Register an extra module file (e.g. name="Greeting", content="module [msg]\n...").
+/// Register an extra module file (e.g. name="Greeting", content="Greeting := [].{ msg = \"hi\" }\n").
 /// Files are resolved as `/app/<name>.roc` during compilation.
 /// Must be called after init() and before compileAndRun().
 /// Returns 0 on success, 1 if too many files, 2 if name too long, 3 if content too long.

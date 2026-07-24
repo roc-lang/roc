@@ -146,7 +146,7 @@ const importObject = {
   env: {
     js_echo(ptr, len) {
       const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, ptr, len);
-      outputEl.textContent += decoder.decode(bytes) + "\n";
+      outputEl.textContent += decoder.decode(bytes);
     },
     js_stderr(ptr, len) {
       const bytes = new Uint8Array(wasm.instance.exports.memory.buffer, ptr, len);

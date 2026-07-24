@@ -173,7 +173,7 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  │                                                                            │
  └────────────────────────────────────────── where_clauses_error_cases.md:2:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -186,7 +186,7 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  │                                                                            │
  └────────────────────────────────────────── where_clauses_error_cases.md:6:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 
@@ -199,7 +199,7 @@ DECLARATION HAS NO VALUE - where_clauses_error_cases.md:10:1:11:28
  │                                                                            │
  └───────────────────────────────────────── where_clauses_error_cases.md:10:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -215,7 +215,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "broken_fn1")
 			(ty-fn
@@ -237,7 +237,7 @@ EndOfFile,
 				(ty-var (raw "a"))
 				(ty-var (raw "b")))
 			(where
-				(method (module-of "c") (name "method")
+				(method (mod-of "c") (name "method")
 					(args
 						(ty-var (raw "c")))
 					(ty-var (raw "d")))))))

@@ -46,11 +46,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-[
-	42,
-	"hello world",
-	100,
-]
+[42, "hello world", 100]
 ~~~
 # CANONICALIZE
 ~~~clojure

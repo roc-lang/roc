@@ -231,7 +231,7 @@ DECLARATION HAS NO VALUE - fuzz_crash_002.md:1:1:1:7
  │  ‾‾‾‾‾‾                                                                    │
  └───────────────────────────────────────────────────── fuzz_crash_002.md:1:1 ┘
 
-    Add a value body here, or put hosted functions in a platform type module so
+    Add a value body here, or put hosted functions in a platform type mod so
     they are published through the host boundary.
 
 # TOKENS
@@ -242,7 +242,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-type-anno (name "modu")
 			(ty-malformed (tag "ty_anno_unexpected_token")))

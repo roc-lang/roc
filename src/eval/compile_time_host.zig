@@ -45,14 +45,6 @@ pub const HostEvent = union(enum) {
             .crashed => |msg| msg,
         };
     }
-
-    pub fn deinit(self: *HostEvent, allocator: Allocator) void {
-        switch (self.*) {
-            .dbg => |msg| allocator.free(msg),
-            .expect_failed => |msg| allocator.free(msg),
-            .crashed => |msg| allocator.free(msg),
-        }
-    }
 };
 
 /// A compile-time branch marker reached by one root.
@@ -61,9 +53,9 @@ pub const ComptimeBranchHit = struct {
     branch_index: u32,
 };
 
-allocator: Allocator,
 arena: base.SingleThreadArena,
-allocations: std.AutoHashMap(usize, Allocation),
+host_arena: base.SingleThreadArena,
+allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 comptime_branch_hits: std.ArrayListUnmanaged(ComptimeBranchHit) = .empty,
@@ -75,18 +67,16 @@ active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
 
 pub fn init(allocator: Allocator) CompileTimeHost {
+    const backing_allocator = hostBytesAllocator(allocator);
     return .{
-        .allocator = allocator,
-        .arena = base.SingleThreadArena.init(allocator),
-        .allocations = std.AutoHashMap(usize, Allocation).init(allocator),
+        .arena = base.SingleThreadArena.init(backing_allocator),
+        .host_arena = base.SingleThreadArena.init(backing_allocator),
     };
 }
 
 pub fn deinit(self: *CompileTimeHost) void {
-    self.clearEvents();
-    self.comptime_branch_hits.deinit(self.allocator);
-    self.call_regions.deinit(self.allocator);
-    self.allocations.deinit();
+    self.clearHostState();
+    self.host_arena.deinit();
     self.arena.deinit();
     self.* = undefined;
 }
@@ -108,14 +98,12 @@ pub fn ops(self: *CompileTimeHost) *RocOps {
     return &self.roc_ops.?;
 }
 
-/// Clear per-run state while retaining allocated buffers for this root host.
+/// Clear per-run state and release root-local compile-time host memory.
 pub fn resetForRun(self: *CompileTimeHost) void {
-    self.clearEvents();
-    self.comptime_branch_hits.clearRetainingCapacity();
-    self.call_regions.clearRetainingCapacity();
+    self.clearHostState();
+    _ = self.host_arena.reset(.free_all);
     self.comptime_failed_site = null;
     self.failed_region = null;
-    self.allocations.clearRetainingCapacity();
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
@@ -163,7 +151,7 @@ pub fn crashMessage(self: *const CompileTimeHost) ?[]const u8 {
 /// Dev-backend hook called when a compile-time branch marker is reached.
 pub fn rocComptimeBranchTaken(roc_ops: *RocOps, site_raw: u32, branch_index: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.comptime_branch_hits.append(self.allocator, .{
+    self.comptime_branch_hits.append(self.host_arena.allocator(), .{
         .site = @enumFromInt(site_raw),
         .branch_index = branch_index,
     }) catch {
@@ -187,7 +175,7 @@ pub fn rocComptimeFailureRegion(roc_ops: *RocOps, start_offset: u32, end_offset:
 /// Dev-backend hook pushing a source region for a generated call frame.
 pub fn rocComptimeCallEnter(roc_ops: *RocOps, start_offset: u32, end_offset: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    self.call_regions.append(self.allocator, base.Region.from_raw_offsets(start_offset, end_offset)) catch {
+    self.call_regions.append(self.host_arena.allocator(), base.Region.from_raw_offsets(start_offset, end_offset)) catch {
         self.jump(.host_oom);
     };
 }
@@ -211,18 +199,20 @@ fn restoreJumpBuf(self: *CompileTimeHost, prev: ?*JmpBuf) void {
     self.active_jmp_buf = prev;
 }
 
-fn clearEvents(self: *CompileTimeHost) void {
-    for (self.events.items) |*event| event.deinit(self.allocator);
-    self.events.clearAndFree(self.allocator);
+fn clearHostState(self: *CompileTimeHost) void {
+    self.events = .empty;
+    self.comptime_branch_hits = .empty;
+    self.call_regions = .empty;
+    self.allocations = .empty;
 }
 
 fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), bytes: []const u8) void {
-    const owned = self.allocator.dupe(u8, bytes) catch {
+    const host_allocator = self.host_arena.allocator();
+    const owned = host_allocator.dupe(u8, bytes) catch {
         self.jump(.host_oom);
         unreachable;
     };
-    self.events.append(self.allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
-        self.allocator.free(owned);
+    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
         self.jump(.host_oom);
         unreachable;
     };
@@ -246,7 +236,7 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*an
     const ptr = allocateBytes(arena_allocator, alloc_len, alignment) orelse {
         self.jump(.host_oom);
     };
-    self.allocations.put(@intFromPtr(ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
+    self.allocations.put(self.host_arena.allocator(), @intFromPtr(ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
         self.jump(.host_oom);
     };
     return @ptrCast(ptr);
@@ -271,7 +261,7 @@ fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: u
     };
     const old_bytes: [*]u8 = @ptrCast(@alignCast(ptr));
     @memcpy(new_ptr[0..@min(old_info.size, alloc_len)], old_bytes[0..@min(old_info.size, alloc_len)]);
-    self.allocations.put(@intFromPtr(new_ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
+    self.allocations.put(self.host_arena.allocator(), @intFromPtr(new_ptr), .{ .size = alloc_len, .alignment = alignment }) catch {
         self.jump(.host_oom);
     };
     _ = self.allocations.remove(@intFromPtr(ptr));
@@ -305,6 +295,13 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
         8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
         16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
         else => @panic("unsupported compile-time RocOps allocation alignment"),
+    };
+}
+
+fn hostBytesAllocator(allocator: Allocator) Allocator {
+    return switch (@import("builtin").target.os.tag) {
+        .freestanding => std.heap.wasm_allocator,
+        else => allocator,
     };
 }
 

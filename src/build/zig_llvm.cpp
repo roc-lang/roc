@@ -89,6 +89,8 @@ static OptimizationLevel toLLVMOptimizationLevel(ZigLLVMIROptimizationLevel leve
             return OptimizationLevel::Oz;
         case ZigLLVMIROptimizationLevel_O3:
             return OptimizationLevel::O3;
+        case ZigLLVMIROptimizationLevel_O0:
+            return OptimizationLevel::O0;
     }
 
     llvm_unreachable("invalid LLVM IR optimization level");
@@ -476,7 +478,7 @@ ZIG_EXTERN_C bool ZigLLVMTargetMachineEmitToFile(LLVMTargetMachineRef targ_machi
     // Optimization phase
     module_pm.run(llvm_module, module_am);
 
-    if (options->no_target_libcalls) {
+    if (options->lower_memory_intrinsics_to_loops) {
         FunctionPassManager lower_mem_pm;
         lower_mem_pm.addPass(LowerMemoryIntrinsicsPass(target_machine.getTargetIRAnalysis()));
 

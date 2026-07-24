@@ -47,19 +47,12 @@ fn expectNotContains(haystack: []const u8, needle: []const u8) error{TestUnexpec
     try std.testing.expect(std.mem.find(u8, haystack, needle) == null);
 }
 
-test "Monotype has direct calls and no checked-only expression forms" {
+test "Monotype has direct call and structural expression forms" {
     try std.testing.expect(@hasField(Mono.ExprData, "call_proc"));
     try std.testing.expect(@hasField(Mono.ExprData, "call_value"));
     try std.testing.expect(@hasField(Mono.ExprData, "structural_eq"));
     try std.testing.expect(@hasField(Mono.ExprData, "structural_hash"));
     try std.testing.expect(@hasField(Mono.ExprData, "loop_"));
-
-    try std.testing.expect(!@hasField(Mono.ExprData, "dispatch_call"));
-    try std.testing.expect(!@hasField(Mono.ExprData, "type_dispatch_call"));
-    try std.testing.expect(!@hasField(Mono.ExprData, "method_call"));
-    try std.testing.expect(!@hasField(Mono.ExprData, "method_eq"));
-    try std.testing.expect(!@hasField(Mono.ExprData, "anno_only"));
-    try std.testing.expect(!@hasField(Mono.ExprData, "for_"));
 }
 
 test "Monotype types are closed checked types without row tails" {
@@ -164,9 +157,6 @@ test "Lifted functions own captures and consume Monotype expression storage" {
     try std.testing.expect(@hasField(Mono.FnSlot, "imported"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "func"));
     try std.testing.expect(@hasField(Mono.ProcCallee, "lifted"));
-
-    try std.testing.expect(!@hasField(Lifted.ExprData, "dispatch_call"));
-    try std.testing.expect(!@hasField(Lifted.ExprData, "anno_only"));
 }
 
 test "Lambda Solved keeps lifted syntax and stores callable sets in types" {

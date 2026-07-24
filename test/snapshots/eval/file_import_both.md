@@ -26,7 +26,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-file-import
 			(path "test/snapshots/eval/file_import_test_data.txt")
@@ -72,7 +72,7 @@ NO CHANGE
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 112)
+				(e-call (constraint-fn-var 228)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local

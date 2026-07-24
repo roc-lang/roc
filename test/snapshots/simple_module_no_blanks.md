@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=A simple module with no blanks
+description=A simple mod with no blanks
 type=snippet
 ~~~
 # SOURCE
@@ -11,7 +11,7 @@ hello! = Stdout.line!("Hello")
 world = "World"
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - simple_module_no_blanks.md:2:10:2:22
+NAME NOT IN SCOPE - simple_mod_no_blanks.md:2:10:2:22
 # PROBLEMS
 
 ┌───────────────────┐
@@ -20,7 +20,7 @@ NAME NOT IN SCOPE - simple_module_no_blanks.md:2:10:2:22
  │                                                                            │
  │  hello! = Stdout.line!("Hello")                                            │
  │           ‾‾‾‾‾‾‾‾‾‾‾‾                                                     │
- └─────────────────────────────────────────── simple_module_no_blanks.md:2:10 ┘
+ └─────────────────────────────────────────── simple_mod_no_blanks.md:2:10 ┘
 
     Is it misspelled, or is there an import missing?
 
@@ -34,7 +34,7 @@ EndOfFile,
 # PARSE
 ~~~clojure
 (file
-	(type-module)
+	(type-mod)
 	(statements
 		(s-import (raw "pf.Stdout"))
 		(s-decl
@@ -65,7 +65,7 @@ NO CHANGE
 		(p-assign (ident "world"))
 		(e-string
 			(e-literal (string "World"))))
-	(s-import (module "pf.Stdout")
+	(s-import (mod "pf.Stdout")
 		(exposes)))
 ~~~
 # TYPES

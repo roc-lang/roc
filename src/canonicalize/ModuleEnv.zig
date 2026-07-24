@@ -113,9 +113,13 @@ pub const CommonIdents = extern struct {
     is_gt: Ident.Idx,
     is_gte: Ident.Idx,
     is_eq: Ident.Idx,
+    range_exclusive: Ident.Idx,
+    range_inclusive: Ident.Idx,
     to_hash: Ident.Idx,
     parser_for: Ident.Idx,
     encoder_for: Ident.Idx,
+    map: Ident.Idx,
+    map_bang: Ident.Idx,
 
     // Type/module names
     @"try": Ident.Idx,
@@ -234,9 +238,13 @@ pub const CommonIdents = extern struct {
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
             .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
+            .range_exclusive = try common.insertIdent(gpa, Ident.for_text("range_exclusive")),
+            .range_inclusive = try common.insertIdent(gpa, Ident.for_text("range_inclusive")),
             .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
             .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
             .encoder_for = try common.insertIdent(gpa, Ident.for_text("encoder_for")),
+            .map = try common.insertIdent(gpa, Ident.for_text("map")),
+            .map_bang = try common.insertIdent(gpa, Ident.for_text("map!")),
             .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
@@ -351,9 +359,13 @@ pub const CommonIdents = extern struct {
             .is_gt = common.findIdent("is_gt") orelse unreachable,
             .is_gte = common.findIdent("is_gte") orelse unreachable,
             .is_eq = common.findIdent("is_eq") orelse unreachable,
+            .range_exclusive = common.findIdent("range_exclusive") orelse unreachable,
+            .range_inclusive = common.findIdent("range_inclusive") orelse unreachable,
             .to_hash = common.findIdent("to_hash") orelse unreachable,
             .parser_for = common.findIdent("parser_for") orelse unreachable,
             .encoder_for = common.findIdent("encoder_for") orelse unreachable,
+            .map = common.findIdent("map") orelse unreachable,
+            .map_bang = common.findIdent("map!") orelse unreachable,
             .@"try" = common.findIdent("Try") orelse unreachable,
             .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
             .builtin_module = common.findIdent("Builtin") orelse unreachable,
@@ -588,37 +600,28 @@ pub const NumeralLiteral = extern struct {
     }
 };
 
-/// Checked dispatch metadata for a numeric literal that must call
-/// `from_numeral` at runtime.
-pub const NumeralDispatchPlan = extern struct {
-    node_idx: u32,
-    target_var: u32,
-    fn_var: u32,
-
-    pub const SafeList = collections.SafeList(@This());
-};
-
-/// One constrained-scheme instantiation recorded by checking for static-dispatch
-/// evidence. It names the source node whose checking instantiated the scheme, the
-/// pristine (never-unified) scheme root that was copied, and — via
-/// `scheme_instantiation_pairs` — the fresh var each constrained scheme var was
-/// copied to. Publication resolves the fresh vars after checking settles to
-/// decide how each of the callee's dispatch constraints was satisfied at this
-/// site.
-pub const SchemeInstantiationRecord = extern struct {
+/// One constrained-scheme use recorded by checking for static-dispatch
+/// evidence. It names the source node, the scheme root used at that edge, and
+/// — for an instantiation — the fresh var each constrained scheme var was
+/// copied to. Shared monomorphic edges have no copy pairs. Publication resolves
+/// the recorded vars after checking settles to decide how each of the callee's
+/// dispatch constraints was satisfied at this site.
+pub const SchemeUseRecord = extern struct {
     node_idx: u32,
     /// `Slot` — distinguishes several schemes instantiated at one node (a value
-    /// use vs. the target of a dispatch constraint).
+    /// use, an expression-position function stored as a value, or the target
+    /// of a dispatch constraint).
     slot_kind: u32,
     /// For `dispatch_target` slots, the raw fn `Var` of the constraint whose
     /// discharge instantiated this scheme — unique per constraint
     /// instantiation, so nested evidence chains resolve without ambiguity.
-    /// 0 for `value_use` slots (keyed by `node_idx` instead).
+    /// 0 for value and nested-function use slots (keyed by `node_idx`
+    /// instead).
     slot_data: u32,
-    /// The pristine scheme root `Var` that was instantiated. For imported
-    /// schemes this is the local copy, which stays structurally intact.
+    /// The scheme root `Var` used at this edge. For imported schemes this is
+    /// the pristine local copy; for shared uses it is the in-flight local root.
     scheme_root: u32,
-    /// Range into `scheme_instantiation_pairs`.
+    /// Range into `scheme_use_pairs`.
     pairs_start: u32,
     pairs_len: u32,
 
@@ -628,15 +631,23 @@ pub const SchemeInstantiationRecord = extern struct {
         /// The scheme of a value that was referenced (e.g. an `e_lookup` of a
         /// generalized definition).
         value_use,
+        /// A generalized expression-position function instantiated when a
+        /// containing value (record, tuple, list, tag, or nominal) stores it.
+        /// The nested function specialization consumes this edge's evidence.
+        nested_function_use,
         /// The scheme of the method target chosen while discharging a static
         /// dispatch constraint originating at this node.
         dispatch_target,
+        /// A monomorphic reference to an in-flight unannotated definition.
+        /// The edge shares the definition's vars, so its record has no copy
+        /// pairs but still names the exact scheme root used by checking.
+        shared_value_use,
     };
 };
 
 /// One (constrained scheme var → fresh instantiated var) pair of a
-/// `SchemeInstantiationRecord`.
-pub const SchemeInstantiationPair = extern struct {
+/// `SchemeUseRecord`.
+pub const SchemeUsePair = extern struct {
     /// Constrained var in the pristine scheme (`Var`).
     old_var: u32,
     /// The fresh copy created for this instantiation (`Var`).
@@ -836,19 +847,13 @@ for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
 numeral_digit_bytes: collections.SafeList(u8),
 /// Exact numeric literals attached to source expression and pattern nodes.
 numeral_literals: NumeralLiteral.SafeList,
-/// `from_numeral` dispatch plans attached by checking to source expression nodes.
-numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
-/// `from_quote` dispatch plans attached by checking to source string literal
-/// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
-/// node plus the constraint's target and function type vars.
-quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
-/// Constrained-scheme instantiations recorded by checking for static-dispatch
-/// evidence; consumed at checked-module publication.
-scheme_instantiations: SchemeInstantiationRecord.SafeList,
-/// Flat pool of (scheme var → fresh var) pairs backing `scheme_instantiations`.
-scheme_instantiation_pairs: SchemeInstantiationPair.SafeList,
+/// Constrained-scheme uses recorded by checking for static-dispatch evidence;
+/// consumed at checked-module publication.
+scheme_uses: SchemeUseRecord.SafeList,
+/// Flat pool of (scheme var → fresh var) pairs backing `scheme_uses`.
+scheme_use_pairs: SchemeUsePair.SafeList,
 /// Generated codec derivations validated by checking and consumed by checked
 /// artifact publication.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
@@ -1040,11 +1045,9 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
-        .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
-        .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
-        .scheme_instantiations = try SchemeInstantiationRecord.SafeList.initCapacity(gpa, 8),
-        .scheme_instantiation_pairs = try SchemeInstantiationPair.SafeList.initCapacity(gpa, 8),
+        .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
+        .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
     };
@@ -1069,11 +1072,9 @@ pub fn deinit(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
-    self.numeral_dispatch_plans.deinit(self.gpa);
-    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
-    self.scheme_instantiations.deinit(self.gpa);
-    self.scheme_instantiation_pairs.deinit(self.gpa);
+    self.scheme_uses.deinit(self.gpa);
+    self.scheme_use_pairs.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
@@ -1114,11 +1115,9 @@ pub fn deinitCachedModule(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
-    self.numeral_dispatch_plans.deinit(self.gpa);
-    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
-    self.scheme_instantiations.deinit(self.gpa);
-    self.scheme_instantiation_pairs.deinit(self.gpa);
+    self.scheme_uses.deinit(self.gpa);
+    self.scheme_use_pairs.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
 
@@ -1243,24 +1242,36 @@ pub fn publishScratchDiagnostics(self: *Self) std.mem.Allocator.Error!void {
     const new_top = scratch.diagnostics.top();
     if (new_top == 0) return;
 
-    const existing = self.store.sliceDiagnostics(self.diagnostics);
-    const index_start = self.store.index_data.len();
+    const existing_span = self.diagnostics.span;
+    const index_len = self.store.index_data.len();
+    const existing_at_tail = @as(u64, existing_span.start) + @as(u64, existing_span.len) == index_len;
+    const copy_count: u32 = if (existing_at_tail) 0 else existing_span.len;
+    const additional_capacity: usize = @intCast(@as(u64, copy_count) + @as(u64, new_top));
+    const index_start = if (existing_at_tail) existing_span.start else @as(u32, @intCast(index_len));
 
-    for (existing) |diagnostic_idx| {
-        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+    // Reserve before borrowing existing diagnostics. The diagnostic span is a
+    // view into index_data, so growing index_data while iterating that view
+    // would invalidate it if the backing allocation moved.
+    try self.store.index_data.items.ensureUnusedCapacity(self.gpa, additional_capacity);
+
+    if (!existing_at_tail) {
+        const existing = self.store.sliceDiagnostics(self.diagnostics);
+        for (existing) |diagnostic_idx| {
+            _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
+        }
     }
 
     var i: u32 = 0;
     while (i < new_top) : (i += 1) {
         const diagnostic_idx = scratch.diagnostics.items.items[@intCast(i)];
-        _ = try self.store.index_data.append(self.gpa, @intFromEnum(diagnostic_idx));
+        _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
     }
 
     scratch.diagnostics.clearFrom(0);
     self.diagnostics = .{
         .span = .{
-            .start = @intCast(index_start),
-            .len = @intCast(existing.len + new_top),
+            .start = index_start,
+            .len = @intCast(@as(u64, existing_span.len) + @as(u64, new_top)),
         },
     };
 }
@@ -3202,6 +3213,20 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .type_parameter_conflict => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const original_region_info = self.calcRegionInfo(data.original_region);
+            break :blk try CIR.Diagnostic.buildTypeParameterConflictReport(
+                allocator,
+                self.getIdent(data.name),
+                self.getIdent(data.parameter_name),
+                region_info,
+                original_region_info,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
         .type_shadowed_warning => |data| blk: {
             const new_region_info = self.calcRegionInfo(data.region);
             const original_region_info = self.calcRegionInfo(data.original_region);
@@ -3210,7 +3235,17 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getIdent(data.name),
                 new_region_info,
                 original_region_info,
-                data.cross_scope,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+        },
+        .builtin_type_shadowed_warning => |data| blk: {
+            const new_region_info = self.calcRegionInfo(data.region);
+            break :blk try CIR.Diagnostic.buildBuiltinTypeShadowedWarningReport(
+                allocator,
+                self.getIdent(data.name),
+                new_region_info,
                 filename,
                 self.getSourceAll(),
                 self.getLineStartsAll(),
@@ -3285,11 +3320,9 @@ pub const Serialized = extern struct {
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
-    numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
-    quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
-    scheme_instantiations: SchemeInstantiationRecord.SafeList.Serialized,
-    scheme_instantiation_pairs: SchemeInstantiationPair.SafeList.Serialized,
+    scheme_uses: SchemeUseRecord.SafeList.Serialized,
+    scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
@@ -3388,11 +3421,9 @@ pub const Serialized = extern struct {
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
-        try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
-        try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
-        try self.scheme_instantiations.serialize(&env.scheme_instantiations, allocator, writer);
-        try self.scheme_instantiation_pairs.serialize(&env.scheme_instantiation_pairs, allocator, writer);
+        try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
+        try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
 
@@ -3451,11 +3482,9 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
-            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
-            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
-            .scheme_instantiations = self.scheme_instantiations.deserializeInto(base_addr),
-            .scheme_instantiation_pairs = self.scheme_instantiation_pairs.deserializeInto(base_addr),
+            .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
+            .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
         };
@@ -3514,11 +3543,9 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
-            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
-            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
-            .scheme_instantiations = self.scheme_instantiations.deserializeInto(base_addr),
-            .scheme_instantiation_pairs = self.scheme_instantiation_pairs.deserializeInto(base_addr),
+            .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
+            .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
         };
@@ -3579,11 +3606,9 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
-            .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
-            .scheme_instantiations = try self.scheme_instantiations.deserializeWithCopy(base_addr, gpa),
-            .scheme_instantiation_pairs = try self.scheme_instantiation_pairs.deserializeWithCopy(base_addr, gpa),
+            .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
+            .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
         };
@@ -3644,6 +3669,11 @@ pub fn forLoopDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?ForLoo
 }
 
 /// Record exact base-256 digits for a numeric source node.
+///
+/// The table is kept sorted by `node_idx` so lookups are O(log n).
+/// Canonicalization records each literal right after allocating its node, so
+/// appends arrive in increasing node order and the sort costs nothing; an
+/// out-of-order record shifts the tail to keep the order invariant.
 pub fn recordNumeralLiteral(
     self: *Self,
     node_idx: Node.Idx,
@@ -3671,21 +3701,53 @@ pub fn recordNumeralLiteral(
             (if (had_decimal_point) NumeralLiteral.decimal_point_flag else 0) |
             (if (is_materialized) NumeralLiteral.materialized_flag else 0),
     };
-    for (self.numeral_literals.items.items) |*existing| {
-        if (existing.node_idx == raw_node) {
-            existing.* = literal;
-            return;
-        }
-    }
-    _ = try self.numeral_literals.append(self.gpa, literal);
+    try upsertSortedByNode(NumeralLiteral, &self.numeral_literals, self.gpa, literal);
 }
 
 /// Return exact base-256 digits for a numeric source node.
 pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.numeral_literals.items.items) |literal| {
-        if (literal.node_idx == raw_node) return literal;
+    return findSortedByNode(NumeralLiteral, self.numeral_literals.items.items, @intFromEnum(node_idx));
+}
+
+/// First index whose `node_idx` is >= `raw_node` in a node-sorted table.
+fn sortedNodeSlot(comptime T: type, entries: []const T, raw_node: u32) usize {
+    var low: usize = 0;
+    var high: usize = entries.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (entries[mid].node_idx < raw_node) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
     }
+    return low;
+}
+
+/// Insert or replace `entry` in a node-sorted SafeList. Appends are O(1) when
+/// entries arrive in increasing node order (the common case — recording
+/// follows node allocation); out-of-order inserts shift the tail.
+fn upsertSortedByNode(comptime T: type, list: *collections.SafeList(T), gpa: std.mem.Allocator, entry: T) std.mem.Allocator.Error!void {
+    const entries = list.items.items;
+    if (entries.len == 0 or entries[entries.len - 1].node_idx < entry.node_idx) {
+        _ = try list.append(gpa, entry);
+        return;
+    }
+    const slot = sortedNodeSlot(T, entries, entry.node_idx);
+    if (slot < entries.len and entries[slot].node_idx == entry.node_idx) {
+        entries[slot] = entry;
+        return;
+    }
+    _ = try list.append(gpa, entry);
+    const grown = list.items.items;
+    std.mem.copyBackwards(T, grown[slot + 1 ..], grown[slot .. grown.len - 1]);
+    grown[slot] = entry;
+}
+
+/// Binary-search a node-sorted table for `raw_node`.
+fn findSortedByNode(comptime T: type, entries: []const T, raw_node: u32) ?T {
+    const slot = sortedNodeSlot(T, entries, raw_node);
+    if (slot < entries.len and entries[slot].node_idx == raw_node) return entries[slot];
     return null;
 }
 
@@ -3700,6 +3762,23 @@ pub fn numeralDigitsAfter(self: *const Self, literal: NumeralLiteral) []const u8
     return self.numeral_digit_bytes.items.items[start..][0..literal.after_len];
 }
 
+/// The exact-digit view of a recorded numeral — the input every literal fit
+/// and bit computation consumes (src/types/numeral.zig). Borrowed from this
+/// env's digit pool.
+pub fn exactNumeral(self: *const Self, literal: NumeralLiteral) types_mod.numeral.Exact {
+    return .{
+        .before = self.numeralDigitsBefore(literal),
+        .after = self.numeralDigitsAfter(literal),
+        // Saturating: a materialized literal's scale is bounded by the digit
+        // recording limit (~158k), far below u32. Only unmaterialized
+        // literals (whose digit buffers are empty and whose fit set is
+        // forced empty) can carry a u64-sized count.
+        .scale = std.math.lossyCast(u32, literal.after_decimal_digit_count),
+        .is_negative = literal.isNegative(),
+        .is_fractional = literal.after_decimal_digit_count != 0 or literal.hadDecimalPoint(),
+    };
+}
+
 /// Record the checked `from_numeral` function for a numeric expression.
 pub fn recordNumeralDispatchPlan(
     self: *Self,
@@ -3707,30 +3786,13 @@ pub fn recordNumeralDispatchPlan(
     target_var: TypeVar,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.numeral_dispatch_plans.items.items) |*plan| {
-        if (plan.node_idx != raw_node) continue;
-        plan.* = .{
-            .node_idx = raw_node,
-            .target_var = @intFromEnum(target_var),
-            .fn_var = @intFromEnum(fn_var),
-        };
-        return;
-    }
-    _ = try self.numeral_dispatch_plans.append(self.gpa, .{
-        .node_idx = raw_node,
-        .target_var = @intFromEnum(target_var),
-        .fn_var = @intFromEnum(fn_var),
-    });
+    try self.store.recordLiteralDispatchPlan(node_idx, .numeral, target_var, fn_var);
 }
 
 /// Return the checked `from_numeral` function for a numeric expression.
-pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.numeral_dispatch_plans.items.items) |plan| {
-        if (plan.node_idx == raw_node) return plan;
-    }
-    return null;
+pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
+    const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
+    return if (plan.dispatchKind() == .numeral) plan else null;
 }
 
 /// Record the checked `from_quote` function for a string literal node.
@@ -3740,39 +3802,25 @@ pub fn recordQuoteDispatchPlan(
     target_var: TypeVar,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.quote_dispatch_plans.items.items) |*plan| {
-        if (plan.node_idx != raw_node) continue;
-        plan.* = .{
-            .node_idx = raw_node,
-            .target_var = @intFromEnum(target_var),
-            .fn_var = @intFromEnum(fn_var),
-        };
-        return;
-    }
-    _ = try self.quote_dispatch_plans.append(self.gpa, .{
-        .node_idx = raw_node,
-        .target_var = @intFromEnum(target_var),
-        .fn_var = @intFromEnum(fn_var),
-    });
+    try self.store.recordLiteralDispatchPlan(node_idx, .quote, target_var, fn_var);
 }
 
-/// Record a constrained-scheme instantiation for static-dispatch evidence.
+/// Record a constrained-scheme use for static-dispatch evidence.
 /// `slot_data` is the raw fn `Var` of the discharged constraint for
-/// `dispatch_target` slots and 0 for `value_use` slots.
-pub fn recordSchemeInstantiation(
+/// `dispatch_target` slots and 0 for value and nested-function use slots.
+pub fn recordSchemeUse(
     self: *Self,
     node_idx: u32,
-    slot: SchemeInstantiationRecord.Slot,
+    slot: SchemeUseRecord.Slot,
     slot_data: u32,
     scheme_root: TypeVar,
-    pairs: []const SchemeInstantiationPair,
+    pairs: []const SchemeUsePair,
 ) std.mem.Allocator.Error!void {
-    const pairs_start: u32 = @intCast(self.scheme_instantiation_pairs.items.items.len);
+    const pairs_start: u32 = @intCast(self.scheme_use_pairs.items.items.len);
     for (pairs) |pair| {
-        _ = try self.scheme_instantiation_pairs.append(self.gpa, pair);
+        _ = try self.scheme_use_pairs.append(self.gpa, pair);
     }
-    _ = try self.scheme_instantiations.append(self.gpa, .{
+    _ = try self.scheme_uses.append(self.gpa, .{
         .node_idx = node_idx,
         .slot_kind = @intFromEnum(slot),
         .slot_data = slot_data,
@@ -3844,12 +3892,9 @@ pub fn recordGeneratedCodecDerivation(
 }
 
 /// Return the checked `from_quote` function for a string literal node.
-pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.quote_dispatch_plans.items.items) |plan| {
-        if (plan.node_idx == raw_node) return plan;
-    }
-    return null;
+pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
+    const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
+    return if (plan.dispatchKind() == .quote) plan else null;
 }
 
 /// Record the scope-resolved type target for an explicit numeric suffix.
@@ -3886,21 +3931,12 @@ pub fn recordNumericSuffixTarget(
         },
     };
 
-    for (self.numeric_suffix_targets.items.items) |*existing| {
-        if (existing.node_idx != raw_node) continue;
-        existing.* = suffix_target;
-        return;
-    }
-    _ = try self.numeric_suffix_targets.append(self.gpa, suffix_target);
+    try upsertSortedByNode(NumericSuffixTarget, &self.numeric_suffix_targets, self.gpa, suffix_target);
 }
 
 /// Return the scope-resolved type target for an explicit numeric suffix.
 pub fn numericSuffixTargetForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixTarget {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.numeric_suffix_targets.items.items) |suffix_target| {
-        if (suffix_target.node_idx == raw_node) return suffix_target;
-    }
-    return null;
+    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items.items, @intFromEnum(node_idx));
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.

@@ -1,9 +1,4 @@
 :root {
-  /* Sidebar dropdown triangle, used as a mask on `.entry-toggle::before` so it
-     follows the toggle's color. Two back-to-back right triangles split along the
-     triangle's axis; the lower half is masked to ~55% alpha so it reads a touch
-     lighter than the upper half. */
-  --toggle-triangle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath d='M1.5 1L1.5 4L7 4Z'/%3E%3Cpath d='M1.5 4L1.5 7L7 4Z' fill-opacity='.55'/%3E%3C/svg%3E");
   /* WCAG AAA Compliant colors - important that luminance (the l in hsl) is 18% for font colors against the bg's luminance of 96-97% when the font-size is at least 14pt */
   --code-bg: hsl(262 33% 96% / 1);
   --code-color: #000;
@@ -114,10 +109,23 @@ table tr td {
 }
 
 
-.entry-signature-code {
+.entry-signature-pre {
   background: none;
   font-size: inherit;
+  font-family: inherit;
   flex: 1;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+  white-space: inherit;
+}
+
+.entry-signature-code,
+.entry-type-def-code {
+  background: none;
+  color: inherit;
+  display: block;
+  font: inherit;
 }
 
 .sig-arrow {
@@ -131,7 +139,7 @@ table tr td {
   background-color: var(--violet-bg);
   color: var(--text-color);
   padding: 12px 16px;
-  margin-bottom: 16px;
+  margin: 0 0 16px;
   white-space: pre-wrap;
   font-size: var(--font-base);
   line-height: 1.5;
@@ -279,6 +287,15 @@ a:hover code {
   text-decoration: none;
 }
 
+/* Injected by the website build (see build_website.roc's builtins_tip_html)
+   ahead of #sidebar-nav on the roc-lang.org docs site only — not emitted by
+   this repo's docs generator, so it has no default padding without this
+   rule. */
+.builtins-tip {
+  padding-left: 8px;
+  padding-bottom: 8px;
+}
+
 body {
   display: grid;
   grid-template-columns:
@@ -298,6 +315,14 @@ body {
   overflow: hidden;
 }
 
+/* The docs landing page (root of a docs site, nothing after it in the URL)
+   shows the guide links (Tutorial, FAQ, Language Reference) below the search
+   bar, in addition to the sidebar; search.js toggles this class to match
+   during soft navigation. */
+body.docs-index .index-guide-links {
+  display: flex;
+}
+
 main {
   grid-column-start: main-content;
   grid-column-end: content-end;
@@ -312,12 +337,17 @@ main {
   min-width: 0;
   overflow-x: auto;
   /* fixes issues with horizontal scroll in cases where word is too long,
-  like in one of the examples at https://www.roc-lang.org/builtins/Num#Dec */
+  like in one of the examples at https://www.roc-lang.org/docs/main/Num#Dec */
   overflow-y: auto;
   display: grid;
   --main-content-width: clamp(100px, calc(100% - 32px), 70ch);
   grid-template-columns: [main-start] minmax(16px,1fr) [main-content-start] var(--main-content-width) [main-content-end] minmax(16px,1fr) [main-end];
-  grid-template-rows: auto 1fr auto;
+  /* A 4th row for .index-guide-links, which is hidden (display: none) on every
+     page except the docs index. Every row is assigned explicitly below rather
+     than relying on source-order auto-placement, so hiding that row doesn't
+     shift the others — auto-placement would skip a display:none item and pull
+     everything up a row, breaking main-content's 1fr sizing. */
+  grid-template-rows: auto auto 1fr auto;
   scrollbar-color: var(--violet) var(--body-bg-color);
   scrollbar-gutter: stable both-edges;
 }
@@ -327,16 +357,82 @@ main > * {
     grid-column-end: main-content-end;
 }
 
+#module-search-form {
+    grid-row: 1;
+}
+
 .main-content {
+    grid-row: 3;
     min-width: 0;
 }
 
-/* Module links on the package index page (/index.html) */
-.index-module-links {
-    margin: 0;
+footer,
+#docs-loader {
+    grid-row: 4;
+}
+
+/* Decorative Roc logo filling the empty space below the docs landing page's
+   guide-link buttons. Outline only (no fill) and low-opacity so it reads as
+   background texture rather than content; not part of the persistent chrome
+   (unlike .index-guide-links) since it's only ever emitted on the index
+   page's .main-content, which soft navigation fully replaces per page. */
+.index-decoration {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    user-select: none;
+    z-index: -1;
+}
+
+.index-decoration-logo {
+    width: min(60%, 420px);
+    height: auto;
+    fill: none;
+    stroke: var(--violet);
+    stroke-width: 0.6;
+    stroke-linejoin: round;
+    opacity: 0.05;
+}
+
+/* Prose-guide links (Language Reference, Tutorial, FAQ), same links as the
+   sidebar. Emitted on every docs page — not just the index — because this is
+   part of the persistent chrome carried across soft navigations (see
+   search.js's createMainShell), so it already exists, correctly positioned,
+   whenever body.docs-index makes it visible. Hidden by default (overridden
+   above); a left-aligned single column of button-like links below the search
+   bar reads as the landing page's primary call to action (centered instead on
+   mobile — see the max-width: 768px query below — where it sits under a
+   full-width search bar). */
+.index-guide-links {
+    display: none;
+    grid-row: 2;
+    flex-direction: column;
+    align-items: flex-start;
+    margin: 16px 0 0;
     padding: 0;
     list-style-type: none;
-    font-size: large;
+    gap: 10px;
+}
+
+.index-guide-links a {
+    display: block;
+    box-sizing: border-box;
+    max-width: 320px;
+    padding: 12px 16px;
+    border: 2px solid var(--search-border-color);
+    font-size: var(--font-base);
+    color: var(--link-color);
+    text-decoration: none;
+    text-align: left;
+}
+
+.index-guide-links a:hover {
+    border-color: var(--violet-border-hover);
+    background-color: var(--violet-bg);
+    color: var(--link-color);
 }
 
 section:not(.langref-article) {
@@ -421,7 +517,6 @@ padding: 0px 16px;
     box-sizing: border-box;
     width: 100%;
     background-color: var(--sidebar-bg-color);
-    transition: all 1s linear;
 }
 
 #sidebar-nav .module-links-container {
@@ -458,6 +553,15 @@ footer p {
   margin-bottom: 0;
 }
 
+.sidebar-entry {
+  position: relative;
+}
+
+.sidebar-entry > .sidebar-module-link {
+  margin-left: 48px;
+  width: calc(100% - 48px);
+}
+
 .sidebar-entry ul {
   list-style-type: none;
   margin: 0;
@@ -478,13 +582,16 @@ footer p {
 
 .sidebar-sub-entries {
     font-size: var(--font-base);
-    display: none;
     list-style: none;
     padding: 0;
     margin: 0;
 }
 
-.active + .sidebar-sub-entries {
+.sidebar-entry details:not([open]) > .sidebar-sub-entries {
+    display: none;
+}
+
+.sidebar-entry details[open] > .sidebar-sub-entries {
     display: block;
 }
 
@@ -492,7 +599,7 @@ footer p {
    (e.g. the builtin type modules under "Builtin Types"), indent its members so
    they sit underneath their type rather than level with it. Top-level modules
    and types are not descendants of a sub-entry list, so they are unaffected. */
-.sidebar-sub-entries .sidebar-entry > .sidebar-sub-entries {
+.sidebar-sub-entries .sidebar-entry > details > .sidebar-sub-entries {
     margin-left: 22px;
 }
 
@@ -525,6 +632,22 @@ footer p {
 .sidebar-sub-entries > li:last-child > a {
     margin-bottom: 8px;
     padding-bottom: 0;
+}
+
+.sidebar-sub-entries > li:first-child.sidebar-entry {
+    margin-top: 8px;
+}
+
+.sidebar-sub-entries > li:first-child.sidebar-entry > a {
+    margin-top: 0;
+}
+
+.sidebar-sub-entries > li:last-child.sidebar-entry {
+    margin-bottom: 8px;
+}
+
+.sidebar-sub-entries > li:last-child.sidebar-entry > a {
+    margin-bottom: 0;
 }
 
 .sidebar-sub-entries a:hover {
@@ -588,6 +711,7 @@ footer p {
   font-family: var(--font-mono);
   font-weight: var(--weight-bold);
   margin-top: 36px;
+  margin-bottom: 16px;
   color: var(--violet);
 }
 
@@ -636,6 +760,26 @@ color: inherit;
   color: var(--link-hover-color);
 }
 
+.sidebar-module-summary {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  left: 0;
+  list-style: none;
+  min-height: 40px;
+  position: absolute;
+  top: 0;
+  width: 48px;
+}
+
+.sidebar-module-summary::marker {
+  content: "";
+}
+
+.sidebar-module-summary::-webkit-details-marker {
+  display: none;
+}
+
 a.sidebar-module-link {
   box-sizing: border-box;
   font-size: var(--font-base);
@@ -643,77 +787,76 @@ a.sidebar-module-link {
   font-family: var(--font-mono);
   font-weight: var(--weight-normal);
   display: flex;
-  flex-direction: row;
-  justify-content: space-between;
   align-items: center;
-  width: 100%;
+  min-width: 0;
   padding: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.sidebar-module-link:hover {
-    text-decoration: none;
-
-    span:hover {
-        color: var(--violet);
-    }
+.sidebar-module-link:hover,
+.sidebar-module-link:focus-visible {
+  color: var(--violet);
+  text-decoration: none;
 }
 
 .sidebar-module-link span {
-    display: inline-block;
-    flex-grow: 1;
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-module-link.active {
   font-weight: var(--weight-bold);
 }
 
-.sidebar-module-link > .entry-toggle {
-    background-color: transparent;
-    appearance: none;
-    border: none;
-    color: transparent;
-    color: rgba(from var(--text-color) r g b / .5);
-    transition: all 80ms linear;
-    text-decoration: none;
-    font-size: 0.8rem;
-    cursor: pointer;
-    padding: 8px 16px;
-
-    &:hover {
-        color: var(--violet);
-    }
+.sidebar-module-summary > .entry-toggle {
+  align-items: center;
+  color: rgba(from var(--text-color) r g b / .5);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 8px 16px;
+  transition: color 80ms linear;
 }
 
-/* The triangle itself: a single SVG (`--toggle-triangle`) masked by the toggle's
-   current color, so it tracks the gray/hover-violet transitions. */
+.sidebar-module-summary > .entry-toggle:hover,
+.sidebar-module-summary:focus-visible > .entry-toggle {
+  color: var(--violet);
+  transition: color 80ms linear, rotate 80ms linear;
+}
+
+/* Draw an outlined chevron in the control's current color. */
 .entry-toggle::before {
-    content: "";
-    display: inline-block;
-    width: 0.85rem;
-    height: 0.85rem;
-    vertical-align: middle;
-    background-color: currentColor;
-    -webkit-mask: var(--toggle-triangle) center / contain no-repeat;
-    mask: var(--toggle-triangle) center / contain no-repeat;
-}
-
-.sidebar-entry:hover > a > .entry-toggle,
-.sidebar-module-link:hover > .entry-toggle {
-    color: var(--text-color);
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  content: "";
+  display: block;
+  height: 0.45rem;
+  transform: rotate(-45deg);
+  width: 0.45rem;
 }
 
 /* Nested module toggles (e.g. the builtin types under "Builtin Types") sit in a
    smaller-font line and read a touch low; nudge them up to center on the label.
    `top` offsets the box before the `rotate` spins it, so both states stay aligned. */
-.sidebar-sub-entries .entry-toggle {
+.sidebar-sub-entries .sidebar-entry {
+    margin-left: 20px;
+}
+
+.sidebar-sub-entries .sidebar-module-summary > .entry-toggle {
     position: relative;
     top: -2px;
 }
 
-.active .entry-toggle {
+.sidebar-sub-entries .sidebar-entry > .sidebar-module-link {
+    border-left: 0;
+    padding-left: 0;
+}
+
+.sidebar-entry details[open] > .sidebar-module-summary > .entry-toggle {
     rotate: 90deg;
 }
 
@@ -916,6 +1059,21 @@ pre>code {
   }
 }
 
+#search-type-ahead .type-ahead-link.type-ahead-langref {
+  font-family: var(--font-sans);
+}
+
+#search-type-ahead .type-ahead-link.type-ahead-langref,
+#search-type-ahead .type-ahead-link.type-ahead-langref .type-ahead-langref-context {
+  color: var(--text-color);
+}
+
+#search-type-ahead .type-ahead-link.type-ahead-langref .type-ahead-langref-title {
+  color: var(--text-color);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+}
+
 #search-type-ahead li {
   box-sizing: border-box;
   position: relative;
@@ -960,7 +1118,7 @@ pre>code {
   /* In dark mode "lighter" means more of the near-white text color, i.e. a
      higher alpha (the opposite of light mode, where lighter means fading toward
      the light background). */
-  .sidebar-module-link > .entry-toggle {
+  .sidebar-module-summary > .entry-toggle {
       color: rgba(from var(--text-color) r g b / .8);
   }
 }
@@ -985,10 +1143,20 @@ pre>code {
         bottom: 0;
         position: fixed;
         z-index: 2;
-        transition: all .2s linear;
+        transition: left .2s linear;
     }
 
+    /* box-sizing: border-box keeps the existing padding (8px 16px, set on
+       .sidebar-module-summary > .entry-toggle above) inside this size
+       instead of adding to it. Without it the rendered box balloons to
+       64x80px (48 + padding on each axis) — wider than
+       .sidebar-module-summary's fixed 48px (causing horizontal overflow,
+       which is what made some toggles vanish or appear detached from their
+       row when the sidebar clips or wraps that overflow) and taller than
+       the ~40px entry row (throwing the chevron out of line with its
+       label). */
     .entry-toggle {
+        box-sizing: border-box;
         height: var(--icon-size);
         width: var(--icon-size);
     }
@@ -1003,6 +1171,124 @@ pre>code {
         margin: 0;
         min-height: 100dvh;
         --main-content-width: minmax(calc(100% - 32px), 60ch);
+    }
+
+    /* Buttons are left-aligned on desktop but on mobile match the full width
+       of the search bar above them and sit truly centered in the whole
+       remaining space, like the pre-decoration version did. A flex spacer
+       (body.docs-index main::before — it's the first in-flow child of
+       <main>, ahead of .index-guide-links, since ::before always renders
+       before real children) and .main-content grow equally (both flex: 1),
+       with .index-guide-links sized to its own content in between — so its
+       center sits at the true midpoint of the space between the search bar
+       and the footer, regardless of how tall the button group itself is.
+       align-items: stretch (rather than a width set directly on the <a>) is
+       what makes the <li> a definite, non-shrink-to-fit size, so the child
+       <a>'s width: 100% resolves cleanly instead of the circular
+       shrink-to-fit-vs-percentage sizing bug width: 100% caused earlier when
+       the <li> was content-sized. */
+    /* Explicit order puts the logo (.main-content) above the buttons
+       (.index-guide-links), with the empty flex spacer (main::before) now
+       below the buttons instead of above — the reverse of DOM order, which
+       is form, .index-guide-links, .main-content, footer (::before always
+       renders first, ahead of even that). Buttons still end up truly
+       centered in the whole remaining space: .main-content and
+       main::before are both flex: 1, so whichever one is "above" vs.
+       "below" the buttons, they grow equally and the buttons' center lands
+       at the true midpoint. */
+    body.docs-index main::before {
+        content: "";
+        flex: 1;
+        order: 2;
+    }
+
+    body.docs-index .index-guide-links {
+        order: 1;
+    }
+
+    body.docs-index main > .main-content {
+        order: 0;
+    }
+
+    body.docs-index footer {
+        order: 3;
+    }
+
+    .index-guide-links {
+        align-items: stretch;
+        justify-content: center;
+        width: 100%;
+        margin: 0;
+    }
+
+    .index-guide-links a {
+        width: 100%;
+        max-width: none;
+        text-align: center;
+    }
+
+    /* Undo the desktop treatment (position: absolute spanning the whole
+       non-sidebar area, ignoring .index-guide-links) — on mobile the logo
+       is instead absolutely positioned within .main-content specifically
+       (now the space above the buttons, sized by the flex spacer below —
+       see the order rules above), so it automatically scales to whatever
+       that leftover space turns out to be instead of using a fixed max
+       size.
+       This has to be position: absolute (not a normal-flow flex: 1 +
+       align-self: stretch box, which was tried first) because the <svg>'s
+       width/height: 100% only resolves once .main-content already has a
+       definite size — while it's normal flow, the <svg>'s height: 100% can't
+       resolve yet, so it falls back to its intrinsic aspect-ratio size
+       instead, which then floors .main-content's own size and breaks the
+       1:1 split with the spacer (main::before), even with min-height: 0 set
+       on every ancestor in the chain — that min-height only suppresses each
+       element's own automatic-minimum-size floor, not a child's actual
+       preferred/auto size feeding upward. Taking the logo out of flow with
+       position: absolute sidesteps this entirely: it can never contribute to
+       .main-content's size in the first place, so .main-content's size is
+       decided purely by flex-grow, and *afterwards* the logo is laid out
+       against that now-definite box. */
+    body.docs-index main > .main-content {
+        position: relative;
+    }
+
+    .index-decoration {
+        position: absolute;
+        inset: 0;
+        padding: 16px 0;
+        box-sizing: border-box;
+    }
+
+    .index-decoration-logo {
+        width: 100%;
+        height: 100%;
+    }
+
+    /* #module-search-form's margin-bottom: 16px (below) sits between the
+       search bar and wherever main's padding-top clearance ends, outside
+       the flex-centered region entirely (main::before/.main-content only
+       start once that clearance is over) — so it read as extra, lopsided
+       whitespace above the logo with nothing matching it below. Zeroing it
+       out here (index page only) removes that dead gap so the logo's own
+       centering within .main-content is what the eye actually sees, top
+       and bottom. Its padding-bottom is zeroed the same way (the search bar
+       itself shrinks by that same 16px), which is why main's own
+       padding-top (below) needs adjusting to match. */
+    body.docs-index #module-search-form {
+        margin-bottom: 0;
+        padding-bottom: 0;
+    }
+
+    /* main's padding-top reserves clearance matching #module-search-form's
+       full rendered height (var(--module-search-form-height), which bakes in
+       16px top + 16px bottom padding) so in-flow content starts right below
+       the fixed search bar everywhere. On the index page the form is now
+       16px shorter (padding-bottom: 0, just above), so this needs to shrink
+       to match — otherwise the same dead-zone bug from before reappears,
+       just shifted: main's content would still start at the old (taller)
+       offset, 16px below where the now-shorter form actually ends. */
+    body.docs-index main {
+        padding-top: calc(var(--module-search-height) + 16px);
     }
 
     main > .main-content {
@@ -1115,6 +1401,13 @@ pre>code {
         padding: 18px;
         font-size: var(--font-base);
         padding-top: var(--module-search-form-height);
+        /* The fixed search bar's own inset from the viewport top is its
+           padding (#module-search-form's padding: 16px), not this padding-top
+           (which only reserves clearance so in-flow content starts below the
+           fixed bar) — so to make the space below the footer match the space
+           above the search bar, this needs to match that 16px, not the 18px
+           used for the other three sides. */
+        padding-bottom: 16px;
     }
 
     #sidebar-nav {

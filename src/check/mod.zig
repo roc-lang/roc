@@ -26,6 +26,7 @@ pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
 pub const CheckedTraverse = @import("checked_traverse.zig");
 pub const HoistRoots = @import("hoist_roots.zig");
+pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
 pub const CheckedArtifact = @import("checked_artifact.zig");
 /// Generic comptime layout fingerprint for a `Serialized` type (recurses into nested
@@ -53,6 +54,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("static_dispatch_registry.zig"));
     std.testing.refAllDecls(@import("checked_traverse.zig"));
     std.testing.refAllDecls(@import("hoist_roots.zig"));
+    std.testing.refAllDecls(@import("requirement_solution.zig"));
     std.testing.refAllDecls(@import("canonical_names.zig"));
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
     std.testing.refAllDecls(@import("const_store.zig"));
@@ -75,7 +77,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/unify_test.zig"));
     std.testing.refAllDecls(@import("test/instantiate_tag_union_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
-    std.testing.refAllDecls(@import("test/scheme_instantiation_evidence_test.zig"));
+    std.testing.refAllDecls(@import("test/scheme_use_evidence_test.zig"));
     std.testing.refAllDecls(@import("test/dispatch_evidence_test.zig"));
     std.testing.refAllDecls(@import("dispatch_evidence.zig"));
     std.testing.refAllDecls(@import("test/range_test.zig"));

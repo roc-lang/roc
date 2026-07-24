@@ -27,13 +27,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # 2.2.1
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
           version: 0.16.0
           use-cache: true
 
       - name: Cache Zig dependency packages
-        uses: actions/cache@v4 # ratchet:actions/cache@v4
+        uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
           # See ci_zig.yml: cache Zig's fetched-package subdir under a stable
           # build.zig.zon key so a cold runner doesn't re-download deps and hit
@@ -45,7 +45,7 @@ jobs:
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # ratchet:ilammy/msvc-dev-cmd@v1.13.0
+        uses: TheMrMilchmann/setup-msvc-dev@79dac248aac9d0059f86eae9d8b5bfab4e95e97c  # ratchet:TheMrMilchmann/setup-msvc-dev@v4.0.0
         with:
           arch: x64
 
@@ -53,7 +53,6 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|Timeout|bad HTTP response code"
           retry_count: 3
 
       - name: Run fx platform cross-compilation tests (Unix)
@@ -81,7 +80,7 @@ jobs:
           zig-out\bin\roc.exe build --target=${{ matrix.target }} --output=int_app_${{ matrix.target }}_${{ matrix.host }} test/int/app.roc
 
       - name: Upload cross-compiled int app executables
-        uses: actions/upload-artifact@v4 # ratchet:actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
         with:
           name: cross-compiled-${{ matrix.host }}-${{ matrix.target }}
           path: |
@@ -106,7 +105,7 @@ jobs:
             arch: arm64
     steps:
       - name: Download all cross-compiled artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: cross-compiled-*-${{ matrix.target }}
           merge-multiple: true
