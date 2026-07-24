@@ -3738,6 +3738,7 @@ pub fn build(b: *std.Build) void {
     {
         eval_test_exe.root_module.link_libcpp = true;
     }
+    add_tracy(b, roc_modules.build_options, eval_test_exe, target, true, flag_enable_tracy);
     // Build eval runner args: forward all --test-filter values as --filter args.
     const eval_run_args = if (test_filters.len > 0) blk: {
         var eval_args_list = std.ArrayList([]const u8).empty;
