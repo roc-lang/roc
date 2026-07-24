@@ -18322,7 +18322,7 @@ fn nominalHasPendingOpenLiteralForDerivedEncode(
             try self.varHasPendingOpenLiteralForDerivedEncode(args.value, env, visited);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
-        if (try self.jsonTryInfoFromNominal(nominal)) |info| {
+        if (try self.nullTryInfoFromNominal(nominal)) |info| {
             return try self.varHasPendingOpenLiteralForDerivedEncode(info.ok_var, env, visited);
         }
         if (try self.missingTryInfoFromNominal(nominal)) |info| {
@@ -20570,16 +20570,16 @@ fn varSupportsToHash(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return try self.varSupportsStructuralDeriveInternal(var_, .hash, &self.var_set);
 }
 
-fn varSupportsJsonObjectKey(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+fn varSupportsDictKey(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| try self.typeSupportsJsonObjectKey(structure),
-        .alias => |alias| try self.varSupportsJsonObjectKey(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| try self.typeSupportsDictKey(structure),
+        .alias => |alias| try self.varSupportsDictKey(self.types.getAliasBackingVar(alias)),
         .err => true,
         .flex, .rigid => false,
     };
 }
 
-fn typeSupportsJsonObjectKey(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
+fn typeSupportsDictKey(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         .nominal_type => |nominal| self.nominalIsBuiltinBoolType(nominal) or
             self.nominalIsBuiltinStrType(nominal) or
@@ -20590,10 +20590,10 @@ fn typeSupportsJsonObjectKey(self: *Self, flat_type: types_mod.FlatType) std.mem
     };
 }
 
-fn varSupportsJsonObjectKeyForDerivedEncode(self: *Self, var_: Var) std.mem.Allocator.Error!DerivedSupport {
+fn varSupportsDictKeyForDerivedEncode(self: *Self, var_: Var) std.mem.Allocator.Error!DerivedSupport {
     return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| derivedSupportFromBool(try self.typeSupportsJsonObjectKey(structure)),
-        .alias => |alias| try self.varSupportsJsonObjectKeyForDerivedEncode(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| derivedSupportFromBool(try self.typeSupportsDictKey(structure)),
+        .alias => |alias| try self.varSupportsDictKeyForDerivedEncode(self.types.getAliasBackingVar(alias)),
         .err => .supported,
         .flex => .unresolved,
         .rigid => .unsupported,
@@ -20803,11 +20803,11 @@ fn nominalSupportsDerivedParseShape(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return try self.varSupportsIsEq(args.key) and
             try self.varSupportsToHash(args.key) and
-            try self.varSupportsJsonObjectKey(args.key) and
+            try self.varSupportsDictKey(args.key) and
             try self.varSupportsDerivedParseShape(args.value, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
-        return (try self.jsonTryInfoFromNominal(nominal)) != null;
+        return (try self.nullTryInfoFromNominal(nominal)) != null;
     }
     if (nominal.originIsBuiltin()) return false;
     return true;
@@ -20834,14 +20834,14 @@ fn nominalSupportsDerivedParseField(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return try self.varSupportsIsEq(args.key) and
             try self.varSupportsToHash(args.key) and
-            try self.varSupportsJsonObjectKey(args.key) and
+            try self.varSupportsDictKey(args.key) and
             try self.varSupportsDerivedParseShape(args.value, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
         if (try self.missingTryInfoFromNominal(nominal)) |info| {
             return try self.varSupportsDerivedParseShape(info.ok_var, env, region);
         }
-        if (try self.jsonTryInfoFromNominal(nominal)) |info| {
+        if (try self.nullTryInfoFromNominal(nominal)) |info| {
             return try self.varSupportsDerivedParseShape(info.ok_var, env, region);
         }
         if (try self.unboundTryInfoFromNominal(nominal)) |info| {
@@ -21002,12 +21002,12 @@ fn nominalSupportsDerivedEncodeShape(
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return combineDerivedSupport(
-            try self.varSupportsJsonObjectKeyForDerivedEncode(args.key),
+            try self.varSupportsDictKeyForDerivedEncode(args.key),
             try self.varSupportsDerivedEncodeShape(args.value, encoding_var, env, region),
         );
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
-        return if ((try self.jsonTryInfoFromNominal(nominal)) != null) .supported else .unsupported;
+        return if ((try self.nullTryInfoFromNominal(nominal)) != null) .supported else .unsupported;
     }
     if (nominal.originIsBuiltin()) return .unsupported;
     return .supported;
@@ -21041,10 +21041,10 @@ fn builtinTryInfoFromNominal(
     };
 }
 
-fn jsonTryInfoFromNominal(
+fn nullTryInfoFromNominal(
     self: *Self,
     nominal: types_mod.NominalType,
-) Allocator.Error!?JsonTryInfo {
+) Allocator.Error!?NullTryInfo {
     const try_info = (try self.builtinTryInfoFromNominal(nominal)) orelse return null;
     if (!try self.varIsExactUnitTagUnion(try_info.err_var, "Null")) return null;
     return .{
@@ -22125,7 +22125,7 @@ const DerivedParseValidation = enum {
     reported_error,
 };
 
-const JsonTryInfo = struct {
+const NullTryInfo = struct {
     ok_var: Var,
     err_var: Var,
 };
@@ -23107,7 +23107,7 @@ fn validateDerivedParseNominal(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         if (!try self.varSupportsIsEq(args.key)) return .unsupported;
         if (!try self.varSupportsToHash(args.key)) return .unsupported;
-        if (!try self.varSupportsJsonObjectKey(args.key)) return .unsupported;
+        if (!try self.varSupportsDictKey(args.key)) return .unsupported;
         switch (try self.validateDerivedParseDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -23134,7 +23134,7 @@ fn validateDerivedParseNominal(
             if (context != .record_field) return .unsupported;
             return try self.validateDerivedParseVar(info.ok_var, encoding_var, state_var, err_var, constraint, env, region, visited, .shape);
         }
-        const info = try self.jsonTryInfoFromNominal(nominal) orelse return .unsupported;
+        const info = try self.nullTryInfoFromNominal(nominal) orelse return .unsupported;
         switch (try self.validateParseFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -23529,7 +23529,7 @@ fn validateDerivedEncodeNominal(
         return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited);
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
-        if (!try self.varSupportsJsonObjectKey(args.key)) return .unsupported;
+        if (!try self.varSupportsDictKey(args.key)) return .unsupported;
         switch (try self.validateDerivedEncodeDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -23548,7 +23548,7 @@ fn validateDerivedEncodeNominal(
         return try self.validateDerivedEncodeVar(args.value, encoding_var, state_var, err_var, constraint, env, region, visited);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
-        const info = try self.jsonTryInfoFromNominal(nominal) orelse return .unsupported;
+        const info = try self.nullTryInfoFromNominal(nominal) orelse return .unsupported;
         switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,

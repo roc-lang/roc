@@ -10623,19 +10623,19 @@ const BodyContext = struct {
 
         switch (kind) {
             .parser => {
-                if (self.tryJsonInfo(shape_ty)) |info| {
+                if (self.tryNullInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
                 }
                 if (try self.missingTryInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_ty, encoding_ty, plan, inputs);
                 }
-                if ((try self.customParserLookup(shape_ty)) != null or self.jsonParseScalarMethodName(shape_ty) != null) return;
+                if ((try self.customParserLookup(shape_ty)) != null or self.parseScalarMethodName(shape_ty) != null) return;
             },
             .encoder => {
-                if (self.tryJsonInfo(shape_ty)) |info| {
+                if (self.tryNullInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
                 }
-                if ((try self.customEncoderForLookup(shape_ty)) != null or self.jsonEncodeScalarMethodName(shape_ty) != null) return;
+                if ((try self.customEncoderForLookup(shape_ty)) != null or self.encodeScalarMethodName(shape_ty) != null) return;
             },
         }
         if (self.setPayloadType(shape_ty)) |payload_ty| {
@@ -17486,14 +17486,14 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
-        if (self.tryJsonInfo(shape_ty)) |info| {
+        if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (try self.missingTryInfo(shape_ty)) |info| {
             return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_ty, encoding_expr, encoding_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
-        if (self.jsonParseScalarMethodName(shape_ty) != null) return;
+        if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
@@ -17535,11 +17535,11 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
-        if (self.tryJsonInfo(shape_ty)) |info| {
+        if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if ((try self.customEncoderForLookup(shape_ty)) != null) return;
-        if (self.jsonEncodeScalarMethodName(shape_ty) != null) return;
+        if (self.encodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
@@ -17590,11 +17590,11 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
-        if (self.tryJsonInfo(shape_ty)) |info| {
+        if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, encoding_ty, str_ty);
         }
         if ((try self.customEncoderForLookup(shape_ty)) != null) return;
-        if (self.jsonEncodeScalarMethodName(shape_ty) != null) return;
+        if (self.encodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
         }
@@ -17781,11 +17781,11 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!void {
-        if (self.tryJsonInfo(shape_ty)) |info| {
+        if (self.tryNullInfo(shape_ty)) |info| {
             return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
-        if (self.jsonParseScalarMethodName(shape_ty) != null) return;
+        if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
         }
@@ -17840,11 +17840,11 @@ const BodyContext = struct {
         seen: *std.AutoHashMap(Type.TypeId, void),
         shape_ty: Type.TypeId,
     ) Allocator.Error!void {
-        if (self.tryJsonInfo(shape_ty)) |info| {
+        if (self.tryNullInfo(shape_ty)) |info| {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, info.ok_payload_ty);
         }
         if ((try self.customParserLookup(shape_ty)) != null) return;
-        if (self.jsonParseScalarMethodName(shape_ty) != null) return;
+        if (self.parseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, payload_ty);
         }
@@ -19395,8 +19395,8 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        if (self.tryJsonInfo(shape_ty)) |info| {
-            return try self.lowerParseJsonTryFromState(info, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
+        if (self.tryNullInfo(shape_ty)) |info| {
+            return try self.lowerParseNullTryFromState(info, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             return try self.lowerParseDictFromState(dict.key_ty, dict.value_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
@@ -19659,7 +19659,6 @@ const BodyContext = struct {
         });
         return try self.parseResultOk(ret_ty, tuple_expr, rest_expr, state_ty);
     }
-
 
     /// A format that knows its element count up front returns `Counted`, and
     /// the driver then reads exactly that many elements with no further format
@@ -20308,7 +20307,6 @@ const BodyContext = struct {
         return try self.sequenceTryRecord(key_parse, key_parse_ret_ty, key_local, value_name, rest_local, rest_name, body, ret_ty);
     }
 
-
     fn lowerParseListLoopBody(
         self: *BodyContext,
         elem_ty: Type.TypeId,
@@ -20638,9 +20636,9 @@ const BodyContext = struct {
         return try self.sequenceTryRecord(payload_parse, payload_parse_ret_ty, payload_local, value_name, rest_local, rest_name, ok_body, ret_ty);
     }
 
-    fn lowerParseJsonTryFromState(
+    fn lowerParseNullTryFromState(
         self: *BodyContext,
-        info: TryJsonInfo,
+        info: TryNullInfo,
         shape_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
@@ -21190,7 +21188,7 @@ const BodyContext = struct {
     };
 
     fn parseShapeSelection(self: *BodyContext, shape_ty: Type.TypeId) ParseShapeSelection {
-        if (self.jsonParseScalarMethodName(shape_ty)) |method_name| return .{ .tag_text = method_name };
+        if (self.parseScalarMethodName(shape_ty)) |method_name| return .{ .tag_text = method_name };
         return switch (self.builder.shapeContent(shape_ty)) {
             .record => .{ .tag_text = "Record" },
             .zst => .{ .tag_text = "Record" },
@@ -28438,7 +28436,7 @@ const BodyContext = struct {
         });
     }
 
-    fn jsonParseScalarMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
+    fn parseScalarMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
         if (self.typeHasBuiltinOwner(ty, .bool)) return "parse_bool";
         if (self.typeHasBuiltinOwner(ty, .str)) return "parse_str";
         if (self.typeHasBuiltinOwner(ty, .u8)) return "parse_u8";
@@ -28457,7 +28455,7 @@ const BodyContext = struct {
         return null;
     }
 
-    fn jsonEncodeScalarMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
+    fn encodeScalarMethodName(self: *BodyContext, ty: Type.TypeId) ?[]const u8 {
         if (self.typeHasBuiltinOwner(ty, .bool)) return "encode_bool";
         if (self.typeHasBuiltinOwner(ty, .str)) return "encode_str";
         if (self.typeHasBuiltinOwner(ty, .u8)) return "encode_u8";
@@ -28514,7 +28512,7 @@ const BodyContext = struct {
         return null;
     }
 
-    fn jsonObjectKeyTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
+    fn dictKeyTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
         return self.parseDictKeyMethodName(ty) != null or self.dictKeyUnitTags(ty) != null;
     }
 
@@ -30383,12 +30381,12 @@ const BodyContext = struct {
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 1) Common.invariant("structural parser runtime function must have one state argument");
 
-        const top_level_json_try = self.tryJsonInfo(shape_ty);
-        if (self.jsonParseScalarMethodName(shape_ty) == null and top_level_json_try == null) {
+        const top_level_null_try = self.tryNullInfo(shape_ty);
+        if (self.parseScalarMethodName(shape_ty) == null and top_level_null_try == null) {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
                 if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
-                if (!self.jsonObjectKeyTypeIsSupported(dict.key_ty)) Common.invariant("structural parser dict key type was not supported");
+                if (!self.dictKeyTypeIsSupported(dict.key_ty)) Common.invariant("structural parser dict key type was not supported");
                 if (!try self.parseFieldTypeIsSupported(dict.value_ty, false)) Common.invariant("structural parser dict value type was not supported");
             } else {
                 switch (self.builder.shapeContent(shape_ty)) {
@@ -30613,8 +30611,8 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        if (self.tryJsonInfo(shape_ty)) |info| {
-            return try self.lowerEncodeJsonTryToState(info, shape_ty, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
+        if (self.tryNullInfo(shape_ty)) |info| {
+            return try self.lowerEncodeNullTryToState(info, shape_ty, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
             return try self.lowerEncodeDictToState(dict.key_ty, dict.value_ty, shape_ty, value_expr, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
@@ -30647,7 +30645,7 @@ const BodyContext = struct {
                 ret_ty,
             );
         }
-        if (self.jsonEncodeScalarMethodName(shape_ty)) |method_name| {
+        if (self.encodeScalarMethodName(shape_ty)) |method_name| {
             return try self.lowerEncodeFormatMethod(method_name, &.{ value_expr, state_expr }, &.{ shape_ty, state_ty }, encoding_ty, ret_ty);
         }
         return switch (self.builder.shapeContent(shape_ty)) {
@@ -31492,9 +31490,9 @@ const BodyContext = struct {
         return try self.wrapLet(element_local, elem_ty, element_expr, after_element, method.container_result_ty);
     }
 
-    fn lowerEncodeJsonTryToState(
+    fn lowerEncodeNullTryToState(
         self: *BodyContext,
-        info: TryJsonInfo,
+        info: TryNullInfo,
         shape_ty: Type.TypeId,
         value_expr: DraftExprId,
         encoding_expr: DraftExprId,
@@ -32250,7 +32248,7 @@ const BodyContext = struct {
         } });
     }
 
-    const TryJsonInfo = struct {
+    const TryNullInfo = struct {
         backing_ty: Type.TypeId,
         ok_payload_ty: Type.TypeId,
         err_ty: Type.TypeId,
@@ -32572,7 +32570,7 @@ const BodyContext = struct {
     }
 
     fn parseFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, allow_missing: bool) Allocator.Error!bool {
-        if (self.jsonParseScalarMethodName(ty) != null) return true;
+        if (self.parseScalarMethodName(ty) != null) return true;
         if (try self.missingTryInfo(ty)) |info| {
             if (!allow_missing) return false;
             return try self.parseFieldTypeIsSupported(info.ok_ty, false);
@@ -32582,7 +32580,7 @@ const BodyContext = struct {
         }
         if ((try self.customParserLookup(ty)) != null) return true;
         if (self.setPayloadType(ty)) |payload_ty| return try self.parseFieldTypeIsSupported(payload_ty, false);
-        if (self.dictEntryShape(ty)) |dict| return self.jsonObjectKeyTypeIsSupported(dict.key_ty) and try self.parseFieldTypeIsSupported(dict.value_ty, false);
+        if (self.dictEntryShape(ty)) |dict| return self.dictKeyTypeIsSupported(dict.key_ty) and try self.parseFieldTypeIsSupported(dict.value_ty, false);
         return switch (self.builder.shapeContent(ty)) {
             .list => |elem_ty| try self.parseFieldTypeIsSupported(elem_ty, false),
             .box => |payload_ty| try self.parseFieldTypeIsSupported(payload_ty, false),
@@ -32621,13 +32619,13 @@ const BodyContext = struct {
     }
 
     fn encodeFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, encoding_ty: Type.TypeId) Allocator.Error!bool {
-        if (self.jsonEncodeScalarMethodName(ty) != null) return true;
+        if (self.encodeScalarMethodName(ty) != null) return true;
         if (self.tryJsonInfo(ty)) |info| {
             return try self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
         }
         if ((try self.customEncoderForLookup(ty)) != null) return true;
         if (self.setPayloadType(ty)) |payload_ty| return try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty);
-        if (self.dictEntryShape(ty)) |dict| return self.jsonObjectKeyTypeIsSupported(dict.key_ty) and try self.encodeFieldTypeIsSupported(dict.value_ty, encoding_ty);
+        if (self.dictEntryShape(ty)) |dict| return self.dictKeyTypeIsSupported(dict.key_ty) and try self.encodeFieldTypeIsSupported(dict.value_ty, encoding_ty);
         return switch (self.builder.shapeContent(ty)) {
             .list => |elem_ty| try self.encodeFieldTypeIsSupported(elem_ty, encoding_ty),
             .box => |payload_ty| try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty),
@@ -34268,7 +34266,7 @@ const BodyContext = struct {
         };
     }
 
-    fn tryJsonInfo(self: *BodyContext, ty: Type.TypeId) ?TryJsonInfo {
+    fn tryNullInfo(self: *BodyContext, ty: Type.TypeId) ?TryNullInfo {
         const backing_ty = self.builder.namedBackingType(ty) orelse return null;
         const ok_tag = self.monoTagByTextOptional(backing_ty, "Ok") orelse return null;
         const err_tag = self.monoTagByTextOptional(backing_ty, "Err") orelse return null;
@@ -34388,7 +34386,7 @@ const BodyContext = struct {
         if (visited.contains(ty)) return false;
         try visited.put(ty, {});
 
-        if (self.jsonParseScalarMethodName(ty) != null) return false;
+        if (self.parseScalarMethodName(ty) != null) return false;
         if (try self.missingTryInfo(ty)) |info| {
             return try self.parserShapeNeedsRequiredFieldError(info.ok_ty, visited);
         }
