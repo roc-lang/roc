@@ -4069,9 +4069,12 @@ const BuiltinParseSpecDecl = enum {
     bool,
     str,
     null,
-    array_start,
-    array_next,
-    array_after_element,
+    list_start,
+    list_next,
+    list_after_element,
+    tuple_start,
+    tuple_next,
+    tuple_end,
     u8,
     i8,
     u16,
@@ -4085,7 +4088,9 @@ const BuiltinParseSpecDecl = enum {
     dec,
     f32,
     f64,
+    record_start,
     record_field,
+    record_after_field,
     tag_union,
 };
 
@@ -4237,7 +4242,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
         const indices = self.builtin_ctx.builtin_indices.?;
         const stmt_idx = switch (decl) {
             .tag_union => indices.parse_tag_union_spec_type,
-            .bool, .str, .null, .array_start, .array_next, .array_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_field => {
+            .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
                 if (builtin.mode == .Debug) {
                     std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
                 }
@@ -4258,7 +4263,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
 
     const ident = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
-        .bool, .str, .null, .array_start, .array_next, .array_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_field => {
+        .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
@@ -4920,7 +4925,7 @@ fn mkParseSpecVar(
 ) Allocator.Error!Var {
     const ident_idx = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
-        .bool, .str, .null, .array_start, .array_next, .array_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_field => {
+        .bool, .str, .null, .list_start, .list_next, .list_after_element, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
             if (builtin.mode == .Debug) {
                 std.debug.panic("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
@@ -20595,6 +20600,17 @@ fn varSupportsJsonObjectKeyForDerivedEncode(self: *Self, var_: Var) std.mem.Allo
     };
 }
 
+fn varIsClosedUnitTagUnion(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    return switch (self.types.resolveVar(var_).desc.content) {
+        .structure => |structure| switch (structure) {
+            .tag_union => |tag_union| try self.tagUnionIsClosedAndUnit(tag_union),
+            else => false,
+        },
+        .alias => |alias| try self.varIsClosedUnitTagUnion(self.types.getAliasBackingVar(alias)),
+        else => false,
+    };
+}
+
 fn tagUnionIsClosedAndUnit(self: *Self, tag_union: types_mod.TagUnion) std.mem.Allocator.Error!bool {
     const tags = self.types.getTagsSlice(tag_union.tags);
     if (tags.items(.name).len == 0) return false;
@@ -21995,29 +22011,64 @@ fn freshParseRecordFieldEventVar(
         .ext = try_field_record_ext,
     } } }, env, region);
 
-    const rest_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
-    const rest_record_fields = [_]types_mod.RecordField{
-        .{ .name = rest_name, .var_ = state_var },
-    };
-    const rest_record = try self.freshFromContent(.{ .structure = .{ .record = .{
-        .fields = try self.types.appendRecordFields(&rest_record_fields),
-        .ext = rest_record_ext,
-    } } }, env, region);
-
     const continue_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Continue"));
     const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
     const field_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Field"));
     const try_field_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("TryField"));
     const try_field_caseless_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("TryFieldCaseless"));
     const tags = [_]types_mod.Tag{
-        try self.types.mkTag(continue_ident, &.{rest_record}),
-        try self.types.mkTag(done_ident, &.{rest_record}),
+        try self.types.mkTag(continue_ident, &.{state_var}),
+        try self.types.mkTag(done_ident, &.{state_var}),
         try self.types.mkTag(field_ident, &.{field_record}),
         try self.types.mkTag(try_field_ident, &.{try_field_record}),
         try self.types.mkTag(try_field_caseless_ident, &.{try_field_record}),
     };
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
     return try self.freshFromContent(try self.types.mkTagUnion(&tags, ext_var), env, region);
+}
+
+/// The event a variable-length container's `parse_*_start` returns: either the
+/// format declared the entry count up front (`Counted`) or the driver must ask
+/// after every entry whether more follow (`Uncounted`).
+fn freshParseCountedStartEventVar(
+    self: *Self,
+    state_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const len_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("len"));
+    const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
+
+    const len_var = try self.freshU64(env, region);
+    const counted_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
+    const counted_record_fields = [_]types_mod.RecordField{
+        .{ .name = len_name, .var_ = len_var },
+        .{ .name = rest_name, .var_ = state_var },
+    };
+    const counted_record = try self.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try self.types.appendRecordFields(&counted_record_fields),
+        .ext = counted_record_ext,
+    } } }, env, region);
+
+    const counted_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Counted"));
+    const uncounted_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Uncounted"));
+    const tags = [_]types_mod.Tag{
+        try self.types.mkTag(counted_ident, &.{counted_record}),
+        try self.types.mkTag(uncounted_ident, &.{state_var}),
+    };
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
+    return try self.freshFromContent(try self.types.mkTagUnion(&tags, ext_var), env, region);
+}
+
+fn freshParseCountedStartTryVar(
+    self: *Self,
+    state_var: Var,
+    err_var: Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    const event_var = try self.freshParseCountedStartEventVar(state_var, env, region);
+    return try self.freshFromContent(try self.mkTryContent(event_var, err_var), env, region);
 }
 
 fn freshParseRecordFieldTryVar(
@@ -22172,9 +22223,12 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
         .bool => "parse_bool",
         .str => "parse_str",
         .null => "parse_null",
-        .array_start => "parse_array_start",
-        .array_next => "parse_array_next",
-        .array_after_element => "parse_array_after_element",
+        .list_start => "parse_list_start",
+        .list_next => "parse_list_next",
+        .list_after_element => "parse_list_after_element",
+        .tuple_start => "parse_tuple_start",
+        .tuple_next => "parse_tuple_next",
+        .tuple_end => "parse_tuple_end",
         .u8 => "parse_u8",
         .i8 => "parse_i8",
         .u16 => "parse_u16",
@@ -22188,7 +22242,9 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
         .dec => "parse_dec",
         .f32 => "parse_f32",
         .f64 => "parse_f64",
+        .record_start => "parse_record_start",
         .record_field => "parse_record_field",
+        .record_after_field => "parse_record_after_field",
         .tag_union => "parse_tag_union",
     };
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
@@ -22449,13 +22505,26 @@ fn validateParseFormatMethod(
     };
     const expected_ret = switch (spec_decl) {
         .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .tag_union => try self.freshParseResultTryVar(shape_var, state_var, err_var, env, region),
-        .null, .array_start => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
-        .array_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Element", "Done", env, region),
-        .array_after_element => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .null, .tuple_start, .tuple_next, .tuple_end => try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region),
+        .list_next => try self.freshParseArrayEventTryVar(state_var, err_var, "Element", "Done", env, region),
+        .list_after_element => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
+        .list_start, .record_start => try self.freshParseCountedStartTryVar(state_var, err_var, env, region),
         .record_field => try self.freshParseRecordFieldTryVar(shape_var, state_var, err_var, env, region),
+        .record_after_field => try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region),
     };
     const expected_fn = switch (spec_decl) {
-        .bool, .str, .null, .array_start, .array_next, .array_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64 => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
+        .bool, .str, .null, .list_start, .list_next, .list_after_element, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_after_field => try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region),
+        // A tuple's arity is static, so the format is told the element count
+        // and (for `parse_tuple_next`) which element is about to be read.
+        .tuple_start, .tuple_end => blk: {
+            const len_var = try self.freshU64(env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var, len_var }, expected_ret), env, region);
+        },
+        .tuple_next => blk: {
+            const index_var = try self.freshU64(env, region);
+            const len_var = try self.freshU64(env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var, index_var, len_var }, expected_ret), env, region);
+        },
         .record_field => blk: {
             const fields_var = try self.mkFieldsVar(shape_var, env, region);
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, fields_var, state_var }, expected_ret), env, region);
@@ -22779,7 +22848,15 @@ fn validateDerivedParseVar(
                     .ok => {},
                     .unsupported, .reported_error => |result| break :blk result,
                 }
+                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_start, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
                 switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_field, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| break :blk result,
+                }
+                switch (try self.validateParseFormatMethod(encoding_var, state_var, var_, .record_after_field, err_var, constraint, env, region)) {
                     .ok => {},
                     .unsupported, .reported_error => |result| break :blk result,
                 }
@@ -22814,7 +22891,15 @@ fn validateDerivedParseRecord(
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_start, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
     switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_field, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, record_var, .record_after_field, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
@@ -22859,11 +22944,7 @@ fn validateDerivedParseTuple(
     region: Region,
     visited: *std.AutoHashMap(Var, void),
 ) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateDerivedParseArrayMethods(encoding_var, state_var, state_var, err_var, constraint, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
-    switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+    switch (try self.validateDerivedParseTupleMethods(encoding_var, state_var, state_var, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
@@ -23008,7 +23089,7 @@ fn validateDerivedParseNominal(
         return try self.validateParseFormatMethod(encoding_var, state_var, nominal_var, parseSpecDeclForNumKind(num_kind), err_var, constraint, env, region);
     }
     if (self.nominalListPayloadVar(nominal)) |payload_var| {
-        switch (try self.validateDerivedParseArrayMethods(encoding_var, state_var, nominal_var, err_var, constraint, env, region)) {
+        switch (try self.validateDerivedParseListMethods(encoding_var, state_var, nominal_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -23019,7 +23100,7 @@ fn validateDerivedParseNominal(
     }
     if (self.nominalSetPayloadVar(nominal)) |payload_var| {
         if (!try self.varSupportsIsEq(payload_var)) return .unsupported;
-        switch (try self.validateDerivedParseArrayMethods(encoding_var, state_var, state_var, err_var, constraint, env, region)) {
+        switch (try self.validateDerivedParseListMethods(encoding_var, state_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
@@ -23036,6 +23117,12 @@ fn validateDerivedParseNominal(
         switch (try self.validateParseKeyMethod(args.key, encoding_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
+        }
+        if (try self.varIsClosedUnitTagUnion(args.key)) {
+            switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
         }
         return try self.validateDerivedParseVar(args.value, encoding_var, state_var, err_var, constraint, env, region, visited, .shape);
     }
@@ -23279,7 +23366,7 @@ fn validateDerivedEncodeTagUnionMethods(
     return .ok;
 }
 
-fn validateDerivedParseArrayMethods(
+fn validateDerivedParseListMethods(
     self: *Self,
     encoding_var: Var,
     state_var: Var,
@@ -23289,15 +23376,40 @@ fn validateDerivedParseArrayMethods(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .array_start, err_var, constraint, env, region)) {
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_start, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .array_next, err_var, constraint, env, region)) {
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_next, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
-    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .array_after_element, err_var, constraint, env, region)) {
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, list_var, .list_after_element, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    return .ok;
+}
+
+fn validateDerivedParseTupleMethods(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    tuple_var: Var,
+    err_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, tuple_var, .tuple_start, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, tuple_var, .tuple_next, err_var, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    switch (try self.validateParseFormatMethod(encoding_var, state_var, tuple_var, .tuple_end, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }

@@ -10807,6 +10807,40 @@ const BodyContext = struct {
         }
     };
 
+    /// Loop-carried control locals for a derived record parser. `done` is set
+    /// when the format reports the end of the record so the next iteration
+    /// finishes at the loop head, which keeps the record-construction code at
+    /// exactly one site. `counted`/`remaining` drive Counted mode, where the
+    /// format declared the entry count up front and the driver never calls
+    /// `parse_record_after_field`.
+    const RecordLoopCtl = struct {
+        done_local: DraftLocalId,
+        counted_local: DraftLocalId,
+        remaining_local: DraftLocalId,
+        bool_ty: Type.TypeId,
+        u64_ty: Type.TypeId,
+    };
+
+    const UpdatedFieldSlot = struct {
+        local: DraftLocalId,
+        ty: Type.TypeId,
+        index: usize,
+    };
+
+    /// Loop-carried control locals for a derived list parser. In Counted mode
+    /// the format declared the element count up front, so the driver reads
+    /// exactly `remaining` more elements and never calls `parse_list_next` or
+    /// `parse_list_after_element`.
+    const ListLoopCtl = struct {
+        counted_local: DraftLocalId,
+        remaining_local: DraftLocalId,
+        bool_ty: Type.TypeId,
+        u64_ty: Type.TypeId,
+    };
+
+    /// Loop params before the payload slots: cursor, done, counted, remaining.
+    const record_loop_slot_offset = 4;
+
     const BindingContinuation = union(enum) {
         expr: DraftExprId,
         checked_expr: checked.CheckedExprId,
@@ -18281,6 +18315,14 @@ const BodyContext = struct {
         } else null;
 
         const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const ctl = RecordLoopCtl{
+            .done_local = try self.addLocal(self.builder.symbols.fresh(), bool_ty),
+            .counted_local = try self.addLocal(self.builder.symbols.fresh(), bool_ty),
+            .remaining_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty),
+            .bool_ty = bool_ty,
+            .u64_ty = u64_ty,
+        };
         const fields_expr = try self.lowerFieldNamesValue(fields_ty, fields_backing_ty, field_handle_ty, renamed_field_locals, renamed_field_lengths);
         const fields_local = try self.addLocal(self.builder.symbols.fresh(), fields_ty);
         const step_expr = try self.addExpr(.{
@@ -18304,6 +18346,7 @@ const BodyContext = struct {
             state_ty,
             ret_ty,
             record_slots,
+            ctl,
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
@@ -18311,16 +18354,45 @@ const BodyContext = struct {
             event_local,
             event_ty,
         );
-        const loop_body = try self.sequenceTry(step_expr, step_try_ty, event_local, event_body, ret_ty);
+        const step_body = try self.sequenceTry(step_expr, step_try_ty, event_local, event_body, ret_ty);
 
-        const params = try self.allocator.alloc(BodyTypedLocal, 1 + record_slots.payload_locals.len + record_slots.presence_locals.len);
+        const remaining_is_zero = try self.lowLevelExpr(.num_is_eq, &.{
+            try self.localExpr(ctl.remaining_local, u64_ty),
+            try self.intLiteralExpr(0, u64_ty),
+        }, bool_ty);
+        const counted_finished = try self.ifExpr(
+            try self.localExpr(ctl.counted_local, bool_ty),
+            remaining_is_zero,
+            try self.boolLiteral(false, bool_ty),
+            bool_ty,
+        );
+        const finish_cond = try self.ifExpr(
+            try self.localExpr(ctl.done_local, bool_ty),
+            try self.boolLiteral(true, bool_ty),
+            counted_finished,
+            bool_ty,
+        );
+        const finish_body = try self.lowerParseRecordFinish(
+            shape_ty,
+            state_ty,
+            ret_ty,
+            record_slots,
+            renamed_field_locals,
+            try self.localExpr(cursor_local, state_ty),
+        );
+        const loop_body = try self.ifExpr(finish_cond, finish_body, step_body, ret_ty);
+
+        const params = try self.allocator.alloc(BodyTypedLocal, record_loop_slot_offset + record_slots.payload_locals.len + record_slots.presence_locals.len);
         defer self.allocator.free(params);
         params[0] = .{ .local = cursor_local, .ty = state_ty };
+        params[1] = .{ .local = ctl.done_local, .ty = bool_ty };
+        params[2] = .{ .local = ctl.counted_local, .ty = bool_ty };
+        params[3] = .{ .local = ctl.remaining_local, .ty = u64_ty };
         // Payloads must be carried before presence words. LIR lowers continue
         // arguments into ordered `set_local` statements; ARC inserts cleanup of
         // the old payload immediately before the payload write, and that cleanup
         // must test the old presence bit, not the just-updated one.
-        const payload_param_offset = 1;
+        const payload_param_offset = record_loop_slot_offset;
         for (record_slots.payload_locals, record_slots.payload_tys, 0..) |local, ty, index| {
             params[payload_param_offset + index] = .{ .local = local, .ty = ty };
         }
@@ -18329,16 +18401,87 @@ const BodyContext = struct {
             params[presence_param_offset + index] = .{ .local = local, .ty = ty };
         }
 
-        const initial_values = try self.allocator.alloc(DraftExprId, 1 + initial_payload_values.len + initial_presence_values.len);
+        const start_event_ty = try self.parseCountedStartEventType(state_ty);
+        const start_try_ty = try self.tryTypeLike(ret_ty, start_event_ty, ret_info.err_ty);
+        const start_try = try self.lowerParseFormatMethod(
+            "parse_record_start",
+            &.{ encoding_expr, state_expr },
+            &.{ encoding_ty, state_ty },
+            encoding_ty,
+            start_try_ty,
+        );
+        const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
+
+        const init_counted_name = try self.builder.program.names.internRecordFieldLabel("counted");
+        const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
+        const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
+        const init_field_tys = [_]Type.Field{
+            .{ .name = init_counted_name, .ty = bool_ty },
+            .{ .name = init_cursor_name, .ty = state_ty },
+            .{ .name = init_remaining_name, .ty = u64_ty },
+        };
+        const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
+
+        const counted_tag = self.monoTagByText(start_event_ty, "Counted");
+        const counted_payload_ty = self.singleTagPayloadType(counted_tag, "record parse Counted start event");
+        const counted_payload_local = try self.addLocal(self.builder.symbols.fresh(), counted_payload_ty);
+        const counted_payload_pat = try self.bindPat(counted_payload_local, counted_payload_ty);
+        const counted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
+            .name = counted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{counted_payload_pat}),
+        } } });
+        const counted_init_fields = [_]DraftFieldExpr{
+            .{ .name = init_counted_name, .value = try self.boolLiteral(true, bool_ty) },
+            .{ .name = init_cursor_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "rest") },
+            .{ .name = init_remaining_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "len") },
+        };
+        const counted_init = try self.addExpr(.{
+            .ty = init_ty,
+            .data = .{ .record = try self.addFieldExprSpan(&counted_init_fields) },
+        });
+
+        const uncounted_tag = self.monoTagByText(start_event_ty, "Uncounted");
+        const uncounted_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const uncounted_state_pat = try self.bindPat(uncounted_state_local, state_ty);
+        const uncounted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
+            .name = uncounted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{uncounted_state_pat}),
+        } } });
+        const uncounted_init_fields = [_]DraftFieldExpr{
+            .{ .name = init_counted_name, .value = try self.boolLiteral(false, bool_ty) },
+            .{ .name = init_cursor_name, .value = try self.localExpr(uncounted_state_local, state_ty) },
+            .{ .name = init_remaining_name, .value = try self.intLiteralExpr(0, u64_ty) },
+        };
+        const uncounted_init = try self.addExpr(.{
+            .ty = init_ty,
+            .data = .{ .record = try self.addFieldExprSpan(&uncounted_init_fields) },
+        });
+
+        const init_branches = [_]DraftBranch{
+            .{ .pat = counted_pat, .body = counted_init },
+            .{ .pat = uncounted_pat, .body = uncounted_init },
+        };
+        const init_expr = try self.addExpr(.{ .ty = init_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.localExpr(start_event_local, start_event_ty),
+            .branches = try self.addBranchSpan(&init_branches),
+        } } });
+        const init_local = try self.addLocal(self.builder.symbols.fresh(), init_ty);
+
+        const initial_values = try self.allocator.alloc(DraftExprId, record_loop_slot_offset + initial_payload_values.len + initial_presence_values.len);
         defer self.allocator.free(initial_values);
-        initial_values[0] = state_expr;
-        @memcpy(initial_values[1 .. 1 + initial_payload_values.len], initial_payload_values);
-        @memcpy(initial_values[1 + initial_payload_values.len ..], initial_presence_values);
+        initial_values[0] = try self.recordPayloadFieldAccess(init_local, init_ty, "cursor");
+        initial_values[1] = try self.boolLiteral(false, bool_ty);
+        initial_values[2] = try self.recordPayloadFieldAccess(init_local, init_ty, "counted");
+        initial_values[3] = try self.recordPayloadFieldAccess(init_local, init_ty, "remaining");
+        @memcpy(initial_values[record_loop_slot_offset .. record_loop_slot_offset + initial_payload_values.len], initial_payload_values);
+        @memcpy(initial_values[record_loop_slot_offset + initial_payload_values.len ..], initial_presence_values);
         var loop_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
             .params = try self.addTypedLocalSpan(params),
             .initial_values = try self.addExprSpan(initial_values),
             .body = loop_body,
         } } });
+        loop_expr = try self.wrapLet(init_local, init_ty, init_expr, loop_expr, ret_ty);
+        loop_expr = try self.sequenceTry(start_try, start_try_ty, start_event_local, loop_expr, ret_ty);
         loop_expr = try self.wrapLet(fields_local, fields_ty, fields_expr, loop_expr, ret_ty);
         if (owned_renamed_field_values) |renamed_field_values| {
             var index = renamed_field_locals.len;
@@ -18358,6 +18501,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
@@ -18370,39 +18514,36 @@ const BodyContext = struct {
         const field_tag = self.monoTagByText(event_ty, "Field");
         const try_field_tag = self.monoTagByText(event_ty, "TryField");
         const try_field_caseless_tag = self.monoTagByText(event_ty, "TryFieldCaseless");
-        const continue_payload_ty = self.singleTagPayloadType(continue_tag, "record parse Continue event");
-        const done_payload_ty = self.singleTagPayloadType(done_tag, "record parse Done event");
         const field_payload_ty = self.singleTagPayloadType(field_tag, "record parse Field event");
         const try_field_payload_ty = self.singleTagPayloadType(try_field_tag, "record parse TryField event");
         const try_field_caseless_payload_ty = self.singleTagPayloadType(try_field_caseless_tag, "record parse TryFieldCaseless event");
 
-        const continue_payload_local = try self.addLocal(self.builder.symbols.fresh(), continue_payload_ty);
-        const continue_payload_pat = try self.bindPat(continue_payload_local, continue_payload_ty);
+        const continue_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const continue_state_pat = try self.bindPat(continue_state_local, state_ty);
         const continue_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
             .name = continue_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{continue_payload_pat}),
+            .payloads = try self.addPatSpan(&[_]DraftPatId{continue_state_pat}),
         } } });
         const continue_body = try self.lowerParseRecordContinueEvent(
-            ret_ty,
-            record_slots,
-            continue_payload_local,
-            continue_payload_ty,
-        );
-
-        const done_payload_local = try self.addLocal(self.builder.symbols.fresh(), done_payload_ty);
-        const done_payload_pat = try self.bindPat(done_payload_local, done_payload_ty);
-        const done_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = done_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{done_payload_pat}),
-        } } });
-        const done_body = try self.lowerParseRecordDoneEvent(
-            shape_ty,
             state_ty,
             ret_ty,
             record_slots,
-            renamed_field_locals,
-            done_payload_local,
-            done_payload_ty,
+            ctl,
+            continue_state_local,
+        );
+
+        const done_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const done_state_pat = try self.bindPat(done_state_local, state_ty);
+        const done_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
+            .name = done_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{done_state_pat}),
+        } } });
+        const done_body = try self.lowerParseRecordDoneEvent(
+            state_ty,
+            ret_ty,
+            record_slots,
+            ctl,
+            done_state_local,
         );
 
         const field_payload_local = try self.addLocal(self.builder.symbols.fresh(), field_payload_ty);
@@ -18418,6 +18559,7 @@ const BodyContext = struct {
             state_ty,
             ret_ty,
             record_slots,
+            ctl,
             precomputed_plan,
             field_payload_local,
             field_payload_ty,
@@ -18436,6 +18578,7 @@ const BodyContext = struct {
             state_ty,
             ret_ty,
             record_slots,
+            ctl,
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
@@ -18458,6 +18601,7 @@ const BodyContext = struct {
             state_ty,
             ret_ty,
             record_slots,
+            ctl,
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
@@ -18600,60 +18744,134 @@ const BodyContext = struct {
         return try self.wrapLet(key_len_local, u64_ty, key_len_expr, body, ret_ty);
     }
 
-    fn continueRecordLoopWithCurrentSlots(
+    fn continueRecordLoop(
         self: *BodyContext,
         ret_ty: Type.TypeId,
         cursor_expr: DraftExprId,
+        done_expr: DraftExprId,
+        remaining_expr: DraftExprId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
+        updated: ?UpdatedFieldSlot,
     ) Allocator.Error!DraftExprId {
-        const values = try self.allocator.alloc(DraftExprId, 1 + record_slots.payload_locals.len + record_slots.presence_locals.len);
+        const values = try self.allocator.alloc(DraftExprId, record_loop_slot_offset + record_slots.payload_locals.len + record_slots.presence_locals.len);
         defer self.allocator.free(values);
         values[0] = cursor_expr;
-        // Keep this order in sync with `lowerParseRecordFromState`: payload
-        // writes must happen before the presence word marks them initialized.
-        const payload_offset = 1;
-        for (record_slots.payload_locals, record_slots.payload_tys, 0..) |local, ty, index| {
-            values[payload_offset + index] = try self.localExpr(local, ty);
-        }
-        const presence_offset = payload_offset + record_slots.payload_locals.len;
-        for (record_slots.presence_locals, record_slots.presence_tys, 0..) |local, ty, index| {
-            values[presence_offset + index] = try self.localExpr(local, ty);
-        }
-        return try self.continueWith(.{ .sealed = ret_ty }, values);
-    }
-
-    fn continueRecordLoopWithUpdatedField(
-        self: *BodyContext,
-        ret_ty: Type.TypeId,
-        cursor_expr: DraftExprId,
-        record_slots: ParseRecordSlots,
-        field_value_local: DraftLocalId,
-        field_value_ty: Type.TypeId,
-        replace_index: usize,
-    ) Allocator.Error!DraftExprId {
-        const values = try self.allocator.alloc(DraftExprId, 1 + record_slots.payload_locals.len + record_slots.presence_locals.len);
-        defer self.allocator.free(values);
-        values[0] = cursor_expr;
-        const presence_word = recordPresenceWordIndex(replace_index);
-        const presence_mask = recordPresenceMask(replace_index);
+        values[1] = done_expr;
+        values[2] = try self.localExpr(ctl.counted_local, ctl.bool_ty);
+        values[3] = remaining_expr;
         // Keep this order in sync with `lowerParseRecordFromState`: ARC cleanup
         // of the old slot must see the old presence word before the new value is
         // marked present.
-        const payload_offset = 1;
+        const payload_offset = record_loop_slot_offset;
         for (record_slots.payload_locals, record_slots.payload_tys, 0..) |local, ty, index| {
-            values[payload_offset + index] = if (index == replace_index) blk: {
-                if (!self.sameType(ty, field_value_ty)) Common.invariant("record parser field payload type differed from slot payload type");
-                break :blk try self.localExpr(field_value_local, field_value_ty);
+            values[payload_offset + index] = if (updated != null and index == updated.?.index) blk: {
+                if (!self.sameType(ty, updated.?.ty)) Common.invariant("record parser field payload type differed from slot payload type");
+                break :blk try self.localExpr(updated.?.local, updated.?.ty);
             } else try self.localExpr(local, ty);
         }
         const presence_offset = payload_offset + record_slots.payload_locals.len;
         for (record_slots.presence_locals, record_slots.presence_tys, 0..) |local, ty, index| {
-            values[presence_offset + index] = if (index == presence_word)
-                try self.recordPresenceWithBit(local, ty, presence_mask)
+            values[presence_offset + index] = if (updated != null and index == recordPresenceWordIndex(updated.?.index))
+                try self.recordPresenceWithBit(local, ty, recordPresenceMask(updated.?.index))
             else
                 try self.localExpr(local, ty);
         }
         return try self.continueWith(.{ .sealed = ret_ty }, values);
+    }
+
+    /// After a record entry (matched field, skipped field) has been consumed:
+    /// in Counted mode decrement `remaining` and re-enter the loop directly;
+    /// otherwise ask `parse_record_after_field` whether more entries follow.
+    fn lowerParseRecordEntryEnd(
+        self: *BodyContext,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        entry_state_local: DraftLocalId,
+        record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
+        updated: ?UpdatedFieldSlot,
+    ) Allocator.Error!DraftExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const false_expr = try self.boolLiteral(false, ctl.bool_ty);
+        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            try self.intLiteralExpr(1, ctl.u64_ty),
+        }, ctl.u64_ty);
+        const counted_body = try self.continueRecordLoop(
+            ret_ty,
+            try self.localExpr(entry_state_local, state_ty),
+            false_expr,
+            remaining_minus_one,
+            record_slots,
+            ctl,
+            updated,
+        );
+
+        const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
+        const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
+        const after_try = try self.lowerParseFormatMethod(
+            "parse_record_after_field",
+            &.{ encoding_expr, try self.localExpr(entry_state_local, state_ty) },
+            &.{ encoding_ty, state_ty },
+            encoding_ty,
+            after_try_ty,
+        );
+        const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
+        const remaining_expr = try self.localExpr(ctl.remaining_local, ctl.u64_ty);
+
+        const continue_tag = self.monoTagByText(after_event_ty, "Continue");
+        const continue_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const continue_state_pat = try self.bindPat(continue_state_local, state_ty);
+        const continue_pat = try self.addPat(.{ .ty = after_event_ty, .data = .{ .tag = .{
+            .name = continue_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{continue_state_pat}),
+        } } });
+        const continue_body = try self.continueRecordLoop(
+            ret_ty,
+            try self.localExpr(continue_state_local, state_ty),
+            try self.boolLiteral(false, ctl.bool_ty),
+            remaining_expr,
+            record_slots,
+            ctl,
+            updated,
+        );
+
+        const done_tag = self.monoTagByText(after_event_ty, "Done");
+        const done_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const done_state_pat = try self.bindPat(done_state_local, state_ty);
+        const done_pat = try self.addPat(.{ .ty = after_event_ty, .data = .{ .tag = .{
+            .name = done_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{done_state_pat}),
+        } } });
+        const done_body = try self.continueRecordLoop(
+            ret_ty,
+            try self.localExpr(done_state_local, state_ty),
+            try self.boolLiteral(true, ctl.bool_ty),
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            record_slots,
+            ctl,
+            updated,
+        );
+
+        const branches = [_]DraftBranch{
+            .{ .pat = continue_pat, .body = continue_body },
+            .{ .pat = done_pat, .body = done_body },
+        };
+        const after_match = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.localExpr(after_event_local, after_event_ty),
+            .branches = try self.addBranchSpan(&branches),
+        } } });
+        const uncounted_body = try self.sequenceTry(after_try, after_try_ty, after_event_local, after_match, ret_ty);
+
+        return try self.ifExpr(
+            try self.localExpr(ctl.counted_local, ctl.bool_ty),
+            counted_body,
+            uncounted_body,
+            ret_ty,
+        );
     }
 
     fn lowerParseRecordNamedFieldEvent(
@@ -18664,6 +18882,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
@@ -18690,6 +18909,7 @@ const BodyContext = struct {
             state_ty,
             ret_ty,
             record_slots,
+            ctl,
             precomputed_plan,
             renamed_field_locals,
             renamed_field_lengths,
@@ -18699,29 +18919,72 @@ const BodyContext = struct {
         return try self.wrapLet(key_local, str_ty, key_expr, try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty), ret_ty);
     }
 
+    /// A `Continue` event means the format consumed a whole entry itself and
+    /// the cursor is already at the next entry boundary, so the loop re-enters
+    /// without calling `parse_record_after_field`.
     fn lowerParseRecordContinueEvent(
         self: *BodyContext,
+        state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
-        continue_payload_local: DraftLocalId,
-        continue_payload_ty: Type.TypeId,
+        ctl: RecordLoopCtl,
+        continue_state_local: DraftLocalId,
     ) Allocator.Error!DraftExprId {
-        const rest_expr = try self.recordPayloadFieldAccess(continue_payload_local, continue_payload_ty, "rest");
-        return try self.continueRecordLoopWithCurrentSlots(ret_ty, rest_expr, record_slots);
+        const cursor_expr = try self.localExpr(continue_state_local, state_ty);
+        const false_expr = try self.boolLiteral(false, ctl.bool_ty);
+        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            try self.intLiteralExpr(1, ctl.u64_ty),
+        }, ctl.u64_ty);
+        const counted_body = try self.continueRecordLoop(ret_ty, cursor_expr, false_expr, remaining_minus_one, record_slots, ctl, null);
+        const uncounted_body = try self.continueRecordLoop(
+            ret_ty,
+            cursor_expr,
+            try self.boolLiteral(false, ctl.bool_ty),
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            record_slots,
+            ctl,
+            null,
+        );
+        return try self.ifExpr(
+            try self.localExpr(ctl.counted_local, ctl.bool_ty),
+            counted_body,
+            uncounted_body,
+            ret_ty,
+        );
     }
 
     fn lowerParseRecordDoneEvent(
+        self: *BodyContext,
+        state_ty: Type.TypeId,
+        ret_ty: Type.TypeId,
+        record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
+        done_state_local: DraftLocalId,
+    ) Allocator.Error!DraftExprId {
+        return try self.continueRecordLoop(
+            ret_ty,
+            try self.localExpr(done_state_local, state_ty),
+            try self.boolLiteral(true, ctl.bool_ty),
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            record_slots,
+            ctl,
+            null,
+        );
+    }
+
+    /// The single record-construction site: runs at the loop head once `done`
+    /// is set or a counted record has consumed all its entries.
+    fn lowerParseRecordFinish(
         self: *BodyContext,
         shape_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
         renamed_field_locals: []const DraftLocalId,
-        done_payload_local: DraftLocalId,
-        done_payload_ty: Type.TypeId,
+        rest_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const rest_expr = try self.recordPayloadFieldAccess(done_payload_local, done_payload_ty, "rest");
         const record_try_ty = try self.tryTypeLike(ret_ty, shape_ty, ret_info.err_ty);
         const record_expr = try self.finishGeneratedRecordSlots(
             record_slots,
@@ -18749,6 +19012,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         field_payload_local: DraftLocalId,
         field_payload_ty: Type.TypeId,
@@ -18768,6 +19032,7 @@ const BodyContext = struct {
             state_ty,
             ret_ty,
             record_slots,
+            ctl,
             precomputed_plan,
         );
         return try self.wrapLet(field_local, field_ty, field_expr, try self.wrapLet(rest_local, state_ty, rest_expr, body, ret_ty), ret_ty);
@@ -18784,6 +19049,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const fields = try GuardedList.dupe(self.allocator, Type.Field, switch (self.builder.shapeContent(shape_ty)) {
@@ -18802,6 +19068,7 @@ const BodyContext = struct {
                 ret_ty,
                 rest_local,
                 record_slots,
+                ctl,
             );
         }
 
@@ -18814,6 +19081,7 @@ const BodyContext = struct {
             encoding_ty,
             state_ty,
             record_slots,
+            ctl,
             precomputed_plan,
             rest_local,
             ret_ty,
@@ -18828,6 +19096,7 @@ const BodyContext = struct {
                 encoding_ty,
                 state_ty,
                 record_slots,
+                ctl,
                 precomputed_plan,
                 rest_local,
                 ret_ty,
@@ -18853,6 +19122,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         renamed_field_locals: []const DraftLocalId,
         renamed_field_lengths: ?[]const u32,
@@ -18884,6 +19154,7 @@ const BodyContext = struct {
                 encoding_ty,
                 state_ty,
                 record_slots,
+                ctl,
                 precomputed_plan,
                 rest_local,
                 ret_ty,
@@ -18897,6 +19168,7 @@ const BodyContext = struct {
             ret_ty,
             rest_local,
             record_slots,
+            ctl,
         );
 
         return try self.lowerParseRecordNamedDispatchBody(
@@ -18920,6 +19192,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         rest_local: DraftLocalId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
         const skip_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
@@ -18940,10 +19213,15 @@ const BodyContext = struct {
             } },
         });
         const skipped_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const ok_body = try self.continueRecordLoopWithCurrentSlots(
+        const ok_body = try self.lowerParseRecordEntryEnd(
+            encoding_expr,
+            encoding_ty,
+            state_ty,
             ret_ty,
-            try self.localExpr(skipped_local, state_ty),
+            skipped_local,
             record_slots,
+            ctl,
+            null,
         );
         return try self.sequenceTry(skip_expr, skip_try_ty, skipped_local, ok_body, ret_ty);
     }
@@ -18956,6 +19234,7 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         record_slots: ParseRecordSlots,
+        ctl: RecordLoopCtl,
         precomputed_plan: ?*const ParserPrecomputedPlan,
         rest_local: DraftLocalId,
         ret_ty: Type.TypeId,
@@ -18986,7 +19265,16 @@ const BodyContext = struct {
             try self.localExpr(parsed_value_local, field_parse_ty);
         const field_value_local = try self.addLocal(self.builder.symbols.fresh(), field.ty);
         const parsed_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const ok_body = try self.continueRecordLoopWithUpdatedField(ret_ty, try self.localExpr(parsed_rest_local, state_ty), record_slots, field_value_local, field.ty, field_index);
+        const ok_body = try self.lowerParseRecordEntryEnd(
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            ret_ty,
+            parsed_rest_local,
+            record_slots,
+            ctl,
+            .{ .local = field_value_local, .ty = field.ty, .index = field_index },
+        );
         const with_field_value = try self.wrapLet(field_value_local, field.ty, field_value, ok_body, ret_ty);
         return try self.sequenceTryRecord(parse_expr, parse_ret_ty, parsed_value_local, value_name, parsed_rest_local, rest_name, with_field_value, ret_ty);
     }
@@ -19140,6 +19428,10 @@ const BodyContext = struct {
         return try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
     }
 
+    /// A tuple's arity is static, so the format is told the element count and
+    /// never decides when the sequence ends: no per-element event union, and
+    /// arity mismatches are reported by the format itself, where it can say
+    /// what it actually found.
     fn lowerParseTupleFromState(
         self: *BodyContext,
         item_tys: []const Type.TypeId,
@@ -19152,9 +19444,9 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const start_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
-        const start_try = try self.lowerParseFormatMethod("parse_array_start", &.{ encoding_expr, state_expr }, &.{ encoding_ty, state_ty }, encoding_ty, start_try_ty);
-        const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const len_expr = try self.intLiteralExpr(@intCast(item_tys.len), u64_ty);
+        const state_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
 
         const item_locals = try self.allocator.alloc(DraftLocalId, item_tys.len);
         defer self.allocator.free(item_locals);
@@ -19162,120 +19454,27 @@ const BodyContext = struct {
             item_locals[index] = try self.addLocal(self.builder.symbols.fresh(), item_ty);
         }
 
-        const body = try self.lowerParseTupleItemFromState(
+        const start_try = try self.lowerParseFormatMethod(
+            "parse_tuple_start",
+            &.{ encoding_expr, state_expr, len_expr },
+            &.{ encoding_ty, state_ty, u64_ty },
+            encoding_ty,
+            state_try_ty,
+        );
+        const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const body = try self.lowerParseTupleElement(
             item_tys,
             tuple_ty,
             encoding_expr,
             encoding_ty,
-            try self.localExpr(cursor_local, state_ty),
+            cursor_local,
             state_ty,
             ret_ty,
             item_locals,
             0,
             precomputed_plan,
         );
-        return try self.sequenceTry(start_try, start_try_ty, cursor_local, body, ret_ty);
-    }
-
-    fn lowerParseTupleItemFromState(
-        self: *BodyContext,
-        item_tys: []const Type.TypeId,
-        tuple_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_expr: DraftExprId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        item_locals: []const DraftLocalId,
-        item_index: usize,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
-    ) Allocator.Error!DraftExprId {
-        const ret_info = self.tryInfo(ret_ty);
-        const next_event_ty = try self.parseArrayEventType(state_ty, "Element", "Done");
-        const next_try_ty = try self.tryTypeLike(ret_ty, next_event_ty, ret_info.err_ty);
-        const next_try = try self.lowerParseFormatMethod(
-            "parse_array_next",
-            &.{ encoding_expr, state_expr },
-            &.{ encoding_ty, state_ty },
-            encoding_ty,
-            next_try_ty,
-        );
-        const event_local = try self.addLocal(self.builder.symbols.fresh(), next_event_ty);
-        const event_body = try self.lowerParseTupleNextEvent(
-            item_tys,
-            tuple_ty,
-            encoding_expr,
-            encoding_ty,
-            state_ty,
-            ret_ty,
-            item_locals,
-            item_index,
-            event_local,
-            next_event_ty,
-            precomputed_plan,
-        );
-        return try self.sequenceTry(next_try, next_try_ty, event_local, event_body, ret_ty);
-    }
-
-    fn lowerParseTupleNextEvent(
-        self: *BodyContext,
-        item_tys: []const Type.TypeId,
-        tuple_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        item_locals: []const DraftLocalId,
-        item_index: usize,
-        event_local: DraftLocalId,
-        event_ty: Type.TypeId,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
-    ) Allocator.Error!DraftExprId {
-        const element_tag = self.monoTagByText(event_ty, "Element");
-        const element_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const element_state_pat = try self.bindPat(element_state_local, state_ty);
-        const element_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = element_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{element_state_pat}),
-        } } });
-        const element_state_expr = try self.localExpr(element_state_local, state_ty);
-        const element_body = if (item_index < item_tys.len)
-            try self.lowerParseTupleElement(
-                item_tys,
-                tuple_ty,
-                encoding_expr,
-                encoding_ty,
-                state_ty,
-                ret_ty,
-                item_locals,
-                item_index,
-                element_state_local,
-                precomputed_plan,
-            )
-        else
-            try self.invalidValueParseResult(encoding_expr, element_state_expr, encoding_ty, state_ty, ret_ty);
-
-        const done_tag = self.monoTagByText(event_ty, "Done");
-        const done_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const done_state_pat = try self.bindPat(done_state_local, state_ty);
-        const done_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = done_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{done_state_pat}),
-        } } });
-        const done_state_expr = try self.localExpr(done_state_local, state_ty);
-        const done_body = if (item_index == item_tys.len)
-            try self.lowerParseTupleDone(item_tys, tuple_ty, item_locals, done_state_expr, state_ty, ret_ty)
-        else
-            try self.invalidValueParseResult(encoding_expr, done_state_expr, encoding_ty, state_ty, ret_ty);
-
-        const branches = [_]DraftBranch{
-            .{ .pat = done_pat, .body = done_body },
-            .{ .pat = element_pat, .body = element_body },
-        };
-        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
-            .scrutinee = try self.localExpr(event_local, event_ty),
-            .branches = try self.addBranchSpan(&branches),
-        } } });
+        return try self.sequenceTry(start_try, state_try_ty, cursor_local, body, ret_ty);
     }
 
     fn lowerParseTupleElement(
@@ -19284,116 +19483,159 @@ const BodyContext = struct {
         tuple_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
+        cursor_local: DraftLocalId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         item_locals: []const DraftLocalId,
         item_index: usize,
-        item_state_local: DraftLocalId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const len_expr = try self.intLiteralExpr(@intCast(item_tys.len), u64_ty);
+        const state_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
+
+        if (item_index == item_tys.len) {
+            const end_try = try self.lowerParseFormatMethod(
+                "parse_tuple_end",
+                &.{ encoding_expr, try self.localExpr(cursor_local, state_ty), len_expr },
+                &.{ encoding_ty, state_ty, u64_ty },
+                encoding_ty,
+                state_try_ty,
+            );
+            const end_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+            const done_body = try self.lowerParseTupleDone(
+                item_tys,
+                tuple_ty,
+                item_locals,
+                try self.localExpr(end_local, state_ty),
+                state_ty,
+                ret_ty,
+            );
+            return try self.sequenceTry(end_try, state_try_ty, end_local, done_body, ret_ty);
+        }
+
         const item_ty = item_tys[item_index];
-        const item_parse_ok_ty = try self.parseResultOkType(item_ty, state_ty);
-        const item_parse_ret_ty = try self.tryTypeLike(ret_ty, item_parse_ok_ty, ret_info.err_ty);
-        const item_parse = try self.lowerParseShapeHelperCall(
-            item_ty,
-            encoding_expr,
-            encoding_ty,
-            try self.localExpr(item_state_local, state_ty),
-            state_ty,
-            item_parse_ret_ty,
-            precomputed_plan,
-        );
+        const parse_ok_ty = try self.parseResultOkType(item_ty, state_ty);
+        const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
         const value_name = try self.builder.program.names.internRecordFieldLabel("value");
         const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
-        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const parsed_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
 
-        const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
-        const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
-        const after_try = try self.lowerParseFormatMethod(
-            "parse_array_after_element",
-            &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
-            &.{ encoding_ty, state_ty },
-            encoding_ty,
-            after_try_ty,
-        );
-        const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
-        const after_body = try self.lowerParseTupleAfterElementEvent(
+        const rest_body = try self.lowerParseTupleElement(
             item_tys,
             tuple_ty,
             encoding_expr,
             encoding_ty,
+            parsed_rest_local,
+            state_ty,
+            ret_ty,
+            item_locals,
+            item_index + 1,
+            precomputed_plan,
+        );
+
+        const parse_expr = try self.lowerParseShapeHelperCall(
+            item_ty,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(cursor_local, state_ty),
+            state_ty,
+            parse_ret_ty,
+            precomputed_plan,
+        );
+        const element_body = try self.sequenceTryRecord(
+            parse_expr,
+            parse_ret_ty,
+            item_locals[item_index],
+            value_name,
+            parsed_rest_local,
+            rest_name,
+            rest_body,
+            ret_ty,
+        );
+
+        // Every element after the first is preceded by a separator the format
+        // consumes, told which element is coming and how many there are.
+        if (item_index == 0) return element_body;
+
+        const index_expr = try self.intLiteralExpr(@intCast(item_index), u64_ty);
+        const next_try = try self.lowerParseFormatMethod(
+            "parse_tuple_next",
+            &.{ encoding_expr, try self.localExpr(cursor_local, state_ty), index_expr, len_expr },
+            &.{ encoding_ty, state_ty, u64_ty, u64_ty },
+            encoding_ty,
+            state_try_ty,
+        );
+        const separated_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const separated_body = try self.lowerParseTupleElementAfterSeparator(
+            item_tys,
+            tuple_ty,
+            encoding_expr,
+            encoding_ty,
+            separated_local,
             state_ty,
             ret_ty,
             item_locals,
             item_index,
-            after_event_local,
-            after_event_ty,
             precomputed_plan,
         );
-        const sequenced_after = try self.sequenceTry(after_try, after_try_ty, after_event_local, after_body, ret_ty);
-        return try self.sequenceTryRecord(item_parse, item_parse_ret_ty, item_locals[item_index], value_name, rest_local, rest_name, sequenced_after, ret_ty);
+        return try self.sequenceTry(next_try, state_try_ty, separated_local, separated_body, ret_ty);
     }
 
-    fn lowerParseTupleAfterElementEvent(
+    /// The element read itself, with the cursor already past the separator.
+    fn lowerParseTupleElementAfterSeparator(
         self: *BodyContext,
         item_tys: []const Type.TypeId,
         tuple_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
+        cursor_local: DraftLocalId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
         item_locals: []const DraftLocalId,
         item_index: usize,
-        event_local: DraftLocalId,
-        event_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        const continue_tag = self.monoTagByText(event_ty, "Continue");
-        const continue_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const continue_state_pat = try self.bindPat(continue_state_local, state_ty);
-        const continue_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = continue_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{continue_state_pat}),
-        } } });
-        const continue_state_expr = try self.localExpr(continue_state_local, state_ty);
-        const continue_body = if (item_index + 1 < item_tys.len)
-            try self.lowerParseTupleItemFromState(
-                item_tys,
-                tuple_ty,
-                encoding_expr,
-                encoding_ty,
-                continue_state_expr,
-                state_ty,
-                ret_ty,
-                item_locals,
-                item_index + 1,
-                precomputed_plan,
-            )
-        else
-            try self.invalidValueParseResult(encoding_expr, continue_state_expr, encoding_ty, state_ty, ret_ty);
+        const ret_info = self.tryInfo(ret_ty);
+        const item_ty = item_tys[item_index];
+        const parse_ok_ty = try self.parseResultOkType(item_ty, state_ty);
+        const parse_ret_ty = try self.tryTypeLike(ret_ty, parse_ok_ty, ret_info.err_ty);
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const parsed_rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
 
-        const done_tag = self.monoTagByText(event_ty, "Done");
-        const done_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const done_state_pat = try self.bindPat(done_state_local, state_ty);
-        const done_pat = try self.addPat(.{ .ty = event_ty, .data = .{ .tag = .{
-            .name = done_tag.name,
-            .payloads = try self.addPatSpan(&[_]DraftPatId{done_state_pat}),
-        } } });
-        const done_state_expr = try self.localExpr(done_state_local, state_ty);
-        const done_body = if (item_index + 1 == item_tys.len)
-            try self.lowerParseTupleDone(item_tys, tuple_ty, item_locals, done_state_expr, state_ty, ret_ty)
-        else
-            try self.invalidValueParseResult(encoding_expr, done_state_expr, encoding_ty, state_ty, ret_ty);
-
-        const branches = [_]DraftBranch{
-            .{ .pat = continue_pat, .body = continue_body },
-            .{ .pat = done_pat, .body = done_body },
-        };
-        return try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
-            .scrutinee = try self.localExpr(event_local, event_ty),
-            .branches = try self.addBranchSpan(&branches),
-        } } });
+        const rest_body = try self.lowerParseTupleElement(
+            item_tys,
+            tuple_ty,
+            encoding_expr,
+            encoding_ty,
+            parsed_rest_local,
+            state_ty,
+            ret_ty,
+            item_locals,
+            item_index + 1,
+            precomputed_plan,
+        );
+        const parse_expr = try self.lowerParseShapeHelperCall(
+            item_ty,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(cursor_local, state_ty),
+            state_ty,
+            parse_ret_ty,
+            precomputed_plan,
+        );
+        return try self.sequenceTryRecord(
+            parse_expr,
+            parse_ret_ty,
+            item_locals[item_index],
+            value_name,
+            parsed_rest_local,
+            rest_name,
+            rest_body,
+            ret_ty,
+        );
     }
 
     fn lowerParseTupleDone(
@@ -19418,6 +19660,11 @@ const BodyContext = struct {
         return try self.parseResultOk(ret_ty, tuple_expr, rest_expr, state_ty);
     }
 
+
+    /// A format that knows its element count up front returns `Counted`, and
+    /// the driver then reads exactly that many elements with no further format
+    /// calls and preallocates the list. Otherwise the element loop asks the
+    /// format after every element whether more follow.
     fn lowerParseListFromState(
         self: *BodyContext,
         elem_ty: Type.TypeId,
@@ -19430,10 +19677,27 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const start_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
-        const start_try = try self.lowerParseFormatMethod("parse_array_start", &.{ encoding_expr, state_expr }, &.{ encoding_ty, state_ty }, encoding_ty, start_try_ty);
+        const u64_ty = try self.builder.primitiveType(.u64);
+        const bool_ty = try self.builder.primitiveType(.bool);
+        const start_event_ty = try self.parseCountedStartEventType(state_ty);
+        const start_try_ty = try self.tryTypeLike(ret_ty, start_event_ty, ret_info.err_ty);
+        const start_try = try self.lowerParseFormatMethod(
+            "parse_list_start",
+            &.{ encoding_expr, state_expr },
+            &.{ encoding_ty, state_ty },
+            encoding_ty,
+            start_try_ty,
+        );
+        const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
+
         const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const list_local = try self.addLocal(self.builder.symbols.fresh(), list_ty);
+        const ctl = ListLoopCtl{
+            .counted_local = try self.addLocal(self.builder.symbols.fresh(), bool_ty),
+            .remaining_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty),
+            .bool_ty = bool_ty,
+            .u64_ty = u64_ty,
+        };
         const loop_body = try self.lowerParseListLoopBody(
             elem_ty,
             list_ty,
@@ -19442,25 +19706,86 @@ const BodyContext = struct {
             state_ty,
             cursor_local,
             list_local,
+            ctl,
             ret_ty,
             precomputed_plan,
         );
-        const u64_ty = try self.builder.primitiveType(.u64);
-        const initial_list = try self.lowLevelExpr(.list_with_capacity, &.{try self.intLiteralExpr(0, u64_ty)}, list_ty);
         const loop_params = [_]BodyTypedLocal{
             .{ .local = cursor_local, .ty = state_ty },
             .{ .local = list_local, .ty = list_ty },
+            .{ .local = ctl.counted_local, .ty = bool_ty },
+            .{ .local = ctl.remaining_local, .ty = u64_ty },
         };
+
+        const init_counted_name = try self.builder.program.names.internRecordFieldLabel("counted");
+        const init_cursor_name = try self.builder.program.names.internRecordFieldLabel("cursor");
+        const init_remaining_name = try self.builder.program.names.internRecordFieldLabel("remaining");
+        const init_field_tys = [_]Type.Field{
+            .{ .name = init_counted_name, .ty = bool_ty },
+            .{ .name = init_cursor_name, .ty = state_ty },
+            .{ .name = init_remaining_name, .ty = u64_ty },
+        };
+        const init_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &init_field_tys) });
+
+        const counted_tag = self.monoTagByText(start_event_ty, "Counted");
+        const counted_payload_ty = self.singleTagPayloadType(counted_tag, "list parse Counted start event");
+        const counted_payload_local = try self.addLocal(self.builder.symbols.fresh(), counted_payload_ty);
+        const counted_payload_pat = try self.bindPat(counted_payload_local, counted_payload_ty);
+        const counted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
+            .name = counted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{counted_payload_pat}),
+        } } });
+        const counted_init_fields = [_]DraftFieldExpr{
+            .{ .name = init_counted_name, .value = try self.boolLiteral(true, bool_ty) },
+            .{ .name = init_cursor_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "rest") },
+            .{ .name = init_remaining_name, .value = try self.recordPayloadFieldAccess(counted_payload_local, counted_payload_ty, "len") },
+        };
+        const counted_init = try self.addExpr(.{
+            .ty = init_ty,
+            .data = .{ .record = try self.addFieldExprSpan(&counted_init_fields) },
+        });
+
+        const uncounted_tag = self.monoTagByText(start_event_ty, "Uncounted");
+        const uncounted_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const uncounted_state_pat = try self.bindPat(uncounted_state_local, state_ty);
+        const uncounted_pat = try self.addPat(.{ .ty = start_event_ty, .data = .{ .tag = .{
+            .name = uncounted_tag.name,
+            .payloads = try self.addPatSpan(&[_]DraftPatId{uncounted_state_pat}),
+        } } });
+        const uncounted_init_fields = [_]DraftFieldExpr{
+            .{ .name = init_counted_name, .value = try self.boolLiteral(false, bool_ty) },
+            .{ .name = init_cursor_name, .value = try self.localExpr(uncounted_state_local, state_ty) },
+            .{ .name = init_remaining_name, .value = try self.intLiteralExpr(0, u64_ty) },
+        };
+        const uncounted_init = try self.addExpr(.{
+            .ty = init_ty,
+            .data = .{ .record = try self.addFieldExprSpan(&uncounted_init_fields) },
+        });
+
+        const init_branches = [_]DraftBranch{
+            .{ .pat = counted_pat, .body = counted_init },
+            .{ .pat = uncounted_pat, .body = uncounted_init },
+        };
+        const init_expr = try self.addExpr(.{ .ty = init_ty, .data = .{ .match_ = .{
+            .scrutinee = try self.localExpr(start_event_local, start_event_ty),
+            .branches = try self.addBranchSpan(&init_branches),
+        } } });
+        const init_local = try self.addLocal(self.builder.symbols.fresh(), init_ty);
+
+        const remaining_expr = try self.recordPayloadFieldAccess(init_local, init_ty, "remaining");
         const initial_values = [_]DraftExprId{
-            try self.localExpr(cursor_local, state_ty),
-            initial_list,
+            try self.recordPayloadFieldAccess(init_local, init_ty, "cursor"),
+            try self.lowLevelExpr(.list_with_capacity, &.{remaining_expr}, list_ty),
+            try self.recordPayloadFieldAccess(init_local, init_ty, "counted"),
+            try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"),
         };
-        const loop_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
+        var loop_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
             .params = try self.addTypedLocalSpan(&loop_params),
             .initial_values = try self.addExprSpan(&initial_values),
             .body = loop_body,
         } } });
-        return try self.sequenceTry(start_try, start_try_ty, cursor_local, loop_expr, ret_ty);
+        loop_expr = try self.wrapLet(init_local, init_ty, init_expr, loop_expr, ret_ty);
+        return try self.sequenceTry(start_try, start_try_ty, start_event_local, loop_expr, ret_ty);
     }
 
     fn lowerParseSetFromState(
@@ -19781,6 +20106,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         cursor_local: DraftLocalId,
         list_local: DraftLocalId,
+        ctl: ListLoopCtl,
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
@@ -19788,7 +20114,7 @@ const BodyContext = struct {
         const next_event_ty = try self.parseArrayEventType(state_ty, "Element", "Done");
         const next_try_ty = try self.tryTypeLike(ret_ty, next_event_ty, ret_info.err_ty);
         const next_try = try self.lowerParseFormatMethod(
-            "parse_array_next",
+            "parse_list_next",
             &.{ encoding_expr, try self.localExpr(cursor_local, state_ty) },
             &.{ encoding_ty, state_ty },
             encoding_ty,
@@ -19804,10 +20130,95 @@ const BodyContext = struct {
             event_local,
             next_event_ty,
             list_local,
+            ctl,
             ret_ty,
             precomputed_plan,
         );
-        return try self.sequenceTry(next_try, next_try_ty, event_local, event_body, ret_ty);
+        const uncounted_body = try self.sequenceTry(next_try, next_try_ty, event_local, event_body, ret_ty);
+
+        const counted_body = try self.lowerParseListCountedStep(
+            elem_ty,
+            list_ty,
+            encoding_expr,
+            encoding_ty,
+            state_ty,
+            cursor_local,
+            list_local,
+            ctl,
+            ret_ty,
+            precomputed_plan,
+        );
+        return try self.ifExpr(
+            try self.localExpr(ctl.counted_local, ctl.bool_ty),
+            counted_body,
+            uncounted_body,
+            ret_ty,
+        );
+    }
+
+    /// Counted mode: stop once the declared count is exhausted, otherwise read
+    /// one more element back-to-back with no intervening format call.
+    fn lowerParseListCountedStep(
+        self: *BodyContext,
+        elem_ty: Type.TypeId,
+        list_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_ty: Type.TypeId,
+        cursor_local: DraftLocalId,
+        list_local: DraftLocalId,
+        ctl: ListLoopCtl,
+        ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+    ) Allocator.Error!DraftExprId {
+        const ret_info = self.tryInfo(ret_ty);
+        const done_value = try self.parseResultOk(
+            ret_ty,
+            try self.localExpr(list_local, list_ty),
+            try self.localExpr(cursor_local, state_ty),
+            state_ty,
+        );
+        const done_body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .break_ = done_value } });
+
+        const elem_parse_ok_ty = try self.parseResultOkType(elem_ty, state_ty);
+        const elem_parse_ret_ty = try self.tryTypeLike(ret_ty, elem_parse_ok_ty, ret_info.err_ty);
+        const elem_parse = try self.lowerParseShapeHelperCall(
+            elem_ty,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(cursor_local, state_ty),
+            state_ty,
+            elem_parse_ret_ty,
+            precomputed_plan,
+        );
+        const value_name = try self.builder.program.names.internRecordFieldLabel("value");
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const elem_local = try self.addLocal(self.builder.symbols.fresh(), elem_ty);
+        const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const appended = try self.appendListElement(
+            try self.localExpr(list_local, list_ty),
+            try self.localExpr(elem_local, elem_ty),
+            list_ty,
+        );
+        const remaining_minus_one = try self.lowLevelExpr(.num_minus_wrap, &.{
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            try self.intLiteralExpr(1, ctl.u64_ty),
+        }, ctl.u64_ty);
+        const continue_body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .continue_ = .{
+            .values = try self.addExprSpan(&[_]DraftExprId{
+                try self.localExpr(rest_local, state_ty),
+                appended,
+                try self.localExpr(ctl.counted_local, ctl.bool_ty),
+                remaining_minus_one,
+            }),
+        } } });
+        const element_body = try self.sequenceTryRecord(elem_parse, elem_parse_ret_ty, elem_local, value_name, rest_local, rest_name, continue_body, ret_ty);
+
+        const remaining_is_zero = try self.lowLevelExpr(.num_is_eq, &.{
+            try self.localExpr(ctl.remaining_local, ctl.u64_ty),
+            try self.intLiteralExpr(0, ctl.u64_ty),
+        }, ctl.bool_ty);
+        return try self.ifExpr(remaining_is_zero, done_body, element_body, ret_ty);
     }
 
     fn lowerParseListNextEvent(
@@ -19820,6 +20231,7 @@ const BodyContext = struct {
         event_local: DraftLocalId,
         event_ty: Type.TypeId,
         list_local: DraftLocalId,
+        ctl: ListLoopCtl,
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
@@ -19838,6 +20250,7 @@ const BodyContext = struct {
             state_ty,
             element_state_local,
             list_local,
+            ctl,
             ret_ty,
             precomputed_plan,
         );
@@ -19876,6 +20289,7 @@ const BodyContext = struct {
         state_ty: Type.TypeId,
         element_state_local: DraftLocalId,
         list_local: DraftLocalId,
+        ctl: ListLoopCtl,
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
@@ -19899,7 +20313,7 @@ const BodyContext = struct {
         const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
         const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
         const after_try = try self.lowerParseFormatMethod(
-            "parse_array_after_element",
+            "parse_list_after_element",
             &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
             &.{ encoding_ty, state_ty },
             encoding_ty,
@@ -19914,6 +20328,7 @@ const BodyContext = struct {
             list_local,
             after_event_local,
             after_event_ty,
+            ctl,
             ret_ty,
         );
         const sequenced_after = try self.sequenceTry(after_try, after_try_ty, after_event_local, after_body, ret_ty);
@@ -19929,6 +20344,7 @@ const BodyContext = struct {
         list_local: DraftLocalId,
         event_local: DraftLocalId,
         event_ty: Type.TypeId,
+        ctl: ListLoopCtl,
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const continue_tag = self.monoTagByText(event_ty, "Continue");
@@ -19947,6 +20363,8 @@ const BodyContext = struct {
             .values = try self.addExprSpan(&[_]DraftExprId{
                 try self.localExpr(continue_state_local, state_ty),
                 continue_appended,
+                try self.localExpr(ctl.counted_local, ctl.bool_ty),
+                try self.localExpr(ctl.remaining_local, ctl.u64_ty),
             }),
         } } });
 
@@ -20333,11 +20751,6 @@ const BodyContext = struct {
         };
         const try_field_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &try_field_fields) });
 
-        const rest_fields = [_]Type.Field{
-            .{ .name = rest_name, .ty = state_ty },
-        };
-        const rest_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &rest_fields) });
-
         const continue_name = try self.builder.program.names.internTagLabel("Continue");
         const done_name = try self.builder.program.names.internTagLabel("Done");
         const field_name = try self.builder.program.names.internTagLabel("Field");
@@ -20347,12 +20760,12 @@ const BodyContext = struct {
             .{
                 .name = continue_name,
                 .checked_name = continue_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{rest_payload_ty}),
+                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
             },
             .{
                 .name = done_name,
                 .checked_name = done_name,
-                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{rest_payload_ty}),
+                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
             },
             .{
                 .name = field_name,
@@ -20371,6 +20784,41 @@ const BodyContext = struct {
             },
         };
         return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTagVariants(&self.builder.program.names, &tags) });
+    }
+
+    /// The event a variable-length container's `parse_*_start` returns: either
+    /// the format declared the entry count up front (`Counted`) or the driver
+    /// must ask after every entry whether more follow (`Uncounted`).
+    fn parseCountedStartEventType(
+        self: *BodyContext,
+        state_ty: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const len_name = try self.builder.program.names.internRecordFieldLabel("len");
+        const rest_name = try self.builder.program.names.internRecordFieldLabel("rest");
+        const u64_ty = try self.builder.primitiveType(.u64);
+
+        const counted_fields = [_]Type.Field{
+            .{ .name = len_name, .ty = u64_ty },
+            .{ .name = rest_name, .ty = state_ty },
+        };
+        const counted_payload_ty = try self.builder.program.types.add(.{ .record = try self.builder.program.types.addRecordFields(&self.builder.program.names, &counted_fields) });
+
+        const counted_name = try self.builder.program.names.internTagLabel("Counted");
+        const uncounted_name = try self.builder.program.names.internTagLabel("Uncounted");
+        var tags = [_]Type.Tag{
+            .{
+                .name = counted_name,
+                .checked_name = counted_name,
+                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{counted_payload_ty}),
+            },
+            .{
+                .name = uncounted_name,
+                .checked_name = uncounted_name,
+                .payloads = try self.builder.program.types.addSpan(&[_]Type.TypeId{state_ty}),
+            },
+        };
+        std.mem.sort(Type.Tag, tags[0..], &self.builder.program.names, solve.tagLessThan);
+        return try self.builder.program.types.add(.{ .tag_union = try self.builder.program.types.addTags(&tags) });
     }
 
     fn parseObjectEventType(
