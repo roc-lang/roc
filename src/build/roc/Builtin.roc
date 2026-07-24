@@ -3572,6 +3572,16 @@ Builtin :: [].{
 		append_if_ok : List(a), Try(a, err) -> List(a)
 		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
 
+		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
+		## if the value is `Err`.
+		## ```roc
+		## expect List.prepend_if_ok([2, 3], Ok(1)) == [1, 2, 3]
+		##
+		## expect List.prepend_if_ok([2, 3], Err(NotFound)) == [2, 3]
+		## ```
+		prepend_if_ok : List(a), Try(a, err) -> List(a)
+		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
+
 		## Add a single element to the beginning of a list.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
@@ -21335,6 +21345,13 @@ list_append_if_ok : List(a), Try(a, err) -> List(a)
 list_append_if_ok = |list, maybe_item|
 	match maybe_item {
 		Ok(item) => List.append(list, item)
+		Err(_) => list
+	}
+
+list_prepend_if_ok : List(a), Try(a, err) -> List(a)
+list_prepend_if_ok = |list, maybe_item|
+	match maybe_item {
+		Ok(item) => List.prepend(list, item)
 		Err(_) => list
 	}
 
