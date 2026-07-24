@@ -194,10 +194,65 @@ pub const SpecIdentity = struct {
 };
 
 /// Lifecycle state for a specialization record.
+///
+/// `discovering` and `representation_ready` are the section 11.3 lifecycle
+/// states threaded through as inert pass-throughs (reunify.md Slice 7 Stage C):
+/// `markLowering` walks `reserved → discovering → lowering`, and the seal path
+/// hops `lowering → representation_ready` right before `markReady`. The current
+/// `lowering` state is retained until the flip; the observable resting states a
+/// record is found in stay `reserved`, `lowering`, and `ready`, so every
+/// existing status assert holds.
 pub const SpecStatus = enum(u8) {
     reserved,
+    discovering,
     lowering,
+    representation_ready,
     ready,
+};
+
+/// Parallel, lookup-inert FinalSpecId identity of a specialization record
+/// (reunify.md 11.1/11.5, Slice 7 Stage C). Computed at `markReady` from the
+/// record's representation-erased logical binding and its sealed
+/// representation-input digests; it is stored but is NEVER a reuse or cache key
+/// — the digest-keyed `SpecLookupAddress` remains the only reuse key. The
+/// digests stay zero and `computed` stays false until `markReady` fills them,
+/// and in builds where the measurement is compiled out they remain zero.
+pub const FinalSpecId = struct {
+    /// The combined FinalSpecId digest: the logical-identity digest plus the
+    /// sorted sealed representation-input digests.
+    final_spec_id: names.TypeDigest = .{},
+    /// Callable identity, representation-erased logical binding, and method
+    /// scope — everything that fixes the logical identity before representation.
+    logical_identity_digest: names.TypeDigest = .{},
+    /// Checked evidence identity placeholder. Production spec records carry no
+    /// durable evidence reference yet, so this stays zero: inert carried data
+    /// until the section 11 lifecycle supplies a checked evidence identity.
+    evidence_digest: names.TypeDigest = .{},
+    /// The representation-erased solved logical skeleton digest — the collision
+    /// witness two records sharing one FinalSpecId must agree on.
+    output_solved_digest: names.TypeDigest = .{},
+    /// Whether `markReady` filled the digests above from a reducible request.
+    computed: bool = false,
+};
+
+/// Byte range of one specialization record's serialized FinalSpecId component
+/// inside the `final_spec_components` cache section (reunify.md 11.5, Slice 7
+/// Stage D). Indexed by `SpecId`; a zero-length slice means the record carries
+/// no serialized component (its FinalSpecId was not computed).
+pub const FinalSpecComponentSlice = extern struct {
+    offset: u32 = 0,
+    len: u32 = 0,
+};
+
+/// One specialization record's sealing-component membership (reunify.md 11.5,
+/// Slice 7 Stage D). A mutually-dependent sealing component is serialized with a
+/// relocation table proving no cross-member representation edge is missing.
+/// Stage C emits singleton components — `first_spec` is the record's own id and
+/// `member_count` is one — because production sealing-component grouping is not
+/// observable yet; Stage E supplies real grouping.
+pub const FinalSpecRelocation = extern struct {
+    first_spec: u32 = 0,
+    member_count: u32 = 1,
 };
 
 /// Durable record describing one reserved, lowering, or ready specialization.
@@ -216,6 +271,9 @@ pub const SpecRecord = struct {
     solved_fn_ty_digest: names.TypeDigest,
     fn_id: FnId,
     status: SpecStatus,
+    /// The parallel, lookup-inert FinalSpecId identity (Slice 7 Stage C). Filled
+    /// at `markReady`; never a reuse or cache key.
+    final_spec: FinalSpecId = .{},
 };
 
 /// Compare the fields that make two function templates identical for Monotype.

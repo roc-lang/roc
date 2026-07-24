@@ -35,6 +35,7 @@ const check = @import("check");
 const MonoType = @import("../monotype/type.zig");
 const monotype_ast = @import("../monotype/ast.zig");
 const census = @import("../monotype/census.zig");
+const fsid = @import("../monotype/final_spec_id.zig");
 const logic = @import("logical_identity.zig");
 const closure = @import("../representation_closure.zig");
 
@@ -1414,6 +1415,88 @@ test "shadow does not run without the enabling env var" {
     // The tests run without ROC_REUNIFY_SHADOW set, so the gate is off and the
     // shadow performs no work: production is untouched by default.
     try std.testing.expect(!shouldRun());
+}
+
+test "production FinalSpecId matches the shadow sealing computation" {
+    const allocator = std.testing.allocator;
+
+    var program_names = names.NameStore.init(allocator);
+    defer program_names.deinit();
+
+    var store = MonoType.Store.init(allocator);
+    defer store.deinit();
+
+    // A representation-bearing request type — fn (Iter U64) -> U64 where Iter is
+    // a minted iterator nominal — so the sealing path is genuinely exercised: the
+    // iterator becomes one sealed representation input, not the trivial empty set.
+    const owner_module: [32]u8 = [_]u8{0x5A} ** 32;
+    const u64_ty = try store.add(.{ .primitive = .u64 });
+    const backing_ty = try store.add(.{ .primitive = .str });
+    const module_id = try program_names.internModuleIdentity(&owner_module);
+    const iter_name = try program_names.internTypeName("Iter");
+    const iter_args = try store.addSpan(&.{u64_ty});
+    const iter_ty = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{ .bytes = owner_module }, .ty = @enumFromInt(1) },
+        .def = .{
+            .module = module_id,
+            .type_name = iter_name,
+            .source_decl = 3,
+            .iterator_representation = .minted,
+            .iterator_kind = .list,
+            .iterator_depth = 1,
+        },
+        .kind = .nominal,
+        .builtin_owner = .iter,
+        .args = iter_args,
+        .backing = .{ .ty = backing_ty, .use = .inspectable },
+    } });
+    const fn_args = try store.addSpan(&.{iter_ty});
+    const request_fn_ty = try store.add(.{ .func = .{ .args = fn_args, .ret = u64_ty } });
+
+    const record = monotype_ast.SpecRecord{
+        .identity = .{
+            .callable = .{ .proc_template = .{ .module = .{ .bytes = [_]u8{0x11} ** 32 }, .proc_base = 2, .template = 7 } },
+            .method_scope = .{ .bytes = [_]u8{0x22} ** 32 },
+            .source_fn_ty_digest = .{},
+            .request_fn_ty_digest = .{},
+            .request_fn_ty = request_fn_ty,
+        },
+        .request_fn_ty = request_fn_ty,
+        .request_fn_ty_digest = .{},
+        .solved_fn_ty = request_fn_ty,
+        .solved_fn_ty_digest = .{},
+        .fn_id = @enumFromInt(9),
+        .status = .ready,
+    };
+
+    // Shadow side: the independent LogicalStore erasure plus the sealing census's
+    // private digest composition.
+    var logical = LogicalStore.init(allocator);
+    defer logical.deinit();
+    var rep_inputs = std.ArrayList(logic.RepresentationInput).empty;
+    defer rep_inputs.deinit(allocator);
+    var reason: SkipReason = undefined;
+    const erased = try logical.walkRequestSealing(&store, &program_names, request_fn_ty, &rep_inputs, &reason);
+    try std.testing.expectEqual(@as(usize, 1), rep_inputs.items.len);
+    var relate_calls: u64 = 0;
+    var sealed = try sealRepresentationInputs(allocator, &program_names, rep_inputs.items, &relate_calls);
+    defer sealed.deinit(allocator);
+    const shadow_lid = logicalIdentityDigest(&logical, record, erased);
+    const shadow_fsid = finalSpecIdDigest(shadow_lid, sealed.items);
+
+    // Production side: the standalone module the flip keeps.
+    var computer = fsid.Computer.init(allocator);
+    defer computer.deinit();
+    var produced = (try computer.compute(record, &store, &program_names)) orelse return error.TestUnexpectedResult;
+    defer produced.deinit(allocator);
+
+    try std.testing.expectEqualSlices(u8, &shadow_lid, &produced.logical_identity_digest.bytes);
+    try std.testing.expectEqualSlices(u8, &shadow_fsid, &produced.final_spec_id.bytes);
+    // The production input-digest list matches the shadow's sealed inputs.
+    try std.testing.expectEqual(sealed.items.len, produced.input_digests.len);
+    for (sealed.items, produced.input_digests) |shadow_digest, produced_digest| {
+        try std.testing.expectEqualSlices(u8, &shadow_digest, &produced_digest.bytes);
+    }
 }
 
 test "declarations are referenced" {

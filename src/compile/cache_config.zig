@@ -61,7 +61,8 @@ pub const Constants = struct {
     /// 36: checked store carries a consuming-side imported-scheme table (projected defining scheme root + binders).
     /// 37: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
     /// 38: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
-    pub const CACHE_VERSION = 38;
+    /// 39: Monotype specialization records carry a parallel FinalSpecId identity and the spec cache gained FinalSpecId component/relocation sections (spec cache FORMAT_VERSION 10).
+    pub const CACHE_VERSION = 39;
 };
 
 /// Configuration for the Roc cache system.

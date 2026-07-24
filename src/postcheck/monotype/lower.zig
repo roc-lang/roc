@@ -1393,6 +1393,8 @@ const Builder = struct {
             switch (record.status) {
                 .ready,
                 .lowering,
+                .discovering,
+                .representation_ready,
                 => {
                     return existing.def;
                 },
@@ -1418,6 +1420,8 @@ const Builder = struct {
                 switch (hit.status) {
                     .ready,
                     .lowering,
+                    .discovering,
+                    .representation_ready,
                     => {
                         return existing.def;
                     },
@@ -1770,6 +1774,10 @@ const Builder = struct {
     fn markTemplateReady(self: *Builder, fn_id: Ast.FnId, fn_ty: Type.TypeId) Allocator.Error!void {
         const entry = self.lowered_templates.get(fn_id) orelse
             Common.invariant("lowered procedure template definition disappeared before completion");
+        // Hop through the section 11.3 `representation_ready` state as an inert
+        // pass-through right before sealing the record (reunify.md Slice 7 Stage
+        // C): representation inputs are settled once the body has lowered.
+        self.spec_store.markRepresentationReady(entry.spec);
         try self.spec_store.markReady(entry.spec, fn_ty, self.specializationTypeDigest(fn_ty));
     }
 
@@ -1854,7 +1862,10 @@ const Builder = struct {
         switch (status) {
             .reserved => {},
             .lowering => self.spec_store.markLowering(spec),
-            .ready => Common.invariant("fresh Monotype specialization record cannot be created ready"),
+            .discovering,
+            .representation_ready,
+            .ready,
+            => Common.invariant("fresh Monotype specialization record cannot be created past reservation"),
         }
         return spec;
     }
@@ -3419,6 +3430,8 @@ const Builder = struct {
             switch (hit.status) {
                 .ready,
                 .lowering,
+                .discovering,
+                .representation_ready,
                 => return hit.fn_id,
                 .reserved => Common.invariant("Monotype nested function specialization was reserved without lowering"),
             }

@@ -30,8 +30,22 @@ const check = @import("check");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const census = @import("census.zig");
+const fsid = @import("final_spec_id.zig");
 
 const names = check.CheckedNames;
+
+/// Whether the parallel FinalSpecId identity is computed and censused. It is a
+/// measurement path (reunify.md Slice 7 Stage C): compiled in only where the
+/// census is, so release lowering carries the same zero-cost inert field.
+const final_spec_enabled = census.enabled;
+
+/// The collision witness the FinalSpecId census keeps per FinalSpecId: the
+/// erased solved logical skeleton the first record sealed. A later record with
+/// the same FinalSpecId is the same specialization and must reduce to a
+/// structurally equal solved skeleton — exact id equality within one computer.
+const FinalWitness = struct {
+    solved_logical: ?fsid.LogicalId,
+};
 
 /// Deterministic counters used by specialization-shape tests.
 pub const Counters = struct {
@@ -196,6 +210,12 @@ pub const SpecBuilder = struct {
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
     refined_digest_shadow: if (identity_shadow_enabled) std.ArrayList(RefinedDigestShadow) else void,
+    /// The parallel FinalSpecId computer (reunify.md Slice 7 Stage C). Its
+    /// erasure store persists across records so solved skeletons compare by id.
+    final_spec_computer: if (final_spec_enabled) fsid.Computer else void,
+    /// FinalSpecId -> the first record's collision witness, so a later record
+    /// with the same FinalSpecId is classified equivalent or divergent.
+    final_spec_by_id: if (final_spec_enabled) std.AutoHashMap([32]u8, FinalWitness) else void,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -213,10 +233,16 @@ pub const SpecBuilder = struct {
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
             .refined_digest_shadow = if (identity_shadow_enabled) .empty else {},
+            .final_spec_computer = if (final_spec_enabled) fsid.Computer.init(allocator) else {},
+            .final_spec_by_id = if (final_spec_enabled) std.AutoHashMap([32]u8, FinalWitness).init(allocator) else {},
         };
     }
 
     pub fn deinit(self: *SpecBuilder) void {
+        if (final_spec_enabled) {
+            self.final_spec_by_id.deinit();
+            self.final_spec_computer.deinit();
+        }
         if (identity_shadow_enabled) {
             self.refined_digest_shadow.deinit(self.allocator);
             self.reserved_identities.deinit(self.allocator);
@@ -445,7 +471,24 @@ pub const SpecBuilder = struct {
         if (record.status != .reserved) {
             invariant("Monotype specialization began lowering from a non-reserved status");
         }
+        // Walk the section 11.3 lifecycle states as inert pass-throughs: the
+        // record passes through `discovering` on its way to `lowering`, its
+        // resting state until the seal path advances it.
+        record.status = .discovering;
         record.status = .lowering;
+    }
+
+    /// Hop a lowering record through the section 11.3 `representation_ready`
+    /// state right before it is marked ready (reunify.md Slice 7 Stage C). The
+    /// seal path calls this once representation inputs are sealed; it is an inert
+    /// state hop that `markReady` then accepts alongside the direct lowering
+    /// path a body without a seal step takes.
+    pub fn markRepresentationReady(self: *SpecBuilder, spec: Ast.SpecId) void {
+        const record = self.recordPtr(spec);
+        if (record.status != .lowering) {
+            invariant("Monotype specialization sealed representation from a non-lowering status");
+        }
+        record.status = .representation_ready;
     }
 
     /// Complete a record with the solved type its body evidence produced. If
@@ -459,7 +502,7 @@ pub const SpecBuilder = struct {
         solved_fn_ty_digest: names.TypeDigest,
     ) std.mem.Allocator.Error!void {
         const record = self.recordPtr(spec);
-        if (record.status != .lowering) {
+        if (record.status != .lowering and record.status != .representation_ready) {
             invariant("Monotype specialization was marked ready without lowering");
         }
         record.solved_fn_ty = solved_fn_ty;
@@ -468,6 +511,46 @@ pub const SpecBuilder = struct {
         if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
             census.bump("solved_digest_differs_from_request");
             try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.source_fn_ty_digest, solved_fn_ty_digest, spec);
+        }
+        try self.computeFinalSpec(record);
+    }
+
+    /// Compute the record's parallel, lookup-inert FinalSpecId and census it
+    /// (reunify.md 11.1/11.5, Slice 7 Stage C). Compiled out of builds without
+    /// the census, so release lowering carries the field as an unchanged zero.
+    /// The FinalSpecId is never a reuse or cache key.
+    fn computeFinalSpec(self: *SpecBuilder, record: *Ast.SpecRecord) std.mem.Allocator.Error!void {
+        if (comptime final_spec_enabled) {
+            var computed = (try self.final_spec_computer.compute(record.*, self.types, self.names)) orelse {
+                census.bump("final_spec_id_skipped");
+                return;
+            };
+            // The Stage C record carries only the scalar identity; the sealed
+            // input and output digest lists are Stage D cache data recomputed at
+            // serialize time, so they are released here.
+            defer computed.deinit(self.allocator);
+            record.final_spec = .{
+                .final_spec_id = computed.final_spec_id,
+                .logical_identity_digest = computed.logical_identity_digest,
+                .evidence_digest = .{},
+                .output_solved_digest = computed.output_solved_digest,
+                .computed = true,
+            };
+            census.bump("final_spec_id_computed");
+
+            const gop = try self.final_spec_by_id.getOrPut(computed.final_spec_id.bytes);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{ .solved_logical = computed.solved_logical };
+                return;
+            }
+            const prior = gop.value_ptr.*;
+            if (prior.solved_logical == null or computed.solved_logical == null) {
+                census.bump("final_spec_id_collisions_solved_skipped");
+            } else if (prior.solved_logical.? == computed.solved_logical.?) {
+                census.bump("final_spec_id_collisions_equivalent");
+            } else {
+                census.bump("final_spec_id_collisions_divergent");
+            }
         }
     }
 
@@ -659,6 +742,50 @@ fn invariant(comptime message: []const u8) noreturn {
 
 test "monotype specialize declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "monotype spec builder threads the section 11.3 lifecycle states as pass-throughs" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var type_store = Type.Store.init(std.testing.allocator);
+    defer type_store.deinit();
+
+    const unit_ty = try type_store.add(.zst);
+    const identity = testSpecIdentity(unit_ty, digestWithFirstByte(1), digestWithFirstByte(2));
+
+    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer records.deinit(std.testing.allocator);
+
+    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
+    defer builder.deinit();
+
+    // The seal path advances reserved -> lowering -> representation_ready -> ready,
+    // and each resting state observed is exactly the state its transition set.
+    const reserved = try builder.reserve(identity, @enumFromInt(1));
+    const spec = reserved.spec orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(Ast.SpecStatus.reserved, builder.records.get(@intFromEnum(spec)).status);
+
+    builder.markLowering(spec);
+    try std.testing.expectEqual(Ast.SpecStatus.lowering, builder.records.get(@intFromEnum(spec)).status);
+
+    builder.markRepresentationReady(spec);
+    try std.testing.expectEqual(Ast.SpecStatus.representation_ready, builder.records.get(@intFromEnum(spec)).status);
+
+    try builder.markReady(spec, unit_ty, identity.request_fn_ty_digest);
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.records.get(@intFromEnum(spec)).status);
+    builder.validateLookupIntegrity();
+
+    // A record whose body needs no seal step still reaches ready straight from
+    // lowering: markReady accepts both the lowering and representation_ready
+    // resting states, so the existing direct path holds verbatim.
+    const direct_identity = testSpecIdentity(unit_ty, digestWithFirstByte(4), digestWithFirstByte(5));
+    const direct = try builder.reserve(direct_identity, @enumFromInt(2));
+    const direct_spec = direct.spec orelse return error.TestUnexpectedResult;
+    builder.markLowering(direct_spec);
+    try builder.markReady(direct_spec, unit_ty, direct_identity.request_fn_ty_digest);
+    try std.testing.expectEqual(Ast.SpecStatus.ready, builder.records.get(@intFromEnum(direct_spec)).status);
+    builder.validateLookupIntegrity();
 }
 
 test "monotype spec builder reuses exact specialization identities" {

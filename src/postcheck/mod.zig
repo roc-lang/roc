@@ -22,6 +22,10 @@ pub const Monotype = struct {
     /// engine from the graph and Debug-asserts the sealed outcome (reunify.md
     /// section 10, Slice 7 Stage B). Off by default; never selects lowering.
     pub const RepresentationMirror = @import("monotype/representation_mirror.zig");
+    /// The parallel, lookup-inert FinalSpecId identity computed on the spec
+    /// builder at markReady (reunify.md 11.1/11.5, Slice 7 Stage C). Never a
+    /// reuse or cache key; carried as inert data the Stage D cache serializes.
+    pub const FinalSpecId = @import("monotype/final_spec_id.zig");
 };
 /// Monotype IR after nested function bodies are lifted.
 pub const MonotypeLifted = struct {
@@ -72,6 +76,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/census.zig"));
     std.testing.refAllDecls(@import("monotype/direct_translate.zig"));
     std.testing.refAllDecls(@import("monotype/representation_mirror.zig"));
+    std.testing.refAllDecls(@import("monotype/final_spec_id.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));

@@ -121,6 +121,22 @@ pub const Census = struct {
     interface_slots_reserved: Counter = Counter.init(0),
     interface_slots_gained_info: Counter = Counter.init(0),
     gained_info_nonrecursive: Counter = Counter.init(0),
+    // reunify.md section 11.1/11.5, Slice 7 Stage C: the parallel FinalSpecId
+    // computed on the production spec builder at `markReady`. `computed` counts a
+    // record whose request type reduced to a FinalSpecId; `skipped` counts one
+    // whose request left the representation-reducible subset (recursive, open
+    // row, zero sized). The collision counters key by FinalSpecId: two records
+    // sharing one are the same specialization and must reduce to structurally
+    // equal solved skeletons — `equivalent` counts a matching repeat, `divergent`
+    // a mismatch (a red flag the flip must not carry; expected zero),
+    // `solved_skipped` a repeat whose solved witness could not be compared. This
+    // is the production port of the shadow's `spec_seal_*`/`spec_collisions_*`
+    // sealing census, driven on live records instead of a read-only post-pass.
+    final_spec_id_computed: Counter = Counter.init(0),
+    final_spec_id_skipped: Counter = Counter.init(0),
+    final_spec_id_collisions_equivalent: Counter = Counter.init(0),
+    final_spec_id_collisions_divergent: Counter = Counter.init(0),
+    final_spec_id_collisions_solved_skipped: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the

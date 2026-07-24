@@ -11,6 +11,7 @@ const check = @import("check");
 const Common = @import("../common.zig");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+const fsid = @import("final_spec_id.zig");
 const checked = check.CheckedModule;
 const checked_names = check.CheckedNames;
 
@@ -35,9 +36,16 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// the visiting stack by content shape rather than by allocation id. Both paths
 /// are measured inert on the current corpus, so the bump only guards against
 /// reading a record written under the old digest algorithm.
-pub const FORMAT_VERSION: u32 = 9;
+/// Version 10: specialization records carry a parallel, lookup-inert FinalSpecId
+/// identity, and the cache carries three new sections keyed by `SpecId` — the
+/// serialized FinalSpecId output-summary components, their per-record byte
+/// slices, and a sealing-component relocation table (reunify.md 11.5, Slice 7
+/// Stage D). The load path still keys and matches records by request/solved
+/// digests exactly as before; the new sections are carried data, not lookup
+/// inputs, so the bump only guards against reading the old record layout.
+pub const FORMAT_VERSION: u32 = 10;
 
-const SECTION_COUNT = 40;
+const SECTION_COUNT = 43;
 /// Required byte alignment for every section payload. This covers all typed
 /// Monotype cache sections so mapping can produce process slices directly.
 pub const SECTION_ALIGNMENT: u64 = 16;
@@ -91,6 +99,9 @@ pub const SectionId = enum(u8) {
     stmt_regions,
     local_names,
     debug_names,
+    final_spec_components,
+    final_spec_component_slices,
+    final_spec_relocations,
 };
 
 /// Byte payload for one section when constructing a cache image.
@@ -231,6 +242,14 @@ pub const SpecializationCacheHeader = extern struct {
     stmt_regions: FileSlice = .{},
     local_names: FileSlice = .{},
     debug_names: FileSlice = .{},
+
+    /// Parallel, lookup-inert FinalSpecId sections (reunify.md 11.5, Slice 7
+    /// Stage D). `final_spec_components` concatenates each record's serialized
+    /// output-summary component; `final_spec_component_slices` indexes it by
+    /// `SpecId`; `final_spec_relocations` carries the sealing-component table.
+    final_spec_components: FileSlice = .{},
+    final_spec_component_slices: FileSlice = .{},
+    final_spec_relocations: FileSlice = .{},
 };
 
 /// Validated mapped cache file with accessors for its sections.
@@ -291,6 +310,9 @@ pub const MappedView = struct {
             .stmt_regions = try self.sectionTyped(Base.Region, header.stmt_regions),
             .local_names = try self.sectionBytes(header.local_names),
             .debug_names = try self.sectionBytes(header.debug_names),
+            .final_spec_components = try self.sectionBytes(header.final_spec_components),
+            .final_spec_component_slices = try self.sectionTyped(Ast.FinalSpecComponentSlice, header.final_spec_component_slices),
+            .final_spec_relocations = try self.sectionTyped(Ast.FinalSpecRelocation, header.final_spec_relocations),
         };
     }
 };
@@ -337,6 +359,9 @@ pub const MappedSections = struct {
     stmt_regions: []const Base.Region,
     local_names: []const u8,
     debug_names: []const u8,
+    final_spec_components: []const u8,
+    final_spec_component_slices: []const Ast.FinalSpecComponentSlice,
+    final_spec_relocations: []const Ast.FinalSpecRelocation,
 
     pub fn typeView(self: MappedSections) Type.DurableView {
         return .{
@@ -381,6 +406,44 @@ pub const MappedProgramView = struct {
     expr_regions: []const Base.Region,
     stmt_locs: []const Base.SourceLoc,
     stmt_regions: []const Base.Region,
+    /// Parallel, lookup-inert FinalSpecId sections (reunify.md 11.5, Slice 7
+    /// Stage D). Carried data validated at load and reachable through the
+    /// accessors below; the load path never keys or matches records by them.
+    final_spec_components: []const u8,
+    final_spec_component_slices: []const Ast.FinalSpecComponentSlice,
+    final_spec_relocations: []const Ast.FinalSpecRelocation,
+
+    /// The raw serialized FinalSpecId component bytes for one record, or an
+    /// empty slice when the record carries none. Bounds are validated at load.
+    pub fn finalSpecComponentBytes(self: MappedProgramView, spec: Ast.SpecId) []const u8 {
+        const index = @intFromEnum(spec);
+        if (index >= self.final_spec_component_slices.len) return &.{};
+        const slice = self.final_spec_component_slices[index];
+        if (slice.len == 0) return &.{};
+        return self.final_spec_components[slice.offset..][0..slice.len];
+    }
+
+    /// Parse one record's FinalSpecId output-summary component. The caller owns
+    /// the returned digest lists. Returns null when the record carries none.
+    pub fn finalSpecComponent(
+        self: MappedProgramView,
+        allocator: std.mem.Allocator,
+        spec: Ast.SpecId,
+    ) FinalSpecComponent.ReadError!?FinalSpecComponent {
+        const bytes = self.finalSpecComponentBytes(spec);
+        if (bytes.len == 0) return null;
+        return try FinalSpecComponent.deserialize(allocator, bytes);
+    }
+
+    /// The sealing-component relocation entry for one record, or a singleton
+    /// pointing at the record itself when no table entry exists.
+    pub fn finalSpecRelocation(self: MappedProgramView, spec: Ast.SpecId) Ast.FinalSpecRelocation {
+        const index = @intFromEnum(spec);
+        if (index >= self.final_spec_relocations.len) {
+            return .{ .first_spec = @intCast(index), .member_count = 1 };
+        }
+        return self.final_spec_relocations[index];
+    }
 
     /// Verify the mapped program and resolve its top-level import table.
     ///
@@ -516,6 +579,40 @@ pub const MappedProgramView = struct {
         }
         for (self.stmts) |stmt| {
             if (!self.verifyStmt(stmt)) return false;
+        }
+
+        if (!self.verifyFinalSpecSections()) return false;
+
+        return true;
+    }
+
+    /// Validate the parallel, lookup-inert FinalSpecId sections (reunify.md 11.5,
+    /// Slice 7 Stage D). All three may be absent (a cache with no computed
+    /// FinalSpecId), but if present they must index one entry per specialization
+    /// record, every component byte slice must be in bounds and parse with
+    /// in-bounds digest lengths, and every relocation must name a member range
+    /// inside the record table. This is carried data, so a defect is cache
+    /// corruption, not a lowering-path signal.
+    fn verifyFinalSpecSections(self: MappedProgramView) bool {
+        if (self.final_spec_component_slices.len != 0) {
+            if (self.final_spec_component_slices.len != self.specs.len) return false;
+            for (self.final_spec_component_slices) |slice| {
+                if (slice.len == 0) continue;
+                const end = std.math.add(u32, slice.offset, slice.len) catch return false;
+                if (end > self.final_spec_components.len) return false;
+                if (!FinalSpecComponent.validateBytes(self.final_spec_components[slice.offset..][0..slice.len])) return false;
+            }
+        } else if (self.final_spec_components.len != 0) {
+            return false;
+        }
+
+        if (self.final_spec_relocations.len != 0) {
+            if (self.final_spec_relocations.len != self.specs.len) return false;
+            for (self.final_spec_relocations) |relocation| {
+                if (relocation.member_count == 0) return false;
+                const end = std.math.add(u32, relocation.first_spec, relocation.member_count) catch return false;
+                if (end > self.specs.len) return false;
+            }
         }
 
         return true;
@@ -855,6 +952,9 @@ pub fn mappedProgramView(view: MappedView) CacheError!MappedProgramView {
         .expr_regions = sections_.expr_regions,
         .stmt_locs = sections_.stmt_locs,
         .stmt_regions = sections_.stmt_regions,
+        .final_spec_components = sections_.final_spec_components,
+        .final_spec_component_slices = sections_.final_spec_component_slices,
+        .final_spec_relocations = sections_.final_spec_relocations,
     };
 }
 
@@ -1076,6 +1176,8 @@ pub fn computeCompilerLayoutHash() [32]u8 {
     writeLayout(&hasher, Ast.LayoutRequest);
     writeLayout(&hasher, Ast.RuntimeSchemaRequest);
     writeLayout(&hasher, Ast.StaticDataValue);
+    writeLayout(&hasher, Ast.FinalSpecComponentSlice);
+    writeLayout(&hasher, Ast.FinalSpecRelocation);
     writeLayout(&hasher, Base.SourceLoc);
     writeLayout(&hasher, Base.Region);
 
@@ -1138,6 +1240,9 @@ fn sections(header: *const SpecializationCacheHeader) [SECTION_COUNT]FileSlice {
         header.stmt_regions,
         header.local_names,
         header.debug_names,
+        header.final_spec_components,
+        header.final_spec_component_slices,
+        header.final_spec_relocations,
     };
 }
 
@@ -1182,6 +1287,9 @@ const section_order = [_]SectionId{
     .stmt_regions,
     .local_names,
     .debug_names,
+    .final_spec_components,
+    .final_spec_component_slices,
+    .final_spec_relocations,
 };
 
 fn sectionIndex(id: SectionId) usize {
@@ -1226,6 +1334,9 @@ fn sectionIndex(id: SectionId) usize {
         .stmt_regions => 37,
         .local_names => 38,
         .debug_names => 39,
+        .final_spec_components => 40,
+        .final_spec_component_slices => 41,
+        .final_spec_relocations => 42,
     };
 }
 
@@ -1294,7 +1405,217 @@ fn setSection(header: *SpecializationCacheHeader, id: SectionId, slice: FileSlic
         .stmt_regions => header.stmt_regions = slice,
         .local_names => header.local_names = slice,
         .debug_names => header.debug_names = slice,
+        .final_spec_components => header.final_spec_components = slice,
+        .final_spec_component_slices => header.final_spec_component_slices = slice,
+        .final_spec_relocations => header.final_spec_relocations = slice,
     }
+}
+
+/// One specialization record's serialized FinalSpecId output summary (reunify.md
+/// 11.5, Slice 7 Stage D). It carries the Stage C scalar identity — final key,
+/// logical-identity digest, method scope, evidence digest, output solved digest —
+/// plus the sorted sealed representation-input digests and the body-produced
+/// representation-output digests. The byte format is a flat sequence of
+/// fixed-width 32-byte digests and little-endian u32 counts, so it holds no
+/// process-local id and reloads with no relocation. This format mirrors the
+/// shadow `SealedComponent` field set (`reunify_shadow/shadow.zig`), specialized
+/// to the production spec record's identity.
+pub const FinalSpecComponent = struct {
+    final_spec_id: [32]u8,
+    logical_identity_digest: [32]u8,
+    method_scope: [32]u8,
+    evidence_digest: [32]u8,
+    output_solved_digest: [32]u8,
+    /// The sorted sealed representation-input digests the FinalSpecId digests.
+    /// Owned by the caller.
+    sealed_input_digests: [][32]u8,
+    /// The body-produced representation-output digests (the output summary a
+    /// cache hit replays). Owned by the caller.
+    output_representation_digests: [][32]u8,
+
+    pub const ReadError = error{ Truncated, TrailingBytes } || std.mem.Allocator.Error;
+
+    pub fn deinit(self: *FinalSpecComponent, allocator: std.mem.Allocator) void {
+        allocator.free(self.sealed_input_digests);
+        allocator.free(self.output_representation_digests);
+    }
+
+    pub fn serializeInto(self: FinalSpecComponent, allocator: std.mem.Allocator, out: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
+        try out.appendSlice(allocator, &self.final_spec_id);
+        try out.appendSlice(allocator, &self.logical_identity_digest);
+        try out.appendSlice(allocator, &self.method_scope);
+        try out.appendSlice(allocator, &self.evidence_digest);
+        try out.appendSlice(allocator, &self.output_solved_digest);
+        try appendComponentDigestList(allocator, out, self.sealed_input_digests);
+        try appendComponentDigestList(allocator, out, self.output_representation_digests);
+    }
+
+    pub fn deserialize(allocator: std.mem.Allocator, bytes: []const u8) ReadError!FinalSpecComponent {
+        var cursor: usize = 0;
+        const final_spec_id = try readComponentDigest(bytes, &cursor);
+        const logical_identity_digest = try readComponentDigest(bytes, &cursor);
+        const method_scope = try readComponentDigest(bytes, &cursor);
+        const evidence_digest = try readComponentDigest(bytes, &cursor);
+        const output_solved_digest = try readComponentDigest(bytes, &cursor);
+        const inputs = try readComponentDigestList(allocator, bytes, &cursor);
+        errdefer allocator.free(inputs);
+        const outputs = try readComponentDigestList(allocator, bytes, &cursor);
+        errdefer allocator.free(outputs);
+        if (cursor != bytes.len) return error.TrailingBytes;
+        return .{
+            .final_spec_id = final_spec_id,
+            .logical_identity_digest = logical_identity_digest,
+            .method_scope = method_scope,
+            .evidence_digest = evidence_digest,
+            .output_solved_digest = output_solved_digest,
+            .sealed_input_digests = inputs,
+            .output_representation_digests = outputs,
+        };
+    }
+
+    /// Validate a component byte stream without allocating: the load path uses
+    /// this to prove every component parses with in-bounds digest lengths before
+    /// exposing it, so a corrupt section is rejected as cache corruption.
+    fn validateBytes(bytes: []const u8) bool {
+        var cursor: usize = 0;
+        // Five fixed 32-byte digests.
+        if (bytes.len < 32 * 5) return false;
+        cursor += 32 * 5;
+        if (!skipComponentDigestList(bytes, &cursor)) return false;
+        if (!skipComponentDigestList(bytes, &cursor)) return false;
+        return cursor == bytes.len;
+    }
+};
+
+fn appendComponentDigestList(allocator: std.mem.Allocator, out: *std.ArrayList(u8), list: []const [32]u8) std.mem.Allocator.Error!void {
+    var count_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &count_buf, @intCast(list.len), .little);
+    try out.appendSlice(allocator, &count_buf);
+    for (list) |digest| try out.appendSlice(allocator, &digest);
+}
+
+fn readComponentDigest(bytes: []const u8, cursor: *usize) FinalSpecComponent.ReadError![32]u8 {
+    if (cursor.* + 32 > bytes.len) return error.Truncated;
+    var digest: [32]u8 = undefined;
+    @memcpy(&digest, bytes[cursor.* .. cursor.* + 32]);
+    cursor.* += 32;
+    return digest;
+}
+
+fn readComponentDigestList(allocator: std.mem.Allocator, bytes: []const u8, cursor: *usize) FinalSpecComponent.ReadError![][32]u8 {
+    if (cursor.* + 4 > bytes.len) return error.Truncated;
+    var count_buf: [4]u8 = undefined;
+    @memcpy(&count_buf, bytes[cursor.* .. cursor.* + 4]);
+    const count = std.mem.readInt(u32, &count_buf, .little);
+    cursor.* += 4;
+    const list = try allocator.alloc([32]u8, count);
+    errdefer allocator.free(list);
+    for (list) |*digest| digest.* = try readComponentDigest(bytes, cursor);
+    return list;
+}
+
+fn skipComponentDigestList(bytes: []const u8, cursor: *usize) bool {
+    if (cursor.* + 4 > bytes.len) return false;
+    var count_buf: [4]u8 = undefined;
+    @memcpy(&count_buf, bytes[cursor.* .. cursor.* + 4]);
+    const count = std.mem.readInt(u32, &count_buf, .little);
+    cursor.* += 4;
+    const digest_bytes = std.math.mul(usize, count, 32) catch return false;
+    const next = std.math.add(usize, cursor.*, digest_bytes) catch return false;
+    if (next > bytes.len) return false;
+    cursor.* = next;
+    return true;
+}
+
+/// The owned byte payloads of the three FinalSpecId cache sections, ready to
+/// hand to `buildImage` as `.final_spec_components`, `.final_spec_component_slices`,
+/// and `.final_spec_relocations`.
+pub const FinalSpecSections = struct {
+    components: []u8,
+    slices: []Ast.FinalSpecComponentSlice,
+    relocations: []Ast.FinalSpecRelocation,
+
+    pub fn deinit(self: *FinalSpecSections, allocator: std.mem.Allocator) void {
+        allocator.free(self.components);
+        allocator.free(self.slices);
+        allocator.free(self.relocations);
+    }
+
+    pub fn payloads(self: *const FinalSpecSections) [3]SectionPayload {
+        return .{
+            .{ .id = .final_spec_components, .bytes = self.components },
+            .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(self.slices) },
+            .{ .id = .final_spec_relocations, .bytes = std.mem.sliceAsBytes(self.relocations) },
+        };
+    }
+};
+
+/// Build the FinalSpecId cache sections for a program's specialization records
+/// (reunify.md 11.5, Slice 7 Stage D). Each record whose FinalSpecId was
+/// computed (Stage C) contributes a serialized output-summary component; its
+/// sorted representation-input digests and body-produced representation-output
+/// digests are recomputed from the record's request and solved types through the
+/// same machinery Stage C used, so the section is consistent with the record's
+/// stored scalar identity. Records without a computed FinalSpecId contribute an
+/// empty slice. The relocation table emits singleton sealing components until
+/// Stage E supplies real grouping.
+pub fn buildFinalSpecSections(
+    allocator: std.mem.Allocator,
+    specs: []const Ast.SpecRecord,
+    types: *const Type.Store,
+    names: *const checked_names.NameStore,
+) std.mem.Allocator.Error!FinalSpecSections {
+    var components = std.ArrayList(u8).empty;
+    errdefer components.deinit(allocator);
+
+    const slices = try allocator.alloc(Ast.FinalSpecComponentSlice, specs.len);
+    errdefer allocator.free(slices);
+    const relocations = try allocator.alloc(Ast.FinalSpecRelocation, specs.len);
+    errdefer allocator.free(relocations);
+
+    var computer = fsid.Computer.init(allocator);
+    defer computer.deinit();
+
+    for (specs, 0..) |record, index| {
+        relocations[index] = .{ .first_spec = @intCast(index), .member_count = 1 };
+
+        if (!record.final_spec.computed) {
+            slices[index] = .{ .offset = 0, .len = 0 };
+            continue;
+        }
+
+        var computed = (try computer.compute(record, types, names)) orelse {
+            slices[index] = .{ .offset = 0, .len = 0 };
+            continue;
+        };
+        defer computed.deinit(allocator);
+
+        const component = FinalSpecComponent{
+            .final_spec_id = record.final_spec.final_spec_id.bytes,
+            .logical_identity_digest = record.final_spec.logical_identity_digest.bytes,
+            .method_scope = record.identity.method_scope.bytes,
+            .evidence_digest = record.final_spec.evidence_digest.bytes,
+            .output_solved_digest = record.final_spec.output_solved_digest.bytes,
+            .sealed_input_digests = digestBytesList(computed.input_digests),
+            .output_representation_digests = digestBytesList(computed.output_rep_digests),
+        };
+
+        const start: u32 = @intCast(components.items.len);
+        try component.serializeInto(allocator, &components);
+        slices[index] = .{ .offset = start, .len = @intCast(components.items.len - start) };
+    }
+
+    return .{
+        .components = try components.toOwnedSlice(allocator),
+        .slices = slices,
+        .relocations = relocations,
+    };
+}
+
+/// View a `TypeDigest` slice as a raw `[32]u8` slice. `TypeDigest` is a single
+/// `[32]u8` field, so this reinterpretation is layout-exact.
+fn digestBytesList(digests: []checked_names.TypeDigest) [][32]u8 {
+    return @as([*][32]u8, @ptrCast(digests.ptr))[0..digests.len];
 }
 
 fn writeRootRequest(hasher: *std.crypto.hash.sha2.Sha256, request: checked.RootRequest) void {
@@ -1581,6 +1902,11 @@ test "monotype specialization cache rejects wrong version and hashes" {
     header.* = .{};
 
     header.format_version = FORMAT_VERSION + 1;
+    try std.testing.expectError(error.UnsupportedSpecializationCacheVersion, validateHeader(header, bytes.len, zeroHash(), zeroHash()));
+
+    // A record written under the previous format (the pre-Stage-D layout) is
+    // rejected cleanly: no new-section record crosses a version boundary.
+    header.format_version = FORMAT_VERSION - 1;
     try std.testing.expectError(error.UnsupportedSpecializationCacheVersion, validateHeader(header, bytes.len, zeroHash(), zeroHash()));
 
     header.format_version = FORMAT_VERSION;
@@ -2550,4 +2876,236 @@ fn testProcedureTemplate(proc_base: u32, template: u32) checked_names.ProcTempla
 
 fn zeroHash() [32]u8 {
     return [_]u8{0} ** 32;
+}
+
+fn specIdAt(index: u32) Ast.SpecId {
+    return @enumFromInt(index);
+}
+
+fn stageDSpecRecord(request_ty: Type.TypeId, computed: bool) Ast.SpecRecord {
+    return .{
+        .identity = .{
+            .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 1, .template = 2 } },
+            .method_scope = testModuleDigest(4),
+            .source_fn_ty_digest = .{},
+            .request_fn_ty_digest = .{},
+            .request_fn_ty = request_ty,
+        },
+        .request_fn_ty = request_ty,
+        .request_fn_ty_digest = .{},
+        .solved_fn_ty = request_ty,
+        .solved_fn_ty_digest = .{},
+        .fn_id = @enumFromInt(1),
+        .status = .ready,
+        .final_spec = .{ .computed = computed },
+    };
+}
+
+test "monotype specialization cache round trips FinalSpecId component sections" {
+    const allocator = std.testing.allocator;
+
+    var inputs0 = [_][32]u8{ [_]u8{0xB0} ** 32, [_]u8{0xB1} ** 32 };
+    var outputs0 = [_][32]u8{[_]u8{0xC0} ** 32};
+    const comp0 = FinalSpecComponent{
+        .final_spec_id = [_]u8{0xA0} ** 32,
+        .logical_identity_digest = [_]u8{0xA1} ** 32,
+        .method_scope = [_]u8{0xA2} ** 32,
+        .evidence_digest = [_]u8{0xA3} ** 32,
+        .output_solved_digest = [_]u8{0xA4} ** 32,
+        .sealed_input_digests = inputs0[0..],
+        .output_representation_digests = outputs0[0..],
+    };
+    var no_digests = [_][32]u8{};
+    const comp1 = FinalSpecComponent{
+        .final_spec_id = [_]u8{0xD0} ** 32,
+        .logical_identity_digest = [_]u8{0xD1} ** 32,
+        .method_scope = [_]u8{0xD2} ** 32,
+        .evidence_digest = [_]u8{0xD3} ** 32,
+        .output_solved_digest = [_]u8{0xD4} ** 32,
+        .sealed_input_digests = no_digests[0..],
+        .output_representation_digests = no_digests[0..],
+    };
+
+    var components = std.ArrayList(u8).empty;
+    defer components.deinit(allocator);
+    const start0: u32 = @intCast(components.items.len);
+    try comp0.serializeInto(allocator, &components);
+    const len0: u32 = @intCast(components.items.len - start0);
+    const start1: u32 = @intCast(components.items.len);
+    try comp1.serializeInto(allocator, &components);
+    const len1: u32 = @intCast(components.items.len - start1);
+
+    const slices = [_]Ast.FinalSpecComponentSlice{
+        .{ .offset = start0, .len = len0 },
+        .{ .offset = start1, .len = len1 },
+    };
+    const relocations = [_]Ast.FinalSpecRelocation{
+        .{ .first_spec = 0, .member_count = 1 },
+        .{ .first_spec = 1, .member_count = 1 },
+    };
+    const specs = [_]Ast.SpecRecord{
+        stageDSpecRecord(@enumFromInt(1), true),
+        stageDSpecRecord(@enumFromInt(1), true),
+    };
+
+    const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+        .{ .id = .specs, .bytes = std.mem.sliceAsBytes(specs[0..]) },
+        .{ .id = .final_spec_components, .bytes = components.items },
+        .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(slices[0..]) },
+        .{ .id = .final_spec_relocations, .bytes = std.mem.sliceAsBytes(relocations[0..]) },
+    });
+    defer allocator.free(image);
+
+    var header: SpecializationCacheHeader = undefined;
+    @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+    const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+    const program = try mappedProgramView(mapped);
+
+    try std.testing.expect(program.verifyFinalSpecSections());
+
+    var loaded0 = (try program.finalSpecComponent(allocator, specIdAt(0))) orelse return error.TestUnexpectedResult;
+    defer loaded0.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, &comp0.final_spec_id, &loaded0.final_spec_id);
+    try std.testing.expectEqualSlices(u8, &comp0.logical_identity_digest, &loaded0.logical_identity_digest);
+    try std.testing.expectEqualSlices(u8, &comp0.method_scope, &loaded0.method_scope);
+    try std.testing.expectEqualSlices(u8, &comp0.evidence_digest, &loaded0.evidence_digest);
+    try std.testing.expectEqualSlices(u8, &comp0.output_solved_digest, &loaded0.output_solved_digest);
+    try std.testing.expectEqual(@as(usize, 2), loaded0.sealed_input_digests.len);
+    try std.testing.expectEqualSlices(u8, &inputs0[1], &loaded0.sealed_input_digests[1]);
+    try std.testing.expectEqual(@as(usize, 1), loaded0.output_representation_digests.len);
+    try std.testing.expectEqualSlices(u8, &outputs0[0], &loaded0.output_representation_digests[0]);
+
+    var loaded1 = (try program.finalSpecComponent(allocator, specIdAt(1))) orelse return error.TestUnexpectedResult;
+    defer loaded1.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, &comp1.final_spec_id, &loaded1.final_spec_id);
+    try std.testing.expectEqual(@as(usize, 0), loaded1.sealed_input_digests.len);
+    try std.testing.expectEqual(@as(usize, 0), loaded1.output_representation_digests.len);
+
+    try std.testing.expectEqual(@as(u32, 1), program.finalSpecRelocation(specIdAt(1)).first_spec);
+    try std.testing.expectEqual(@as(u32, 1), program.finalSpecRelocation(specIdAt(1)).member_count);
+}
+
+test "monotype specialization cache rejects a truncated or trailing FinalSpecId component" {
+    const allocator = std.testing.allocator;
+
+    var inputs = [_][32]u8{[_]u8{0xB0} ** 32};
+    const comp = FinalSpecComponent{
+        .final_spec_id = [_]u8{0x10} ** 32,
+        .logical_identity_digest = [_]u8{0x11} ** 32,
+        .method_scope = [_]u8{0x12} ** 32,
+        .evidence_digest = [_]u8{0x13} ** 32,
+        .output_solved_digest = [_]u8{0x14} ** 32,
+        .sealed_input_digests = inputs[0..],
+        .output_representation_digests = &.{},
+    };
+
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+    try comp.serializeInto(allocator, &buf);
+
+    var parsed = try FinalSpecComponent.deserialize(allocator, buf.items);
+    parsed.deinit(allocator);
+    try std.testing.expect(FinalSpecComponent.validateBytes(buf.items));
+
+    // A byte short of the full stream is rejected by both the parser and the
+    // non-allocating validator.
+    try std.testing.expectError(error.Truncated, FinalSpecComponent.deserialize(allocator, buf.items[0 .. buf.items.len - 1]));
+    try std.testing.expect(!FinalSpecComponent.validateBytes(buf.items[0 .. buf.items.len - 1]));
+
+    // Trailing bytes are rejected.
+    try buf.append(allocator, 0);
+    try std.testing.expectError(error.TrailingBytes, FinalSpecComponent.deserialize(allocator, buf.items));
+}
+
+test "monotype specialization cache rejects corrupt FinalSpecId section shapes" {
+    const allocator = std.testing.allocator;
+
+    const one_spec = [_]Ast.SpecRecord{stageDSpecRecord(@enumFromInt(1), true)};
+
+    // The slice index must carry one entry per specialization record.
+    {
+        const two_slices = [_]Ast.FinalSpecComponentSlice{ .{}, .{} };
+        const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+            .{ .id = .specs, .bytes = std.mem.sliceAsBytes(one_spec[0..]) },
+            .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(two_slices[0..]) },
+        });
+        defer allocator.free(image);
+        var header: SpecializationCacheHeader = undefined;
+        @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+        const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+        const program = try mappedProgramView(mapped);
+        try std.testing.expect(!program.verifyFinalSpecSections());
+    }
+
+    // A component slice reaching past the component bytes is corruption.
+    {
+        const small_bytes = [_]u8{0} ** 8;
+        const bad_slice = [_]Ast.FinalSpecComponentSlice{.{ .offset = 0, .len = 999 }};
+        const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+            .{ .id = .specs, .bytes = std.mem.sliceAsBytes(one_spec[0..]) },
+            .{ .id = .final_spec_components, .bytes = small_bytes[0..] },
+            .{ .id = .final_spec_component_slices, .bytes = std.mem.sliceAsBytes(bad_slice[0..]) },
+        });
+        defer allocator.free(image);
+        var header: SpecializationCacheHeader = undefined;
+        @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+        const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+        const program = try mappedProgramView(mapped);
+        try std.testing.expect(!program.verifyFinalSpecSections());
+    }
+
+    // A relocation member range reaching past the record table is corruption.
+    {
+        const bad_reloc = [_]Ast.FinalSpecRelocation{.{ .first_spec = 0, .member_count = 5 }};
+        const image = try buildImage(allocator, zeroHash(), zeroHash(), &.{
+            .{ .id = .specs, .bytes = std.mem.sliceAsBytes(one_spec[0..]) },
+            .{ .id = .final_spec_relocations, .bytes = std.mem.sliceAsBytes(bad_reloc[0..]) },
+        });
+        defer allocator.free(image);
+        var header: SpecializationCacheHeader = undefined;
+        @memcpy(std.mem.asBytes(&header), image[0..@sizeOf(SpecializationCacheHeader)]);
+        const mapped = try viewMappedFile(&header, image.ptr, image.len, zeroHash(), zeroHash(), 0);
+        const program = try mappedProgramView(mapped);
+        try std.testing.expect(!program.verifyFinalSpecSections());
+    }
+}
+
+test "monotype specialization cache writer builds FinalSpecId sections from records" {
+    const allocator = std.testing.allocator;
+
+    var name_store = checked_names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(allocator);
+    defer type_store.deinit();
+
+    const u64_ty = try type_store.add(.{ .primitive = .u64 });
+    const fn_args = try type_store.addSpan(&.{u64_ty});
+    const request_ty = try type_store.add(.{ .func = .{ .args = fn_args, .ret = u64_ty } });
+
+    var record = stageDSpecRecord(request_ty, true);
+    record.final_spec.final_spec_id = testDigest(0x77);
+    record.final_spec.logical_identity_digest = testDigest(0x66);
+    const specs = [_]Ast.SpecRecord{record};
+
+    var built = try buildFinalSpecSections(allocator, specs[0..], &type_store, &name_store);
+    defer built.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), built.slices.len);
+    try std.testing.expectEqual(@as(usize, 1), built.relocations.len);
+    try std.testing.expect(built.slices[0].len > 0);
+    try std.testing.expectEqual(@as(u32, 0), built.relocations[0].first_spec);
+    try std.testing.expectEqual(@as(u32, 1), built.relocations[0].member_count);
+
+    const slice = built.slices[0];
+    var component = try FinalSpecComponent.deserialize(allocator, built.components[slice.offset..][0..slice.len]);
+    defer component.deinit(allocator);
+    try std.testing.expectEqualSlices(u8, &record.final_spec.final_spec_id.bytes, &component.final_spec_id);
+    try std.testing.expectEqualSlices(u8, &record.final_spec.logical_identity_digest.bytes, &component.logical_identity_digest);
+    try std.testing.expectEqualSlices(u8, &record.identity.method_scope.bytes, &component.method_scope);
+}
+
+fn testDigest(byte: u8) checked_names.TypeDigest {
+    var digest: checked_names.TypeDigest = .{};
+    digest.bytes[0] = byte;
+    return digest;
 }

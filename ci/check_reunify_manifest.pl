@@ -43,6 +43,7 @@ my $RSLOG = 'src/postcheck/reunify_shadow/logical_identity.zig';
 my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
 my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
 my $RMIRR = 'src/postcheck/monotype/representation_mirror.zig';
+my $FSID  = 'src/postcheck/monotype/final_spec_id.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -273,8 +274,13 @@ my @categories = (
             # shadow relates the two mirrored slots through the section 10.3
             # closure engine at each decision site it mirrors, so the engine runs
             # real workload on the live corpus. It deletes with the shadow.
+            # $FSID gained one `relate(` in Slice 7 Stage C: the production
+            # FinalSpecId computation seals a record's representation inputs by
+            # relating same-logical positions through the section 10.3 closure
+            # engine, the same seal the shadow census runs. It is representation
+            # closure, not logical re-derivation, and the flip keeps it.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 17, $RSHAD => 1, $RMIRR => 1 } },
+              counts => { $RCLO => 17, $RSHAD => 1, $RMIRR => 1, $FSID => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],
@@ -302,9 +308,14 @@ my @categories = (
             # once in $RSLOG and called twice in the sealing census ($RSHAD) — once
             # for each spec record's requested type and once for its solved type —
             # to erase representation to the logical binding while collecting the
-            # representation-input positions a FinalSpecId digests.
+            # representation-input positions a FinalSpecId digests. $RSHAD grew
+            # 2 -> 3 in Slice 7 Stage C: the Stage C parity test drives the shadow
+            # walk once more to prove the production FinalSpecId ($FSID) computes
+            # the same digest. $FSID names it once in the module doc comment that
+            # ties the production duplicate of this walk to the shadow original;
+            # $FSID owns its own faithful copy (`Walk`), which the flip keeps.
             { label => 'walkRequestSealing', re => qr/\bwalkRequestSealing\b/,
-              counts => { $RSLOG => 1, $RSHAD => 2 } },
+              counts => { $RSLOG => 1, $RSHAD => 3, $FSID => 1 } },
             { label => 'instantiateScheme', re => qr/\binstantiateScheme\b/,
               counts => { $RSLOG => 7, $RSHAD => 1 } },
             { label => 'alphaEqual', re => qr/\balphaEqual\b/,
