@@ -7789,6 +7789,12 @@ fn verifyReusedDemandRange(
     }
     demand_loop: for (body_draft.runtime_value_demands.items[start..end]) |demand| {
         if (!graph.finalizesAsClosedEmptyTagUnion(demand.node)) continue;
+        // The creation context's certification covers the one emitted body:
+        // statement-position guard frames are not monotonic across call sites
+        // in one block, so a reusing context can legitimately lack a frame
+        // (e.g. a call lowered before the statement whose result proves later
+        // statements unreachable) without the demand becoming executable.
+        if (try evaluator.holds(demand.impossibility_proof)) continue;
         if (try evaluator.holds(reuse.prefix_proof)) continue;
         if (try evaluator.holds(demand.local_proof)) continue;
         if (demand.frames.len < frame_floor) {
@@ -20594,6 +20600,29 @@ const BodyContext = struct {
         };
     }
 
+    /// Unify a callee formal with the caller's checked argument type. The
+    /// checked type's cached cell may already carry a generated-private
+    /// producer representation (e.g. a list literal of minted iterators), and
+    /// private content never enters ordinary public unification: the formal
+    /// gets a fresh public interface related opaquely, and the private node
+    /// itself becomes the request argument.
+    fn unifyFormalWithCallerArgNode(
+        self: *BodyContext,
+        caller: *BodyContext,
+        formal_node: NodeId,
+        arg_ty: checked.CheckedTypeId,
+    ) Allocator.Error!NodeId {
+        const arg_node = try caller.instNode(arg_ty);
+        if (try self.graph.containsGeneratedPrivate(arg_node)) {
+            const public_node = try caller.freshInstNode(arg_ty);
+            try self.graph.relateOpaqueInterface(public_node, arg_node);
+            try self.graph.unify(formal_node, public_node);
+            return arg_node;
+        }
+        try self.graph.unify(formal_node, arg_node);
+        return formal_node;
+    }
+
     fn instantiateCallNodeFromCallerAtNode(
         self: *BodyContext,
         source_fn_ty: checked.CheckedTypeId,
@@ -20624,13 +20653,12 @@ const BodyContext = struct {
                     try self.graph.unify(formal_node, public_node);
                     request_args[index] = evidence_node;
                 } else {
-                    try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                    const request = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
                     try self.graph.unify(formal_node, evidence_node);
-                    request_args[index] = formal_node;
+                    request_args[index] = request;
                 }
             } else {
-                try self.graph.unify(formal_node, try caller.instNode(arg_ty));
-                request_args[index] = formal_node;
+                request_args[index] = try self.unifyFormalWithCallerArgNode(caller, formal_node, arg_ty);
             }
         }
         if (expected_ret_node != null) {
@@ -20971,18 +20999,9 @@ const BodyContext = struct {
             .type_dispatch_call => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
             .method_eq => |plan| return try self.dispatchResultTypeNode(expr.ty, plan, expected_ty),
             .field_access => |field| return try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, field.backing_access, expected_ty),
-            .lookup_local => |lookup| return if (try self.lookupCallArgumentMonoType(expr.ty, lookup.resolved, expected_ty)) |ty|
-                try self.activeNodeFromType(ty)
-            else
-                null,
-            .lookup_external => |resolved| return if (try self.lookupCallArgumentMonoType(expr.ty, resolved, expected_ty)) |ty|
-                try self.activeNodeFromType(ty)
-            else
-                null,
-            .lookup_required => |resolved| return if (try self.lookupCallArgumentMonoType(expr.ty, resolved, expected_ty)) |ty|
-                try self.activeNodeFromType(ty)
-            else
-                null,
+            .lookup_local => |lookup| return try self.lookupCallArgumentEvidenceNode(expr.ty, lookup.resolved, expected_ty),
+            .lookup_external => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
+            .lookup_required => |resolved| return try self.lookupCallArgumentEvidenceNode(expr.ty, resolved, expected_ty),
             else => {},
         }
         if (expected_ty) |ty| {
@@ -20990,6 +21009,36 @@ const BodyContext = struct {
             return try self.activeNodeFromType(ty);
         }
         return null;
+    }
+
+    fn lookupCallArgumentEvidenceNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        maybe_ref: ?checked.ResolvedValueId,
+        expected_ty: ?Type.TypeId,
+    ) Allocator.Error!?NodeId {
+        const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
+        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        local: {
+            switch (record.ref) {
+                // A selected hoisted constant has a local binder only while
+                // lowering its own root; the ConstStore path below serves
+                // every other use.
+                .selected_hoisted_const => break :local,
+                else => {},
+            }
+            if (self.currentLocalForResolvedValue(ref_id) == null) break :local;
+            // A generated-private evidence node (e.g. a minted iterator) may
+            // still carry unresolved leaves whose defaults apply at final
+            // sealing, so it stays a graph node instead of forcing an eager
+            // resolved view.
+            if (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) |node| return node;
+            return if (expected_ty) |ty| try self.activeNodeFromType(ty) else null;
+        }
+        return if (try self.lookupCallArgumentMonoType(checked_ty, maybe_ref, expected_ty)) |ty|
+            try self.activeNodeFromType(ty)
+        else
+            null;
     }
 
     fn lookupCallArgumentMonoType(
@@ -21033,6 +21082,20 @@ const BodyContext = struct {
         ref_id: checked.ResolvedValueId,
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
+        const node = (try self.localCallArgumentEvidenceNode(checked_ty, ref_id, expected_ty)) orelse
+            return expected_ty;
+        return try self.activeTypeFromNode(node);
+    }
+
+    /// Constrain a local call argument's cell and return its evidence node
+    /// when the local carries generated-private content; otherwise the
+    /// caller's expected type (if any) is the evidence.
+    fn localCallArgumentEvidenceNode(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        ref_id: checked.ResolvedValueId,
+        expected_ty: ?Type.TypeId,
+    ) Allocator.Error!?NodeId {
         const local_id = self.currentLocalForResolvedValue(ref_id) orelse
             Common.invariant("local call argument evidence requested without a current local");
         const cell = self.localTypeCell(local_id);
@@ -21042,10 +21105,7 @@ const BodyContext = struct {
         };
         try self.constrainCheckedInterfaceToCell(checked_ty, cell);
         if (expected_ty) |expected| try self.graph.unify(node, try self.graph.importMono(expected));
-        return if (try self.graph.containsGeneratedPrivate(node))
-            try self.activeTypeFromNode(node)
-        else
-            expected_ty;
+        return if (try self.graph.containsGeneratedPrivate(node)) node else null;
     }
 
     fn lookupExprTypeNode(

@@ -682,7 +682,9 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn requireLoweredExpr(",
         "fn nodeIsProvenUninhabited(",
     );
-    try expectContains(demand_source, ".impossibility_proof = try self.currentRuntimeImpossibilityProof(self.exprImpossibilityProof(lowered))");
+    try expectContains(demand_source, ".impossibility_proof = try self.currentRuntimeImpossibilityProof(expr_proof)");
+    try expectContains(demand_source, ".frames = self.runtime_demand_guard_frames");
+    try expectContains(demand_source, ".local_proof = try self.anyImpossibilityProof(&.{ entry_guard_proof, expr_proof })");
     try expectNotContains(demand_source, "producer");
     try expectNotContains(demand_source, "flattenRuntimeDemandGuardFrames");
 

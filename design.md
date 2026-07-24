@@ -2965,9 +2965,12 @@ Runtime-reachability guards captured while lowering a branch can exempt a
 demand whose value is proven unreachable, but they are not part of
 specialization identity. A request beneath one guard context may reuse a
 specialization created beneath another; each such reuse is recorded, and final
-sealing re-verifies every runtime-value demand of the reused body under the
-reusing context. The exemption diagnostic therefore stays exact per requesting
-context without duplicating bodies per guard context.
+sealing re-verifies the reused body's runtime-value demands. A demand already
+certified under its creation context covers the one emitted body —
+statement-position guards are not monotonic across call sites in one block —
+and a reuse whose own context cannot certify an otherwise-uncertified demand
+is a compiler invariant violation. Bodies are never duplicated per guard
+context.
 
 An inspect-only demand may render results determined by type or callable
 identity without lowering a runtime value into Monotype IR. For example,

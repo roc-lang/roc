@@ -959,13 +959,13 @@ pub const InstGraph = struct {
                 if (named.args.len != 1) {
                     Common.invariant("forced-dynamic iterator identity did not have exactly one item argument");
                 }
-                const item = try self.activeTypeViewForNode(named.args[0]);
+                const item = try self.finalTypeViewForNode(named.args[0]);
                 const item_digest = self.types.typeDigest(self.name_store, item);
                 hasher.update("roc.generated_iterator.forced_dynamic_identity");
                 hasher.update(&item_digest.bytes);
             } else {
-                const active = try self.activeTypeViewForNode(node);
-                const shape = self.types.typeDigest(self.name_store, active);
+                const final = try self.finalTypeViewForNode(node);
+                const shape = self.types.typeDigest(self.name_store, final);
                 hasher.update("roc.generated_iterator.final_identity");
                 hasher.update(&shape.bytes);
                 if (provenance.callable_evidence) |evidence| {
@@ -3244,6 +3244,20 @@ pub const InstGraph = struct {
             };
         }
         return out;
+    }
+
+    /// Materialize a read-only Monotype-shaped view of a node's FINAL shape,
+    /// applying recorded defaults to any still-unresolved leaves. Valid only
+    /// inside final graph sealing, after every relation has been applied and
+    /// only defaults remain; the returned TypeId is graph-owned scratch state
+    /// and must not be written to completed Monotype output.
+    fn finalTypeViewForNode(self: *InstGraph, node: NodeId) Allocator.Error!Type.TypeId {
+        self.requireRelationProduction();
+        if (self.imported_monos.get(node)) |imported| return imported;
+        if (try self.typeIsResolved(node)) return try self.monoFor(node);
+        var snapshot = GraphTypeFinals.initActiveSnapshot(self);
+        defer snapshot.deinit();
+        return try snapshot.sealNode(self.find(node));
     }
 
     /// Materialize a read-only Monotype-shaped view of a fully resolved graph

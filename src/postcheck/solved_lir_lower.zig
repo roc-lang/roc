@@ -8505,6 +8505,7 @@ fn emptySolvedProgramForTest(allocator: std.mem.Allocator) Solved.Program {
         .empty,
         .empty,
         .empty,
+        .empty,
         Mono.ProcDebugNameMap.init(allocator),
         .empty,
         .empty,

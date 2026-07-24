@@ -1717,20 +1717,20 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
 
     try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
         .template_requests = 27,
-        .template_hits = 0,
-        .template_misses = 27,
+        .template_hits = 22,
+        .template_misses = 5,
         .nested_requests = 16,
         .nested_hits = 8,
         .nested_misses = 8,
-        .template_lookup_candidates = 22,
+        .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 83,
-        .specialization_type_digest_cache_hits = 145,
-        .specialization_type_digest_cache_misses = 94,
-        .specialization_type_digest_nodes_visited = 94,
+        .specialization_type_digest_requests = 66,
+        .specialization_type_digest_cache_hits = 118,
+        .specialization_type_digest_cache_misses = 101,
+        .specialization_type_digest_nodes_visited = 101,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 110,
+        .nominal_backing_instantiations = 81,
     }, counters);
 }
 
@@ -1765,20 +1765,20 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
 
     try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
         .template_requests = 15,
-        .template_hits = 0,
-        .template_misses = 15,
+        .template_hits = 5,
+        .template_misses = 10,
         .nested_requests = 12,
         .nested_hits = 6,
         .nested_misses = 6,
-        .template_lookup_candidates = 5,
+        .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 58,
-        .specialization_type_digest_cache_hits = 164,
-        .specialization_type_digest_cache_misses = 146,
-        .specialization_type_digest_nodes_visited = 146,
+        .specialization_type_digest_requests = 63,
+        .specialization_type_digest_cache_hits = 217,
+        .specialization_type_digest_cache_misses = 221,
+        .specialization_type_digest_nodes_visited = 221,
         .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 133,
+        .nominal_backing_instantiations = 128,
     }, counters);
 }
 
