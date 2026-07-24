@@ -3782,6 +3782,54 @@ Builtin :: [].{
 			$result
 		}
 
+		## Apply a ternary function to triples of elements from three lists, returning a list of results.
+		## The result's length is the length of the shortest input list.
+		## ```
+		## expect [1, 2, 3].map3([10, 20, 30], [100, 200, 300], |a, b, c| a + b + c) == [111, 222, 333]
+		## expect [1, 2, 3, 4, 5].map3([10, 20], [100, 200, 300], |a, b, c| a + b + c) == [111, 222]
+		## ```
+		map3 : List(a), List(b), List(c), (a, b, c -> d) -> List(d)
+		map3 = |a_list, b_list, c_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len() and $index < c_list.len()) {
+				match (a_list.get($index), b_list.get($index), c_list.get($index)) {
+					(Ok(a), Ok(b), Ok(c)) => {
+						$result = $result.append(transform(a, b, c))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
+		## Apply a quaternary function to groups of elements from four lists, returning a list of results.
+		## The result's length is the length of the shortest input list.
+		## ```
+		## expect [1, 2, 3].map4([10, 20, 30], [100, 200, 300], [1000, 2000, 3000], |a, b, c, d| a + b + c + d) == [1111, 2222, 3333]
+		## expect [1, 2, 3, 4, 5].map4([10, 20], [100, 200, 300], [1000, 2000, 3000, 4000], |a, b, c, d| a + b + c + d) == [1111, 2222]
+		## ```
+		map4 : List(a), List(b), List(c), List(d), (a, b, c, d -> e) -> List(e)
+		map4 = |a_list, b_list, c_list, d_list, transform| {
+			var $result = []
+			var $index = 0
+			while ($index < a_list.len() and $index < b_list.len() and $index < c_list.len() and $index < d_list.len()) {
+				match (a_list.get($index), b_list.get($index), c_list.get($index), d_list.get($index)) {
+					(Ok(a), Ok(b), Ok(c), Ok(d)) => {
+						$result = $result.append(transform(a, b, c, d))
+					}
+					_ => {
+						break
+					}
+				}
+				$index = $index + 1
+			}
+			$result
+		}
+
 		## Run the given function on each element of a list, and return all the
 		## elements for which the function returned `Bool.True`.
 		## ```roc
