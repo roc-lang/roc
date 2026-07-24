@@ -4262,8 +4262,18 @@ const Builder = struct {
                 )) added_codec_call = true;
             }
 
+            var added_intrinsic_call = false;
+            var intrinsic_index: usize = 0;
+            while (intrinsic_index < body_draft.deferred_parse_intrinsics.items.len) : (intrinsic_index += 1) {
+                if (try self.prepareDraftParseIntrinsic(
+                    body_draft,
+                    graph,
+                    body_draft.deferred_parse_intrinsics.items[intrinsic_index],
+                )) added_intrinsic_call = true;
+            }
+
             if (const_index < body_draft.deferred_const_uses.items.len) continue;
-            if (!added_method_call and !added_inspect_method and !added_codec_call) break;
+            if (!added_method_call and !added_inspect_method and !added_codec_call and !added_intrinsic_call) break;
         }
         resolveDraftConstUseReservations(body_draft);
 
@@ -4280,6 +4290,11 @@ const Builder = struct {
         for (body_draft.deferred_structural_serializations.items) |boundary| {
             if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
                 Common.invariant("deferred structural serialization reservation was filled before final graph sealing");
+            }
+        }
+        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
+                Common.invariant("deferred parse intrinsic reservation was filled before final graph sealing");
             }
         }
     }
@@ -4304,10 +4319,11 @@ const Builder = struct {
         self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
         self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-        var ctx = try BodyContext.init(
+        var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self,
             boundary.view,
+            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -4391,10 +4407,11 @@ const Builder = struct {
         self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
         self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-        var ctx = try BodyContext.init(
+        var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self,
             boundary.view,
+            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -4428,10 +4445,11 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        var ctx = try BodyContext.init(
+        var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self,
             boundary.view,
+            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -4456,10 +4474,11 @@ const Builder = struct {
         const owner_scope = try body_draft.enterOwner(boundary.owner);
         defer owner_scope.leave();
 
-        var ctx = try BodyContext.init(
+        var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self,
             boundary.view,
+            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -4489,6 +4508,64 @@ const Builder = struct {
             kind,
             boundary.shape_node,
             boundary.callable_node,
+            &seen,
+        ) or added_relation;
+    }
+
+    /// Relation production for a deferred parse intrinsic. Only
+    /// `parse_tag_union` generates parser bodies whose format method calls
+    /// and error-row tags must exist as graph relations before the freeze;
+    /// the FieldNames/Field intrinsics only reshape already-related values.
+    /// The intrinsic's callable is `(spec, options) -> Try({value, rest}, e)`;
+    /// a synthetic `(encoding) -> (state) -> Try` constructor node over the
+    /// options' own component cells lets the structural-parser preparation
+    /// helpers run unchanged.
+    fn prepareDraftParseIntrinsic(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+        boundary: DraftDeferredParseIntrinsic,
+    ) Allocator.Error!bool {
+        if (boundary.intrinsic != .parse_tag_union) return false;
+        const owner_scope = try body_draft.enterOwner(boundary.owner);
+        defer owner_scope.leave();
+
+        var ctx = try BodyContext.initWithMethodScope(
+            self.allocator,
+            self,
+            boundary.view,
+            boundary.method_scope,
+            boundary.owner_template,
+            graph,
+            body_draft,
+        );
+        defer ctx.deinit();
+        ctx.evidence = boundary.evidence;
+        ctx.current_fn_key = boundary.current_fn_key;
+        try ctx.restoreCodecLexicalContext(boundary.lexical);
+
+        const callable = try graph.functionNodes(boundary.callable_node);
+        const constructor_node = try ctx.parseTagUnionSyntheticBoundary(callable, callable.ret);
+        const result = try ctx.graphParserResultNodes(callable.ret);
+
+        var added_relation = false;
+        var required_error_seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer required_error_seen.deinit();
+        if (try ctx.graphParserShapeNeedsRequiredFieldError(result.value, &required_error_seen)) {
+            added_relation = try ctx.ensureGraphParserMissingRequiredFieldError(constructor_node);
+            if (!added_relation and !try ctx.graphRowHasTag(result.err, "MissingRequiredField")) {
+                // Checker-closed row without the report: emission crash-maps
+                // this decode, so no format-method relations may widen it.
+                return false;
+            }
+        }
+        var seen = std.AutoHashMap(NodeId, void).init(self.allocator);
+        defer seen.deinit();
+        return try ctx.prepareCustomCodecCallsAtNode(
+            boundary.expr,
+            .parser,
+            result.value,
+            constructor_node,
             &seen,
         ) or added_relation;
     }
@@ -4536,10 +4613,11 @@ const Builder = struct {
             self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
             self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-            var ctx = try BodyContext.init(
+            var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
                 self,
                 boundary.view,
+                boundary.method_scope,
                 boundary.owner_template,
                 graph,
                 body_draft,
@@ -4592,6 +4670,69 @@ const Builder = struct {
         }
     }
 
+    /// Deferred parse intrinsics consume the closed snapshot produced by
+    /// final graph sealing: their callable request nodes carried live row
+    /// defaults during body lowering, and only the sealer may decide the
+    /// final rows those intrinsic bodies are generated over.
+    fn emitDraftDeferredParseIntrinsics(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        graph: *InstGraph,
+        sealer: *GraphTypeFinals,
+    ) Allocator.Error!void {
+        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+            const owner_scope = try body_draft.enterOwner(boundary.owner);
+            defer owner_scope.leave();
+
+            const saved_loc = self.program.current_loc;
+            defer self.program.current_loc = saved_loc;
+            const saved_region = self.program.current_region;
+            defer self.program.current_region = saved_region;
+            self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
+            self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+
+            var ctx = try BodyContext.initWithMethodScope(
+                self.allocator,
+                self,
+                boundary.view,
+                boundary.method_scope,
+                boundary.owner_template,
+                graph,
+                body_draft,
+            );
+            defer ctx.deinit();
+            ctx.evidence = boundary.evidence;
+            ctx.current_fn_key = boundary.current_fn_key;
+            try ctx.restoreCodecLexicalContext(boundary.lexical);
+            ctx.frozen_sealed_emission = true;
+            ctx.frozen_type_finals = sealer;
+
+            const callable = try graph.functionNodes(boundary.callable_node);
+            const lowered = try ctx.lowerParseIntrinsicBodyAtCallable(
+                boundary.intrinsic,
+                boundary.checked_expr_id,
+                boundary.source_fn_ty,
+                boundary.args,
+                callable,
+                null,
+            );
+            const lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+            const reserved_ty = try body_draft.exprs.items[@intFromEnum(boundary.expr)].ty.seal(graph, sealer);
+            const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
+            if (!try self.program.types.typeEql(&self.program.names, reserved_ty, lowered_ty)) {
+                Common.invariant("deferred parse intrinsic changed its sealed result type");
+            }
+            body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
+            body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
+                body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
+        }
+        for (body_draft.deferred_parse_intrinsics.items) |boundary| {
+            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+                Common.invariant("deferred parse intrinsic did not fill its reservation");
+            }
+        }
+    }
+
     /// Deferred inspect-only expressions consume the one closed snapshot
     /// produced by final graph sealing. They do not participate in relation
     /// production: the runtime value and result were already lowered, and the
@@ -4628,10 +4769,11 @@ const Builder = struct {
             self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
             self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-            var ctx = try BodyContext.init(
+            var ctx = try BodyContext.initWithMethodScope(
                 self.allocator,
                 self,
                 boundary.view,
+                boundary.method_scope,
                 boundary.owner_template,
                 graph,
                 body_draft,
@@ -4677,10 +4819,11 @@ const Builder = struct {
         self.program.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
         self.program.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
 
-        var ctx = try BodyContext.init(
+        var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self,
             boundary.view,
+            boundary.method_scope,
             boundary.owner_template,
             graph,
             body_draft,
@@ -5115,6 +5258,7 @@ const Builder = struct {
         var sealer = GraphTypeFinals.init(graph);
         defer sealer.deinit();
         try self.emitDraftDeferredStructuralSerializations(body_draft, graph, &sealer);
+        try self.emitDraftDeferredParseIntrinsics(body_draft, graph, &sealer);
         try self.emitDraftDeferredStructuralEqs(body_draft, graph, &sealer);
         try self.emitDraftDeferredInspects(body_draft, graph, &sealer);
         const sealed_root = if (root_node) |node| try sealer.sealNode(node) else null;
@@ -8092,6 +8236,9 @@ const DraftConstUseProvenance = union(enum) {
 
 const DraftDeferredConstUse = struct {
     view: ModuleView,
+    /// Checked module whose ordered registry scope governs generated method
+    /// dispatch inside the deferred emission, captured at deferral time.
+    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -8121,6 +8268,7 @@ const DraftDeferredConstUse = struct {
 /// hasher (whose type is `ret_ty`).
 const DraftDeferredStructuralEq = struct {
     view: ModuleView,
+    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -8142,6 +8290,7 @@ const DraftStructuralDerivationMode = union(enum) {
 
 const DraftDeferredStructuralSerialization = struct {
     view: ModuleView,
+    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -8149,6 +8298,27 @@ const DraftDeferredStructuralSerialization = struct {
     callable_node: NodeId,
     shape_node: NodeId,
     encoding: DraftExprId,
+    evidence: EvidenceChain,
+    current_fn_key: names.TypeDigest,
+    lexical: DraftCodecLexicalContext,
+};
+
+/// One parse intrinsic whose callable request still carried unresolved
+/// component cells at body-lowering time (e.g. a `FieldName(shape)` whose
+/// shape row stays widenable until final sealing). The reservation keeps the
+/// callable's result node live; emission lowers the intrinsic body under the
+/// frozen final-type sealer.
+const DraftDeferredParseIntrinsic = struct {
+    view: ModuleView,
+    method_scope: ModuleView,
+    owner_template: names.ProcTemplate,
+    owner: DraftOwner,
+    expr: DraftExprId,
+    intrinsic: checked.IntrinsicId,
+    checked_expr_id: checked.CheckedExprId,
+    source_fn_ty: checked.CheckedTypeId,
+    args: []const checked.CheckedExprId,
+    callable_node: NodeId,
     evidence: EvidenceChain,
     current_fn_key: names.TypeDigest,
     lexical: DraftCodecLexicalContext,
@@ -8192,6 +8362,7 @@ const FrozenPreparedCodecCall = struct {
 
 const DraftDeferredInspect = struct {
     view: ModuleView,
+    method_scope: ModuleView,
     owner_template: names.ProcTemplate,
     owner: DraftOwner,
     expr: DraftExprId,
@@ -8477,6 +8648,7 @@ const BodyDraftStore = struct {
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
+    deferred_parse_intrinsics: std.ArrayList(DraftDeferredParseIntrinsic),
     prepared_codec_calls: std.ArrayList(DraftPreparedCodecCall),
     local_proc_contexts: std.ArrayList(LocalProcContext),
     deferred_inspects: std.ArrayList(DraftDeferredInspect),
@@ -8543,6 +8715,7 @@ const BodyDraftStore = struct {
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
             .deferred_structural_serializations = .empty,
+            .deferred_parse_intrinsics = .empty,
             .prepared_codec_calls = .empty,
             .local_proc_contexts = .empty,
             .deferred_inspects = .empty,
@@ -8615,6 +8788,10 @@ const BodyDraftStore = struct {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
         }
+        for (self.deferred_parse_intrinsics.items) |boundary| {
+            self.allocator.free(boundary.lexical.binders);
+            self.allocator.free(boundary.lexical.local_procs);
+        }
         for (self.deferred_inspects.items) |boundary| {
             self.allocator.free(boundary.lexical.binders);
             self.allocator.free(boundary.lexical.local_procs);
@@ -8655,6 +8832,7 @@ const BodyDraftStore = struct {
         self.prepared_inspect_methods.deinit(self.allocator);
         self.deferred_inspects.deinit(self.allocator);
         self.deferred_structural_serializations.deinit(self.allocator);
+        self.deferred_parse_intrinsics.deinit(self.allocator);
         self.prepared_codec_calls.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
@@ -11062,7 +11240,13 @@ const BodyContext = struct {
     }
 
     fn localType(self: *BodyContext, id: DraftLocalId) Allocator.Error!Type.TypeId {
-        return try self.activeTypeFromCell(self.draft.locals.items[@intFromEnum(id)].ty);
+        const cell = self.draft.locals.items[@intFromEnum(id)].ty;
+        if (self.frozen_sealed_emission) {
+            const finals = self.frozen_type_finals orelse
+                Common.invariant("frozen Monotype emission had no graph type finalizer");
+            return try cell.seal(self.graph, finals);
+        }
+        return try self.activeTypeFromCell(cell);
     }
 
     fn localTypeCell(self: *BodyContext, id: DraftLocalId) DraftTypeCell {
@@ -13157,6 +13341,7 @@ const BodyContext = struct {
         }
         try self.draft.deferred_inspects.append(self.allocator, .{
             .view = self.view,
+            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -14386,7 +14571,83 @@ const BodyContext = struct {
             },
         }
 
-        const arg_tys = try self.allocator.alloc(Type.TypeId, call.args.len);
+        if (!self.frozen_sealed_emission) {
+            var unresolved = !try self.graph.typeIsResolved(callable.ret);
+            if (!unresolved) for (callable.args) |arg_node| {
+                if (!try self.graph.typeIsResolved(arg_node)) {
+                    unresolved = true;
+                    break;
+                }
+            };
+            if (unresolved) {
+                // The request still carries live row defaults (e.g. an open
+                // `FieldName(shape)` row). Reserve the result and lower the
+                // intrinsic body under the frozen final-type sealer, exactly
+                // like a deferred structural serialization.
+                const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
+                const lexical = try self.captureCodecLexicalContext();
+                var lexical_needs_cleanup = true;
+                errdefer if (lexical_needs_cleanup) {
+                    self.allocator.free(lexical.binders);
+                    self.allocator.free(lexical.local_procs);
+                };
+                try self.draft.deferred_parse_intrinsics.append(self.allocator, .{
+                    .view = self.view,
+                    .method_scope = self.method_scope,
+                    .owner_template = self.owner_template,
+                    .owner = self.draft.current_owner,
+                    .expr = expr,
+                    .intrinsic = intrinsic,
+                    .checked_expr_id = checked_expr_id,
+                    .source_fn_ty = source_fn_ty,
+                    .args = call.args,
+                    .callable_node = callable_node,
+                    .evidence = self.evidence,
+                    .current_fn_key = self.current_fn_key,
+                    .lexical = lexical,
+                });
+                lexical_needs_cleanup = false;
+                return expr;
+            }
+        }
+
+        return try self.lowerParseIntrinsicBodyAtCallable(
+            intrinsic,
+            checked_expr_id,
+            source_fn_ty,
+            call.args,
+            callable,
+            expected_ret_ty,
+        );
+    }
+
+    /// Synthetic `(encoding) -> (state) -> Try` constructor node over a
+    /// `ParseTagUnionSpec.parse` request's own component cells, letting the
+    /// structural-parser relation helpers treat the intrinsic like a derived
+    /// `parser_for` boundary.
+    fn parseTagUnionSyntheticBoundary(self: *BodyContext, callable: FunctionNodes, callable_ret: NodeId) Allocator.Error!NodeId {
+        if (callable.args.len != 2) Common.invariant("ParseTagUnionSpec.parse request did not have spec and options arguments");
+        const options_node = callable.args[1];
+        const encoding_node = try self.graph.recordFieldNode(options_node, try self.builder.program.names.internRecordFieldLabel("encoding"));
+        const state_node = try self.graph.recordFieldNode(options_node, try self.builder.program.names.internRecordFieldLabel("state"));
+        const runtime_node = try self.graphFunctionNode(&.{state_node}, callable_ret);
+        return try self.graphFunctionNode(&.{encoding_node}, runtime_node);
+    }
+
+    /// Materialize the intrinsic's argument and result types from the exact
+    /// checked callable request nodes and lower the intrinsic body. Under
+    /// frozen emission the current-phase view seals each node to its final
+    /// type; during ordinary body lowering every node is already resolved.
+    fn lowerParseIntrinsicBodyAtCallable(
+        self: *BodyContext,
+        intrinsic: checked.IntrinsicId,
+        checked_expr_id: checked.CheckedExprId,
+        source_fn_ty: checked.CheckedTypeId,
+        args: []const checked.CheckedExprId,
+        callable: FunctionNodes,
+        expected_ret_ty: ?Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        const arg_tys = try self.allocator.alloc(Type.TypeId, args.len);
         defer self.allocator.free(arg_tys);
         for (callable.args, 0..) |arg_node, index| {
             arg_tys[index] = try self.currentPhaseTypeForNode(arg_node);
@@ -14397,13 +14658,13 @@ const BodyContext = struct {
         }
 
         return switch (intrinsic) {
-            .parse_tag_union => try self.lowerParseTagUnionDecode(call.args, arg_tys, ret_ty),
-            .field_names_rename_fields => try self.lowerFieldNamesRenameFieldNames(call.args, arg_tys, ret_ty),
-            .field_names_shortest_name => try self.lowerFieldNamesNameBound(call.args, arg_tys, ret_ty, .shortest),
-            .field_names_longest_name => try self.lowerFieldNamesNameBound(call.args, arg_tys, ret_ty, .longest),
-            .field_names_iter => try self.lowerFieldNamesIter(checked_expr_id, source_fn_ty, call.args, arg_tys, ret_ty, .all),
-            .field_names_for_size => try self.lowerFieldNamesIter(checked_expr_id, source_fn_ty, call.args, arg_tys, ret_ty, .for_size),
-            .field_name => try self.lowerFieldName(call.args, arg_tys, ret_ty),
+            .parse_tag_union => try self.lowerParseTagUnionDecode(args, arg_tys, ret_ty),
+            .field_names_rename_fields => try self.lowerFieldNamesRenameFieldNames(args, arg_tys, ret_ty),
+            .field_names_shortest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .shortest),
+            .field_names_longest_name => try self.lowerFieldNamesNameBound(args, arg_tys, ret_ty, .longest),
+            .field_names_iter => try self.lowerFieldNamesIter(checked_expr_id, source_fn_ty, args, arg_tys, ret_ty, .all),
+            .field_names_for_size => try self.lowerFieldNamesIter(checked_expr_id, source_fn_ty, args, arg_tys, ret_ty, .for_size),
+            .field_name => try self.lowerFieldName(args, arg_tys, ret_ty),
             .str_inspect, .structural_eq => unreachable,
         };
     }
@@ -20163,15 +20424,30 @@ const BodyContext = struct {
         const payload_ty = payload_tys[payload_index];
         const payload_ok_ty = try self.parseResultOkType(payload_ty, state_ty);
         const payload_try_ty = try self.tryTypeLike(ret_ty, payload_ok_ty, ret_info.err_ty);
-        const payload_try = try self.lowerParseShapeHelperCall(
-            payload_ty,
-            try self.localExpr(encoding_local, encoding_ty),
-            encoding_ty,
-            state_expr,
-            state_ty,
-            payload_try_ty,
-            precomputed_plan,
-        );
+        const payload_try = payload_try: {
+            // A payload whose parse can report a missing required field is
+            // only decodable when the spec's checked error row carries that
+            // report. A closed row without it is checker-authored proof this
+            // payload is converter-fed and never parsed from source text, so
+            // the impossible parse lowers to the failure mapping instead of
+            // generating helpers over unparseable internals.
+            var required_visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+            defer required_visited.deinit();
+            if (try self.parserShapeNeedsRequiredFieldError(payload_ty, &required_visited) and
+                self.monoTagByTextOptional(ret_info.err_ty, "MissingRequiredField") == null)
+            {
+                break :payload_try try self.runtimeCrashExpr(payload_try_ty, "missing required field outside its checked error row");
+            }
+            break :payload_try try self.lowerParseShapeHelperCall(
+                payload_ty,
+                try self.localExpr(encoding_local, encoding_ty),
+                encoding_ty,
+                state_expr,
+                state_ty,
+                payload_try_ty,
+                precomputed_plan,
+            );
+        };
         const rest_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
         const rest_expr = try self.localExpr(rest_local, state_ty);
         const next_body = if (payload_index + 1 < payload_tys.len) blk: {
@@ -22217,6 +22493,7 @@ const BodyContext = struct {
         }
         try self.draft.deferred_const_uses.append(self.allocator, .{
             .view = self.view,
+            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -28501,6 +28778,7 @@ const BodyContext = struct {
         };
         try self.draft.deferred_structural_serializations.append(self.allocator, .{
             .view = self.view,
+            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
@@ -31678,6 +31956,17 @@ const BodyContext = struct {
             .unresolved, .empty_tag_union => {},
             else => Common.invariant("structural parser error evidence was not a tag-union row"),
         }
+        // A row whose extension chain already terminated in a concrete empty
+        // union is checker-closed; the generated body crash-maps the missing
+        // required-field path instead of widening checked output.
+        var row_probe = outer_result.err;
+        probe: while (true) {
+            switch (self.graph.content(row_probe)) {
+                .tag_union => |row| row_probe = row.ext,
+                .empty_tag_union => return false,
+                else => break :probe,
+            }
+        }
 
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const tags = try self.graph.arena().alloc(InstTag, 1);
@@ -31692,6 +31981,18 @@ const BodyContext = struct {
         } });
         try self.graph.unify(outer_result.err, evidence);
         return true;
+    }
+
+    fn graphRowHasTag(self: *BodyContext, row_node: NodeId, text: []const u8) Allocator.Error!bool {
+        switch (self.graph.content(row_node)) {
+            .tag_union, .named => {
+                for ((try self.graph.tagRowNodes(row_node)).tags) |tag| {
+                    if (Ident.textEql(self.builder.program.names.tagLabelText(tag.name), text)) return true;
+                }
+            },
+            else => {},
+        }
+        return false;
     }
 
     fn prepareCustomCodecCallsAtNode(
@@ -31916,6 +32217,69 @@ const BodyContext = struct {
         } } });
     }
 
+    /// Whether parsing `ty` from source text can report a missing required
+    /// record field. Mirrors the checker's derived-parse analysis over the
+    /// materialized monotype.
+    fn parserShapeNeedsRequiredFieldError(
+        self: *BodyContext,
+        ty: Type.TypeId,
+        visited: *std.AutoHashMap(Type.TypeId, void),
+    ) Allocator.Error!bool {
+        if (visited.contains(ty)) return false;
+        try visited.put(ty, {});
+
+        if (self.jsonParseScalarMethodName(ty) != null) return false;
+        if (try self.missingTryInfo(ty)) |info| {
+            return try self.parserShapeNeedsRequiredFieldError(info.ok_ty, visited);
+        }
+        if (self.tryJsonInfo(ty)) |info| {
+            return try self.parserShapeNeedsRequiredFieldError(info.ok_payload_ty, visited);
+        }
+        if ((try self.customParserLookup(ty)) != null) return false;
+        if (self.setPayloadType(ty)) |payload_ty| {
+            return try self.parserShapeNeedsRequiredFieldError(payload_ty, visited);
+        }
+        if (self.dictEntryShape(ty)) |dict| {
+            return try self.parserShapeNeedsRequiredFieldError(dict.value_ty, visited);
+        }
+
+        return switch (self.builder.shapeContent(ty)) {
+            .list => |payload_ty| try self.parserShapeNeedsRequiredFieldError(payload_ty, visited),
+            .box => |payload_ty| try self.parserShapeNeedsRequiredFieldError(payload_ty, visited),
+            .tuple => |span| blk: {
+                const elems = self.builder.program.types.span(span);
+                for (0..GuardedList.borrowLen(elems)) |index| {
+                    if (try self.parserShapeNeedsRequiredFieldError(GuardedList.at(elems, index), visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .record => |span| blk: {
+                const fields = self.builder.program.types.fieldSpan(span);
+                for (0..GuardedList.borrowLen(fields)) |index| {
+                    const field = GuardedList.at(fields, index);
+                    if (try self.missingTryInfo(field.ty)) |optional| {
+                        if (try self.parserShapeNeedsRequiredFieldError(optional.ok_ty, visited)) break :blk true;
+                    } else {
+                        break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .tag_union => |span| blk: {
+                const tags = self.builder.program.types.tagSpan(span);
+                for (0..GuardedList.borrowLen(tags)) |tag_index| {
+                    const payloads = self.builder.program.types.span(GuardedList.at(tags, tag_index).payloads);
+                    for (0..GuardedList.borrowLen(payloads)) |payload_index| {
+                        if (try self.parserShapeNeedsRequiredFieldError(GuardedList.at(payloads, payload_index), visited)) break :blk true;
+                    }
+                }
+                break :blk false;
+            },
+            .zst => false,
+            else => false,
+        };
+    }
+
     fn missingRequiredFieldError(
         self: *BodyContext,
         field_name_expr: DraftExprId,
@@ -31925,7 +32289,14 @@ const BodyContext = struct {
         if (!self.sameType(try self.exprType(field_name_expr), str_ty)) {
             Common.invariant("generated missing required field name was not Str");
         }
-        const missing_tag = self.monoTagByText(err_ty, "MissingRequiredField");
+        // A closed checked error row without the tag is checker-authored
+        // proof this parse path never reports a missing field (e.g. the
+        // record parser generated for a converter-fed tag payload that is
+        // never decoded from source text). The impossible path lowers to
+        // the conversion failure mapping like any other checked-impossible
+        // value.
+        const missing_tag = self.monoTagByTextOptional(err_ty, "MissingRequiredField") orelse
+            return try self.runtimeCrashExpr(err_ty, "missing required field outside its checked error row");
         const payload_tys = self.builder.program.types.span(missing_tag.payloads);
         if (payload_tys.len != 1 or !self.sameType(GuardedList.at(payload_tys, 0), str_ty)) {
             Common.invariant("MissingRequiredField in parser error row did not carry one Str payload");
@@ -32113,6 +32484,7 @@ const BodyContext = struct {
         }
         try self.draft.deferred_structural_eqs.append(self.allocator, .{
             .view = self.view,
+            .method_scope = self.method_scope,
             .owner_template = self.owner_template,
             .owner = self.draft.current_owner,
             .expr = expr,
