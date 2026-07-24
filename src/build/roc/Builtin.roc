@@ -1137,6 +1137,10 @@ Builtin :: [].{
 			finish_string_tag_payloads = |state, count|
 				if count == 0 Ok(state) else Err(Json.invalid_json)
 
+			## A multi-payload tag writes its payloads as a JSON array, which is
+			## a fixed-arity sequence, so it reads back through the tuple
+			## methods. A single payload is written bare, and a payload-free tag
+			## is written as an empty object.
 			start_object_tag_payloads : JsonEncoding, JsonState, U64 -> Try(JsonState, [InvalidJson(Str), ..])
 			start_object_tag_payloads = |encoding, state, count|
 				if count == 0 {
@@ -1149,8 +1153,6 @@ Builtin :: [].{
 				} else if count == 1 {
 					Ok(state)
 				} else {
-					## A multi-payload tag is a fixed-arity sequence, which is
-					## exactly what the tuple methods describe.
 					JsonEncoding.parse_tuple_start(encoding, state, count)
 				}
 
