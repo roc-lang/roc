@@ -22083,56 +22083,6 @@ fn freshParseRecordFieldTryVar(
     return try self.freshFromContent(try self.mkTryContent(event_var, err_var), env, region);
 }
 
-fn freshParseObjectNextEventVar(
-    self: *Self,
-    state_var: Var,
-    env: *Env,
-    region: Region,
-) Allocator.Error!Var {
-    const key_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("key"));
-    const rest_name = try @constCast(self.cir).insertIdent(base.Ident.for_text("rest"));
-
-    const str_var = try self.freshStr(env, region);
-    const entry_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
-    const entry_record_fields = [_]types_mod.RecordField{
-        .{ .name = key_name, .var_ = str_var },
-        .{ .name = rest_name, .var_ = state_var },
-    };
-    const entry_record = try self.freshFromContent(.{ .structure = .{ .record = .{
-        .fields = try self.types.appendRecordFields(&entry_record_fields),
-        .ext = entry_record_ext,
-    } } }, env, region);
-
-    const done_record_ext = try self.freshFromContent(.{ .structure = .empty_record }, env, region);
-    const done_record_fields = [_]types_mod.RecordField{
-        .{ .name = rest_name, .var_ = state_var },
-    };
-    const done_record = try self.freshFromContent(.{ .structure = .{ .record = .{
-        .fields = try self.types.appendRecordFields(&done_record_fields),
-        .ext = done_record_ext,
-    } } }, env, region);
-
-    const entry_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Entry"));
-    const done_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Done"));
-    const tags = [_]types_mod.Tag{
-        try self.types.mkTag(entry_ident, &.{entry_record}),
-        try self.types.mkTag(done_ident, &.{done_record}),
-    };
-    const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-    return try self.freshFromContent(try self.types.mkTagUnion(&tags, ext_var), env, region);
-}
-
-fn freshParseObjectNextTryVar(
-    self: *Self,
-    state_var: Var,
-    err_var: Var,
-    env: *Env,
-    region: Region,
-) Allocator.Error!Var {
-    const event_var = try self.freshParseObjectNextEventVar(state_var, env, region);
-    return try self.freshFromContent(try self.mkTryContent(event_var, err_var), env, region);
-}
-
 fn freshParseArrayEventVar(
     self: *Self,
     state_var: Var,
@@ -22216,6 +22166,7 @@ const BuiltinEncodeSpecDecl = enum {
     record,
     tuple,
     list,
+    dict,
 };
 
 fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Error!Ident.Idx {
@@ -22273,8 +22224,8 @@ fn invalidValueMethodName(self: *Self) Allocator.Error!Ident.Idx {
     return try @constCast(self.cir).insertIdent(base.Ident.for_text("invalid_value"));
 }
 
-fn parseObjectNextMethodName(self: *Self) Allocator.Error!Ident.Idx {
-    return try @constCast(self.cir).insertIdent(base.Ident.for_text("parse_object_next"));
+fn dictMethodName(self: *Self, comptime text: []const u8) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
 fn skipRecordFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
@@ -22285,7 +22236,7 @@ fn renameFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
     return try @constCast(self.cir).insertIdent(base.Ident.for_text("rename_field"));
 }
 
-fn parseJsonObjectKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
+fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
     return switch (self.types.resolveVar(key_var).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| {
@@ -22313,13 +22264,13 @@ fn parseJsonObjectKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]co
             },
             else => null,
         },
-        .alias => |alias| try self.parseJsonObjectKeyMethodText(self.types.getAliasBackingVar(alias)),
+        .alias => |alias| try self.parseDictKeyMethodText(self.types.getAliasBackingVar(alias)),
         .err => null,
         .flex, .rigid => null,
     };
 }
 
-fn encodeJsonObjectKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
+fn encodeDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
     return switch (self.types.resolveVar(key_var).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| {
@@ -22347,7 +22298,7 @@ fn encodeJsonObjectKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]c
             },
             else => null,
         },
-        .alias => |alias| try self.encodeJsonObjectKeyMethodText(self.types.getAliasBackingVar(alias)),
+        .alias => |alias| try self.encodeDictKeyMethodText(self.types.getAliasBackingVar(alias)),
         .err => null,
         .flex, .rigid => null,
     };
@@ -22375,6 +22326,7 @@ fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Er
         .record => "encode_record",
         .tuple => "encode_tuple",
         .list => "encode_list",
+        .dict => "encode_dict",
     };
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
@@ -22573,6 +22525,16 @@ fn validateEncodeFormatMethod(
             const write_fields_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, field_writer_var }, container_ret), env, region);
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ state_var, count_var, write_fields_var }, expected_ret), env, region);
         },
+        .dict => blk: {
+            const count_var = try self.freshU64(env, region);
+            const container_state_var = try self.fresh(env, region);
+            const container_ret = try self.freshFromContent(try self.mkTryContent(container_state_var, err_var), env, region);
+            const key_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
+            const value_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{state_var}, expected_ret), env, region);
+            const entry_writer_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, key_writer_var, value_writer_var }, container_ret), env, region);
+            const write_entries_var = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ container_state_var, entry_writer_var }, container_ret), env, region);
+            break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ state_var, count_var, write_entries_var }, expected_ret), env, region);
+        },
         .tag, .tuple, .list => blk: {
             const count_var = try self.freshU64(env, region);
             const container_state_var = try self.fresh(env, region);
@@ -22597,7 +22559,11 @@ fn validateEncodeFormatMethod(
     return if (result.isOk()) .ok else .reported_error;
 }
 
-fn validateParseObjectNextMethod(
+/// The dict protocol, mirroring the list one: `parse_dict_start` may declare
+/// the entry count, `parse_dict_next` reports whether an entry follows,
+/// `parse_dict_after_key` consumes whatever sits between a key and its value,
+/// and `parse_dict_after_entry` reports whether more entries follow.
+fn validateDerivedParseDictMethods(
     self: *Self,
     encoding_var: Var,
     state_var: Var,
@@ -22606,11 +22572,43 @@ fn validateParseObjectNextMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.parseObjectNextMethodName();
+    const start_ret = try self.freshParseCountedStartTryVar(state_var, err_var, env, region);
+    switch (try self.validateDictProtocolMethod(encoding_var, state_var, "parse_dict_start", start_ret, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    const next_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Entry", "Done", env, region);
+    switch (try self.validateDictProtocolMethod(encoding_var, state_var, "parse_dict_next", next_ret, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    const after_key_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+    switch (try self.validateDictProtocolMethod(encoding_var, state_var, "parse_dict_after_key", after_key_ret, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    const after_entry_ret = try self.freshParseArrayEventTryVar(state_var, err_var, "Continue", "Done", env, region);
+    switch (try self.validateDictProtocolMethod(encoding_var, state_var, "parse_dict_after_entry", after_entry_ret, constraint, env, region)) {
+        .ok => {},
+        .unsupported, .reported_error => |result| return result,
+    }
+    return .ok;
+}
+
+fn validateDictProtocolMethod(
+    self: *Self,
+    encoding_var: Var,
+    state_var: Var,
+    comptime method_text: []const u8,
+    expected_ret: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+) Allocator.Error!DerivedParseValidation {
+    const method_name = try self.dictMethodName(method_text);
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
-    const expected_ret = try self.freshParseObjectNextTryVar(state_var, err_var, env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
@@ -22626,19 +22624,19 @@ fn validateParseKeyMethod(
     self: *Self,
     key_var: Var,
     encoding_var: Var,
+    state_var: Var,
     err_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_text = try self.parseJsonObjectKeyMethodText(key_var) orelse return .ok;
+    const method_text = try self.parseDictKeyMethodText(key_var) orelse return .ok;
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
-    const str_var = try self.freshStr(env, region);
-    const expected_ret = try self.freshFromContent(try self.mkTryContent(key_var, err_var), env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var }, expected_ret), env, region);
+    const expected_ret = try self.freshParseResultTryVar(key_var, state_var, err_var, env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -22653,19 +22651,19 @@ fn validateEncodeKeyMethod(
     self: *Self,
     key_var: Var,
     encoding_var: Var,
+    state_var: Var,
     err_var: Var,
     constraint: StaticDispatchConstraint,
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_text = try self.encodeJsonObjectKeyMethodText(key_var) orelse return .ok;
+    const method_text = try self.encodeDictKeyMethodText(key_var) orelse return .ok;
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
-    const str_var = try self.freshStr(env, region);
-    const expected_ret = try self.freshFromContent(try self.mkTryContent(str_var, err_var), env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, key_var }, expected_ret), env, region);
+    const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, key_var, state_var }, expected_ret), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -23110,15 +23108,20 @@ fn validateDerivedParseNominal(
         if (!try self.varSupportsIsEq(args.key)) return .unsupported;
         if (!try self.varSupportsToHash(args.key)) return .unsupported;
         if (!try self.varSupportsJsonObjectKey(args.key)) return .unsupported;
-        switch (try self.validateParseObjectNextMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+        switch (try self.validateDerivedParseDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        switch (try self.validateParseKeyMethod(args.key, encoding_var, err_var, constraint, env, region)) {
+        switch (try self.validateParseKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
         if (try self.varIsClosedUnitTagUnion(args.key)) {
+            const str_var = try self.freshStr(env, region);
+            switch (try self.validateParseKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
             switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
@@ -23448,7 +23451,7 @@ fn validateDerivedEncodeDictMethods(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .record, err_var, constraint, env, region)) {
+    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .dict, err_var, constraint, env, region)) {
         .ok => {},
         .unsupported, .reported_error => |result| return result,
     }
@@ -23531,9 +23534,16 @@ fn validateDerivedEncodeNominal(
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        switch (try self.validateEncodeKeyMethod(args.key, encoding_var, err_var, constraint, env, region)) {
+        switch (try self.validateEncodeKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
+        }
+        if (try self.varIsClosedUnitTagUnion(args.key)) {
+            const str_var = try self.freshStr(env, region);
+            switch (try self.validateEncodeKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
         }
         return try self.validateDerivedEncodeVar(args.value, encoding_var, state_var, err_var, constraint, env, region, visited);
     }

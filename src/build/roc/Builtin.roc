@@ -168,6 +168,9 @@ Builtin :: [].{
 			encode_list : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |_, state, count, write_elements| JsonEncoding.encode_list(state, count, write_elements)
 
+			encode_dict : JsonEncoding, JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_dict = |_, state, count, write_entries| JsonEncoding.encode_dict(state, count, write_entries)
+
 			to_str : a -> Str
 				where [
 					a.encoder_for : JsonEncoding -> (a, JsonEncodeState -> Try(JsonEncodeState, [])),
@@ -555,38 +558,62 @@ Builtin :: [].{
 				}
 			}
 
-			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_unsigned_int = |key, parse_num|
-				if Json.is_json_unsigned_int_literal(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
+			## Read one quoted object key at the cursor, leaving the cursor
+			## just past the closing quote.
+			take_json_key : Str -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			take_json_key = |raw| {
+				trimmed = json_trim_start(raw)
+
+				if !Str.starts_with(trimmed, "\"") {
+					return Err(Json.invalid_json)
 				}
 
-			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_signed_int = |key, parse_num|
-				if Json.is_json_signed_int_literal(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
-				}
+				parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
 
-			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try(a, [InvalidJson(Str), ..])
-			parse_json_key_number = |key, parse_num|
-				if Json.is_json_number(key) {
-					match parse_num(key) {
-						Ok(value) => Ok(value)
+				Ok({ value: parts.value, rest: JsonState.Input(json_trim_start(parts.after)) })
+			}
+
+			parse_json_key_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_unsigned_int = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_unsigned_int_literal(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
 						Err(_) => Err(Json.invalid_json)
 					}
 				} else {
 					Err(Json.invalid_json)
 				}
+			}
+
+			parse_json_key_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_signed_int = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_signed_int_literal(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
+						Err(_) => Err(Json.invalid_json)
+					}
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
+
+			parse_json_key_number : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_json_key_number = |raw, parse_num| {
+				parts = Json.take_json_key(raw)?
+
+				if Json.is_json_number(parts.value) {
+					match parse_num(parts.value) {
+						Ok(value) => Ok({ value, rest: parts.rest })
+						Err(_) => Err(Json.invalid_json)
+					}
+				} else {
+					Err(Json.invalid_json)
+				}
+			}
 
 			encode_json_number : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_json_number = |value, state|
@@ -606,6 +633,24 @@ Builtin :: [].{
 				output = u8_append(Json.append_json_quoted_string(with_comma, field), 58)
 
 				encoded = write_value(JsonEncodeState.{ output })?
+				Ok(
+					JsonContainerEncodeState.{
+						output: encoded.output,
+						needs_comma: True,
+					},
+				)
+			}
+
+			write_dict_entry : JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)
+			write_dict_entry = |state, write_key, write_value| {
+				with_comma = if state.needs_comma {
+					u8_append(state.output, 44)
+				} else {
+					state.output
+				}
+
+				keyed = write_key(JsonEncodeState.{ output: with_comma })?
+				encoded = write_value(JsonEncodeState.{ output: u8_append(keyed.output, 58) })?
 				Ok(
 					JsonContainerEncodeState.{
 						output: encoded.output,
@@ -797,38 +842,6 @@ Builtin :: [].{
 				after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
 
 				Ok({ name: key, rest: JsonState.Input(after_colon) })
-			}
-
-			parse_object_next_from_json : JsonEncoding, Str -> Try([Entry({ key : Str, rest : JsonState }), Done({ rest : JsonState })], [InvalidJson(Str), ..])
-			parse_object_next_from_json = |encoding, raw| {
-				remaining = json_trim_start(raw)
-
-				if Str.starts_with(remaining, "{") {
-					after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
-
-					if Str.starts_with(after_open, "}") {
-						after_record = json_trim_start(Str.drop_prefix(after_open, "}"))
-						return Ok(Done({ rest: JsonState.Input(after_record) }))
-					}
-
-					if Str.starts_with(after_open, ",") {
-						return Err(Json.invalid_json)
-					}
-
-					key_parts = Json.parse_json_object_key(after_open)?
-					return Ok(Entry({ key: key_parts.name, rest: key_parts.rest }))
-				}
-
-				match Json.parse_record_after_field_from_json(encoding, remaining)? {
-					Done(rest) => Ok(Done({ rest: rest }))
-					Continue(next_state) =>
-						match next_state {
-							Input(next_raw) => {
-								key_parts = Json.parse_json_object_key(next_raw)?
-								Ok(Entry({ key: key_parts.name, rest: key_parts.rest }))
-							}
-						}
-				}
 			}
 
 			snake_to_camel : Str -> Str
@@ -1594,10 +1607,46 @@ Builtin :: [].{
 					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
 				}
 
-			parse_object_next : JsonEncoding, JsonState -> Try([Entry({ key : Str, rest : JsonState }), Done({ rest : JsonState })], [InvalidJson(Str), ..])
-			parse_object_next = |encoding, state|
+			## A JSON object never declares its entry count up front, so dict
+			## parsing always runs in Uncounted mode.
+			parse_dict_start : JsonEncoding, JsonState -> Try([Counted({ len : U64, rest : JsonState }), Uncounted(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_start = |_, state|
 				match state {
-					Input(raw) => Json.parse_object_next_from_json(encoding, raw)
+					Input(raw) => Json.parse_record_start_from_json(raw)
+				}
+
+			parse_dict_next : JsonEncoding, JsonState -> Try([Entry(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_next = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = json_trim_start(raw)
+
+						if Str.starts_with(trimmed, "}") {
+							Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "}")))))
+						} else {
+							Ok(Entry(JsonState.Input(trimmed)))
+						}
+					}
+				}
+
+			parse_dict_after_key : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
+			parse_dict_after_key = |_, state|
+				match state {
+					Input(raw) => {
+						trimmed = json_trim_start(raw)
+
+						if !Str.starts_with(trimmed, ":") {
+							return Err(Json.invalid_json)
+						}
+
+						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ":"))))
+					}
+				}
+
+			parse_dict_after_entry : JsonEncoding, JsonState -> Try([Continue(JsonState), Done(JsonState)], [InvalidJson(Str), ..])
+			parse_dict_after_entry = |encoding, state|
+				match state {
+					Input(raw) => Json.parse_record_after_field_from_json(encoding, raw)
 				}
 
 			skip_record_field : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str), ..])
@@ -1657,6 +1706,15 @@ Builtin :: [].{
 
 			encode_list : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
 			encode_list = |state, count, write_elements| JsonEncoding.encode_tuple(state, count, write_elements)
+
+			## A dict writes as a JSON object. The key is written by its own
+			## thunk, which the key encoders always render as a quoted string.
+			encode_dict : JsonEncodeState, U64, (JsonContainerEncodeState, (JsonContainerEncodeState, (JsonEncodeState -> Try(JsonEncodeState, err)), (JsonEncodeState -> Try(JsonEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonContainerEncodeState, err)) -> Try(JsonEncodeState, err)
+			encode_dict = |state, _, write_entries| {
+				started = JsonContainerEncodeState.{ output: u8_append(state.output, 123), needs_comma: False }
+				finished = write_entries(started, Json.write_dict_entry)?
+				Ok(JsonEncodeState.{ output: u8_append(finished.output, 125) })
+			}
 
 			encode_str : Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_str = |value, state|
@@ -1750,99 +1808,151 @@ Builtin :: [].{
 					},
 				)
 
-			parse_key_str : JsonEncoding, Str -> Try(Str, [InvalidJson(Str), ..])
-			parse_key_str = |_, key| Ok(key)
-
-			parse_key_bool : JsonEncoding, Str -> Try(Bool, [InvalidJson(Str), ..])
-			parse_key_bool = |_, key|
-				if Str.is_eq(key, "true") {
-					Ok(True)
-				} else if Str.is_eq(key, "false") {
-					Ok(False)
-				} else {
-					Err(Json.invalid_json)
+			## Dict keys arrive as JSON strings, so each key parser reads the
+			## quoted text at the cursor and converts it to the key type.
+			parse_key_str : JsonEncoding, JsonState -> Try({ value : Str, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_str = |_, state|
+				match state {
+					Input(raw) => Json.take_json_key(raw)
 				}
 
-			parse_key_u8 : JsonEncoding, Str -> Try(U8, [InvalidJson(Str), ..])
-			parse_key_u8 = |_, key| Json.parse_json_key_unsigned_int(key, u8_from_str)
+			parse_key_bool : JsonEncoding, JsonState -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_bool = |_, state|
+				match state {
+					Input(raw) => {
+						parts = Json.take_json_key(raw)?
 
-			parse_key_i8 : JsonEncoding, Str -> Try(I8, [InvalidJson(Str), ..])
-			parse_key_i8 = |_, key| Json.parse_json_key_signed_int(key, i8_from_str)
+						if Str.is_eq(parts.value, "true") {
+							Ok({ value: True, rest: parts.rest })
+						} else if Str.is_eq(parts.value, "false") {
+							Ok({ value: False, rest: parts.rest })
+						} else {
+							Err(Json.invalid_json)
+						}
+					}
+				}
 
-			parse_key_u16 : JsonEncoding, Str -> Try(U16, [InvalidJson(Str), ..])
-			parse_key_u16 = |_, key| Json.parse_json_key_unsigned_int(key, u16_from_str)
+			parse_key_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u8 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u8_from_str)
+				}
 
-			parse_key_i16 : JsonEncoding, Str -> Try(I16, [InvalidJson(Str), ..])
-			parse_key_i16 = |_, key| Json.parse_json_key_signed_int(key, i16_from_str)
+			parse_key_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i8 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i8_from_str)
+				}
 
-			parse_key_u32 : JsonEncoding, Str -> Try(U32, [InvalidJson(Str), ..])
-			parse_key_u32 = |_, key| Json.parse_json_key_unsigned_int(key, u32_from_str)
+			parse_key_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u16 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u16_from_str)
+				}
 
-			parse_key_i32 : JsonEncoding, Str -> Try(I32, [InvalidJson(Str), ..])
-			parse_key_i32 = |_, key| Json.parse_json_key_signed_int(key, i32_from_str)
+			parse_key_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i16 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i16_from_str)
+				}
 
-			parse_key_u64 : JsonEncoding, Str -> Try(U64, [InvalidJson(Str), ..])
-			parse_key_u64 = |_, key| Json.parse_json_key_unsigned_int(key, u64_from_str)
+			parse_key_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u32_from_str)
+				}
 
-			parse_key_i64 : JsonEncoding, Str -> Try(I64, [InvalidJson(Str), ..])
-			parse_key_i64 = |_, key| Json.parse_json_key_signed_int(key, i64_from_str)
+			parse_key_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i32_from_str)
+				}
 
-			parse_key_u128 : JsonEncoding, Str -> Try(U128, [InvalidJson(Str), ..])
-			parse_key_u128 = |_, key| Json.parse_json_key_unsigned_int(key, u128_from_str)
+			parse_key_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u64_from_str)
+				}
 
-			parse_key_i128 : JsonEncoding, Str -> Try(I128, [InvalidJson(Str), ..])
-			parse_key_i128 = |_, key| Json.parse_json_key_signed_int(key, i128_from_str)
+			parse_key_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i64_from_str)
+				}
 
-			parse_key_dec : JsonEncoding, Str -> Try(Dec, [InvalidJson(Str), ..])
-			parse_key_dec = |_, key| Json.parse_json_key_number(key, Json.dec_from_json_number)
+			parse_key_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_u128 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_unsigned_int(raw, u128_from_str)
+				}
 
-			parse_key_f32 : JsonEncoding, Str -> Try(F32, [InvalidJson(Str), ..])
-			parse_key_f32 = |_, key| Json.parse_json_key_number(key, f32_from_str)
+			parse_key_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_i128 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_signed_int(raw, i128_from_str)
+				}
 
-			parse_key_f64 : JsonEncoding, Str -> Try(F64, [InvalidJson(Str), ..])
-			parse_key_f64 = |_, key| Json.parse_json_key_number(key, f64_from_str)
+			parse_key_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_dec = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, Json.dec_from_json_number)
+				}
 
-			encode_key_str : JsonEncoding, Str -> Try(Str, _never_fails)
-			encode_key_str = |_, key| Ok(key)
+			parse_key_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f32 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, f32_from_str)
+				}
 
-			encode_key_bool : JsonEncoding, Bool -> Try(Str, _never_fails)
-			encode_key_bool = |_, key| Ok(if key "true" else "false")
+			parse_key_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str), ..])
+			parse_key_f64 = |_, state|
+				match state {
+					Input(raw) => Json.parse_json_key_number(raw, f64_from_str)
+				}
 
-			encode_key_u8 : JsonEncoding, U8 -> Try(Str, _never_fails)
-			encode_key_u8 = |_, key| Ok(json_u8_to_str(key))
+			## A JSON object key is always quoted text, so each key encoder
+			## renders its value and writes it as a JSON string.
+			encode_key_str : JsonEncoding, Str, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_str = |_, key, state| JsonEncoding.encode_str(key, state)
 
-			encode_key_i8 : JsonEncoding, I8 -> Try(Str, _never_fails)
-			encode_key_i8 = |_, key| Ok(json_i8_to_str(key))
+			encode_key_bool : JsonEncoding, Bool, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if key "true" else "false", state)
 
-			encode_key_u16 : JsonEncoding, U16 -> Try(Str, _never_fails)
-			encode_key_u16 = |_, key| Ok(json_u16_to_str(key))
+			encode_key_u8 : JsonEncoding, U8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u8 = |_, key, state| JsonEncoding.encode_str(json_u8_to_str(key), state)
 
-			encode_key_i16 : JsonEncoding, I16 -> Try(Str, _never_fails)
-			encode_key_i16 = |_, key| Ok(json_i16_to_str(key))
+			encode_key_i8 : JsonEncoding, I8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i8 = |_, key, state| JsonEncoding.encode_str(json_i8_to_str(key), state)
 
-			encode_key_u32 : JsonEncoding, U32 -> Try(Str, _never_fails)
-			encode_key_u32 = |_, key| Ok(json_u32_to_str(key))
+			encode_key_u16 : JsonEncoding, U16, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u16 = |_, key, state| JsonEncoding.encode_str(json_u16_to_str(key), state)
 
-			encode_key_i32 : JsonEncoding, I32 -> Try(Str, _never_fails)
-			encode_key_i32 = |_, key| Ok(json_i32_to_str(key))
+			encode_key_i16 : JsonEncoding, I16, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i16 = |_, key, state| JsonEncoding.encode_str(json_i16_to_str(key), state)
 
-			encode_key_u64 : JsonEncoding, U64 -> Try(Str, _never_fails)
-			encode_key_u64 = |_, key| Ok(json_u64_to_str(key))
+			encode_key_u32 : JsonEncoding, U32, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u32 = |_, key, state| JsonEncoding.encode_str(json_u32_to_str(key), state)
 
-			encode_key_i64 : JsonEncoding, I64 -> Try(Str, _never_fails)
-			encode_key_i64 = |_, key| Ok(json_i64_to_str(key))
+			encode_key_i32 : JsonEncoding, I32, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i32 = |_, key, state| JsonEncoding.encode_str(json_i32_to_str(key), state)
 
-			encode_key_u128 : JsonEncoding, U128 -> Try(Str, _never_fails)
-			encode_key_u128 = |_, key| Ok(json_u128_to_str(key))
+			encode_key_u64 : JsonEncoding, U64, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u64 = |_, key, state| JsonEncoding.encode_str(json_u64_to_str(key), state)
 
-			encode_key_i128 : JsonEncoding, I128 -> Try(Str, _never_fails)
-			encode_key_i128 = |_, key| Ok(json_i128_to_str(key))
+			encode_key_i64 : JsonEncoding, I64, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i64 = |_, key, state| JsonEncoding.encode_str(json_i64_to_str(key), state)
 
-			encode_key_dec : JsonEncoding, Dec -> Try(Str, _never_fails)
-			encode_key_dec = |_, key| Ok(json_dec_to_str(key))
+			encode_key_u128 : JsonEncoding, U128, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_u128 = |_, key, state| JsonEncoding.encode_str(json_u128_to_str(key), state)
 
-			encode_key_f32 : JsonEncoding, F32 -> Try(Str, [Infinity, NaN, NegativeInfinity])
-			encode_key_f32 = |_, key| {
+			encode_key_i128 : JsonEncoding, I128, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_i128 = |_, key, state| JsonEncoding.encode_str(json_i128_to_str(key), state)
+
+			encode_key_dec : JsonEncoding, Dec, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
+			encode_key_dec = |_, key, state| JsonEncoding.encode_str(json_dec_to_str(key), state)
+
+			encode_key_f32 : JsonEncoding, F32, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f32 = |_, key, state| {
 				if json_f32_is_nan(key) {
 					Err(NaN)
 				} else if json_f32_is_infinite(key) {
@@ -1852,12 +1962,12 @@ Builtin :: [].{
 						Err(Infinity)
 					}
 				} else {
-					Ok(json_f32_to_str(key))
+					JsonEncoding.encode_str(json_f32_to_str(key), state)
 				}
 			}
 
-			encode_key_f64 : JsonEncoding, F64 -> Try(Str, [Infinity, NaN, NegativeInfinity])
-			encode_key_f64 = |_, key| {
+			encode_key_f64 : JsonEncoding, F64, JsonEncodeState -> Try(JsonEncodeState, [Infinity, NaN, NegativeInfinity])
+			encode_key_f64 = |_, key, state| {
 				if json_f64_is_nan(key) {
 					Err(NaN)
 				} else if json_f64_is_infinite(key) {
@@ -1867,9 +1977,10 @@ Builtin :: [].{
 						Err(Infinity)
 					}
 				} else {
-					Ok(json_f64_to_str(key))
+					JsonEncoding.encode_str(json_f64_to_str(key), state)
 				}
 			}
+
 		}
 
 		HttpHeaderState :: { raw : Str }
