@@ -10831,6 +10831,10 @@ const BodyContext = struct {
     /// the format declared the element count up front, so the driver reads
     /// exactly `remaining` more elements and never calls `parse_list_next` or
     /// `parse_list_after_element`.
+    /// How a dict entry ends: `uncounted` asks the format whether more entries
+    /// follow, `counted` re-enters the loop with one fewer entry left.
+    const DictEntryEndMode = enum { counted, uncounted };
+
     const ListLoopCtl = struct {
         counted_local: DraftLocalId,
         remaining_local: DraftLocalId,
@@ -20013,7 +20017,7 @@ const BodyContext = struct {
             dict_local,
             ctl,
             remaining_minus_one,
-            null,
+            .counted,
             ret_ty,
             precomputed_plan,
         );
@@ -20064,7 +20068,7 @@ const BodyContext = struct {
             dict_local,
             ctl,
             try self.localExpr(ctl.remaining_local, ctl.u64_ty),
-            encoding_expr,
+            .uncounted,
             ret_ty,
             precomputed_plan,
         );
@@ -20094,9 +20098,9 @@ const BodyContext = struct {
         } } });
     }
 
-    /// One key-value entry. `after_entry_encoding` is non-null exactly in
-    /// Uncounted mode, where the format decides after each entry whether more
-    /// follow; Counted mode instead re-enters the loop with one fewer left.
+    /// One key-value entry. In Uncounted mode the format decides after each
+    /// entry whether more follow; Counted mode instead re-enters the loop with
+    /// one fewer entry left.
     fn lowerParseDictEntry(
         self: *BodyContext,
         key_ty: Type.TypeId,
@@ -20109,7 +20113,7 @@ const BodyContext = struct {
         dict_local: DraftLocalId,
         ctl: ListLoopCtl,
         remaining_expr: DraftExprId,
-        after_entry_encoding: ?DraftExprId,
+        entry_end_mode: DictEntryEndMode,
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
@@ -20163,66 +20167,69 @@ const BodyContext = struct {
         );
         const inserted_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
 
-        const entry_end = if (after_entry_encoding) |after_encoding| blk: {
-            const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
-            const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
-            const after_try = try self.lowerParseFormatMethod(
-                "parse_dict_after_entry",
-                &.{ after_encoding, try self.localExpr(rest_local, state_ty) },
-                &.{ encoding_ty, state_ty },
-                encoding_ty,
-                after_try_ty,
-            );
-            const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
+        const entry_end = switch (entry_end_mode) {
+            .uncounted => blk: {
+                const after_event_ty = try self.parseArrayEventType(state_ty, "Continue", "Done");
+                const after_try_ty = try self.tryTypeLike(ret_ty, after_event_ty, ret_info.err_ty);
+                const after_try = try self.lowerParseFormatMethod(
+                    "parse_dict_after_entry",
+                    &.{ encoding_expr, try self.localExpr(rest_local, state_ty) },
+                    &.{ encoding_ty, state_ty },
+                    encoding_ty,
+                    after_try_ty,
+                );
+                const after_event_local = try self.addLocal(self.builder.symbols.fresh(), after_event_ty);
 
-            const continue_tag = self.monoTagByText(after_event_ty, "Continue");
-            const continue_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-            const continue_state_pat = try self.bindPat(continue_state_local, state_ty);
-            const continue_pat = try self.addPat(.{ .ty = after_event_ty, .data = .{ .tag = .{
-                .name = continue_tag.name,
-                .payloads = try self.addPatSpan(&[_]DraftPatId{continue_state_pat}),
-            } } });
-            const continue_body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .continue_ = .{
+                const continue_tag = self.monoTagByText(after_event_ty, "Continue");
+                const continue_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+                const continue_state_pat = try self.bindPat(continue_state_local, state_ty);
+                const continue_pat = try self.addPat(.{ .ty = after_event_ty, .data = .{ .tag = .{
+                    .name = continue_tag.name,
+                    .payloads = try self.addPatSpan(&[_]DraftPatId{continue_state_pat}),
+                } } });
+                const continue_body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .continue_ = .{
+                    .values = try self.addExprSpan(&[_]DraftExprId{
+                        try self.localExpr(continue_state_local, state_ty),
+                        try self.localExpr(inserted_local, dict_ty),
+                        try self.localExpr(ctl.counted_local, ctl.bool_ty),
+                        remaining_expr,
+                    }),
+                } } });
+
+                const after_done_tag = self.monoTagByText(after_event_ty, "Done");
+                const after_done_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+                const after_done_state_pat = try self.bindPat(after_done_state_local, state_ty);
+                const after_done_pat = try self.addPat(.{ .ty = after_event_ty, .data = .{ .tag = .{
+                    .name = after_done_tag.name,
+                    .payloads = try self.addPatSpan(&[_]DraftPatId{after_done_state_pat}),
+                } } });
+                const after_done_value = try self.parseResultOk(
+                    ret_ty,
+                    try self.localExpr(inserted_local, dict_ty),
+                    try self.localExpr(after_done_state_local, state_ty),
+                    state_ty,
+                );
+                const after_done_body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .break_ = after_done_value } });
+
+                const after_branches = [_]DraftBranch{
+                    .{ .pat = continue_pat, .body = continue_body },
+                    .{ .pat = after_done_pat, .body = after_done_body },
+                };
+                const after_match = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
+                    .scrutinee = try self.localExpr(after_event_local, after_event_ty),
+                    .branches = try self.addBranchSpan(&after_branches),
+                } } });
+                break :blk try self.sequenceTry(after_try, after_try_ty, after_event_local, after_match, ret_ty);
+            },
+            .counted => try self.addExpr(.{ .ty = ret_ty, .data = .{ .continue_ = .{
                 .values = try self.addExprSpan(&[_]DraftExprId{
-                    try self.localExpr(continue_state_local, state_ty),
+                    try self.localExpr(rest_local, state_ty),
                     try self.localExpr(inserted_local, dict_ty),
                     try self.localExpr(ctl.counted_local, ctl.bool_ty),
                     remaining_expr,
                 }),
-            } } });
-
-            const after_done_tag = self.monoTagByText(after_event_ty, "Done");
-            const after_done_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-            const after_done_state_pat = try self.bindPat(after_done_state_local, state_ty);
-            const after_done_pat = try self.addPat(.{ .ty = after_event_ty, .data = .{ .tag = .{
-                .name = after_done_tag.name,
-                .payloads = try self.addPatSpan(&[_]DraftPatId{after_done_state_pat}),
-            } } });
-            const after_done_value = try self.parseResultOk(
-                ret_ty,
-                try self.localExpr(inserted_local, dict_ty),
-                try self.localExpr(after_done_state_local, state_ty),
-                state_ty,
-            );
-            const after_done_body = try self.addExpr(.{ .ty = ret_ty, .data = .{ .break_ = after_done_value } });
-
-            const after_branches = [_]DraftBranch{
-                .{ .pat = continue_pat, .body = continue_body },
-                .{ .pat = after_done_pat, .body = after_done_body },
-            };
-            const after_match = try self.addExpr(.{ .ty = ret_ty, .data = .{ .match_ = .{
-                .scrutinee = try self.localExpr(after_event_local, after_event_ty),
-                .branches = try self.addBranchSpan(&after_branches),
-            } } });
-            break :blk try self.sequenceTry(after_try, after_try_ty, after_event_local, after_match, ret_ty);
-        } else try self.addExpr(.{ .ty = ret_ty, .data = .{ .continue_ = .{
-            .values = try self.addExprSpan(&[_]DraftExprId{
-                try self.localExpr(rest_local, state_ty),
-                try self.localExpr(inserted_local, dict_ty),
-                try self.localExpr(ctl.counted_local, ctl.bool_ty),
-                remaining_expr,
-            }),
-        } } });
+            } } }),
+        };
 
         const with_inserted = try self.wrapLet(inserted_local, dict_ty, inserted, entry_end, ret_ty);
         const value_body = try self.sequenceTryRecord(value_parse, value_parse_ret_ty, value_local, value_name, rest_local, rest_name, with_inserted, ret_ty);
