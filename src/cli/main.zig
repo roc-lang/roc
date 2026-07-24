@@ -13462,7 +13462,529 @@ const REPL_PROMPT_PLAIN = "» ";
 const REPL_CONT_PROMPT_COLOR = "\x1b[1;36m…\x1b[0m ";
 const REPL_CONT_PROMPT_PLAIN = "… ";
 
+fn generateUuid(std_io: std.Io, out_buf: *[36]u8) void {
+    var bytes: [16]u8 = undefined;
+    std_io.random(&bytes);
+
+    // Set version to 4
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    // Set variant to RFC 4122
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    const hex = "0123456789abcdef";
+    var out_idx: usize = 0;
+    for (bytes, 0..) |b, i| {
+        if (i == 4 or i == 6 or i == 8 or i == 10) {
+            out_buf[out_idx] = '-';
+            out_idx += 1;
+        }
+        out_buf[out_idx] = hex[b >> 4];
+        out_buf[out_idx + 1] = hex[b & 0x0f];
+        out_idx += 2;
+    }
+}
+
+fn getSessionId(params_val: ?std.json.Value) ?[]const u8 {
+    const val = params_val orelse return null;
+    return switch (val) {
+        .string => |s| s,
+        .object => |obj| if (obj.get("session_id")) |sess_val| switch (sess_val) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
+fn getCode(params_val: ?std.json.Value) ?[]const u8 {
+    const val = params_val orelse return null;
+    return switch (val) {
+        .object => |obj| if (obj.get("code")) |code_val| switch (code_val) {
+            .string => |s| s,
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
+fn getCursorPos(params_val: ?std.json.Value) ?usize {
+    const val = params_val orelse return null;
+    return switch (val) {
+        .object => |obj| if (obj.get("cursor_pos")) |cursor_val| switch (cursor_val) {
+            .integer => |i| if (i >= 0) @intCast(i) else null,
+            else => null,
+        } else null,
+        else => null,
+    };
+}
+
+fn getPrefixAtCursor(code: []const u8, cursor_pos: usize) []const u8 {
+    if (cursor_pos == 0 or cursor_pos > code.len) return "";
+    var start = cursor_pos;
+    while (start > 0) {
+        const ch = code[start - 1];
+        if (std.ascii.isAlphanumeric(ch) or ch == '_') {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    return code[start..cursor_pos];
+}
+
+threadlocal var current_intercept_buffer: ?*std.ArrayList(u8) = null;
+threadlocal var current_allocator: ?std.mem.Allocator = null;
+threadlocal var current_original_io: ?std.Io = null;
+
+fn isStdoutOrStderr(file: std.Io.File) bool {
+    const builtin_mod = @import("builtin");
+    if (builtin_mod.os.tag == .windows) {
+        const stdout_handle = std.Io.File.stdout().handle;
+        const stderr_handle = std.Io.File.stderr().handle;
+        return file.handle == stdout_handle or file.handle == stderr_handle;
+    } else {
+        return file.handle == 1 or file.handle == 2;
+    }
+}
+
+fn customFileWritePositional(
+    userdata: ?*anyopaque,
+    file: std.Io.File,
+    header: []const u8,
+    data: []const []const u8,
+    splat: usize,
+    offset: u64,
+) std.Io.File.WritePositionalError!usize {
+    if (isStdoutOrStderr(file)) {
+        if (current_intercept_buffer) |buf| {
+            if (current_allocator) |alloc| {
+                buf.appendSlice(alloc, header) catch return error.SystemResources;
+                var total = header.len;
+                for (data[0..splat]) |slice| {
+                    buf.appendSlice(alloc, slice) catch return error.SystemResources;
+                    total += slice.len;
+                }
+                return total;
+            }
+        }
+    }
+    const orig = current_original_io orelse unreachable;
+    return orig.vtable.fileWritePositional(userdata, file, header, data, splat, offset);
+}
+
+fn customOperate(userdata: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+    switch (operation) {
+        .file_write_streaming => |op| {
+            if (isStdoutOrStderr(op.file)) {
+                if (current_intercept_buffer) |buf| {
+                    if (current_allocator) |alloc| {
+                        buf.appendSlice(alloc, op.header) catch {
+                            return .{ .file_write_streaming = error.SystemResources };
+                        };
+                        var total = op.header.len;
+                        for (op.data[0..op.splat]) |slice| {
+                            buf.appendSlice(alloc, slice) catch {
+                                return .{ .file_write_streaming = error.SystemResources };
+                            };
+                            total += slice.len;
+                        }
+                        return .{ .file_write_streaming = total };
+                    }
+                }
+            }
+        },
+        else => {},
+    }
+    const orig = current_original_io orelse unreachable;
+    return orig.vtable.operate(userdata, operation);
+}
+
+fn runRpcServer(allocator: Allocator, std_io: std.Io, backend_kind: eval.EvalBackend) !void {
+    const stdin_file = std.Io.File.stdin();
+    const stdout_file = std.Io.File.stdout();
+
+    const stdin_buf = try allocator.alloc(u8, 1024 * 1024);
+    defer allocator.free(stdin_buf);
+
+    var stdout_buf: [4096]u8 = undefined;
+
+    var stdin_file_reader = stdin_file.reader(std_io, stdin_buf);
+    var stdout_file_writer = stdout_file.writer(std_io, &stdout_buf);
+
+    const reader = &stdin_file_reader.interface;
+    const writer = &stdout_file_writer.interface;
+
+    var sessions = std.StringHashMap(*ReplSession).init(allocator);
+    defer {
+        var iter = sessions.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            allocator.destroy(entry.value_ptr.*);
+            allocator.free(entry.key_ptr.*);
+        }
+        sessions.deinit();
+    }
+
+    while (true) {
+        const line_opt = reader.takeDelimiter('\n') catch |err| {
+            std.debug.print("RPC Server stdin read error: {any}\n", .{err});
+            return error.CliError;
+        };
+        const line = line_opt orelse break;
+
+        const trimmed = std.mem.trim(u8, line, "\r");
+        if (trimmed.len == 0) continue;
+
+        var parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch |err| {
+            std.debug.print("RPC Server JSON parse error: {any}\n", .{err});
+            continue;
+        };
+        defer parsed.deinit();
+
+        const root = parsed.value;
+        const obj = switch (root) {
+            .object => |o| o,
+            else => {
+                std.debug.print("RPC Server received non-object JSON message\n", .{});
+                continue;
+            },
+        };
+
+        const method_val = obj.get("method") orelse {
+            std.debug.print("RPC Server received message missing 'method' field\n", .{});
+            continue;
+        };
+        const method = switch (method_val) {
+            .string => |s| s,
+            else => {
+                std.debug.print("RPC Server 'method' field is not a string\n", .{});
+                continue;
+            },
+        };
+
+        const Method = enum {
+            @"repl.start",
+            @"repl.stop",
+            @"repl.reset",
+            @"repl.evaluate",
+            @"repl.autocomplete",
+            @"repl.inspect",
+            unknown,
+
+            pub fn fromString(s: []const u8) @This() {
+                if (std.mem.eql(u8, s, "repl.start")) return .@"repl.start";
+                if (std.mem.eql(u8, s, "repl.stop")) return .@"repl.stop";
+                if (std.mem.eql(u8, s, "repl.reset")) return .@"repl.reset";
+                if (std.mem.eql(u8, s, "repl.evaluate")) return .@"repl.evaluate";
+                if (std.mem.eql(u8, s, "repl.autocomplete")) return .@"repl.autocomplete";
+                if (std.mem.eql(u8, s, "repl.inspect")) return .@"repl.inspect";
+                return .unknown;
+            }
+        };
+
+        const maybe_id = obj.get("id");
+        const method_enum = Method.fromString(method);
+        switch (method_enum) {
+            .@"repl.start" => {
+                var uuid_buf: [36]u8 = undefined;
+                generateUuid(std_io, &uuid_buf);
+                const session_id = try allocator.dupe(u8, &uuid_buf);
+                errdefer allocator.free(session_id);
+
+                const session = try allocator.create(ReplSession);
+                errdefer allocator.destroy(session);
+                session.* = try ReplSession.init(allocator, std_io, backend_kind);
+
+                try sessions.put(session_id, session);
+
+                const Response = struct {
+                    session_id: []const u8,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .session_id = session_id,
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+            .@"repl.stop" => {
+                const params_val = obj.get("params");
+                const sess_id = getSessionId(params_val);
+                var success = false;
+                if (sess_id) |sid| {
+                    if (sessions.fetchRemove(sid)) |entry| {
+                        entry.value.deinit();
+                        allocator.destroy(entry.value);
+                        allocator.free(entry.key);
+                        success = true;
+                    }
+                }
+
+                const Response = struct {
+                    success: bool,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .success = success,
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+            .@"repl.reset" => {
+                const params_val = obj.get("params");
+                const sess_id = getSessionId(params_val);
+                var success = false;
+                if (sess_id) |sid| {
+                    if (sessions.get(sid)) |session| {
+                        session.deinit();
+                        session.* = try ReplSession.init(allocator, std_io, backend_kind);
+                        success = true;
+                    }
+                }
+
+                const Response = struct {
+                    success: bool,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .success = success,
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+            .@"repl.evaluate" => {
+                const params_val = obj.get("params");
+                const sess_id = getSessionId(params_val);
+                const code = getCode(params_val);
+
+                var success = false;
+                var result_str: ?[]const u8 = null;
+                var diag_str: ?[]const u8 = null;
+
+                var intercept_buffer = std.ArrayList(u8).empty;
+                defer intercept_buffer.deinit(allocator);
+
+                if (sess_id) |sid| {
+                    if (code) |code_str| {
+                        if (sessions.get(sid)) |session| {
+                            success = true;
+                            // Setup custom std.Io to intercept writes
+                            var intercept_vtable = std_io.vtable.*;
+                            intercept_vtable.fileWritePositional = customFileWritePositional;
+                            intercept_vtable.operate = customOperate;
+
+                            const custom_io = std.Io{
+                                .userdata = std_io.userdata,
+                                .vtable = &intercept_vtable,
+                            };
+
+                            const old_io = session.io;
+                            session.io = custom_io;
+                            defer session.io = old_io;
+
+                            current_intercept_buffer = &intercept_buffer;
+                            current_allocator = allocator;
+                            current_original_io = std_io;
+                            defer {
+                                current_intercept_buffer = null;
+                                current_allocator = null;
+                                current_original_io = null;
+                            }
+
+                            // Evaluate
+                            var report_config = reporting.ReportingConfig.initColorTerminal();
+                            report_config.color_preference = .never;
+                            report_config.is_tty = false;
+                            const step_res = session.stepWithConfig(code_str, report_config) catch |err| {
+                                std.debug.print("Repl step error: {any}\n", .{err});
+                                return error.CliError;
+                            };
+                            defer step_res.deinit(allocator);
+
+                            switch (step_res) {
+                                .output => |output| {
+                                    result_str = try allocator.dupe(u8, output);
+                                },
+                                .diagnostic => |diagnostic| {
+                                    diag_str = try allocator.dupe(u8, diagnostic);
+                                },
+                                .none => {},
+                                .exit => {},
+                            }
+                        }
+                    }
+                }
+
+                defer {
+                    if (result_str) |r| allocator.free(r);
+                    if (diag_str) |d| allocator.free(d);
+                }
+
+                const Response = struct {
+                    result: ?[]const u8,
+                    stdout: []const u8,
+                    diagnostics: ?[]const u8,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .result = result_str,
+                    .stdout = intercept_buffer.items,
+                    .diagnostics = if (!success) "Session not found" else diag_str,
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+            .@"repl.autocomplete" => {
+                const params_val = obj.get("params");
+                const sess_id = getSessionId(params_val);
+                const code = getCode(params_val);
+                const cursor_pos = getCursorPos(params_val);
+
+                var matches = std.ArrayList([]const u8).empty;
+                defer matches.deinit(allocator);
+
+                if (sess_id) |sid| {
+                    if (code) |code_str| {
+                        if (cursor_pos) |pos| {
+                            if (sessions.get(sid)) |session| {
+                                const prefix = getPrefixAtCursor(code_str, pos);
+                                if (prefix.len > 0) {
+                                    for (session.definitions.items.items) |def| {
+                                        if (std.mem.startsWith(u8, def.name, prefix)) {
+                                            try matches.append(allocator, def.name);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                const Response = struct {
+                    matches: []const []const u8,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .matches = matches.items,
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+            .@"repl.inspect" => {
+                const Response = struct {
+                    @"type": ?[]const u8,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .@"type" = null,
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+            .unknown => {
+                const Response = struct {
+                    status: []const u8,
+                    id: ?std.json.Value,
+                };
+                const response = Response{
+                    .status = "ok",
+                    .id = maybe_id,
+                };
+
+                std.json.Stringify.value(response, .{}, writer) catch |err| {
+                    std.debug.print("RPC Server JSON stringify error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.writeByte('\n') catch |err| {
+                    std.debug.print("RPC Server stdout write error: {any}\n", .{err});
+                    return error.CliError;
+                };
+                writer.flush() catch |err| {
+                    std.debug.print("RPC Server stdout flush error: {any}\n", .{err});
+                    return error.CliError;
+                };
+            },
+        }
+    }
+}
+
 fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
+    if (repl_args.rpc) {
+        try runRpcServer(ctx.gpa, ctx.io.std_io, repl_args.opt.toBackend());
+        return;
+    }
     const stdout = ctx.io.stdout();
     const backend_kind = repl_args.opt.toBackend();
     const stdin = std.Io.File.stdin();
