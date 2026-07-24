@@ -1297,12 +1297,8 @@ Builtin :: [].{
 								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
 							}
 						}
-						after = match Str.drop_first_bytes(raw, $index) {
-							Ok(v) => v
-							Err(BadUtf8) => {
-								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
-							}
-						}
+						# the cut is at an ASCII delimiter, so it is a UTF-8 boundary
+						after = str_drop_first_bytes_unsafe(raw, $index)
 						Ok({ value, after })
 					}
 				} else if $index == 0 {
@@ -21726,12 +21722,8 @@ json_trim_start = |s| {
 	if $index == 0 {
 		s
 	} else {
-		match Str.drop_first_bytes(s, $index) {
-			Ok(trimmed) => trimmed
-			Err(BadUtf8) => {
-				crash "json_trim_start invariant violated: ASCII whitespace ended inside UTF-8"
-			}
-		}
+		# the dropped prefix is ASCII whitespace, so the cut is a UTF-8 boundary
+		str_drop_first_bytes_unsafe(s, $index)
 	}
 }
 
