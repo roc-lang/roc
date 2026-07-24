@@ -303,7 +303,7 @@ j = -17011687303715884105728
 			(ty-lookup (name "U32") (builtin))))
 	(d-let
 		(p-assign (ident "e"))
-		(e-num-from-numeral)
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "U128") (builtin))))
 	(d-let

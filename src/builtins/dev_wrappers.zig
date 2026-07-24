@@ -17,8 +17,9 @@ const hash = @import("hash.zig");
 const crypto = @import("crypto.zig");
 const i128h = @import("compiler_rt_128.zig");
 const float_math_f32 = @import("float_math/f32.zig");
-const float_tan = @import("float_math/tan.zig");
+const float_math_f64 = @import("float_math/f64.zig");
 const numeric_conversions = @import("numeric_conversions.zig");
+const simd = @import("simd.zig");
 
 const RocStr = str.RocStr;
 const RocList = list.RocList;
@@ -68,6 +69,79 @@ pub fn roc_builtins_hasher_write_u64(seed: u64, domain: u8, value: u64, width: u
 /// C ABI wrapper for hashing 128-bit scalar values.
 pub fn roc_builtins_hasher_write_u128(seed: u64, domain: u8, low: u64, high: u64) callconv(.c) u64 {
     return hash.hasher_write_u128(seed, domain, low, high);
+}
+
+/// Bit-exact SIMD helper for the correctness-oriented dev backends. The
+/// optimizing LLVM and wasm backends lower the same low-level operations to
+/// native vector instructions instead of calling this function.
+pub fn roc_builtins_simd_eval(
+    out: *u128,
+    descriptor: u32,
+    inputs: *const [3]u128,
+) callconv(.c) void {
+    const op: simd.Op = @enumFromInt(@as(u8, @truncate(descriptor)));
+    const arg_kind: simd.Kind = @enumFromInt(@as(u3, @truncate(descriptor >> 8)));
+    const ret_kind: simd.Kind = @enumFromInt(@as(u3, @truncate(descriptor >> 16)));
+    out.* = simd.eval(op, arg_kind, ret_kind, inputs[0], inputs[1], inputs[2]);
+}
+
+/// Load 16 consecutive list bytes into a bit-exact SIMD value.
+pub fn roc_builtins_simd_load_16(out: *u128, bytes: ?[*]u8, index: u64) callconv(.c) void {
+    const source = bytes.? + @as(usize, @intCast(index));
+    @memcpy(std.mem.asBytes(out), source[0..16]);
+}
+
+/// Store a bit-exact SIMD value into 16 consecutive list bytes, cloning first
+/// when the update mode does not permit mutation in place.
+pub fn roc_builtins_simd_store_16(
+    out: *RocList,
+    vector_low: u64,
+    vector_high: u64,
+    bytes: ?[*]u8,
+    length: usize,
+    capacity_or_alloc_ptr: usize,
+    index: u64,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    var result = RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = capacity_or_alloc_ptr };
+    if (update_mode == .Immutable) {
+        result = list.listClone(result, 1, 1, false, null, utils.rcNone, null, utils.rcNone, roc_ops);
+    }
+    const vector = @as(u128, vector_low) | (@as(u128, vector_high) << 64);
+    @memcpy((result.bytes.? + @as(usize, @intCast(index)))[0..16], std.mem.asBytes(&vector));
+    out.* = result;
+}
+
+/// Append the 16 bytes of a bit-exact SIMD value to a byte list.
+pub fn roc_builtins_simd_append_16(
+    out: *RocList,
+    vector_low: u64,
+    vector_high: u64,
+    bytes: ?[*]u8,
+    length: usize,
+    capacity_or_alloc_ptr: usize,
+    update_mode: utils.UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    var result = RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = capacity_or_alloc_ptr };
+    result = list.listReserve(result, 1, 16, 1, false, null, utils.rcNone, null, utils.rcNone, update_mode, roc_ops);
+    const vector = @as(u128, vector_low) | (@as(u128, vector_high) << 64);
+    for (std.mem.asBytes(&vector)) |*byte| {
+        result = list.listAppendUnsafe(result, @ptrCast(@constCast(byte)), 1, &list.copy_fallback);
+    }
+    out.* = result;
+}
+
+test "SIMD dev wrapper descriptor and input block" {
+    const equal_op = @intFromEnum(simd.Op.eq_lanes);
+    const byte_kind = @intFromEnum(simd.Kind.u8x16);
+    const descriptor = @as(u32, equal_op) | (@as(u32, byte_kind) << 8) | (@as(u32, byte_kind) << 16);
+    const bytes: u128 = 0x38383838383838383838383838383838;
+    var inputs = [3]u128{ bytes, bytes, 0 };
+    var out: u128 = undefined;
+    roc_builtins_simd_eval(&out, descriptor, &inputs);
+    try std.testing.expectEqual(@as(u128, ~@as(u128, 0)), out);
 }
 
 /// C ABI wrapper for hashing raw F32 bits.
@@ -1938,7 +2012,7 @@ pub fn roc_builtins_float_pow_f32(base: f32, exponent: f32) callconv(.c) f32 {
 
 /// Raise an F64 base to an F64 exponent.
 pub fn roc_builtins_float_pow(base: f64, exponent: f64) callconv(.c) f64 {
-    return std.math.pow(f64, base, exponent);
+    return float_math_f64.pow(base, exponent);
 }
 
 const FloatUnaryMathOp = enum {
@@ -1952,12 +2026,12 @@ const FloatUnaryMathOp = enum {
 
 fn floatUnaryMathF64(val: f64, comptime op: FloatUnaryMathOp) f64 {
     return switch (op) {
-        .sin => std.math.sin(val),
-        .cos => std.math.cos(val),
-        .tan => float_tan.tan64(val),
-        .asin => std.math.asin(val),
-        .acos => std.math.acos(val),
-        .atan => std.math.atan(val),
+        .sin => float_math_f64.sin(val),
+        .cos => float_math_f64.cos(val),
+        .tan => float_math_f64.tan(val),
+        .asin => float_math_f64.asin(val),
+        .acos => float_math_f64.acos(val),
+        .atan => float_math_f64.atan(val),
     };
 }
 

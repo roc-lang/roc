@@ -110,11 +110,7 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 229)
-			(e-lookup-local
-				(p-assign (ident "swap")))
-			(e-num (value "1"))
-			(e-num (value "2")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -73,13 +73,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "x"))))
-			(e-interpolation (constraint-fn-var 229) (dispatcher-var 12)
-				(first
-					(e-literal (string "value: ")))
-				(parts
-					(e-lookup-local
-						(p-assign (ident "#interp_0")))
-					(e-literal (string "")))))))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

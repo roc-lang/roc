@@ -528,29 +528,7 @@ transform = |result|
 		(e-lambda
 			(args
 				(p-assign (ident "result")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "result"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-call
-									(e-runtime-error (tag "qualified_ident_does_not_exist"))
-									(e-lookup-local
-										(p-assign (ident "rgb"))))))
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-nominal-external (builtin)
-										(p-applied-tag))))
-							(value
-								(e-runtime-error (tag "qualified_ident_does_not_exist"))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

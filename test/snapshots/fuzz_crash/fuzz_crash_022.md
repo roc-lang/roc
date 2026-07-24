@@ -347,10 +347,7 @@ getUser = |id| if
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "getUser"))
-		(e-lambda
-			(args
-				(p-assign (ident "id")))
-			(e-runtime-error (tag "if_condition_not_canonicalized"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin))))

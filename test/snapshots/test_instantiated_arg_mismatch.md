@@ -87,12 +87,11 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call (constraint-fn-var 217)
+	(e-call (constraint-fn-var 233)
 		(e-lookup-local
 			(p-assign (ident "pair")))
 		(e-num (value "42"))
-		(e-string
-			(e-literal (string "hello")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

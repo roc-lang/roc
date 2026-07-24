@@ -286,9 +286,7 @@ enum {
 };
 
 static Msg reset_msg(void) {
-    Msg msg = {{0}};
-    msg.bytes[MSG_TAG_OFFSET] = MSG_RESET_TAG;
-    return msg;
+    return Msg_make_reset();
 }
 
 static void roc_box_decref(RocBox box) {
@@ -307,15 +305,15 @@ static void roc_box_decref(RocBox box) {
 }
 
 static RocList *view_messages(View *view) {
-    return (RocList *)(void *)(view->bytes + VIEW_MESSAGES_OFFSET);
+    return &view->messages;
 }
 
 static RocBox *view_model(View *view) {
-    return (RocBox *)(void *)(view->bytes + VIEW_MODEL_OFFSET);
+    return &view->model;
 }
 
 static RocStr *view_title(View *view) {
-    return (RocStr *)(void *)(view->bytes + VIEW_TITLE_OFFSET);
+    return &view->title;
 }
 
 static void view_decref(View view) {
@@ -335,8 +333,8 @@ static void run_app_model_contract(void) {
     if (roc_str_len(title) != expected_len || memcmp(roc_str_bytes(title), expected_title, expected_len) != 0) {
         record_failure("render title mismatch");
     }
-    if (view.bytes[VIEW_LIFECYCLE_TAG_OFFSET] != LIFECYCLE_READY_TAG) {
-        record_failure("render lifecycle expected Ready got %u", (unsigned)view.bytes[VIEW_LIFECYCLE_TAG_OFFSET]);
+    if (view.lifecycle.tag != FailedOrReadyOrWaitingTag_Ready) {
+        record_failure("render lifecycle expected Ready got %u", (unsigned)view.lifecycle.tag);
     }
     RocList *messages = view_messages(&view);
     if (messages->length != 0) {

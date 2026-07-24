@@ -33,7 +33,7 @@ pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ Expect
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
-pub const CompileDiscoveredError = BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, HasUserErrors };
+pub const CompileDiscoveredError = BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
 /// Errors that can occur while building an app module.
@@ -137,13 +137,9 @@ const PathUtils = struct {
 pub const PostCheckPublicationMode = enum {
     /// No post-check work (diagnostics only).
     none,
-    /// Publish the relation-bearing platform root once at finalization (for
-    /// `roc check` and `roc build`).
+    /// Publish the relation-bearing platform root once at finalization,
+    /// including when checked source contains explicit runtime-error nodes.
     executable_artifacts,
-    /// Executable artifact publication that tolerates user errors when every
-    /// erroring module still permits lowering (checked runtime-error nodes
-    /// the interpreter can execute). Used by the `roc run` interpreter path.
-    executable_artifacts_allow_user_errors,
 };
 
 // BuildEnv: workspace-level orchestrator for multi-package builds with local-only shorthands.
@@ -206,12 +202,9 @@ pub const BuildEnv = struct {
     /// work, for diagnostic-only embeddings that never link an executable.
     post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
 
-    /// Whether executable artifacts were published for this build AND every
-    /// accumulated error (if any) still permits lowering. Consumers that
-    /// lower to LIR must gate on this rather than re-deriving it from error
-    /// state: report ownership moves out of the coordinator when compilation
-    /// finishes, so coordinator error queries go stale. Recomputed after
-    /// finalization because finalization itself may append reports.
+    /// Whether executable artifacts were published for this build. User
+    /// diagnostics do not change this: checked recovery nodes remain valid
+    /// lowering input and crash only if execution reaches them.
     executable_artifacts_finalized: bool = false,
 
     /// Compiler role to assign to the root module of this build.
@@ -1048,35 +1041,19 @@ pub const BuildEnv = struct {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        const allow_user_errors =
-            self.post_check_publication_mode == .executable_artifacts_allow_user_errors;
         var finalized_executable = false;
-        if (!coord.hasUserErrors()) {
-            switch (self.post_check_publication_mode) {
-                .none => {},
-                .executable_artifacts, .executable_artifacts_allow_user_errors => {
-                    coord.finalizeExecutableArtifacts() catch |err| {
-                        self.emitAccumulatedReportsForError();
-                        return err;
-                    };
-                    finalized_executable = true;
-                },
-            }
-        } else if (allow_user_errors and coord.userErrorsAllowExecutableLowering()) {
-            coord.finalizeExecutableArtifactsAllowUserErrors() catch |err| {
-                self.emitAccumulatedReportsForError();
-                return err;
-            };
-            finalized_executable = true;
+        switch (self.post_check_publication_mode) {
+            .none => {},
+            .executable_artifacts => {
+                coord.finalizeExecutableArtifacts() catch |err| {
+                    self.emitAccumulatedReportsForError();
+                    return err;
+                };
+                finalized_executable = true;
+            },
         }
 
-        // Finalization may append new reports (unresolved dispatch,
-        // non-lowerable defs, relation mismatches). Decide whether executable
-        // lowering may proceed now, before result transfer drains the
-        // Coordinator's per-module reports.
-        self.executable_artifacts_finalized = finalized_executable and
-            (!coord.hasUserErrors() or
-                (allow_user_errors and coord.userErrorsAllowExecutableLowering()));
+        self.executable_artifacts_finalized = finalized_executable;
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] Coordinator loop complete, transferring results...\n", .{});
@@ -3104,7 +3081,7 @@ pub const BuildEnv = struct {
     pub fn getExecutableRootSemanticData(self: *BuildEnv) ?SemanticModuleData {
         if (self.getPlatformSemanticData()) |platform| {
             if (platform.checked_artifact) |artifact| {
-                if (artifact.platform_required_bindings.bindings.len > 0 or
+                if (artifact.checking_context_identity.platform_app_relation != null or
                     artifact.root_requests.requests.len > 0 or
                     artifact.provided_exports.exports.len > 0)
                 {

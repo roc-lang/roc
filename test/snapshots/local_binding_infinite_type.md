@@ -79,7 +79,7 @@ f = |_x| {
 					(e-lambda
 						(args
 							(p-assign (ident "x")))
-						(e-call (constraint-fn-var 190)
+						(e-call (constraint-fn-var 206)
 							(e-runtime-error (tag "erroneous_value_use"))
 							(e-list
 								(elems

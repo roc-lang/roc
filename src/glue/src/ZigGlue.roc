@@ -162,23 +162,19 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table| {
 		var $arg_idx = 0
 		for arg_type_id in func.arg_type_ids {
 			arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-			$roots = $roots.append(
-				{
-					alias_base: type_name_root_alias_base_zig(type_table, arg_fallback, arg_type_id),
-					module_base,
-					type_id: arg_type_id,
-				},
-			)
+			$roots = $roots.append({
+				alias_base: type_name_root_alias_base_zig(type_table, arg_fallback, arg_type_id),
+				module_base,
+				type_id: arg_type_id,
+			})
 			$arg_idx = $arg_idx + 1
 		}
 
-		$roots = $roots.append(
-			{
-				alias_base: base,
-				module_base,
-				type_id: func.ret_type_id,
-			},
-		)
+		$roots = $roots.append({
+			alias_base: base,
+			module_base,
+			type_id: func.ret_type_id,
+		})
 	}
 
 	for entry in provides_list {
@@ -190,32 +186,26 @@ type_name_roots_zig = |hosted_functions, provides_list, type_table| {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-					$roots = $roots.append(
-						{
-							alias_base: type_name_root_alias_base_zig(type_table, arg_fallback, arg_type_id),
-							module_base,
-							type_id: arg_type_id,
-						},
-					)
+					$roots = $roots.append({
+						alias_base: type_name_root_alias_base_zig(type_table, arg_fallback, arg_type_id),
+						module_base,
+						type_id: arg_type_id,
+					})
 					$arg_idx = $arg_idx + 1
 				}
 
-				$roots = $roots.append(
-					{
-						alias_base: base,
-						module_base,
-						type_id: func.ret,
-					},
-				)
+				$roots = $roots.append({
+					alias_base: base,
+					module_base,
+					type_id: func.ret,
+				})
 			}
 			_ => {
-				$roots = $roots.append(
-					{
-						alias_base: type_name_root_alias_base_zig(type_table, base, entry.type_id),
-						module_base,
-						type_id: entry.type_id,
-					},
-				)
+				$roots = $roots.append({
+					alias_base: type_name_root_alias_base_zig(type_table, base, entry.type_id),
+					module_base,
+					type_id: entry.type_id,
+				})
 			}
 		}
 	}
@@ -421,6 +411,14 @@ type_repr_to_zig = |type_table, duplicate_tag_names, preferred_names, type_id, t
 		RocStr => "RocStr"
 		RocUnit => "void"
 		RocU8 => "u8"
+		RocU8x16 => "RocU8x16"
+		RocI8x16 => "RocI8x16"
+		RocU16x8 => "RocU16x8"
+		RocI16x8 => "RocI16x8"
+		RocU32x4 => "RocU32x4"
+		RocI32x4 => "RocI32x4"
+		RocU64x2 => "RocU64x2"
+		RocI64x2 => "RocI64x2"
 		RocU16 => "u16"
 		RocU32 => "u32"
 		RocU64 => "u64"
@@ -487,7 +485,7 @@ resolve_tag_union_type = |type_table, duplicate_tag_names, preferred_names, type
 			} else {
 				"*anyopaque"
 			}
-	}
+		}
 
 ## Generate the RocList(T) generic type function (static Zig code)
 generate_roc_list_generic : Str
@@ -774,6 +772,14 @@ generate_element_type_structs = |type_table, duplicate_tag_names, preferred_name
 			RocU32 => {}
 			RocU64 => {}
 			RocU8 => {}
+			RocU8x16 => {}
+			RocI8x16 => {}
+			RocU16x8 => {}
+			RocI16x8 => {}
+			RocU32x4 => {}
+			RocI32x4 => {}
+			RocU64x2 => {}
+			RocI64x2 => {}
 			RocUnit => {}
 			RocUnknown(_) => {}
 		}
@@ -821,6 +827,14 @@ generate_tag_union_structs = |type_table, duplicate_tag_names, preferred_names| 
 			RocU32 => {}
 			RocU64 => {}
 			RocU8 => {}
+			RocU8x16 => {}
+			RocI8x16 => {}
+			RocU16x8 => {}
+			RocI16x8 => {}
+			RocU32x4 => {}
+			RocI32x4 => {}
+			RocU64x2 => {}
+			RocI64x2 => {}
 			RocUnit => {}
 			RocUnknown(_) => {}
 		}
@@ -902,13 +916,13 @@ generate_single_tag_union = |type_table, duplicate_tag_names, preferred_names, t
 			if !(abi_tag_has_payload(tag_layout)) {
 				# No-payload variant: use [0]u8 (Zig extern unions can't have void)
 				$union_fields = Str.concat($union_fields, "        ${snake}: [0]u8,\n")
-				} else if List.len(union_tag.payload) == 1 {
-					zig_type = match List.first(union_tag.payload) {
-						Ok(pid) => type_id_to_zig(type_table, duplicate_tag_names, preferred_names, pid)
-						Err(_) => {
-							crash "glue invariant violated: single-payload tag had no payload"
-						}
+			} else if List.len(union_tag.payload) == 1 {
+				zig_type = match List.first(union_tag.payload) {
+					Ok(pid) => type_id_to_zig(type_table, duplicate_tag_names, preferred_names, pid)
+					Err(_) => {
+						crash "glue invariant violated: single-payload tag had no payload"
 					}
+				}
 				$union_fields = Str.concat($union_fields, "        ${snake}: ${zig_type},\n")
 				$accessors64 = Str.concat($accessors64, "    pub fn payload_${snake}(self: *const @This()) ${zig_type} {\n        return self.payload.${snake};\n    }\n")
 				$accessors32 = Str.concat($accessors32, "    pub fn payload_${snake}(self: *const @This()) ${zig_type} {\n        const ptr: *const ${zig_type} = @ptrCast(@alignCast(&self.payload));\n        return ptr.*;\n    }\n")
@@ -1082,20 +1096,20 @@ incref_stmt_for_repr = |type_table, duplicate_tag_names, preferred_names, _type_
 				"    ${expr}.incref(amount);\n"
 			}
 		}
-			RocTagUnion(tu) =>
-				match TypeTable.single_variant_payload(tu) {
-					SinglePayload(payload_id) => incref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, expr)
-					SingleNoPayload => ""
-					NotSingleVariant =>
-						if tu.name != "" {
-							"    ${expr}.incref(amount);\n"
-						} else {
-							""
-						}
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => incref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, expr)
+				SingleNoPayload => ""
+				NotSingleVariant =>
+					if tu.name != "" {
+						"    ${expr}.incref(amount);\n"
+					} else {
+						""
+					}
 				}
-			_ => ""
-		}
+		_ => ""
 	}
+}
 
 generate_record_refcount_methods : TypeTable, List(Str), TypeNamePlan.PreferredNames, List(AbiFieldLayout) -> Str
 generate_record_refcount_methods = |type_table, duplicate_tag_names, preferred_names, fields| {
@@ -1140,13 +1154,13 @@ generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferr
 				Ok(payload_id) =>
 					if mode == "decref" {
 						decref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, "value.payload_${snake}()")
-						} else {
-							incref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, "value.payload_${snake}()")
-						}
-					Err(_) => {
-						crash "glue invariant violated: single-payload tag had no payload"
+					} else {
+						incref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, "value.payload_${snake}()")
 					}
+				Err(_) => {
+					crash "glue invariant violated: single-payload tag had no payload"
 				}
+			}
 
 		if body == "" {
 			"        .${tag.name} => {},\n"
@@ -1154,7 +1168,7 @@ generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferr
 			"        .${tag.name} => {\n${indent_lines(body, "    ")}        },\n"
 		}
 	} else {
-		var $body = "        const payload = value.payload_${snake}();\n"
+		var $statements = ""
 		var $idx = 0
 		for payload_id in tag.payload {
 			field_expr = "payload._${U64.to_str($idx)}"
@@ -1163,11 +1177,15 @@ generate_tag_payload_refcount_branch = |type_table, duplicate_tag_names, preferr
 			} else {
 				incref_stmt_for_type_id(type_table, duplicate_tag_names, preferred_names, payload_id, field_expr)
 			}
-			$body = Str.concat($body, indent_lines(stmt, "    "))
+			$statements = Str.concat($statements, indent_lines(stmt, "    "))
 			$idx = $idx + 1
 		}
 
-		"        .${tag.name} => {\n${$body}        },\n"
+		if $statements == "" {
+			"        .${tag.name} => {},\n"
+		} else {
+			"        .${tag.name} => {\n        const payload = value.payload_${snake}();\n${$statements}        },\n"
+		}
 	}
 }
 
@@ -1196,16 +1214,16 @@ incref_stmt_uses_amount_for_type_id = |type_table, type_id| {
 		RocStr => Bool.True
 		RocList(_) => Bool.True
 		RocBox(_) => Bool.True
-			RocRecord(rec) => rec.name != ""
-			RocTagUnion(tu) =>
-				match TypeTable.single_variant_payload(tu) {
-					SinglePayload(payload_id) => incref_stmt_uses_amount_for_type_id(type_table, payload_id)
-					SingleNoPayload => Bool.False
-					NotSingleVariant => tu.name != ""
-				}
-			_ => Bool.False
-		}
+		RocRecord(rec) => rec.name != ""
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => incref_stmt_uses_amount_for_type_id(type_table, payload_id)
+				SingleNoPayload => Bool.False
+				NotSingleVariant => tu.name != ""
+			}
+		_ => Bool.False
 	}
+}
 
 tag_payload_refcount_uses_param : TypeTable, TagVariant, Str -> Bool
 tag_payload_refcount_uses_param = |type_table, tag, mode| {
@@ -1389,6 +1407,7 @@ str_replace_all = |s, from, to| RocName.replace_all(s, from, to)
 
 ## Checks `str_replace_all` for this representative case.
 expect str_replace_all("a.b.c", ".", "_") == "a_b_c"
+
 ## Checks `str_replace_all` for this representative case.
 expect str_replace_all("hello!", "!", "") == "hello"
 
@@ -1404,12 +1423,16 @@ to_lower_snake_case = |s| RocName.lower_snake_ascii(s)
 
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("FooBar") == "foo_bar"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("fooBar") == "foo_bar"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("foo") == "foo"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("FOO") == "foo"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("Stdout_line") == "stdout_line"
 
@@ -1419,8 +1442,10 @@ capitalize_first = |s| RocName.capitalize_first(s)
 
 ## Checks `capitalize_first` for this representative case.
 expect capitalize_first("hello") == "Hello"
+
 ## Checks `capitalize_first` for this representative case.
 expect capitalize_first("Hello") == "Hello"
+
 ## Checks `capitalize_first` for this representative case.
 expect capitalize_first("") == ""
 
@@ -1434,8 +1459,10 @@ name_to_struct_name = |name| RocName.from_str(name).to_pascal()
 
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("Stdout.line!") == "StdoutLine"
+
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("line!") == "Line"
+
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("Foo.bar.baz!") == "FooBarBaz"
 
@@ -1445,10 +1472,13 @@ name_to_snake = |name| RocName.from_str(name).to_lower_snake()
 
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("Stdout.line!") == "stdout_line"
+
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("line!") == "line"
+
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("Foo.barBaz!") == "foo_bar_baz"
+
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("PartDef.Idx.get!") == "part_def_idx_get"
 
@@ -1458,8 +1488,10 @@ name_to_camel = |name| RocName.from_str(name).to_camel()
 
 ## Checks `name_to_camel` for this representative case.
 expect name_to_camel("Stdout.line!") == "stdoutLine"
+
 ## Checks `name_to_camel` for this representative case.
 expect name_to_camel("Echo.line!") == "echoLine"
+
 ## Checks `name_to_camel` for this representative case.
 expect name_to_camel("PartDef.Idx.get!") == "partDefIdxGet"
 
@@ -1469,8 +1501,10 @@ name_to_zig_quoted_ident = |name| "@\"${name}\""
 
 ## Checks `name_to_zig_quoted_ident` for this representative case.
 expect name_to_zig_quoted_ident("init!") == "@\"init!\""
+
 ## Checks `name_to_zig_quoted_ident` for this representative case.
 expect name_to_zig_quoted_ident("render!") == "@\"render!\""
+
 ## Checks `name_to_zig_quoted_ident` for this representative case.
 expect name_to_zig_quoted_ident("answer") == "@\"answer\""
 
@@ -1480,8 +1514,10 @@ lowercase_first = |s| RocName.lowercase_first(s)
 
 ## Checks `lowercase_first` for this representative case.
 expect lowercase_first("Hello") == "hello"
+
 ## Checks `lowercase_first` for this representative case.
 expect lowercase_first("hello") == "hello"
+
 ## Checks `lowercase_first` for this representative case.
 expect lowercase_first("") == ""
 
@@ -1549,6 +1585,21 @@ generate_host_abi_types =
 	\\comptime {
 	\\    if (@sizeOf(RocDec) != 16) @compileError("RocDec size mismatch");
 	\\    if (@alignOf(RocDec) != 16) @compileError("RocDec alignment mismatch");
+	\\}
+	\\
+	\\pub const RocU8x16 = @Vector(16, u8);
+	\\pub const RocI8x16 = @Vector(16, i8);
+	\\pub const RocU16x8 = @Vector(8, u16);
+	\\pub const RocI16x8 = @Vector(8, i16);
+	\\pub const RocU32x4 = @Vector(4, u32);
+	\\pub const RocI32x4 = @Vector(4, i32);
+	\\pub const RocU64x2 = @Vector(2, u64);
+	\\pub const RocI64x2 = @Vector(2, i64);
+	\\comptime {
+	\\    for (.{ RocU8x16, RocI8x16, RocU16x8, RocI16x8, RocU32x4, RocI32x4, RocU64x2, RocI64x2 }) |T| {
+	\\        if (@sizeOf(T) != 16) @compileError("Roc SIMD size mismatch");
+	\\        if (@alignOf(T) != 16) @compileError("Roc SIMD alignment mismatch");
+	\\    }
 	\\}
 	\\
 	\\/// Runtime representation of an opaque `Box(T)` value.

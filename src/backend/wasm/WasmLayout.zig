@@ -42,6 +42,7 @@ pub fn wasmRepr(layout_idx: layout.Idx) WasmRepr {
         .u64, .i64 => .{ .primitive = .i64 },
         .f32 => .{ .primitive = .f32 },
         .f64 => .{ .primitive = .f64 },
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .{ .primitive = .v128 },
         .i128, .u128 => .{ .stack_memory = 16 },
         .dec => .{ .stack_memory = 16 },
         .str => .{ .stack_memory = 12 }, // wasm32: ptr(4) + encoded cap(4) + len(4)
@@ -146,6 +147,7 @@ fn scalarValType(l: layout.Layout) ValType {
             .f64 => .f64,
             .dec => .i32, // pointer to stack memory
         },
+        .vector => .v128,
         .opaque_ptr => .i32,
         .str => .i32, // pointer
     };

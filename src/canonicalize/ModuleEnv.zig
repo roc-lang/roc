@@ -180,6 +180,14 @@ pub const CommonIdents = extern struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    u8x16_type: Ident.Idx,
+    i8x16_type: Ident.Idx,
+    u16x8_type: Ident.Idx,
+    i16x8_type: Ident.Idx,
+    u32x4_type: Ident.Idx,
+    i32x4_type: Ident.Idx,
+    u64x2_type: Ident.Idx,
+    i64x2_type: Ident.Idx,
     bool_type: Ident.Idx,
 
     // Field/tag names used during type checking and evaluation
@@ -300,6 +308,14 @@ pub const CommonIdents = extern struct {
             .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
             .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
             .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .u8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8x16")),
+            .i8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8x16")),
+            .u16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16x8")),
+            .i16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16x8")),
+            .u32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32x4")),
+            .i32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32x4")),
+            .u64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64x2")),
+            .i64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64x2")),
             .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
@@ -421,6 +437,14 @@ pub const CommonIdents = extern struct {
             .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
             .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
             .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .u8x16_type = common.findIdent("Builtin.Num.U8x16") orelse unreachable,
+            .i8x16_type = common.findIdent("Builtin.Num.I8x16") orelse unreachable,
+            .u16x8_type = common.findIdent("Builtin.Num.U16x8") orelse unreachable,
+            .i16x8_type = common.findIdent("Builtin.Num.I16x8") orelse unreachable,
+            .u32x4_type = common.findIdent("Builtin.Num.U32x4") orelse unreachable,
+            .i32x4_type = common.findIdent("Builtin.Num.I32x4") orelse unreachable,
+            .u64x2_type = common.findIdent("Builtin.Num.U64x2") orelse unreachable,
+            .i64x2_type = common.findIdent("Builtin.Num.I64x2") orelse unreachable,
             .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
             .before_dot = common.findIdent("before_dot") orelse unreachable,
             .after_dot = common.findIdent("after_dot") orelse unreachable,
@@ -608,16 +632,6 @@ pub const NumeralLiteral = extern struct {
     pub fn isMaterialized(self: NumeralLiteral) bool {
         return (self.flags & materialized_flag) != 0;
     }
-};
-
-/// Checked dispatch metadata for a numeric literal that must call
-/// `from_numeral` at runtime.
-pub const NumeralDispatchPlan = extern struct {
-    node_idx: u32,
-    target_var: u32,
-    fn_var: u32,
-
-    pub const SafeList = collections.SafeList(@This());
 };
 
 /// One constrained-scheme use recorded by checking for static-dispatch
@@ -824,12 +838,6 @@ for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList,
 numeral_digit_bytes: collections.SafeList(u8),
 /// Exact numeric literals attached to source expression and pattern nodes.
 numeral_literals: NumeralLiteral.SafeList,
-/// `from_numeral` dispatch plans attached by checking to source expression nodes.
-numeral_dispatch_plans: NumeralDispatchPlan.SafeList,
-/// `from_quote` dispatch plans attached by checking to source string literal
-/// expression and pattern nodes. Shares `NumeralDispatchPlan`'s shape: a source
-/// node plus the constraint's target and function type vars.
-quote_dispatch_plans: NumeralDispatchPlan.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
@@ -1023,8 +1031,6 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .for_loop_dispatch_plans = try ForLoopDispatchPlan.SafeList.initCapacity(gpa, 4),
         .numeral_digit_bytes = try collections.SafeList(u8).initCapacity(gpa, 32),
         .numeral_literals = try NumeralLiteral.SafeList.initCapacity(gpa, 8),
-        .numeral_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
-        .quote_dispatch_plans = try NumeralDispatchPlan.SafeList.initCapacity(gpa, 8),
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
@@ -1050,8 +1056,6 @@ pub fn deinit(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
-    self.numeral_dispatch_plans.deinit(self.gpa);
-    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
@@ -1093,8 +1097,6 @@ pub fn deinitCachedModule(self: *Self) void {
     self.for_loop_dispatch_plans.deinit(self.gpa);
     self.numeral_digit_bytes.deinit(self.gpa);
     self.numeral_literals.deinit(self.gpa);
-    self.numeral_dispatch_plans.deinit(self.gpa);
-    self.quote_dispatch_plans.deinit(self.gpa);
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
@@ -3298,8 +3300,6 @@ pub const Serialized = extern struct {
     for_loop_dispatch_plans: ForLoopDispatchPlan.SafeList.Serialized,
     numeral_digit_bytes: collections.SafeList(u8).Serialized,
     numeral_literals: NumeralLiteral.SafeList.Serialized,
-    numeral_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
-    quote_dispatch_plans: NumeralDispatchPlan.SafeList.Serialized,
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
@@ -3399,8 +3399,6 @@ pub const Serialized = extern struct {
         try self.for_loop_dispatch_plans.serialize(&env.for_loop_dispatch_plans, allocator, writer);
         try self.numeral_digit_bytes.serialize(&env.numeral_digit_bytes, allocator, writer);
         try self.numeral_literals.serialize(&env.numeral_literals, allocator, writer);
-        try self.numeral_dispatch_plans.serialize(&env.numeral_dispatch_plans, allocator, writer);
-        try self.quote_dispatch_plans.serialize(&env.quote_dispatch_plans, allocator, writer);
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
@@ -3460,8 +3458,6 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
-            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
-            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
@@ -3521,8 +3517,6 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
             .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
             .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
-            .numeral_dispatch_plans = self.numeral_dispatch_plans.deserializeInto(base_addr),
-            .quote_dispatch_plans = self.quote_dispatch_plans.deserializeInto(base_addr),
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
@@ -3584,8 +3578,6 @@ pub const Serialized = extern struct {
             .for_loop_dispatch_plans = try self.for_loop_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeral_digit_bytes = try self.numeral_digit_bytes.deserializeWithCopy(base_addr, gpa),
             .numeral_literals = try self.numeral_literals.deserializeWithCopy(base_addr, gpa),
-            .numeral_dispatch_plans = try self.numeral_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .quote_dispatch_plans = try self.quote_dispatch_plans.deserializeWithCopy(base_addr, gpa),
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
@@ -3767,16 +3759,13 @@ pub fn recordNumeralDispatchPlan(
     target_var: TypeVar,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
-    try upsertSortedByNode(NumeralDispatchPlan, &self.numeral_dispatch_plans, self.gpa, .{
-        .node_idx = @intFromEnum(node_idx),
-        .target_var = @intFromEnum(target_var),
-        .fn_var = @intFromEnum(fn_var),
-    });
+    try self.store.recordLiteralDispatchPlan(node_idx, .numeral, target_var, fn_var);
 }
 
 /// Return the checked `from_numeral` function for a numeric expression.
-pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
-    return findSortedByNode(NumeralDispatchPlan, self.numeral_dispatch_plans.items.items, @intFromEnum(node_idx));
+pub fn numeralDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
+    const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
+    return if (plan.dispatchKind() == .numeral) plan else null;
 }
 
 /// Record the checked `from_quote` function for a string literal node.
@@ -3786,11 +3775,7 @@ pub fn recordQuoteDispatchPlan(
     target_var: TypeVar,
     fn_var: TypeVar,
 ) std.mem.Allocator.Error!void {
-    try upsertSortedByNode(NumeralDispatchPlan, &self.quote_dispatch_plans, self.gpa, .{
-        .node_idx = @intFromEnum(node_idx),
-        .target_var = @intFromEnum(target_var),
-        .fn_var = @intFromEnum(fn_var),
-    });
+    try self.store.recordLiteralDispatchPlan(node_idx, .quote, target_var, fn_var);
 }
 
 /// Record a constrained-scheme use for static-dispatch evidence.
@@ -3819,8 +3804,9 @@ pub fn recordSchemeUse(
 }
 
 /// Return the checked `from_quote` function for a string literal node.
-pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NumeralDispatchPlan {
-    return findSortedByNode(NumeralDispatchPlan, self.quote_dispatch_plans.items.items, @intFromEnum(node_idx));
+pub fn quoteDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?NodeStore.LiteralDispatchPlan {
+    const plan = self.store.literalDispatchPlanForNode(node_idx) orelse return null;
+    return if (plan.dispatchKind() == .quote) plan else null;
 }
 
 /// Record the scope-resolved type target for an explicit numeric suffix.

@@ -189,13 +189,7 @@ NO CHANGE
 			(ty-lookup (name "MyType") (local))))
 	(d-let
 		(p-assign (ident "result2"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 371)
-			(receiver
-				(e-lookup-local
-					(p-assign (ident "c"))))
-			(args
-				(e-lookup-local
-					(p-assign (ident "d")))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(s-nominal-decl

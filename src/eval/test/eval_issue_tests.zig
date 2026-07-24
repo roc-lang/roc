@@ -707,6 +707,50 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[1]" },
     },
     .{
+        // https://github.com/roc-lang/roc/issues/10301
+        .name = "issue 10301: for over an effect-produced runtime list folds correctly",
+        .source_kind = .module,
+        .source =
+        \\produce : U64 -> List(U64)
+        \\produce = |n| {
+        \\    dbg "produce"
+        \\    [n, 2, 3]
+        \\}
+        \\
+        \\main : U64
+        \\main = {
+        \\    var $sum = 0
+        \\    for byte in produce(1) {
+        \\        $sum = $sum * 31 + byte
+        \\    }
+        \\    $sum
+        \\}
+        ,
+        .expected = .{ .inspect_str = "1026" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10317
+        .name = "issue 10317: loop-carried reassignment under a branch keeps zero args",
+        .source_kind = .module,
+        .source =
+        \\main : I64
+        \\main = {
+        \\    var $x = 0
+        \\    var $y = 0
+        \\    for flag in [Bool.False] {
+        \\        $y = if flag {
+        \\            $x = 1
+        \\            0
+        \\        } else {
+        \\            0
+        \\        }
+        \\    }
+        \\    $x + $y
+        \\}
+        ,
+        .expected = .{ .inspect_str = "0" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/10300
         .name = "issue 10300: integer wrapping arithmetic is expressible",
         .source = "(U8.plus_wrap(U8.highest, 1), U8.minus_wrap(0, 1), U8.times_wrap(128, 2))",

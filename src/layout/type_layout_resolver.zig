@@ -905,6 +905,14 @@ pub const Resolver = struct {
         if (ident_idx.eql(env.idents.f32_type)) return .f32;
         if (ident_idx.eql(env.idents.f64_type)) return .f64;
         if (ident_idx.eql(env.idents.dec_type)) return .dec;
+        if (ident_idx.eql(env.idents.u8x16_type)) return .u8x16;
+        if (ident_idx.eql(env.idents.i8x16_type)) return .i8x16;
+        if (ident_idx.eql(env.idents.u16x8_type)) return .u16x8;
+        if (ident_idx.eql(env.idents.i16x8_type)) return .i16x8;
+        if (ident_idx.eql(env.idents.u32x4_type)) return .u32x4;
+        if (ident_idx.eql(env.idents.i32x4_type)) return .i32x4;
+        if (ident_idx.eql(env.idents.u64x2_type)) return .u64x2;
+        if (ident_idx.eql(env.idents.i64x2_type)) return .i64x2;
         return null;
     }
 

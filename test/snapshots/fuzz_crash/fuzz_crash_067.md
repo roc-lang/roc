@@ -57,10 +57,7 @@ f = || {
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-lambda
-			(args)
-			(e-block
-				(e-runtime-error (tag "crash_expects_string"))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

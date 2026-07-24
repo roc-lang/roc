@@ -536,8 +536,8 @@ jobs:
 
       - name: valgrind platform apps
         run: |
-          ./zig-out/bin/test_runner ./zig-out/bin/roc str --mode=valgrind --app=test/str/app.roc
-          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=valgrind --app=test/int/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
 
       - name: valgrind snapshots
         run: |

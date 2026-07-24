@@ -43,6 +43,7 @@ fn byteboxValTypes(comptime vts: []const BuiltinSignatures.ValType) []const byte
             .i64 => .I64,
             .f32 => .F32,
             .f64 => .F64,
+            .v128 => .V128,
         };
         const frozen = arr;
         return &frozen;
@@ -150,9 +151,10 @@ pub const RunWasmStrResult = struct {
 pub fn runWasmStr(
     allocator: std.mem.Allocator,
     wasm_bytes: []const u8,
+    heap_base: u32,
     has_imports: bool,
 ) WasmEvalError![]u8 {
-    const result = try runWasmStrWithStats(allocator, wasm_bytes, has_imports);
+    const result = try runWasmStrWithStats(allocator, wasm_bytes, heap_base, has_imports);
     return result.output;
 }
 
@@ -160,9 +162,10 @@ pub fn runWasmStr(
 pub fn runWasmStrWithStats(
     allocator: std.mem.Allocator,
     wasm_bytes: []const u8,
+    heap_base: u32,
     has_imports: bool,
 ) WasmEvalError!RunWasmStrResult {
-    wasm_heap_ptr = 65536;
+    wasm_heap_ptr = heap_base;
     wasm_allocation_count = 0;
     wasm_crash_state = .none;
 
@@ -344,6 +347,8 @@ pub fn runWasmStrWithStats(
         env_imports.addHostFunction("roc_list_reverse", &[_]bytebox.ValType{ .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReverse, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_replace", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostListReplace, null) catch return error.WasmExecFailed;
         env_imports.addHostFunction("roc_list_swap", &[_]bytebox.ValType{ .I32, .I32, .I32, .I64, .I64, .I32 }, &[_]bytebox.ValType{}, hostListSwap, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_builtins_simd_store_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I64, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdStore16, null) catch return error.WasmExecFailed;
+        env_imports.addHostFunction("roc_builtins_simd_append_16", &[_]bytebox.ValType{ .I32, .I64, .I64, .I32, .I32, .I32, .I32, .I32 }, &[_]bytebox.ValType{}, hostSimdAppend16, null) catch return error.WasmExecFailed;
 
         const imports = [_]bytebox.ModuleImportPackage{env_imports};
         module_instance.instantiate(.{ .stack_size = 1024 * 256, .imports = &imports }) catch |err| {
@@ -582,7 +587,8 @@ fn nativeRocListBytes(roc_list: builtins.list.RocList) []const u8 {
     return &.{};
 }
 
-fn writeWasmList(buffer: []u8, result_ptr: usize, bytes: []const u8) void {
+fn writeWasmList(module: *bytebox.ModuleInstance, result_ptr: usize, bytes: []const u8) void {
+    var buffer = module.store.getMemory(0).buffer();
     if (bytes.len == 0) {
         writeIntLittle(u32, buffer, result_ptr, 0);
         writeIntLittle(u32, buffer, result_ptr + 4, 0);
@@ -590,15 +596,16 @@ fn writeWasmList(buffer: []u8, result_ptr: usize, bytes: []const u8) void {
         return;
     }
 
-    const data_ptr = allocWasmData(buffer, 1, bytes.len);
+    const data_ptr = allocWasmData(module, 1, bytes.len);
+    buffer = module.store.getMemory(0).buffer();
     @memcpy(buffer[data_ptr..][0..bytes.len], bytes);
     writeIntLittle(u32, buffer, result_ptr, data_ptr);
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(bytes.len));
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(bytes.len));
 }
 
-fn writeNativeRocListToWasm(buffer: []u8, result_ptr: usize, roc_list: builtins.list.RocList) void {
-    writeWasmList(buffer, result_ptr, nativeRocListBytes(roc_list));
+fn writeNativeRocListToWasm(module: *bytebox.ModuleInstance, result_ptr: usize, roc_list: builtins.list.RocList) void {
+    writeWasmList(module, result_ptr, nativeRocListBytes(roc_list));
 }
 
 fn hostCryptoHashBytes(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
@@ -615,11 +622,10 @@ fn hostCryptoHashBytes(module: *bytebox.ModuleInstance, params: [*]const bytebox
         .sha256 => builtins.crypto.sha256HashBytes(input.ptr, input.len, ops),
         .blake3 => builtins.crypto.blake3HashBytes(input.ptr, input.len, ops),
     };
-    writeNativeRocListToWasm(buffer, result_ptr, result);
+    writeNativeRocListToWasm(module, result_ptr, result);
 }
 
 fn hostCryptoHasherEmpty(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
-    const buffer = module.store.getMemory(0).buffer();
     const result_ptr: usize = @intCast(params[0].I32);
 
     var env = builtins.utils.TestEnv.init(std.heap.page_allocator);
@@ -629,7 +635,7 @@ fn hostCryptoHasherEmpty(module: *bytebox.ModuleInstance, params: [*]const byteb
         .sha256 => builtins.crypto.sha256HasherEmpty(ops),
         .blake3 => builtins.crypto.blake3HasherEmpty(ops),
     };
-    writeNativeRocListToWasm(buffer, result_ptr, result);
+    writeNativeRocListToWasm(module, result_ptr, result);
 }
 
 fn hostCryptoHasherWrite(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
@@ -649,7 +655,7 @@ fn hostCryptoHasherWrite(module: *bytebox.ModuleInstance, params: [*]const byteb
         .sha256 => builtins.crypto.sha256HasherWrite(state.ptr, state.len, input.ptr, input.len, ops),
         .blake3 => builtins.crypto.blake3HasherWrite(state.ptr, state.len, input.ptr, input.len, ops),
     };
-    writeNativeRocListToWasm(buffer, result_ptr, result);
+    writeNativeRocListToWasm(module, result_ptr, result);
 }
 
 fn hostCryptoHasherFinish(module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, comptime algorithm: CryptoAlgorithm) void {
@@ -666,7 +672,7 @@ fn hostCryptoHasherFinish(module: *bytebox.ModuleInstance, params: [*]const byte
         .sha256 => builtins.crypto.sha256HasherFinish(state.ptr, state.len, ops),
         .blake3 => builtins.crypto.blake3HasherFinish(state.ptr, state.len, ops),
     };
-    writeNativeRocListToWasm(buffer, result_ptr, result);
+    writeNativeRocListToWasm(module, result_ptr, result);
 }
 
 fn hostCryptoSha256HashBytes(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1359,23 +1365,39 @@ fn increfWasmDataPtr(buffer: []u8, data_ptr: usize) void {
     writeIntLittle(u32, buffer, rc_ptr, rc + 1);
 }
 
-fn writeWasmStr(buffer: []u8, result_ptr: usize, data: [*]const u8, len: usize) void {
+fn allocateWasmStrResult(module: *bytebox.ModuleInstance, result_ptr: usize, len: usize) usize {
+    var buffer = module.store.getMemory(0).buffer();
     if (len < wasm_roc_str_size) {
         @memset(buffer[result_ptr..][0..wasm_roc_str_size], 0);
-        @memcpy(buffer[result_ptr..][0..len], data[0..len]);
         buffer[result_ptr + wasm_small_str_max_len] = builtins.str.RocStr.smallStrFlagByte(len);
+        return result_ptr;
     } else {
-        const data_ptr = allocWasmData(buffer, 1, len);
-        @memcpy(buffer[data_ptr..][0..len], data[0..len]);
+        const data_ptr = allocWasmData(module, 1, len);
+        buffer = module.store.getMemory(0).buffer();
         writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
         writeIntLittle(u32, buffer, result_ptr + 4, @intCast(builtins.str.RocStr.encodeCapacityForWidth(@intCast(len))));
         writeIntLittle(u32, buffer, result_ptr + 8, @intCast(len));
+        return data_ptr;
     }
 }
 
-fn writeWasmStrViewFromStr(buffer: []u8, result_ptr: usize, source: WasmStr, start: usize, len: usize) void {
+fn writeWasmStr(module: *bytebox.ModuleInstance, result_ptr: usize, data: [*]const u8, len: usize) void {
+    var buffer = module.store.getMemory(0).buffer();
+    const data_address = @intFromPtr(data);
+    const buffer_address = @intFromPtr(buffer.ptr);
+    const source_offset: ?usize = if (data_address >= buffer_address and data_address - buffer_address <= buffer.len)
+        data_address - buffer_address
+    else
+        null;
+    const destination = allocateWasmStrResult(module, result_ptr, len);
+    buffer = module.store.getMemory(0).buffer();
+    const source = if (source_offset) |offset| buffer[offset..].ptr else data;
+    @memcpy(buffer[destination..][0..len], source[0..len]);
+}
+
+fn writeWasmStrViewFromStr(module: *bytebox.ModuleInstance, buffer: []u8, result_ptr: usize, source: WasmStr, start: usize, len: usize) void {
     if (source.is_small) {
-        writeWasmStr(buffer, result_ptr, source.data + start, len);
+        writeWasmStr(module, result_ptr, source.data + start, len);
         return;
     }
 
@@ -1387,7 +1409,7 @@ fn writeWasmStrViewFromStr(buffer: []u8, result_ptr: usize, source: WasmStr, sta
     writeIntLittle(u32, buffer, result_ptr + 8, @intCast(len));
 }
 
-fn writeWasmStrViewFromList(buffer: []u8, result_ptr: usize, list_ptr: usize, len: usize) void {
+fn writeWasmStrViewFromList(module: *bytebox.ModuleInstance, buffer: []u8, result_ptr: usize, list_ptr: usize, len: usize) void {
     if (len == 0) {
         writeWasmEmptyStr(buffer, result_ptr);
         return;
@@ -1395,7 +1417,7 @@ fn writeWasmStrViewFromList(buffer: []u8, result_ptr: usize, list_ptr: usize, le
     const data_offset: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
     const cap_or_alloc = readIntLittle(u32, buffer, list_ptr + 8);
     if (len < wasm_roc_str_size) {
-        writeWasmStr(buffer, result_ptr, buffer[data_offset..].ptr, len);
+        writeWasmStr(module, result_ptr, buffer[data_offset..].ptr, len);
         return;
     }
 
@@ -1428,13 +1450,22 @@ fn allocExtraBytes(alignment: u32) u32 {
     return if (alignment > ptr_width) alignment else ptr_width;
 }
 
-fn allocWasmData(buffer: []u8, alignment: u32, length: usize) u32 {
+fn allocWasmData(module: *bytebox.ModuleInstance, alignment: u32, length: usize) u32 {
     wasm_allocation_count += 1;
     const align_val: u32 = if (alignment > 4) alignment else 4;
     const extra_bytes = allocExtraBytes(alignment);
     const alloc_ptr = (wasm_heap_ptr + align_val - 1) & ~(align_val - 1);
     const data_ptr = alloc_ptr + extra_bytes;
-    wasm_heap_ptr = @intCast(data_ptr + length);
+    const end: u64 = @as(u64, data_ptr) + length;
+    if (end > std.math.maxInt(u32)) @panic("wasm evaluator exhausted the wasm32 address space");
+    const current_len = module.memoryAll().len;
+    if (end > current_len) {
+        const missing = end - current_len;
+        const pages = (missing + 65535) / 65536;
+        if (!module.memoryGrow(@intCast(pages))) @panic("wasm evaluator could not grow linear memory");
+    }
+    wasm_heap_ptr = @intCast(end);
+    const buffer = module.memoryAll();
     writeIntLittle(u32, buffer, data_ptr - 8, @intCast(length));
     writeIntLittle(u32, buffer, data_ptr - 4, 1);
     return data_ptr;
@@ -1445,17 +1476,16 @@ fn allocWasmData(buffer: []u8, alignment: u32, length: usize) u32 {
 // result returned directly rather than written back into an args struct.
 
 fn hostRocAlloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
     const length: u32 = @bitCast(params[1].I32);
     const alignment: u32 = @bitCast(params[2].I32);
-    const data_ptr = allocWasmData(buffer, alignment, length);
+    const data_ptr = allocWasmData(module, alignment, length);
     results[0] = .{ .I32 = @bitCast(data_ptr) };
 }
 
 fn hostRocDealloc(_: ?*anyopaque, _: *bytebox.ModuleInstance, _: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {}
 
 fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, results: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const old_data_ptr: u32 = @bitCast(params[1].I32);
     const new_length: u32 = @bitCast(params[2].I32);
     const alignment: u32 = @bitCast(params[3].I32);
@@ -1463,7 +1493,8 @@ fn hostRocRealloc(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         readIntLittle(u32, buffer, old_data_ptr - 8)
     else
         0;
-    const data_ptr = allocWasmData(buffer, alignment, new_length);
+    const data_ptr = allocWasmData(module, alignment, new_length);
+    buffer = module.store.getMemory(0).buffer();
     const copy_len = @min(old_length, new_length);
     if (copy_len > 0 and old_data_ptr + copy_len <= buffer.len and data_ptr + copy_len <= buffer.len) {
         @memcpy(buffer[data_ptr..][0..copy_len], buffer[old_data_ptr..][0..copy_len]);
@@ -1491,6 +1522,9 @@ fn hostRocCrashed(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const msg_ptr: u32 = @bitCast(params[1].I32);
     const msg_len: u32 = @bitCast(params[2].I32);
     if (msg_ptr + msg_len > buffer.len) return;
+    if (std.debug.runtime_safety) {
+        debugPrint("wasm Roc crash: {s}\n", .{buffer[msg_ptr..][0..msg_len]});
+    }
     wasm_crash_state = .crashed;
 }
 
@@ -1506,7 +1540,7 @@ fn hostStrTrim(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const
     var end: usize = str.len;
     while (start < end and isWhitespace(slice[start])) start += 1;
     while (end > start and isWhitespace(slice[end - 1])) end -= 1;
-    writeWasmStr(buffer, @intCast(params[1].I32), slice[start..].ptr, end - start);
+    writeWasmStr(module, @intCast(params[1].I32), slice[start..].ptr, end - start);
 }
 
 fn hostStrTrimStart(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1515,7 +1549,7 @@ fn hostStrTrimStart(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
     const slice = str.data[0..str.len];
     var start: usize = 0;
     while (start < slice.len and isWhitespace(slice[start])) start += 1;
-    writeWasmStr(buffer, @intCast(params[1].I32), slice[start..].ptr, slice.len - start);
+    writeWasmStr(module, @intCast(params[1].I32), slice[start..].ptr, slice.len - start);
 }
 
 fn hostStrTrimEnd(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1524,63 +1558,64 @@ fn hostStrTrimEnd(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     const slice = str.data[0..str.len];
     var end: usize = slice.len;
     while (end > 0 and isWhitespace(slice[end - 1])) end -= 1;
-    writeWasmStr(buffer, @intCast(params[1].I32), slice.ptr, end);
+    writeWasmStr(module, @intCast(params[1].I32), slice.ptr, end);
 }
 
 fn hostStrWithAsciiLowercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
     if (str.len == 0) {
         writeWasmEmptyStr(buffer, @intCast(params[1].I32));
         return;
     }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(str.len);
+    const dest_start = allocateWasmStrResult(module, @intCast(params[1].I32), str.len);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
     for (0..str.len) |i| {
         buffer[dest_start + i] = std.ascii.toLower(str.data[i]);
     }
-    writeWasmStr(buffer, @intCast(params[1].I32), buffer[dest_start..].ptr, str.len);
 }
 
 fn hostStrWithAsciiUppercased(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
     if (str.len == 0) {
         writeWasmEmptyStr(buffer, @intCast(params[1].I32));
         return;
     }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(str.len);
+    const dest_start = allocateWasmStrResult(module, @intCast(params[1].I32), str.len);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
     for (0..str.len) |i| {
         buffer[dest_start + i] = std.ascii.toUpper(str.data[i]);
     }
-    writeWasmStr(buffer, @intCast(params[1].I32), buffer[dest_start..].ptr, str.len);
 }
 
 fn hostStrReleaseExcessCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
     const buffer = module.store.getMemory(0).buffer();
     const str = readWasmStr(buffer, @intCast(params[0].I32));
-    writeWasmStr(buffer, @intCast(params[1].I32), str.data, str.len);
+    writeWasmStr(module, @intCast(params[1].I32), str.data, str.len);
 }
 
 fn hostStrWithCapacity(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const cap: usize = @intCast(@as(u32, @bitCast(params[0].I32)));
     const result_ptr: usize = @intCast(params[1].I32);
     if (cap < wasm_roc_str_size) {
         writeWasmEmptyStr(buffer, result_ptr);
         return;
     }
-    const dest_start = allocWasmData(buffer, 1, cap);
+    const dest_start = allocWasmData(module, 1, cap);
+    buffer = module.store.getMemory(0).buffer();
     writeIntLittle(u32, buffer, result_ptr, @intCast(dest_start));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(builtins.str.RocStr.encodeCapacityForWidth(@intCast(cap))));
     writeIntLittle(u32, buffer, result_ptr + 8, 0);
 }
 
 fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
-    const slice = str.data[0..str.len];
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
+    var slice = str.data[0..str.len];
     const result_ptr: usize = @intCast(params[1].I32);
 
     var extra: usize = 0;
@@ -1602,12 +1637,14 @@ fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params
             pos += 1;
         }
         small[pos] = '"';
-        writeWasmStr(buffer, result_ptr, small[0..].ptr, result_len);
+        writeWasmStr(module, result_ptr, small[0..].ptr, result_len);
         return;
     }
 
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(result_len);
+    const dest_start = allocateWasmStrResult(module, result_ptr, result_len);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
+    slice = str.data[0..str.len];
     buffer[dest_start] = '"';
     var pos: usize = dest_start + 1;
     for (slice) |ch| {
@@ -1619,23 +1656,23 @@ fn hostStrEscapeAndQuote(_: ?*anyopaque, module: *bytebox.ModuleInstance, params
         pos += 1;
     }
     buffer[pos] = '"';
-    writeWasmStr(buffer, result_ptr, buffer[dest_start..].ptr, result_len);
 }
 
 fn hostStrWithPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
-    const prefix = readWasmStr(buffer, @intCast(params[1].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
+    var prefix = readWasmStr(buffer, @intCast(params[1].I32));
     const total_len = prefix.len + str.len;
     if (total_len == 0) {
         writeWasmEmptyStr(buffer, @intCast(params[2].I32));
         return;
     }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
+    const dest_start = allocateWasmStrResult(module, @intCast(params[2].I32), total_len);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
+    prefix = readWasmStr(buffer, @intCast(params[1].I32));
     @memcpy(buffer[dest_start..][0..prefix.len], prefix.data[0..prefix.len]);
     @memcpy(buffer[dest_start + prefix.len ..][0..str.len], str.data[0..str.len]);
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
 }
 
 fn hostStrDropPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
@@ -1643,9 +1680,9 @@ fn hostStrDropPrefix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const prefix = readWasmStr(buffer, @intCast(params[1].I32));
     if (prefix.len <= str.len and bytesEqual(str.data[0..prefix.len], prefix.data[0..prefix.len])) {
-        writeWasmStrViewFromStr(buffer, @intCast(params[2].I32), str, prefix.len, str.len - prefix.len);
+        writeWasmStrViewFromStr(module, buffer, @intCast(params[2].I32), str, prefix.len, str.len - prefix.len);
     } else {
-        writeWasmStrViewFromStr(buffer, @intCast(params[2].I32), str, 0, str.len);
+        writeWasmStrViewFromStr(module, buffer, @intCast(params[2].I32), str, 0, str.len);
     }
 }
 
@@ -1658,7 +1695,7 @@ fn hostStrDropPrefixCaselessAscii(_: ?*anyopaque, module: *bytebox.ModuleInstanc
     const found_offset: usize = @intCast(params[4].I32);
 
     if (prefix.len <= str.len and bytesCaselessAsciiEqual(str.data[0..prefix.len], prefix.data[0..prefix.len])) {
-        writeWasmStrViewFromStr(buffer, result_ptr + after_offset, str, prefix.len, str.len - prefix.len);
+        writeWasmStrViewFromStr(module, buffer, result_ptr + after_offset, str, prefix.len, str.len - prefix.len);
         buffer[result_ptr + found_offset] = 1;
     } else {
         writeWasmEmptyStr(buffer, result_ptr + after_offset);
@@ -1671,9 +1708,9 @@ fn hostStrDropSuffix(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     const str = readWasmStr(buffer, @intCast(params[0].I32));
     const suffix = readWasmStr(buffer, @intCast(params[1].I32));
     if (suffix.len <= str.len and bytesEqual((str.data + str.len - suffix.len)[0..suffix.len], suffix.data[0..suffix.len])) {
-        writeWasmStrViewFromStr(buffer, @intCast(params[2].I32), str, 0, str.len - suffix.len);
+        writeWasmStrViewFromStr(module, buffer, @intCast(params[2].I32), str, 0, str.len - suffix.len);
     } else {
-        writeWasmStrViewFromStr(buffer, @intCast(params[2].I32), str, 0, str.len);
+        writeWasmStrViewFromStr(module, buffer, @intCast(params[2].I32), str, 0, str.len);
     }
 }
 
@@ -1690,8 +1727,8 @@ fn hostStrSplitFirst(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*
     const delimiter_slice = delimiter.data[0..delimiter.len];
     const maybe_index = bytesIndexOf(str_slice, delimiter_slice);
     if (maybe_index) |index| {
-        writeWasmStrViewFromStr(buffer, result_ptr + before_offset, str, 0, index);
-        writeWasmStrViewFromStr(buffer, result_ptr + after_offset, str, index + delimiter.len, str.len - index - delimiter.len);
+        writeWasmStrViewFromStr(module, buffer, result_ptr + before_offset, str, 0, index);
+        writeWasmStrViewFromStr(module, buffer, result_ptr + after_offset, str, index + delimiter.len, str.len - index - delimiter.len);
         buffer[result_ptr + found_offset] = 1;
     } else {
         writeWasmEmptyStr(buffer, result_ptr + before_offset);
@@ -1713,8 +1750,8 @@ fn hostStrSplitLast(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
     const delimiter_slice = delimiter.data[0..delimiter.len];
     const maybe_index = bytesLastIndexOf(str_slice, delimiter_slice);
     if (maybe_index) |index| {
-        writeWasmStrViewFromStr(buffer, result_ptr + before_offset, str, 0, index);
-        writeWasmStrViewFromStr(buffer, result_ptr + after_offset, str, index + delimiter.len, str.len - index - delimiter.len);
+        writeWasmStrViewFromStr(module, buffer, result_ptr + before_offset, str, 0, index);
+        writeWasmStrViewFromStr(module, buffer, result_ptr + after_offset, str, index + delimiter.len, str.len - index - delimiter.len);
         buffer[result_ptr + found_offset] = 1;
     } else {
         writeWasmEmptyStr(buffer, result_ptr + before_offset);
@@ -1724,32 +1761,33 @@ fn hostStrSplitLast(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]
 }
 
 fn hostStrConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const lhs = readWasmStr(buffer, @intCast(params[0].I32));
-    const rhs = readWasmStr(buffer, @intCast(params[1].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var lhs = readWasmStr(buffer, @intCast(params[0].I32));
+    var rhs = readWasmStr(buffer, @intCast(params[1].I32));
     const total_len = lhs.len + rhs.len;
     if (total_len == 0) {
         writeWasmEmptyStr(buffer, @intCast(params[2].I32));
         return;
     }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
+    const dest_start = allocateWasmStrResult(module, @intCast(params[2].I32), total_len);
+    buffer = module.store.getMemory(0).buffer();
+    lhs = readWasmStr(buffer, @intCast(params[0].I32));
+    rhs = readWasmStr(buffer, @intCast(params[1].I32));
     if (lhs.len > 0) {
         @memcpy(buffer[dest_start..][0..lhs.len], lhs.data[0..lhs.len]);
     }
     if (rhs.len > 0) {
         @memcpy(buffer[dest_start + lhs.len ..][0..rhs.len], rhs.data[0..rhs.len]);
     }
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
 }
 
 fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
-    const sep = readWasmStr(buffer, @intCast(params[1].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
+    var sep = readWasmStr(buffer, @intCast(params[1].I32));
     const result_ptr: usize = @intCast(params[2].I32);
-    const str_slice = str.data[0..str.len];
-    const sep_slice = sep.data[0..sep.len];
+    var str_slice = str.data[0..str.len];
+    var sep_slice = sep.data[0..sep.len];
     var count: usize = 1;
     if (sep.len > 0 and str.len >= sep.len) {
         var i: usize = 0;
@@ -1762,14 +1800,24 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
             }
         }
     }
-    const list_data_start = allocWasmData(buffer, 4, count * wasm_roc_str_size);
+    const list_data_start = allocWasmData(module, 4, count * wasm_roc_str_size);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
+    sep = readWasmStr(buffer, @intCast(params[1].I32));
+    str_slice = str.data[0..str.len];
+    sep_slice = sep.data[0..sep.len];
     var part_idx: usize = 0;
     var start: usize = 0;
     if (sep.len > 0) {
         var i: usize = 0;
         while (i + sep.len <= str.len) {
             if (bytesEqual(str_slice[i..][0..sep.len], sep_slice)) {
-                writeWasmStr(buffer, list_data_start + part_idx * wasm_roc_str_size, str_slice[start..].ptr, i - start);
+                writeWasmStr(module, list_data_start + part_idx * wasm_roc_str_size, str_slice[start..].ptr, i - start);
+                buffer = module.store.getMemory(0).buffer();
+                str = readWasmStr(buffer, @intCast(params[0].I32));
+                sep = readWasmStr(buffer, @intCast(params[1].I32));
+                str_slice = str.data[0..str.len];
+                sep_slice = sep.data[0..sep.len];
                 part_idx += 1;
                 start = i + sep.len;
                 i = start;
@@ -1778,16 +1826,17 @@ fn hostStrSplit(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
             }
         }
     }
-    writeWasmStr(buffer, list_data_start + part_idx * wasm_roc_str_size, str_slice[start..].ptr, str.len - start);
+    writeWasmStr(module, list_data_start + part_idx * wasm_roc_str_size, str_slice[start..].ptr, str.len - start);
+    buffer = module.store.getMemory(0).buffer();
     writeIntLittle(u32, buffer, result_ptr, @intCast(list_data_start));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(count));
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(count));
 }
 
 fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
-    const sep = readWasmStr(buffer, @intCast(params[1].I32));
+    var sep = readWasmStr(buffer, @intCast(params[1].I32));
     const list_data: usize = @intCast(readIntLittle(u32, buffer, list_ptr));
     const list_len: usize = @intCast(readIntLittle(u32, buffer, list_ptr + 4));
     if (list_len == 0) {
@@ -1801,8 +1850,9 @@ fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         writeWasmEmptyStr(buffer, @intCast(params[2].I32));
         return;
     }
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
+    const dest_start = allocateWasmStrResult(module, @intCast(params[2].I32), total_len);
+    buffer = module.store.getMemory(0).buffer();
+    sep = readWasmStr(buffer, @intCast(params[1].I32));
     var offset: usize = 0;
     for (0..list_len) |i| {
         if (i > 0 and sep.len > 0) {
@@ -1815,39 +1865,40 @@ fn hostStrJoinWith(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
             offset += elem.len;
         }
     }
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
 }
 
 fn hostStrRepeat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
     const count: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
     if (count == 0 or str.len == 0) {
         writeWasmEmptyStr(buffer, @intCast(params[2].I32));
         return;
     }
     const total_len = str.len * count;
-    const dest_start = wasm_heap_ptr;
-    wasm_heap_ptr += @intCast(total_len);
+    const dest_start = allocateWasmStrResult(module, @intCast(params[2].I32), total_len);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
     var offset: usize = 0;
     for (0..count) |_| {
         @memcpy(buffer[dest_start + offset ..][0..str.len], str.data[0..str.len]);
         offset += str.len;
     }
-    writeWasmStr(buffer, @intCast(params[2].I32), buffer[dest_start..].ptr, total_len);
 }
 
 fn hostStrReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
-    const str = readWasmStr(buffer, @intCast(params[0].I32));
+    var buffer = module.store.getMemory(0).buffer();
+    var str = readWasmStr(buffer, @intCast(params[0].I32));
     const extra_cap: usize = @intCast(@as(u32, @bitCast(params[1].I32)));
     const result_ptr: usize = @intCast(params[2].I32);
     const needed = str.len + extra_cap;
     if (needed < wasm_roc_str_size) {
-        writeWasmStr(buffer, result_ptr, str.data, str.len);
+        writeWasmStr(module, result_ptr, str.data, str.len);
         return;
     }
-    const dest_start = allocWasmData(buffer, 1, needed);
+    const dest_start = allocWasmData(module, 1, needed);
+    buffer = module.store.getMemory(0).buffer();
+    str = readWasmStr(buffer, @intCast(params[0].I32));
     @memcpy(buffer[dest_start..][0..str.len], str.data[0..str.len]);
     writeIntLittle(u32, buffer, result_ptr, @intCast(dest_start));
     writeIntLittle(u32, buffer, result_ptr + 4, @intCast(builtins.str.RocStr.encodeCapacityForWidth(@intCast(needed))));
@@ -1913,7 +1964,7 @@ fn hostListAppendUnsafe(_: ?*anyopaque, module: *bytebox.ModuleInstance, params:
 }
 
 fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_a_ptr: usize = @intCast(params[0].I32);
     const list_b_ptr: usize = @intCast(params[1].I32);
     const elem_width: usize = @intCast(params[2].I32);
@@ -1935,7 +1986,8 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
     }
 
     const total_bytes: usize = new_len * elem_width;
-    const new_data = if (total_bytes == 0) 0 else allocWasmData(buffer, alignment, total_bytes);
+    const new_data = if (total_bytes == 0) 0 else allocWasmData(module, alignment, total_bytes);
+    buffer = module.store.getMemory(0).buffer();
     if (a_len > 0 and a_data != 0) {
         @memcpy(buffer[new_data..][0 .. a_len * elem_width], buffer[a_data..][0 .. a_len * elem_width]);
     }
@@ -1950,7 +2002,7 @@ fn hostListConcat(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 }
 
 fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const elem_width: usize = @intCast(params[1].I32);
     const alignment: u32 = @bitCast(params[2].I32);
@@ -1983,7 +2035,8 @@ fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
         return;
     }
 
-    const new_data = allocWasmData(buffer, alignment, new_len * elem_width);
+    const new_data = allocWasmData(module, alignment, new_len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
     const head_size = index * elem_width;
     if (head_size != 0 and data_ptr != 0) {
         @memcpy(buffer[new_data..][0..head_size], buffer[data_ptr..][0..head_size]);
@@ -2002,7 +2055,7 @@ fn hostListDropAt(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]co
 }
 
 fn hostListReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const spare: usize = @intCast(params[1].I64);
     const elem_width: usize = @intCast(params[2].I32);
@@ -2029,7 +2082,8 @@ fn hostListReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         return;
     }
 
-    const new_data = allocWasmData(buffer, alignment, desired_cap * elem_width);
+    const new_data = allocWasmData(module, alignment, desired_cap * elem_width);
+    buffer = module.store.getMemory(0).buffer();
     if (len != 0 and data_ptr != 0) {
         @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
     }
@@ -2039,8 +2093,84 @@ fn hostListReserve(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     writeIntLittle(u32, buffer, result_ptr + 8, encodeWasmListCapacity(desired_cap));
 }
 
+fn wasmListIsUnique(buffer: []const u8, data_ptr: usize, encoded_cap: usize) bool {
+    if (data_ptr == 0) return true;
+    const allocation_data_ptr = wasmAllocPtrFromCapOrData(encoded_cap, data_ptr);
+    if (allocation_data_ptr < 4 or allocation_data_ptr > buffer.len) return false;
+    const refcount_ptr = (allocation_data_ptr & ~@as(usize, 3)) - 4;
+    return readIntLittle(u32, buffer, refcount_ptr) == 1;
+}
+
+fn writeWasmListHeader(buffer: []u8, result_ptr: usize, data_ptr: usize, len: usize, encoded_cap: usize) void {
+    writeIntLittle(u32, buffer, result_ptr, @intCast(data_ptr));
+    writeIntLittle(u32, buffer, result_ptr + 4, @intCast(len));
+    writeIntLittle(u32, buffer, result_ptr + 8, @intCast(encoded_cap));
+}
+
+fn hostSimdStore16(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    var buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const vector_low: u64 = @bitCast(params[1].I64);
+    const vector_high: u64 = @bitCast(params[2].I64);
+    const data_ptr: usize = @intCast(params[3].I32);
+    const len: usize = @intCast(params[4].I32);
+    const encoded_cap: usize = @intCast(params[5].I32);
+    const index: usize = @intCast(params[6].I64);
+    const statically_unique = params[7].I32 != 0;
+
+    std.debug.assert(index + 16 <= len);
+    const can_mutate = statically_unique or wasmListIsUnique(buffer, data_ptr, encoded_cap);
+    const result_data = if (can_mutate) data_ptr else clone: {
+        const cloned = allocWasmData(module, 1, len);
+        buffer = module.store.getMemory(0).buffer();
+        @memcpy(buffer[cloned..][0..len], buffer[data_ptr..][0..len]);
+        break :clone cloned;
+    };
+    writeIntLittle(u64, buffer, result_data + index, vector_low);
+    writeIntLittle(u64, buffer, result_data + index + 8, vector_high);
+    writeWasmListHeader(
+        buffer,
+        result_ptr,
+        result_data,
+        len,
+        if (can_mutate) encoded_cap else encodeWasmListCapacity(len),
+    );
+}
+
+fn hostSimdAppend16(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
+    var buffer = module.store.getMemory(0).buffer();
+    const result_ptr: usize = @intCast(params[0].I32);
+    const vector_low: u64 = @bitCast(params[1].I64);
+    const vector_high: u64 = @bitCast(params[2].I64);
+    const data_ptr: usize = @intCast(params[3].I32);
+    const len: usize = @intCast(params[4].I32);
+    const encoded_cap: usize = @intCast(params[5].I32);
+    const statically_unique = params[6].I32 != 0;
+    const new_len = len + 16;
+
+    const is_seamless_slice = (encoded_cap & 1) != 0;
+    const capacity = if (is_seamless_slice) len else decodeWasmListCapacity(encoded_cap);
+    const allocation_unique = statically_unique or wasmListIsUnique(buffer, data_ptr, encoded_cap);
+    const can_reuse = allocation_unique and !is_seamless_slice and capacity >= new_len;
+    const result_data = if (can_reuse) data_ptr else allocated: {
+        const new_data = allocWasmData(module, 1, new_len);
+        buffer = module.store.getMemory(0).buffer();
+        if (len != 0) @memcpy(buffer[new_data..][0..len], buffer[data_ptr..][0..len]);
+        break :allocated new_data;
+    };
+    writeIntLittle(u64, buffer, result_data + len, vector_low);
+    writeIntLittle(u64, buffer, result_data + len + 8, vector_high);
+    writeWasmListHeader(
+        buffer,
+        result_ptr,
+        result_data,
+        new_len,
+        if (can_reuse) encoded_cap else encodeWasmListCapacity(new_len),
+    );
+}
+
 fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const elem_width: usize = @intCast(params[1].I32);
     const alignment: u32 = @bitCast(params[2].I32);
@@ -2057,7 +2187,8 @@ fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         return;
     }
 
-    const reversed_data = allocWasmData(buffer, alignment, len * elem_width);
+    const reversed_data = allocWasmData(module, alignment, len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
     for (0..len) |i| {
         const src_offset = (len - 1 - i) * elem_width;
         const dst_offset = i * elem_width;
@@ -2073,7 +2204,7 @@ fn hostListReverse(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
 }
 
 fn hostListReplace(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const elem_width: usize = @intCast(params[1].I32);
     const alignment: u32 = @bitCast(params[2].I32);
@@ -2093,7 +2224,8 @@ fn hostListReplace(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
         return;
     }
 
-    const new_data = allocWasmData(buffer, alignment, len * elem_width);
+    const new_data = allocWasmData(module, alignment, len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
     if (len != 0 and data_ptr != 0) {
         @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
     }
@@ -2110,7 +2242,7 @@ fn hostListReplace(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
 }
 
 fn hostListSwap(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]const bytebox.Val, _: [*]bytebox.Val) error{}!void {
-    const buffer = module.store.getMemory(0).buffer();
+    var buffer = module.store.getMemory(0).buffer();
     const list_ptr: usize = @intCast(params[0].I32);
     const elem_width: usize = @intCast(params[1].I32);
     const alignment: u32 = @bitCast(params[2].I32);
@@ -2129,7 +2261,8 @@ fn hostListSwap(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]cons
         return;
     }
 
-    const new_data = allocWasmData(buffer, alignment, len * elem_width);
+    const new_data = allocWasmData(module, alignment, len * elem_width);
+    buffer = module.store.getMemory(0).buffer();
     if (len != 0 and data_ptr != 0) {
         @memcpy(buffer[new_data..][0 .. len * elem_width], buffer[data_ptr..][0 .. len * elem_width]);
     }
@@ -2173,7 +2306,7 @@ fn hostStrFromUtf8(_: ?*anyopaque, module: *bytebox.ModuleInstance, params: [*]c
     const data = buffer[data_ptr..][0..len];
     @memset(buffer[result_ptr..][0..result_size], 0);
     if (std.unicode.utf8ValidateSlice(data)) {
-        writeWasmStrViewFromList(buffer, result_ptr, list_ptr, len);
+        writeWasmStrViewFromList(module, buffer, result_ptr, list_ptr, len);
         writeWasmTagDiscriminant(buffer, result_ptr, disc_offset, disc_size, ok_disc);
     } else {
         var index: usize = 0;

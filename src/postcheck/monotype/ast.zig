@@ -203,6 +203,7 @@ pub const CallableIdentity = union(enum(u8)) {
 /// through additional lookup aliases — never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
+    method_scope: names.CheckedModuleDigest,
     source_fn_ty_digest: names.TypeDigest,
     evidence_digest: EvidenceDigest,
     request_fn_ty_digest: names.TypeDigest,

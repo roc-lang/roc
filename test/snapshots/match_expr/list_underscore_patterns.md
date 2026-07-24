@@ -135,7 +135,7 @@ match items {
 								(p-underscore)
 								(p-assign (ident "y"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 220)
+					(e-dispatch-call (method "plus") (constraint-fn-var 236)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

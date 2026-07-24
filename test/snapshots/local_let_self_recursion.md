@@ -84,7 +84,7 @@ EndOfFile,
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lte") (constraint-fn-var 212)
+							(e-dispatch-call (method "is_lte") (constraint-fn-var 228)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -92,15 +92,15 @@ EndOfFile,
 									(e-num (value "1"))))
 							(e-num (value "1"))))
 					(if-else
-						(e-dispatch-call (method "times") (constraint-fn-var 234)
+						(e-dispatch-call (method "times") (constraint-fn-var 250)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "x"))))
 							(args
-								(e-call (constraint-fn-var 233)
+								(e-call (constraint-fn-var 249)
 									(e-lookup-local
 										(p-assign (ident "fac")))
-									(e-dispatch-call (method "minus") (constraint-fn-var 229)
+									(e-dispatch-call (method "minus") (constraint-fn-var 245)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -111,12 +111,12 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "y")))
-				(e-call (constraint-fn-var 246)
+				(e-call (constraint-fn-var 262)
 					(e-lookup-local
 						(p-assign (ident "fac")))
 					(e-lookup-local
 						(p-assign (ident "y"))))))
-		(e-call (constraint-fn-var 257)
+		(e-call (constraint-fn-var 273)
 			(e-lookup-local
 				(p-assign (ident "helper")))
 			(e-lookup-local

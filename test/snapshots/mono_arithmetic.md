@@ -41,7 +41,7 @@ EndOfFile,
 (can-ir
 	(d-let
 		(p-assign (ident "sum"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 193)
+		(e-dispatch-call (method "plus") (constraint-fn-var 209)
 			(receiver
 				(e-num (value "1")))
 			(args

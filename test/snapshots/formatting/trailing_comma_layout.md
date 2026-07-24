@@ -555,16 +555,10 @@ comment_forces = [
 				(e-num (value "2")))))
 	(d-let
 		(p-assign (ident "compact_call"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num (value "1"))
-			(e-num (value "2"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "expanded_call"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-num (value "1"))
-			(e-num (value "2"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "compact_record"))
 		(e-record

@@ -963,6 +963,14 @@ pub const Program = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    /// Read one branch by value from a stable span identity. Unlike
+    /// `branchSpan`, this retains no borrow across a recursive walk that may
+    /// append to `branches`.
+    pub fn branchAt(self: *const Program, span_: Span(Branch), index: usize) Branch {
+        if (index >= span_.len) Common.invariant("branch index was outside span");
+        return self.branches.get(span_.start + index);
+    }
+
     pub fn addIfBranchSpan(self: *Program, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
         const start: u32 = @intCast(self.if_branches.len());
         try self.if_branches.appendSlice(self.allocator, values);

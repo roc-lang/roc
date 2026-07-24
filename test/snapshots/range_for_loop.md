@@ -79,7 +79,7 @@ total = {
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "i"))
-				(e-dispatch-call (method "range_inclusive") (constraint-fn-var 222)
+				(e-dispatch-call (method "range_inclusive") (constraint-fn-var 238)
 					(receiver
 						(e-num (value "1")))
 					(args
@@ -87,7 +87,7 @@ total = {
 				(e-block
 					(s-reassign
 						(p-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 266)
+						(e-dispatch-call (method "plus") (constraint-fn-var 282)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "sum_"))))

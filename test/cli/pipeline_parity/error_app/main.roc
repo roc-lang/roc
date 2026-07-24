@@ -11,3 +11,5 @@ main! = || {
     mistyped = 42
     Stdout.line!(Alpha.greet(mistyped))
 }
+
+expect 1 == 1

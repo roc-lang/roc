@@ -107,6 +107,14 @@ type_repr_to_rust = |type_table, duplicate_names, preferred_names, type_id, type
 		RocStr => "RocStr"
 		RocUnit => "()"
 		RocU8 => "u8"
+		RocU8x16 => "RocU8x16"
+		RocI8x16 => "RocI8x16"
+		RocU16x8 => "RocU16x8"
+		RocI16x8 => "RocI16x8"
+		RocU32x4 => "RocU32x4"
+		RocI32x4 => "RocI32x4"
+		RocU64x2 => "RocU64x2"
+		RocI64x2 => "RocI64x2"
 		RocU16 => "u16"
 		RocU32 => "u32"
 		RocU64 => "u64"
@@ -150,7 +158,7 @@ resolve_tag_union_type_rust = |type_table, duplicate_names, preferred_names, typ
 			} else {
 				"*mut c_void"
 			}
-	}
+		}
 
 ## Determine whether a type is refcounted (heap-allocated).
 ## Refcounted types need 2*ptr_width header space in list allocations.
@@ -185,6 +193,7 @@ str_replace_all = |s, from, to| RocName.replace_all(s, from, to)
 
 ## Checks `str_replace_all` for this representative case.
 expect str_replace_all("a.b.c", ".", "_") == "a_b_c"
+
 ## Checks `str_replace_all` for this representative case.
 expect str_replace_all("hello!", "!", "") == "hello"
 
@@ -194,12 +203,16 @@ to_lower_snake_case = |s| RocName.lower_snake_ascii(s)
 
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("FooBar") == "foo_bar"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("fooBar") == "foo_bar"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("foo") == "foo"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("FOO") == "foo"
+
 ## Checks `to_lower_snake_case` for this representative case.
 expect to_lower_snake_case("Stdout_line") == "stdout_line"
 
@@ -209,12 +222,16 @@ to_screaming_snake_case = |s| RocName.screaming_snake_ascii(s)
 
 ## Checks `to_screaming_snake_case` for this representative case.
 expect to_screaming_snake_case("FooBar") == "FOO_BAR"
+
 ## Checks `to_screaming_snake_case` for this representative case.
 expect to_screaming_snake_case("fooBar") == "FOO_BAR"
+
 ## Checks `to_screaming_snake_case` for this representative case.
 expect to_screaming_snake_case("foo") == "FOO"
+
 ## Checks `to_screaming_snake_case` for this representative case.
 expect to_screaming_snake_case("FOO") == "FOO"
+
 ## Checks `to_screaming_snake_case` for this representative case.
 expect to_screaming_snake_case("Stdout_line") == "STDOUT_LINE"
 
@@ -224,8 +241,10 @@ capitalize_first = |s| RocName.capitalize_first(s)
 
 ## Checks `capitalize_first` for this representative case.
 expect capitalize_first("hello") == "Hello"
+
 ## Checks `capitalize_first` for this representative case.
 expect capitalize_first("Hello") == "Hello"
+
 ## Checks `capitalize_first` for this representative case.
 expect capitalize_first("") == ""
 
@@ -235,8 +254,10 @@ lowercase_first = |s| RocName.lowercase_first(s)
 
 ## Checks `lowercase_first` for this representative case.
 expect lowercase_first("Hello") == "hello"
+
 ## Checks `lowercase_first` for this representative case.
 expect lowercase_first("hello") == "hello"
+
 ## Checks `lowercase_first` for this representative case.
 expect lowercase_first("") == ""
 
@@ -250,12 +271,16 @@ name_to_struct_name = |name| RocName.from_str(name).to_pascal_clean()
 
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("Stdout.line!") == "StdoutLine"
+
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("line!") == "Line"
+
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("Foo.bar.baz!") == "FooBarBaz"
+
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("Builder.print_value!") == "BuilderPrintValue"
+
 ## Checks `name_to_struct_name` for this representative case.
 expect name_to_struct_name("__AnonStruct10") == "AnonStruct10"
 
@@ -385,23 +410,19 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 		var $arg_idx = 0
 		for arg_type_id in func.arg_type_ids {
 			arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-			$roots = $roots.append(
-				{
-					alias_base: type_name_root_alias_base_rust(type_table, arg_fallback, arg_type_id),
-					module_base,
-					type_id: arg_type_id,
-				},
-			)
+			$roots = $roots.append({
+				alias_base: type_name_root_alias_base_rust(type_table, arg_fallback, arg_type_id),
+				module_base,
+				type_id: arg_type_id,
+			})
 			$arg_idx = $arg_idx + 1
 		}
 
-		$roots = $roots.append(
-			{
-				alias_base: base,
-				module_base,
-				type_id: func.ret_type_id,
-			},
-		)
+		$roots = $roots.append({
+			alias_base: base,
+			module_base,
+			type_id: func.ret_type_id,
+		})
 	}
 
 	for entry in provides_list {
@@ -413,32 +434,26 @@ type_name_roots_rust = |hosted_functions, provides_list, type_table| {
 				var $arg_idx = 0
 				for arg_type_id in func.args {
 					arg_fallback = "${base}Arg${U64.to_str($arg_idx)}"
-					$roots = $roots.append(
-						{
-							alias_base: type_name_root_alias_base_rust(type_table, arg_fallback, arg_type_id),
-							module_base,
-							type_id: arg_type_id,
-						},
-					)
+					$roots = $roots.append({
+						alias_base: type_name_root_alias_base_rust(type_table, arg_fallback, arg_type_id),
+						module_base,
+						type_id: arg_type_id,
+					})
 					$arg_idx = $arg_idx + 1
 				}
 
-				$roots = $roots.append(
-					{
-						alias_base: base,
-						module_base,
-						type_id: func.ret,
-					},
-				)
+				$roots = $roots.append({
+					alias_base: base,
+					module_base,
+					type_id: func.ret,
+				})
 			}
 			_ => {
-				$roots = $roots.append(
-					{
-						alias_base: type_name_root_alias_base_rust(type_table, base, entry.type_id),
-						module_base,
-						type_id: entry.type_id,
-					},
-				)
+				$roots = $roots.append({
+					alias_base: type_name_root_alias_base_rust(type_table, base, entry.type_id),
+					module_base,
+					type_id: entry.type_id,
+				})
 			}
 		}
 	}
@@ -596,10 +611,13 @@ name_to_snake = |name| {
 
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("Stdout.line!") == "stdout_line"
+
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("line!") == "line"
+
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("Foo.barBaz!") == "foo_bar_baz"
+
 ## Checks `name_to_snake` for this representative case.
 expect name_to_snake("PartDef.Idx.get!") == "part_def_idx_get"
 
@@ -619,8 +637,10 @@ name_to_rust_fn_suffix = |name| {
 
 ## Checks `name_to_rust_fn_suffix` for this representative case.
 expect name_to_rust_fn_suffix("Host.Tree") == "host_tree"
+
 ## Checks `name_to_rust_fn_suffix` for this representative case.
 expect name_to_rust_fn_suffix("TryType17") == "try_type17"
+
 ## Checks `name_to_rust_fn_suffix` for this representative case.
 expect name_to_rust_fn_suffix("__AnonStruct10") == "anon_struct10"
 
@@ -635,10 +655,13 @@ name_to_screaming_snake = |name| {
 
 ## Checks `name_to_screaming_snake` for this representative case.
 expect name_to_screaming_snake("Stdout.line!") == "STDOUT_LINE"
+
 ## Checks `name_to_screaming_snake` for this representative case.
 expect name_to_screaming_snake("line!") == "LINE"
+
 ## Checks `name_to_screaming_snake` for this representative case.
 expect name_to_screaming_snake("Foo.barBaz!") == "FOO_BAR_BAZ"
+
 ## Checks `name_to_screaming_snake` for this representative case.
 expect name_to_screaming_snake("PartDef.Idx.get!") == "PART_DEF_IDX_GET"
 
@@ -694,10 +717,13 @@ name_to_rust_field_ident = |name| {
 
 ## Checks `name_to_rust_field_ident` for this representative case.
 expect name_to_rust_field_ident("init!") == "init_bang"
+
 ## Checks `name_to_rust_field_ident` for this representative case.
 expect name_to_rust_field_ident("render!") == "render_bang"
+
 ## Checks `name_to_rust_field_ident` for this representative case.
 expect name_to_rust_field_ident("type") == "r#type"
+
 ## Checks `name_to_rust_field_ident` for this representative case.
 expect name_to_rust_field_ident("_") == "_field"
 
@@ -888,6 +914,8 @@ generate_rust_file_header =
 	\\
 	\\#![cfg_attr(rustfmt, rustfmt_skip)]
 	\\#![allow(dead_code)]
+	\\#![allow(improper_ctypes)]
+	\\#![allow(improper_ctypes_definitions)]
 	\\
 	\\
 
@@ -914,6 +942,74 @@ generate_host_abi_types_rust =
 	\\
 	\\const _: [(); 16] = [(); core::mem::size_of::<RocDec>()];
 	\\const _: [(); 16] = [(); core::mem::align_of::<RocDec>()];
+	\\
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocU8x16Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocI8x16Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocU16x8Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocI16x8Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocU32x4Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocI32x4Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocU64x2Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "x86_64")]
+	\\type RocI64x2Native = core::arch::x86_64::__m128i;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocU8x16Native = core::arch::aarch64::uint8x16_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocI8x16Native = core::arch::aarch64::int8x16_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocU16x8Native = core::arch::aarch64::uint16x8_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocI16x8Native = core::arch::aarch64::int16x8_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocU32x4Native = core::arch::aarch64::uint32x4_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocI32x4Native = core::arch::aarch64::int32x4_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocU64x2Native = core::arch::aarch64::uint64x2_t;
+	\\#[cfg(target_arch = "aarch64")]
+	\\type RocI64x2Native = core::arch::aarch64::int64x2_t;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocU8x16Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocI8x16Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocU16x8Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocI16x8Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocU32x4Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocI32x4Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocU64x2Native = core::arch::wasm32::v128;
+	\\#[cfg(target_arch = "wasm32")]
+	\\type RocI64x2Native = core::arch::wasm32::v128;
+	\\
+	\\macro_rules! roc_simd_type {
+	\\    ($name:ident, $native:ident) => {
+	\\        #[repr(transparent)]
+	\\        #[derive(Clone, Copy)]
+	\\        pub struct $name(pub $native);
+	\\        const _: [(); 16] = [(); core::mem::size_of::<$name>()];
+	\\        const _: [(); 16] = [(); core::mem::align_of::<$name>()];
+	\\    };
+	\\}
+	\\roc_simd_type!(RocU8x16, RocU8x16Native);
+	\\roc_simd_type!(RocI8x16, RocI8x16Native);
+	\\roc_simd_type!(RocU16x8, RocU16x8Native);
+	\\roc_simd_type!(RocI16x8, RocI16x8Native);
+	\\roc_simd_type!(RocU32x4, RocU32x4Native);
+	\\roc_simd_type!(RocI32x4, RocI32x4Native);
+	\\roc_simd_type!(RocU64x2, RocU64x2Native);
+	\\roc_simd_type!(RocI64x2, RocI64x2Native);
+	\\
 	\\
 	\\/// Runtime representation of an opaque `Box(T)` value.
 	\\pub type RocBox = *mut c_void;
@@ -1846,13 +1942,13 @@ generate_single_tag_union_rust = |type_table, duplicate_names, preferred_names, 
 			if !(abi_tag_has_payload(tag_layout)) {
 				# No-payload variant: use [u8; 0]
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: [u8; 0],\n")
-				} else if List.len(union_tag.payload) == 1 {
-					rust_type = match List.first(union_tag.payload) {
-						Ok(pid) => type_id_to_rust(type_table, duplicate_names, preferred_names, pid)
-						Err(_) => {
-							crash "glue invariant violated: single-payload tag had no payload"
-						}
+			} else if List.len(union_tag.payload) == 1 {
+				rust_type = match List.first(union_tag.payload) {
+					Ok(pid) => type_id_to_rust(type_table, duplicate_names, preferred_names, pid)
+					Err(_) => {
+						crash "glue invariant violated: single-payload tag had no payload"
 					}
+				}
 				# Wrap in ManuallyDrop since union fields must be Copy or ManuallyDrop
 				$union_fields = Str.concat($union_fields, "    pub ${snake}: core::mem::ManuallyDrop<${rust_type}>,\n")
 				$payload_accessors = Str.concat(
@@ -2044,20 +2140,20 @@ decref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 			} else {
 				"    unsafe { ${expr}.decref(roc_host); }\n"
 			}
-			RocTagUnion(tu) =>
-				match TypeTable.single_variant_payload(tu) {
-					SinglePayload(payload_id) => decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
-					SingleNoPayload => ""
-					NotSingleVariant =>
-						if tu.name != "" {
-							"    unsafe { ${expr}.decref(roc_host); }\n"
-						} else {
-							""
-						}
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => decref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
+				SingleNoPayload => ""
+				NotSingleVariant =>
+					if tu.name != "" {
+						"    unsafe { ${expr}.decref(roc_host); }\n"
+					} else {
+						""
+					}
 				}
-			_ => ""
-		}
+		_ => ""
 	}
+}
 
 incref_stmt_for_type_id_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, U64, Str -> Str
 incref_stmt_for_type_id_rust = |type_table, duplicate_names, preferred_names, type_id, expr| {
@@ -2081,20 +2177,20 @@ incref_stmt_for_repr_rust = |type_table, duplicate_names, preferred_names, _type
 			} else {
 				"    unsafe { ${expr}.incref(amount); }\n"
 			}
-			RocTagUnion(tu) =>
-				match TypeTable.single_variant_payload(tu) {
-					SinglePayload(payload_id) => incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
-					SingleNoPayload => ""
-					NotSingleVariant =>
-						if tu.name != "" {
-							"    unsafe { ${expr}.incref(amount); }\n"
-						} else {
-							""
-						}
+		RocTagUnion(tu) =>
+			match TypeTable.single_variant_payload(tu) {
+				SinglePayload(payload_id) => incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, expr)
+				SingleNoPayload => ""
+				NotSingleVariant =>
+					if tu.name != "" {
+						"    unsafe { ${expr}.incref(amount); }\n"
+					} else {
+						""
+					}
 				}
-			_ => ""
-		}
+		_ => ""
 	}
+}
 
 generate_record_refcount_helpers_rust : TypeTable, List(Str), TypeNamePlan.PreferredNames, RecordRepr -> Str
 generate_record_refcount_helpers_rust = |type_table, duplicate_names, preferred_names, rec| {
@@ -2142,11 +2238,11 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 					} else {
 						incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, payload_expr)
 					}
-					}
-					Err(_) => {
-						crash "glue invariant violated: single-payload tag had no payload"
-					}
 				}
+				Err(_) => {
+					crash "glue invariant violated: single-payload tag had no payload"
+				}
+			}
 
 		if body == "" {
 			"        ${struct_name}Tag::${variant} => {},\n"
@@ -2154,7 +2250,7 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 			"        ${struct_name}Tag::${variant} => {\n            let payload = value.payload_${snake}();\n${indent_lines(body, "        ")}        },\n"
 		}
 	} else {
-		var $body = "            let payload = value.payload_${snake}();\n"
+		var $statements = ""
 		var $idx = 0
 		for payload_id in tag.payload {
 			field_expr = "payload._${U64.to_str($idx)}"
@@ -2163,11 +2259,15 @@ generate_tag_payload_refcount_branch_rust = |type_table, duplicate_names, prefer
 			} else {
 				incref_stmt_for_type_id_rust(type_table, duplicate_names, preferred_names, payload_id, field_expr)
 			}
-			$body = Str.concat($body, indent_lines(stmt, "        "))
+			$statements = Str.concat($statements, indent_lines(stmt, "        "))
 			$idx = $idx + 1
 		}
 
-		"        ${struct_name}Tag::${variant} => {\n${$body}        },\n"
+		if $statements == "" {
+			"        ${struct_name}Tag::${variant} => {},\n"
+		} else {
+			"        ${struct_name}Tag::${variant} => {\n            let payload = value.payload_${snake}();\n${$statements}        },\n"
+		}
 	}
 }
 

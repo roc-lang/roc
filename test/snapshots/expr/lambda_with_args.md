@@ -36,7 +36,7 @@ NO CHANGE
 	(args
 		(p-assign (ident "x"))
 		(p-assign (ident "y")))
-	(e-dispatch-call (method "plus") (constraint-fn-var 180)
+	(e-dispatch-call (method "plus") (constraint-fn-var 196)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))

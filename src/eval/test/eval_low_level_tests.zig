@@ -240,13 +240,62 @@ pub const tests = [_]TestCase{
     .{
         .name = "low_level - F32 transcendental exact bits agree across backends",
         .source =
-        \\F32.to_bits(F32.sin(1.0)) == 1062693541
-        \\    and F32.to_bits(F32.cos(1.0)) == 1057640768
-        \\    and F32.to_bits(F32.tan(1.0)) == 1070029092
-        \\    and F32.to_bits(F32.asin(0.5)) == 1057360530
-        \\    and F32.to_bits(F32.acos(0.5)) == 1065749138
-        \\    and F32.to_bits(F32.atan(1.0)) == 1061752795
-        \\    and F32.to_bits(F32.pow(0.2, 3.3)) == 1000456303
+        \\{
+        \\    trig = |input, sin_bits, cos_bits, tan_bits|
+        \\        F32.to_bits(F32.sin(F32.from_bits(input))) == sin_bits
+        \\            and F32.to_bits(F32.cos(F32.from_bits(input))) == cos_bits
+        \\            and F32.to_bits(F32.tan(F32.from_bits(input))) == tan_bits
+        \\    inverse = |input, asin_bits, acos_bits, atan_bits|
+        \\        F32.to_bits(F32.asin(F32.from_bits(input))) == asin_bits
+        \\            and F32.to_bits(F32.acos(F32.from_bits(input))) == acos_bits
+        \\            and F32.to_bits(F32.atan(F32.from_bits(input))) == atan_bits
+        \\    atan = |input, expected| F32.to_bits(F32.atan(F32.from_bits(input))) == expected
+        \\    trig(0x3f49_0fda, 0x3f35_04f3, 0x3f35_04f4, 0x3f7f_ffff)
+        \\        and trig(0x3f49_0fdb, 0x3f35_04f3, 0x3f35_04f3, 0x3f80_0000)
+        \\        and trig(0x3fc9_0fdb, 0x3f80_0000, 0xb33b_bd2f, 0xcbae_8a4a)
+        \\        and trig(0x4040_0000, 0x3e10_81c3, 0xbf7d_7026, 0xbe11_f7b8)
+        \\        and trig(0x40a0_0000, 0xbf75_7c10, 0x3e91_3c2b, 0xc058_5a5d)
+        \\        and trig(0x60ad_78ec, 0x3f28_1569, 0x3f41_1723, 0x3f5e_d891)
+        \\        and trig(0x7f7f_ffff, 0xbf05_99b3, 0x3f5a_5f96, 0xbf1c_9eca)
+        \\        and inverse(0x3eff_ffff, 0x3f06_0a91, 0x3f86_0a92, 0x3eed_6337)
+        \\        and inverse(0x3f00_0000, 0x3f06_0a92, 0x3f86_0a92, 0x3eed_6338)
+        \\        and inverse(0x3f00_0001, 0x3f06_0a94, 0x3f86_0a91, 0x3eed_633a)
+        \\        and inverse(0xbf40_0000, 0xbf59_1a99, 0x401a_ce94, 0xbf24_bc7d)
+        \\        and atan(0x3f97_ffff, 0x3f5e_f386)
+        \\        and atan(0x3f98_0000, 0x3f5e_f387)
+        \\        and atan(0x401b_ffff, 0x3f97_3ab9)
+        \\        and atan(0x401c_0000, 0x3f97_3ab9)
+        \\        and atan(0x4c80_0000, 0x3fc9_0fdb)
+        \\        and F32.to_bits(F32.pow(0.2, 3.3)) == 0x3ba1_c072
+        \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F32 power subnormal exact bits agree across backends",
+        .source =
+        \\F32.to_bits(F32.pow(2.0, -126.0)) == 8388608
+        \\    and F32.to_bits(F32.pow(2.0, -128.0)) == 2097152
+        \\    and F32.to_bits(F32.pow(2.0, -149.0)) == 1
+        \\    and F32.to_bits(F32.pow(2.0, -150.0)) == 0
+        \\    and F32.to_bits(F32.pow(1.002557635307312, -34869.0)) == 1484514
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 pow exact bits agree across backends",
+        .source =
+        \\F64.to_bits(F64.pow(0.2, 3.3)) == 4572341155028887172
+        \\    and F64.to_bits(F64.pow(17.54697502703452, 3.3204523365293763)) == 4668664093059486918
+        \\    and F64.to_bits(F64.pow(2.0, -1022.0)) == 4503599627370496
+        \\    and F64.to_bits(F64.pow(2.0, -1024.0)) == 1125899906842624
+        \\    and F64.to_bits(F64.pow(2.0, -1074.0)) == 1
+        \\    and F64.to_bits(F64.pow(2.0, -1075.0)) == 0
+        \\    and F64.to_bits(F64.pow(10.0, -309.0)) == 202402253307311
+        \\    and F64.to_bits(F64.pow(1.8742325878262631, 1111.0207098305914)) == 9141809972431046091
+        \\    and F64.to_bits(F64.pow(0.5797239088410756, 1159.5420969274194)) == 499581428555801976
+        \\    and F64.to_bits(F64.pow(7.165387657176249e-68, -1.0)) == 5611644167112383513
+        \\    and F64.to_bits(F64.pow(6.72744224805919e51, 2.0)) == 6157604850463164499
         ,
         .expected = .{ .inspect_str = "True" },
     },
@@ -278,6 +327,99 @@ pub const tests = [_]TestCase{
         \\    and F64.acos(1.0).to_str() == "0"
         \\    and F64.atan(0.0).to_str() == "0"
         \\}
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - reduction boundaries",
+        .source =
+        \\F64.to_bits(F64.sin(F64.from_bits(0x3fe9_21fb_5444_2d17))) == 0x3fe6_a09e_667f_3bcc
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x3fe9_21fb_5444_2d17))) == 0x3fe6_a09e_667f_3bce
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x3fe9_21fb_5444_2d17))) == 0x3fef_ffff_ffff_fffd
+        \\    and F64.to_bits(F64.sin(F64.from_bits(0x3fe9_21fb_5444_2d19))) == 0x3fe6_a09e_667f_3bcd
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x3fe9_21fb_5444_2d19))) == 0x3fe6_a09e_667f_3bcc
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x3fe9_21fb_5444_2d19))) == 0x3ff0_0000_0000_0001
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x3ff9_21fb_5444_2d17))) == 0x4329_153d_9443_ed0b
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x3ff9_21fb_5444_2d18))) == 0x434d_0296_7c31_cdb5
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x3ff9_21fb_5444_2d19))) == 0xc336_17a1_5494_767a
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - quadrants",
+        .source =
+        \\F64.to_bits(F64.sin(F64.from_bits(0x4008_0000_0000_0000))) == 0x3fc2_1038_6db6_d55b
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x4008_0000_0000_0000))) == 0xbfef_ae04_be85_e5d2
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x4008_0000_0000_0000))) == 0xbfc2_3ef7_1254_b86f
+        \\    and F64.to_bits(F64.sin(F64.from_bits(0x4014_0000_0000_0000))) == 0xbfee_af81_f5e0_9933
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x4014_0000_0000_0000))) == 0x3fd2_2785_706b_4ad9
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x4014_0000_0000_0000))) == 0xc00b_0b4b_739b_bb07
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - 1e20 reduction",
+        .source =
+        \\F64.to_bits(F64.sin(F64.from_bits(0x4415_af1d_78b5_8c40))) == 0xbfe4_a5e6_05fd_6450
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x4415_af1d_78b5_8c40))) == 0x3fe8_7272_0fc6_0d3d
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x4415_af1d_78b5_8c40))) == 0xbfeb_06fb_be99_5394
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - 1e100 reduction",
+        .source =
+        \\F64.to_bits(F64.sin(F64.from_bits(0x54b2_49ad_2594_c37d))) == 0xbfd8_5c5e_5b92_9359
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x54b2_49ad_2594_c37d))) == 0x3fed_9757_4968_41f5
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x54b2_49ad_2594_c37d))) == 0xbfda_5807_d6f7_6f7d
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - max finite reduction",
+        .source =
+        \\F64.to_bits(F64.sin(F64.from_bits(0x7fef_ffff_ffff_ffff))) == 0x3f74_52fc_98b3_4e97
+        \\    and F64.to_bits(F64.cos(F64.from_bits(0x7fef_ffff_ffff_ffff))) == 0xbfef_ffe6_2ecf_ab75
+        \\    and F64.to_bits(F64.tan(F64.from_bits(0x7fef_ffff_ffff_ffff))) == 0xbf74_530c_fe72_9484
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - inverse half boundary",
+        .source =
+        \\F64.to_bits(F64.asin(F64.from_bits(0x3fdf_ffff_ffff_ffff))) == 0x3fe0_c152_382d_7365
+        \\    and F64.to_bits(F64.acos(F64.from_bits(0x3fdf_ffff_ffff_ffff))) == 0x3ff0_c152_382d_7366
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x3fdf_ffff_ffff_ffff))) == 0x3fdd_ac67_0561_bb4f
+        \\    and F64.to_bits(F64.asin(F64.from_bits(0x3fe0_0000_0000_0000))) == 0x3fe0_c152_382d_7366
+        \\    and F64.to_bits(F64.acos(F64.from_bits(0x3fe0_0000_0000_0000))) == 0x3ff0_c152_382d_7366
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x3fe0_0000_0000_0000))) == 0x3fdd_ac67_0561_bb4f
+        \\    and F64.to_bits(F64.asin(F64.from_bits(0x3fe0_0000_0000_0001))) == 0x3fe0_c152_382d_7367
+        \\    and F64.to_bits(F64.acos(F64.from_bits(0x3fe0_0000_0000_0001))) == 0x3ff0_c152_382d_7365
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x3fe0_0000_0000_0001))) == 0x3fdd_ac67_0561_bb51
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - inverse upper branch",
+        .source =
+        \\F64.to_bits(F64.asin(F64.from_bits(0x3fef_3332_ffff_ffff))) == 0x3ff5_8c2a_e9ab_49e8
+        \\    and F64.to_bits(F64.acos(F64.from_bits(0x3fef_3332_ffff_ffff))) == 0x3fcc_ae83_54c7_1987
+        \\    and F64.to_bits(F64.asin(F64.from_bits(0x3fef_3333_0000_0000))) == 0x3ff5_8c2a_e9ab_49ea
+        \\    and F64.to_bits(F64.acos(F64.from_bits(0x3fef_3333_0000_0000))) == 0x3fcc_ae83_54c7_1975
+        \\    and F64.to_bits(F64.asin(F64.from_bits(0xbfe8_0000_0000_0000))) == 0xbfeb_2353_15c6_80dc
+        \\    and F64.to_bits(F64.acos(F64.from_bits(0xbfe8_0000_0000_0000))) == 0x4003_59d2_6f93_b6c3
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0xbfe8_0000_0000_0000))) == 0xbfe4_978f_a326_9ee1
+        ,
+        .expected = .{ .inspect_str = "True" },
+    },
+    .{
+        .name = "low_level - F64 transcendental exact bits agree across backends - atan boundaries",
+        .source =
+        \\F64.to_bits(F64.atan(F64.from_bits(0x3ff2_ffff_ffff_ffff))) == 0x3feb_de70_ed43_9fe6
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x3ff3_0000_0000_0000))) == 0x3feb_de70_ed43_9fe7
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x4003_7fff_ffff_ffff))) == 0x3ff2_e757_2883_3a54
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x4003_8000_0000_0000))) == 0x3ff2_e757_2883_3a54
+        \\    and F64.to_bits(F64.atan(F64.from_bits(0x4410_0000_0000_0000))) == 0x3ff9_21fb_5444_2d18
         ,
         .expected = .{ .inspect_str = "True" },
     },

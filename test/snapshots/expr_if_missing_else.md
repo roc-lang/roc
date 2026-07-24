@@ -64,7 +64,7 @@ NO CHANGE
 			(if-branches
 				(if-branch
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-num (value "0"))))
+					(e-runtime-error (tag "erroneous_value_expr"))))
 			(if-else
 				(e-empty_record)))))
 ~~~

@@ -43,12 +43,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dispatch-call (method "not") (constraint-fn-var 185)
-	(receiver
-		(e-tag (name "C")
-			(args
-				(e-num (value "2")))))
-	(args))
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure

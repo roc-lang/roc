@@ -45,6 +45,52 @@ pub const ScalarTag = enum(u3) {
     int = 1, // Maps to Idx 2-11 (depending on precision)
     frac = 2, // Maps to Idx 12-14 (depending on precision)
     opaque_ptr = 3, // Maps to Idx 15
+    vector = 4, // Maps to Idx 17-24 (depending on lane kind)
+};
+
+/// Lane interpretation for a fixed-width 128-bit integer SIMD value.
+pub const Vector = enum(u3) {
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
+
+    pub fn laneBits(self: Vector) u8 {
+        return switch (self) {
+            .u8x16, .i8x16 => 8,
+            .u16x8, .i16x8 => 16,
+            .u32x4, .i32x4 => 32,
+            .u64x2, .i64x2 => 64,
+        };
+    }
+
+    pub fn laneCount(self: Vector) u8 {
+        return 128 / self.laneBits();
+    }
+
+    pub fn isSigned(self: Vector) bool {
+        return switch (self) {
+            .i8x16, .i16x8, .i32x4, .i64x2 => true,
+            .u8x16, .u16x8, .u32x4, .u64x2 => false,
+        };
+    }
+
+    pub fn lanePrecision(self: Vector) types.Int.Precision {
+        return switch (self) {
+            .u8x16 => .u8,
+            .i8x16 => .i8,
+            .u16x8 => .u16,
+            .i16x8 => .i16,
+            .u32x4 => .u32,
+            .i32x4 => .i32,
+            .u64x2 => .u64,
+            .i64x2 => .i64,
+        };
+    }
 };
 
 /// Raw backing for scalar data (largest payload is Int.Precision = u4).
@@ -67,6 +113,10 @@ pub const Scalar = packed struct {
         return @enumFromInt(@as(u3, @truncate(self.data)));
     }
 
+    pub fn getVector(self: Scalar) Vector {
+        return @enumFromInt(@as(u3, @truncate(self.data)));
+    }
+
     pub fn initStr() Scalar {
         return .{ .data = 0, .tag = .str };
     }
@@ -77,6 +127,10 @@ pub const Scalar = packed struct {
 
     pub fn initFrac(precision: types.Frac.Precision) Scalar {
         return .{ .data = @intFromEnum(precision), .tag = .frac };
+    }
+
+    pub fn initVector(vector: Vector) Scalar {
+        return .{ .data = @intFromEnum(vector), .tag = .vector };
     }
 };
 
@@ -116,6 +170,16 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
     // zero-sized type
     zst = 16,
 
+    // 128-bit integer SIMD vectors
+    u8x16 = 17,
+    i8x16 = 18,
+    u16x8 = 19,
+    i16x8 = 20,
+    u32x4 = 21,
+    i32x4 = 22,
+    u64x2 = 23,
+    i64x2 = 24,
+
     // Regular indices start from here.
     // num_primitives in store.zig must refer to how many variants we had up to this point.
     _,
@@ -128,8 +192,8 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
     /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
     pub fn isSigned(self: Idx) bool {
         return switch (self) {
-            .i8, .i16, .i32, .i64, .i128, .dec => true,
-            .u8, .u16, .u32, .u64, .u128 => false,
+            .i8, .i16, .i32, .i64, .i128, .dec, .i8x16, .i16x8, .i32x4, .i64x2 => true,
+            .u8, .u16, .u32, .u64, .u128, .u8x16, .u16x8, .u32x4, .u64x2 => false,
             // Default to signed for other types (floats don't use this, bools are unsigned)
             else => true,
         };
@@ -620,6 +684,7 @@ pub const ScalarInfo = struct {
     alignment: u32,
     int_precision: ?types.Int.Precision,
     frac_precision: ?types.Frac.Precision,
+    vector: ?Vector,
 };
 
 /// The memory layout of a value in a running Roc program.
@@ -687,6 +752,7 @@ pub const Layout = packed struct {
                 .frac => self.getScalar().getFrac().alignment(),
                 .str => target_usize.alignment(),
                 .opaque_ptr => target_usize.alignment(),
+                .vector => .@"16",
             },
             .box, .box_of_zst => target_usize.alignment(),
             .list, .list_of_zst => target_usize.alignment(),
@@ -709,6 +775,7 @@ pub const Layout = packed struct {
                 .int => SortKey.fromAlignBytes(self.getScalar().getInt().alignment().toByteUnits()),
                 .frac => SortKey.fromAlignBytes(self.getScalar().getFrac().alignment().toByteUnits()),
                 .str, .opaque_ptr => .pointer,
+                .vector => .align_16,
             },
             .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
             .zst => .align_1,
@@ -725,6 +792,11 @@ pub const Layout = packed struct {
     /// frac layout with the given precision
     pub fn frac(precision: types.Frac.Precision) Layout {
         return .{ .data = packData(Scalar.initFrac(precision)), .tag = .scalar };
+    }
+
+    /// Fixed-width 128-bit integer SIMD vector layout.
+    pub fn vector(kind: Vector) Layout {
+        return .{ .data = packData(Scalar.initVector(kind)), .tag = .scalar };
     }
 
     /// Default number layout (Dec) for unresolved polymorphic number types
@@ -814,7 +886,7 @@ pub const Layout = packed struct {
         return switch (self.tag) {
             .scalar => switch (self.getScalar().tag) {
                 .str => true, // RocStr needs refcounting
-                .int, .frac, .opaque_ptr => false,
+                .int, .frac, .opaque_ptr, .vector => false,
             },
             .list, .list_of_zst => true, // Lists need refcounting
             .box, .box_of_zst => true, // Boxes need refcounting
@@ -834,6 +906,7 @@ pub const Layout = packed struct {
                 .int => self.getScalar().getInt() == other.getScalar().getInt(),
                 .frac => self.getScalar().getFrac() == other.getScalar().getFrac(),
                 .opaque_ptr => true,
+                .vector => self.getScalar().getVector() == other.getScalar().getVector(),
             },
             .box => self.getIdx() == other.getIdx(),
             .box_of_zst => true, // No additional data
@@ -875,9 +948,23 @@ test "Layout.alignment() - scalar types" {
         try testing.expectEqual(std.mem.Alignment.@"16", Layout.frac(.dec).alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"1", Layout.boolType().alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.str().alignment(target_usize));
+        inline for (std.enums.values(Vector)) |vector_kind| {
+            try testing.expectEqual(std.mem.Alignment.@"16", Layout.vector(vector_kind).alignment(target_usize));
+        }
     }
 }
 
+test "integer SIMD vector facts" {
+    const testing = std.testing;
+
+    try testing.expectEqual(@as(u8, 8), Vector.u8x16.laneBits());
+    try testing.expectEqual(@as(u8, 16), Vector.u8x16.laneCount());
+    try testing.expectEqual(@as(u8, 64), Vector.i64x2.laneBits());
+    try testing.expectEqual(@as(u8, 2), Vector.i64x2.laneCount());
+    try testing.expect(!Vector.u32x4.isSigned());
+    try testing.expect(Vector.i32x4.isSigned());
+    try testing.expectEqual(types.Int.Precision.i16, Vector.i16x8.lanePrecision());
+}
 test "Layout.alignment() - types containing pointers" {
     const testing = std.testing;
 

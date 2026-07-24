@@ -194,10 +194,10 @@ test "import validation - mix of MODULE NOT FOUND, TYPE NOT EXPOSED, VALUE NOT E
     defer module_envs.deinit();
     const json_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("DataJson"));
     const json_qualified_ident = try json_env.common.insertIdent(json_env.gpa, Ident.for_text("DataJson"));
-    try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident });
+    try module_envs.put(json_module_ident, .{ .env = json_env, .qualified_type_ident = json_qualified_ident, .import_identity = .{ .module = json_module_ident } });
     const utils_module_ident = try parse_env.common.idents.insert(allocator, Ident.for_text("Utils"));
     const utils_qualified_ident = try utils_env.common.insertIdent(utils_env.gpa, Ident.for_text("Utils"));
-    try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident });
+    try module_envs.put(utils_module_ident, .{ .env = utils_env, .qualified_type_ident = utils_qualified_ident, .import_identity = .{ .module = utils_module_ident } });
 
     // Canonicalize with module validation
     var builtin_ctx = try BuiltinTestContext.init(allocator);
@@ -316,7 +316,7 @@ test "import validation - type module associated values are importable via expos
     defer module_envs.deinit();
     const foobar_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("FooBar"));
     const foobar_qualified_ident = try foobar_env.common.insertIdent(foobar_env.gpa, Ident.for_text("FooBar"));
-    try module_envs.put(foobar_module_ident, .{ .env = foobar_env, .qualified_type_ident = foobar_qualified_ident });
+    try module_envs.put(foobar_module_ident, .{ .env = foobar_env, .qualified_type_ident = foobar_qualified_ident, .import_identity = .{ .module = foobar_module_ident } });
 
     var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
     defer importer_builtin_ctx.deinit();
@@ -415,7 +415,7 @@ test "import validation - exposed nested type associated function resolves via s
     defer module_envs.deinit();
     const chess_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("Chess"));
     const chess_qualified_ident = try chess_env.common.insertIdent(chess_env.gpa, Ident.for_text("Chess"));
-    try module_envs.put(chess_module_ident, .{ .env = chess_env, .qualified_type_ident = chess_qualified_ident });
+    try module_envs.put(chess_module_ident, .{ .env = chess_env, .qualified_type_ident = chess_qualified_ident, .import_identity = .{ .module = chess_module_ident } });
 
     var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
     defer importer_builtin_ctx.deinit();
@@ -520,7 +520,7 @@ test "import validation - exposing a type module's main type by name is not a re
     defer module_envs.deinit();
     const shape_module_ident = try importer_env.common.idents.insert(allocator, Ident.for_text("Shape"));
     const shape_qualified_ident = try shape_env.common.insertIdent(shape_env.gpa, Ident.for_text("Shape"));
-    try module_envs.put(shape_module_ident, .{ .env = shape_env, .qualified_type_ident = shape_qualified_ident });
+    try module_envs.put(shape_module_ident, .{ .env = shape_env, .qualified_type_ident = shape_qualified_ident, .import_identity = .{ .module = shape_module_ident } });
 
     var importer_builtin_ctx = try BuiltinTestContext.init(allocator);
     defer importer_builtin_ctx.deinit();
@@ -550,6 +550,91 @@ test "import validation - exposing a type module's main type by name is not a re
             else => {},
         }
     }
+}
+
+test "package-qualified import identity survives a lookup before the import statement" {
+    var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
+    defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
+    const allocator = gpa_state.allocator();
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+
+    const lib_source =
+        \\Lib := [].{
+        \\    Thing : { value : Str }
+        \\    make : Str -> Lib.Thing
+        \\    make = |value| { value: value }
+        \\}
+    ;
+    var lib_env = try ModuleEnv.init(allocator, lib_source);
+    defer lib_env.deinit();
+    try lib_env.initCIRFields("Lib");
+
+    const lib_ast = try parse.file(allocator, &lib_env.common);
+    defer lib_ast.deinit();
+
+    var lib_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer lib_builtin_ctx.deinit();
+    var lib_can = try Can.initModule(roc_ctx, &lib_env, lib_ast, lib_builtin_ctx.canInitContext());
+    defer lib_can.deinit();
+    try lib_can.canonicalizeFile();
+
+    const lib_type_ident = lib_env.common.findIdent("Lib").?;
+    const lib_type_node = lib_env.getExposedTypeNodeIndexById(lib_type_ident).?;
+
+    const app_source =
+        \\App := [].{
+        \\    wrap = |value| Lib.make(value)
+        \\}
+        \\
+        \\import pf.Lib
+    ;
+    var app_env = try ModuleEnv.init(allocator, app_source);
+    defer app_env.deinit();
+    try app_env.initCIRFields("App");
+
+    const app_ast = try parse.file(allocator, &app_env.common);
+    defer app_ast.deinit();
+
+    const lib_ident = try app_env.insertIdent(base.Ident.for_text("Lib"));
+    const qualified_lib_ident = try app_env.insertIdent(base.Ident.for_text("pf.Lib"));
+    const imported_lib = Can.AutoImportedType{
+        .env = &lib_env,
+        .statement_idx = @enumFromInt(lib_type_node),
+        .qualified_type_ident = lib_ident,
+        .import_identity = .{ .module = qualified_lib_ident },
+    };
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    try module_envs.put(lib_ident, imported_lib);
+    try module_envs.put(qualified_lib_ident, imported_lib);
+
+    var app_builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer app_builtin_ctx.deinit();
+    var app_can = try Can.initModule(roc_ctx, &app_env, app_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = app_builtin_ctx.builtin_module.env,
+            .builtin_indices = app_builtin_ctx.builtin_indices,
+        },
+        .imported_modules = &module_envs,
+    });
+    defer app_can.deinit();
+    try app_can.canonicalizeFile();
+
+    const make_ident = try app_env.insertIdent(base.Ident.for_text("make"));
+    var found_make_lookup = false;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < app_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        if (app_env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
+
+        const external = app_env.store.getExpr(@enumFromInt(raw_node_idx)).e_lookup_external;
+        if (!external.ident_idx.eql(make_ident)) continue;
+
+        const import_name_idx = app_env.imports.imports.items.items[@intFromEnum(external.module_idx)];
+        try testing.expectEqualStrings("pf.Lib", app_env.getString(import_name_idx));
+        found_make_lookup = true;
+    }
+    try testing.expect(found_make_lookup);
 }
 
 test "unresolved exposed value is not imported as external lookup target zero" {
@@ -605,6 +690,7 @@ test "unresolved exposed value is not imported as external lookup target zero" {
     try module_envs.put(a_import_ident, .{
         .env = &a_env,
         .qualified_type_ident = a_qualified_ident,
+        .import_identity = .{ .module = a_import_ident },
     });
 
     const importer_ast = try parse.file(allocator, &importer_env.common);
@@ -825,6 +911,7 @@ test "imported type-module tag rejects alias target" {
     try module_envs.put(other_ident, .{
         .env = &imported_env,
         .qualified_type_ident = other_qualified_ident,
+        .import_identity = .{ .module = other_ident },
     });
 
     const ast = try parse.file(allocator, &env.common);
@@ -911,6 +998,7 @@ test "imported nested associated types resolve by qualified export key" {
     try module_envs.put(types_ident, .{
         .env = &imported_env,
         .qualified_type_ident = types_qualified_ident,
+        .import_identity = .{ .module = types_ident },
     });
 
     const ast = try parse.file(allocator, &env.common);

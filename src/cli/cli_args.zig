@@ -135,7 +135,6 @@ pub const RunArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     app_args: []const []const u8 = &[_][]const u8{}, // any arguments to be passed to roc application being run
     no_cache: bool = false, // bypass the executable cache
-    allow_errors: bool = false, // allow execution even if there are type errors
     watch: bool = false, // hot reload when source inputs change; implied for dev runs
     explicit_watch: bool = false, // --watch was passed (as opposed to implied by a dev run)
     explicit_opt: bool = false, // --opt was passed (as opposed to defaulted)
@@ -177,7 +176,6 @@ pub const BuildArgs = struct {
     target: ?[]const u8 = null, // the target to compile for (e.g., x64musl, x64glibc)
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
-    allow_errors: bool = false, // allow building even if there are type errors
     verbose: bool = false, // enable verbose output including cache statistics
     timings: bool = false, // always show the per-phase timing breakdown
     no_cache: bool = false, // disable compilation caching
@@ -346,7 +344,6 @@ const main_help =
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
-    \\      --allow-errors                 Allow execution even if there are type errors (warnings are always allowed)
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\
 ;
@@ -485,7 +482,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var target: ?[]const u8 = null;
     var output: ?[]const u8 = null;
     var debug: bool = false;
-    var allow_errors: bool = false;
     var verbose: bool = false;
     var timings: bool = false;
     var no_cache: bool = false;
@@ -510,7 +506,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --opt=<opt>                    Build mode: speed (default LLVM optimized), size (LLVM optimized for binary size), dev (native dev backend), or interpreter (embedded interpreter backend)
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
-            \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --verbose                      Enable verbose output including cache statistics
             \\      --timings                      Show how long each compilation phase took (shown automatically when a build is slow)
             \\      --no-cache                     Disable compilation caching
@@ -550,8 +545,6 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--debug")) {
             debug = true;
-        } else if (mem.eql(u8, arg, "--allow-errors")) {
-            allow_errors = true;
         } else if (mem.startsWith(u8, arg, "--wasm-memory")) {
             if (getFlagValue(arg)) |value| {
                 wasm_memory = std.fmt.parseInt(usize, value, 10) catch {
@@ -607,7 +600,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .verbose = verbose, .timings = timings, .no_cache = no_cache, .watch = watch, .watch_inputs_file = watch_inputs_file, .max_threads = max_threads, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .resolve_limits = resolve_limits } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
@@ -1272,7 +1265,6 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
     var explicit_opt = false;
     var target: ?[]const u8 = null;
     var no_cache: bool = false;
-    var allow_errors: bool = false;
     var watch: bool = false;
     var timings: bool = false;
     var max_threads: ?usize = null;
@@ -1331,8 +1323,6 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
             }
         } else if (mem.eql(u8, arg, "--no-cache")) {
             no_cache = true;
-        } else if (mem.eql(u8, arg, "--allow-errors")) {
-            allow_errors = true;
         } else if (mem.eql(u8, arg, "--watch")) {
             watch = true;
         } else if (mem.eql(u8, arg, "--timings")) {
@@ -1375,7 +1365,7 @@ fn parseRun(alloc: mem.Allocator, args: []const []const u8, mode: RunParseMode) 
         }
     }
 
-    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .allow_errors = allow_errors, .watch = watch or (opt == .dev), .explicit_watch = watch, .explicit_opt = explicit_opt, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits, .via_run_subcommand = mode == .run_subcommand } };
+    return CliArgs{ .run = RunArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .app_args = try app_args.toOwnedSlice(), .no_cache = no_cache, .watch = watch or (opt == .dev), .explicit_watch = watch, .explicit_opt = explicit_opt, .timings = timings, .max_threads = max_threads, .resolve_limits = resolve_limits, .via_run_subcommand = mode == .run_subcommand } };
 }
 
 fn parseInstall(args: []const []const u8) CliArgs {

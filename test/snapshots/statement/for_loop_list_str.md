@@ -94,7 +94,7 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-assign (ident "counter_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 291)
+						(e-dispatch-call (method "plus") (constraint-fn-var 307)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "counter_"))))

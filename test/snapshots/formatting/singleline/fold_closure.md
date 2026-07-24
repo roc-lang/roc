@@ -58,26 +58,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "sumResult"))
-		(e-call
-			(e-runtime-error (tag "ident_not_in_scope"))
-			(e-list
-				(elems
-					(e-num (value "1"))
-					(e-num (value "2"))
-					(e-num (value "3"))
-					(e-num (value "4"))))
-			(e-num (value "0"))
-			(e-lambda
-				(args
-					(p-assign (ident "acc"))
-					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 226)
-					(receiver
-						(e-lookup-local
-							(p-assign (ident "acc"))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "x")))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -318,10 +318,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(e-lambda
 			(args
 				(p-assign (ident "settings")))
-			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
-				(e-lookup-local
-					(p-assign (ident "settings")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -332,12 +329,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign (ident "user"))
 				(p-assign (ident "pass")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "user")))
-				(e-lookup-local
-					(p-assign (ident "pass")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -349,12 +341,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(args
 				(p-assign (ident "advancedConfig"))
 				(p-assign (ident "input")))
-			(e-call
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))
-				(e-lookup-local
-					(p-assign (ident "advancedConfig")))
-				(e-lookup-local
-					(p-assign (ident "input")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -367,11 +354,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(e-lambda
 			(args
 				(p-assign (ident "text")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "text")))
-				(e-runtime-error (tag "qualified_ident_does_not_exist"))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -381,10 +364,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(e-lambda
 			(args
 				(p-assign (ident "creds")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "creds")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

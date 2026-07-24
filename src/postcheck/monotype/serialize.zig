@@ -32,7 +32,7 @@ pub const MAGIC: [8]u8 = .{ 'R', 'O', 'C', 'S', 'P', 'E', 'C', 0 };
 /// roots or one exact producer-authored graph.
 /// Version 8: specialization and function-template identity includes the
 /// SHA-256 digest of exact compile-time evidence topology.
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 
 const SECTION_COUNT = 42;
 
@@ -1584,6 +1584,7 @@ fn writeProcedureUseTemplate(hasher: *std.crypto.hash.sha2.Sha256, use: checked.
 
 fn writeSpecRecord(hasher: *std.crypto.hash.sha2.Sha256, spec: Ast.SpecRecord) void {
     writeCallableIdentity(hasher, spec.identity.callable);
+    writeHashBytes32(hasher, spec.identity.method_scope.bytes);
     writeHashBytes32(hasher, spec.identity.source_fn_ty_digest.bytes);
     writeHashBytes32(hasher, spec.identity.evidence_digest.bytes);
     writeHashBytes32(hasher, spec.identity.request_fn_ty_digest.bytes);
@@ -2309,6 +2310,7 @@ test "monotype specialization cache maps fresh single-shard program view equival
                 .proc_base = 1,
                 .template = 1,
             } },
+            .method_scope = testModuleDigest(5),
             .source_fn_ty_digest = .{},
             .evidence_digest = fn_template.evidence_digest,
             .request_fn_ty_digest = .{},
@@ -2769,6 +2771,7 @@ test "monotype specialization cache validity includes stored specialization iden
                 .proc_base = 1,
                 .template = 2,
             } },
+            .method_scope = testModuleDigest(8),
             .source_fn_ty_digest = first_source_digest,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
             .request_fn_ty_digest = mono_digest,
@@ -2783,6 +2786,8 @@ test "monotype specialization cache validity includes stored specialization iden
     };
     var second_spec = first_spec;
     second_spec.identity.source_fn_ty_digest = second_source_digest;
+    var third_spec = first_spec;
+    third_spec.identity.method_scope = testModuleDigest(9);
 
     const no_specs = computeValidityId(.{ .root_module = testModuleId(1) });
     const first = computeValidityId(.{
@@ -2793,9 +2798,14 @@ test "monotype specialization cache validity includes stored specialization iden
         .root_module = testModuleId(1),
         .specs = &.{second_spec},
     });
+    const third = computeValidityId(.{
+        .root_module = testModuleId(1),
+        .specs = &.{third_spec},
+    });
 
     try std.testing.expect(!std.mem.eql(u8, no_specs[0..], first[0..]));
     try std.testing.expect(!std.mem.eql(u8, first[0..], second[0..]));
+    try std.testing.expect(!std.mem.eql(u8, first[0..], third[0..]));
 }
 
 fn expectEquivalentProgramViews(

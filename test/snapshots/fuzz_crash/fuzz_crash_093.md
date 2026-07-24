@@ -48,12 +48,7 @@ d = (0, || ())
 (can-ir
 	(d-let
 		(p-assign (ident "d"))
-		(e-tuple
-			(elems
-				(e-num (value "0"))
-				(e-lambda
-					(args)
-					(e-runtime-error (tag "empty_tuple")))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

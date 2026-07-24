@@ -61,11 +61,7 @@ a = ()->(b()())()
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-call
-			(e-call
-				(e-call
-					(e-runtime-error (tag "ident_not_in_scope"))))
-			(e-runtime-error (tag "empty_tuple")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

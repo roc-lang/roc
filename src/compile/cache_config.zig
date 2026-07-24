@@ -55,12 +55,13 @@ pub const Constants = struct {
     /// 29: String interpolation constraint metadata moved into the type store.
     /// 30: Checked interpolation nodes retain their explicit dispatcher type variable.
     /// 31: Canonical expression storage includes compiler-derived method nodes.
-    /// 32: Combined the empty-row and interpolation checked-artifact layouts.
-    /// 33: Platform requirement roots carry producer-authored dispatch evidence.
-    /// 34: Checked iterator procedure identity includes Str.iter_utf8.
-    /// 35: Builtin indices include width-specific f32 conversion and math wrappers.
-    /// 36: Nested procedure sites declare their producer-authored evidence source.
-    pub const CACHE_VERSION = 36;
+    /// 32: Builtin indices include width-specific f32 conversion and math wrappers.
+    /// 33: Builtin indices, identifiers, and checked layouts include integer SIMD vectors.
+    /// 34: Combined the empty-row and interpolation checked-artifact layouts.
+    /// 35: Platform requirement roots carry producer-authored dispatch evidence.
+    /// 36: Checked iterator procedure identity includes Str.iter_utf8.
+    /// 37: Nested procedure sites declare their producer-authored evidence source.
+    pub const CACHE_VERSION = 38;
 };
 
 /// Configuration for the Roc cache system.

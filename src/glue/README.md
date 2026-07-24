@@ -25,6 +25,9 @@ ownership, and refcounting contracts:
 - recursive refcounted data requires compiler-derived retain/release plans
 - erased callables require a specific call ABI, capture teardown callback, and
   host/runtime context
+- 128-bit integer vectors use the target C ABI's native vector class, including
+  different direct-argument, direct-result, and aggregate rules, and
+  memory-class multi-vector aggregates need the union spelling in C
 
 For those reasons, platform code should consume generated glue instead of
 hand-rolling Roc ABI bindings. The generated interface is the compatibility
@@ -41,7 +44,7 @@ should cover:
 
 - layout assertions for ABI-visible types
 - typed views and constructors for strings, lists, boxes, records, tag unions,
-  and erased callables
+  integer vectors, and erased callables
 - retain, release, and recursive teardown for refcounted public types
 - explicit ownership transfer for hosted arguments, provided returns, stored
   values, and values returned back to Roc
@@ -63,8 +66,11 @@ structure shape.
 The glue script input is targetless. It carries no concrete Roc build target,
 OS, or architecture, and `roc glue` has no `--target` flag: running it on any
 machine produces the same generated source for a given platform and glue
-script. The only ABI axis a glue script may branch on is host pointer width,
-modeled as `AbiWidth := [Pointer32, Pointer64]`.
+script. Compiler-emitted layout facts vary only by host pointer width, modeled
+as `AbiWidth := [Pointer32, Pointer64]`. Generated source may additionally use
+the host compiler's target conditionals to select the natural C spelling and
+calling convention for a native vector leaf; that selection does not alter any
+compiler-emitted record, union, or ownership fact.
 
 What the compiler guarantees to glue scripts:
 
@@ -88,6 +94,9 @@ What generators must do with that data:
 - Render pointer-sized Roc values (`Str`, `List`, `Box`, erased callables)
   with the host language's pointer-sized types (`size_t`/`uintptr_t`, `usize`,
   raw pointers), not hardcoded 4- or 8-byte shapes.
+- Render every `Vector128` leaf with the target's native vector type rather
+  than a byte array or `U128` substitute. Keep all eight Roc vector names as
+  distinct generated binding types.
 - Emit one source file per language containing both width shapes, resolved by
   the host compiler: `#if UINTPTR_MAX == UINT64_MAX` in C,
   `if (@sizeOf(usize) == 4)` in Zig, `#[cfg(target_pointer_width = "32")]` in
@@ -123,13 +132,17 @@ The templates restate the host ABI — the `RocStr`/`RocList`/`RocDec`
 layouts, the `RocHost` callback vtable, the extern runtime symbols, and the
 erased-callable payload — as text in their output languages, so the compiler
 cannot import those restatements. `zig build run-check-glue-abi` is the
-enforcement: it generates Zig glue for `test/fx/platform/main.roc` and
-compiles `test/glue/zig_abi_lock.zig` against both the generated file and the
-canonical `builtins` definitions, on native and wasm32 pointer widths.
+enforcement. It generates Zig glue and compiles `test/glue/zig_abi_lock.zig`
+against both the generated file and the canonical `builtins` definitions for
+x86-64 and AArch64 on Linux, macOS, and Windows, plus wasm32. It also generates
+the vector-heavy `layout-probe` C and Rust bindings: C is compiled over that
+same seven-target matrix, while Rust is compiled for the configured native
+target and wasm32 (rustc requires an installed core library for every
+additional cross target).
 Template drift from `src/builtins/host_abi.zig`, `str.RocStr`,
 `list.RocList`, `dec.RocDec`, or `erased_callable` fails that step at compile
-time. The generated C and Rust files carry matching `offsetof`/`offset_of!`
-static assertions, which the C/Rust compile controls in the runtime matrix
+time. Generated C and Rust files carry matching `offsetof`/`offset_of!` static
+assertions, which their compile controls and the native/wasm runtime matrix
 verify per target.
 
 ## ABI Risk Register and Roc Glue Runtime Controls
@@ -176,15 +189,16 @@ language-specific.
 | Erased callable invocation from the host | Generated callable wrapper APIs for args buffer, return buffer, capture pointer, host context, and owned result handling | `glue command with CGlue generates expected C header`, `glue regression: RustGlue succeeds on fx platform`, `glue command generated Zig compiles with zig build-obj`, and `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` cover generated callable payload, capture, call, and drop APIs. |
 | Stored Roc closures and dev hot-reload image lifetime | Retain/release helpers for callable boxes and documented per-thread host-state requirements for later invocation | `glue command with CGlue generates expected C header` covers boxed callable store/call signatures; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` checks retained callable final decref; `roc --watch hot reloads app-provided Model through Box` covers image lifetime outside the glue suite. |
 | Natural C ABI target differences, including sret, aggregate returns, wasm32, and pointer width | Generated extern signatures and compile-time layout assertions per target language | Full `glue runtime:` matrix compiles/links/runs native and wasm32 hosts for CGlue/ZigGlue/RustGlue; `glue runtime: type-catalog` covers `Dec`, `I128`, `U128`, records, unions, and aggregate returns; C exact-header and compile checks catch stale C ABI signatures. |
+| Native 128-bit vector ABI, including SysV SSE/SSEUP, Win64 indirect arguments, AAPCS64 Q-register placement, memory-class multi-vector aggregates, wasm `v128`, mixed aggregates, and register exhaustion | Distinct generated vector leaf types, C-layout aggregates, exact assertions, and extern declarations that use the target C ABI directly | `glue runtime: layout-probe` calls every vector and aggregate shape in both directions from generated C/Zig/Rust hosts; `run-check-glue-abi` compile-locks generated C and Zig across x86-64/AArch64 Linux/macOS/Windows plus wasm and Rust across native+wasm. |
 | Compiler-emitted layout facts: field order, offsets, discriminants, size, alignment, zero-sized values, and Bool representation | Glue consumers must use emitted `AbiLayout` metadata and generated assertions rather than reconstructing layout | `glue runtime: layout-probe`, `glue runtime: duplicate-tags`, and `glue runtime: type-catalog` cover emitted layout facts across all languages/targets; `glue command generated Zig compiles with zig build-obj` checks field offsets and compile-time layout assertions. |
-| Nominal vs structural records and explicit padding fields | Generated record types/opaque bytes with per-target size, alignment, field-offset, and padding assertions | `glue runtime: type-catalog` covers nominal and structural records; `glue runtime: layout-probe` covers padded/boxed layouts; `glue regression: ZigGlue quotes bang record fields` covers field names that require escaping. |
+| Nominal vs structural records and explicit padding fields | Generated records with concrete committed fields plus explicit padding and per-target size, alignment, field-offset, and padding assertions | `glue runtime: type-catalog` covers nominal and structural records; `glue runtime: layout-probe` covers padded/boxed/vector layouts; `glue regression: ZigGlue quotes bang record fields` covers field names that require escaping. |
 | Tag union active-payload handling, discriminant layout, single-variant unwrapping, duplicate names, and recursive tags | Generated tag constructors/accessors/destructors that only touch the active payload and assert discriminant layout | `glue runtime: duplicate-tags` covers duplicate module-local tag/result names; `glue runtime: type-catalog` covers single-payload, no-payload, recursive, boxed, and result tag unions. |
 | Opaque or library containers such as `Dict` whose internals are not platform ABI | Opaque-safe helpers only; no generator or host code may infer container internals from semantic names | `glue regression: ZigGlue uses RocBox for opaque boxed app types` enforces `RocBox` for opaque boxed app values; C/Rust source-shape and compile controls cover opaque helper signatures without exposing container internals. |
 | Accidental shallow copies of ownership-bearing values | Rust non-`Copy` or unsafe ownership APIs; Zig/C retain/release naming and runtime double-free/leak checks | `glue runtime: cli-main`, `app-model`, and `type-catalog` all check balanced live allocations after owned values cross the boundary; `glue regression: RustGlue succeeds on fx platform` covers Rust ownership-shaped generated APIs. |
 | Error paths after ownership transfer into hosted functions | Scenario helpers that deliberately fail after receiving owned values and verify cleanup policy | `glue runtime: duplicate-tags` exercises `Try`-returning hosted functions with owned payloads; `glue runtime: cli-main` checks failure reporting paths and requires owned hosted args to be decrefed before a host-side failure is recorded. |
 | Thread sharing and atomic vs thread-confined refcounting | Thread-aware contracts where supported, plus explicit documentation of host-visible value sharing requirements | Generated Zig/Rust helper compile controls cover atomic refcount operations; `glue regression: ZigGlue decrefs non-refcounted boxed payloads with payload alignment` and the Rust equivalent check final decrement behavior; runtime matrix documents that current glue hosts are single-threaded. |
 | Stale generated bindings after ABI changes | Version/header assertions or harness checks that regenerated glue is used for each platform and target | `runGlueRuntimeCase` runs `roc glue` into an isolated work directory before each host compile/link/run; full `glue runtime:` matrix plus `glue command with CGlue generates expected C header` catch stale generated signatures. |
-| C glue opacity and limited structural visibility | Generated C helper functions/macros for operations that C cannot safely express by struct field access alone | `glue command with CGlue generates expected C header`, `glue command generated C header compiles with zig cc`, `CGlue.roc expect tests pass`, and CGlue runtime cells for all five platform shapes cover C-visible opaque bytes, macros, and helper declarations. |
+| C representation of records and tag unions | Concrete C fields, named discriminants, concrete payload storage, typed constructors/accessors, and helpers for ownership operations that field access alone cannot safely express | `glue command with CGlue generates expected C header`, `glue command generated C header compiles with zig cc`, `CGlue.roc expect tests pass`, and CGlue runtime cells for all five platform shapes cover concrete records, tags, payload access, macros, and helper declarations. |
 
 ## Release Files
 

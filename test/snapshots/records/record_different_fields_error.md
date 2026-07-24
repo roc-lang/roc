@@ -570,22 +570,20 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "pascal"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-dispatch-call (method "negate") (constraint-fn-var 293)
+		(e-dispatch-call (method "negate") (constraint-fn-var 309)
 			(receiver
 				(e-runtime-error (tag "ident_not_in_scope")))
 			(args)))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "kebab"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-let
@@ -604,8 +602,7 @@ EndOfFile,
 	(s-expr
 		(e-runtime-error (tag "expr_not_canonicalized")))
 	(s-expr
-		(e-string
-			(e-literal (string "at symbol"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(e-runtime-error (tag "expr_not_canonicalized")))
 ~~~
 # TYPES

@@ -267,6 +267,7 @@ const CliMainError =
     backend.wasm.WasmModule.RelocationError ||
     backend.wasm.WasmModule.EncodeError ||
     backend.wasm.WasmModule.SymbolLookupError ||
+    backend.wasm.WasmCodeGen.HostedSymbolError ||
     backend.RunImage.WriteError ||
     backend.RunImage.ImageError ||
     backend.CompilationError ||
@@ -1824,6 +1825,7 @@ const LayoutHashContext = struct {
                 switch (scalar.tag) {
                     .int => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getInt()))),
                     .frac => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getFrac()))),
+                    .vector => updateHashU32(hasher, @intCast(@intFromEnum(scalar.getVector()))),
                     .str, .opaque_ptr => {},
                 }
             },
@@ -1898,6 +1900,10 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @intFromEnum(binding.checked_relation));
         updateHashU32(hasher, @intFromEnum(std.meta.activeTag(binding.value_use)));
     }
+
+    const checked_error_requires = root_artifact.platform_required_bindings.checked_error_requires;
+    updateHashU32(hasher, @intCast(checked_error_requires.len));
+    for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }
 
 fn updateHostCallableLayoutIdentity(
@@ -1999,7 +2005,7 @@ fn entrypointAbiDigestFromLirData(
     target: RocTarget,
 ) (Allocator.Error || CliError)![32]u8 {
     const abi_target: layout.abi.Target = switch (target.toCpuArch()) {
-        .aarch64 => .aarch64,
+        .aarch64 => layout.abi.aarch64Target(target.toOsTag()),
         .x86_64 => if (target.toOsTag() == .windows) .x86_64_windows else .x86_64_sysv,
         .wasm32 => .wasm32,
         else => return ctx.fail(.{ .shim_generation_failed = .{ .err = error.UnsupportedTarget } }),
@@ -2013,13 +2019,19 @@ fn entrypointAbiDigestFromLirData(
             switch (placement) {
                 .none => updateHashU32(h, 0),
                 .indirect => updateHashU32(h, 1),
-                .registers => |pieces| {
+                .registers => |registers| {
                     updateHashU32(h, 2);
-                    updateHashU32(h, @intCast(pieces.len));
-                    for (pieces) |piece| {
+                    updateHashU32(h, @intFromEnum(std.meta.activeTag(registers.carrier)));
+                    switch (registers.carrier) {
+                        .array => |alignment| updateHashU32(h, alignment orelse 0),
+                        .piecewise, .structure, .integer => {},
+                    }
+                    updateHashU32(h, @intCast(registers.pieces.len));
+                    for (registers.pieces) |piece| {
                         updateHashU32(h, @intFromEnum(piece.class));
                         updateHashU32(h, piece.offset);
                         updateHashU32(h, piece.size);
+                        updateHashU32(h, if (piece.vector_kind) |kind| @intFromEnum(kind) + 1 else 0);
                     }
                 },
             }
@@ -2566,8 +2578,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     var entrypoint_names: []const []const u8 = &.{};
     var hosted_symbols: []const []const u8 = &.{};
-    var checked_host_identity_opt: ?[32]u8 = null;
-    var error_count: usize = 0;
+    var checked_host_identity: [32]u8 = undefined;
     var warning_count: usize = 0;
 
     switch (args.opt) {
@@ -2584,13 +2595,11 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 resolutionConfigFromLimits(args.resolve_limits),
                 !args.no_cache,
                 &reporter,
-                true,
             );
             const result = if (lowered_result) |*value| value else unreachable;
             entrypoint_names = result.entrypoint_names;
             hosted_symbols = result.hosted_symbols;
-            checked_host_identity_opt = result.checked_host_identity;
-            error_count = result.counts.errors;
+            checked_host_identity = result.checked_host_identity;
             warning_count = result.counts.warnings;
         },
         .interpreter => {
@@ -2604,23 +2613,16 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 resolutionConfigFromLimits(args.resolve_limits),
                 !args.no_cache,
                 &reporter,
-                true,
             );
             shm_handle_opt = shm_result.handle;
             entrypoint_names = shm_result.entrypoint_names;
             hosted_symbols = shm_result.hosted_symbols;
-            checked_host_identity_opt = shm_result.checked_host_identity;
-            error_count = shm_result.error_count;
+            checked_host_identity = shm_result.checked_host_identity;
             warning_count = shm_result.warning_count;
         },
         .size, .speed => unreachable,
     }
 
-    if (error_count > 0 and entrypoint_names.len == 0) {
-        reporter.fail();
-        if (args.allow_errors) return;
-        return error.TypeCheckingFailed;
-    }
     reporter.finish();
 
     if (entrypoint_names.len == 0) {
@@ -2636,13 +2638,6 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .dev => .machine_code,
         .interpreter => .lir,
         .size, .speed => unreachable,
-    };
-
-    const checked_host_identity = checked_host_identity_opt orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("default roc command invariant violated: missing checked host identity after successful LIR image build", .{});
-        }
-        unreachable;
     };
 
     const platform_dir = if (platform_paths.platform_source_path) |p|
@@ -2727,7 +2722,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         const platform_shim_path = switch (args.opt) {
             .dev => blk: {
                 const result = if (lowered_result) |*value| value else unreachable;
-                const lowered = successfulLoweredProgram(result, "default roc command");
+                const lowered = &result.lowered;
                 const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
                 defer ctx.gpa.free(platform_entrypoints);
                 break :blk try generatePlatformHostShimFromLirData(
@@ -2848,7 +2843,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             const referenced_hosted_symbols = switch (args.opt) {
                 .dev => blk: {
                     const result = if (lowered_result) |*value| value else unreachable;
-                    const lowered = successfulLoweredProgram(result, "default roc command");
+                    const lowered = &result.lowered;
                     break :blk try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
                 },
                 .interpreter => blk: {
@@ -2911,7 +2906,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     if (args.opt == .dev) {
         const result = if (lowered_result) |*value| value else unreachable;
-        const lowered = successfulLoweredProgram(result, "default roc command");
+        const lowered = &result.lowered;
         const internal_static_data = successfulInternalStaticData(result, "default roc command");
         shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, args.watch);
     }
@@ -2980,7 +2975,6 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) Cl
         .target = args.target,
         .output = exe_path,
         .debug = false,
-        .allow_errors = args.allow_errors,
         .verbose = false,
         .no_cache = args.no_cache,
         .max_threads = args.max_threads,
@@ -3226,15 +3220,9 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, original_source: []con
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
-        true,
     );
     defer closeSharedMemoryHandle(shm_result.handle);
 
-    if (shm_result.error_count > 0 and shm_result.entrypoint_names.len == 0) {
-        reporter.fail();
-        if (args.allow_errors) return;
-        return error.TypeCheckingFailed;
-    }
     reporter.finish();
 
     const view = try viewLirImageFromHandle(shm_result.handle, base.target.TargetUsize.native, ctx.arena);
@@ -3346,15 +3334,9 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
-        true,
     );
     defer lowered_result.deinit();
 
-    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
-        reporter.fail();
-        if (args.allow_errors) return;
-        return error.TypeCheckingFailed;
-    }
     reporter.finish();
 
     const entrypoint_names = lowered_result.entrypoint_names;
@@ -3365,7 +3347,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, origin
         unreachable;
     }
 
-    const lowered = successfulLoweredProgram(&lowered_result, "default app run");
+    const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .Debug;
     const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
     const libc_info: ?libc_finder.LibcInfo = if (selected_target.isDynamic())
@@ -5073,7 +5055,7 @@ pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
-    checked_host_identity: ?[32]u8,
+    checked_host_identity: [32]u8,
     error_count: usize,
     warning_count: usize,
 };
@@ -5133,11 +5115,11 @@ test "diagnostic summaries support colored and plain output" {
 }
 
 const LoweredCoordinatorResult = struct {
-    lowered: ?lir.CheckedPipeline.LoweredProgram,
+    lowered: lir.CheckedPipeline.LoweredProgram,
     internal_static_data: ?[]backend.StaticDataExport,
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
-    checked_host_identity: ?[32]u8,
+    checked_host_identity: [32]u8,
     watch_inputs: []const compile.watch_inputs.Input,
     watch_inputs_allocator: Allocator,
     counts: CoordinatorReportCounts,
@@ -5146,9 +5128,7 @@ const LoweredCoordinatorResult = struct {
         if (self.internal_static_data) |static_data| {
             compile.static_data_exports.deinitStaticData(self.watch_inputs_allocator, static_data);
         }
-        if (self.lowered) |*lowered| {
-            lowered.deinit();
-        }
+        self.lowered.deinit();
         self.deinitWatchInputs();
     }
 
@@ -5162,15 +5142,6 @@ fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: 
     return result.internal_static_data orelse {
         if (builtin.mode == .Debug) {
             std.debug.panic("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
-        }
-        unreachable;
-    };
-}
-
-fn successfulLoweredProgram(result: *LoweredCoordinatorResult, label: []const u8) *lir.CheckedPipeline.LoweredProgram {
-    return if (result.lowered) |*lowered| lowered else {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("{s} invariant violated: successful coordinator lowering produced no lowered program", .{label});
         }
         unreachable;
     };
@@ -5219,7 +5190,7 @@ fn sharedMemoryResult(
     counts: CoordinatorReportCounts,
     entrypoint_names: []const []const u8,
     hosted_symbols: []const []const u8,
-    checked_host_identity: ?[32]u8,
+    checked_host_identity: [32]u8,
 ) SharedMemoryResult {
     return .{
         .handle = .{
@@ -5475,28 +5446,24 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         null,
-        false,
     );
     defer lowered_result.deinit();
 
     try writeHotReloadWatchPathsFile(ctx, args.watch_inputs_file, lowered_result.watch_inputs, source_rewrite);
 
-    if (lowered_result.counts.errors > 0) {
-        return error.TypeCheckingFailed;
-    }
+    // A normal `roc run` may execute a checked runtime-error node so the
+    // diagnostic is observable at the point that bad code runs. A hot reload
+    // has a stronger publication contract: keep the last accepted generation
+    // active until a diagnostic-free replacement is ready.
+    if (lowered_result.counts.errors != 0) return error.TypeCheckingFailed;
 
-    const checked_host_identity = lowered_result.checked_host_identity orelse {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("hot reload invariant violated: missing checked host identity after successful rebuild", .{});
-        }
-        unreachable;
-    };
+    const checked_host_identity = lowered_result.checked_host_identity;
     if (!std.mem.eql(u8, &checked_host_identity, &args.expected_host_identity)) {
         try ctx.io.stderr().writeAll("Error: hot reload changed the platform host interface; restart `roc --watch`.\n");
         return error.TypeCheckingFailed;
     }
 
-    const lowered = successfulLoweredProgram(&lowered_result, "hot reload compiler");
+    const lowered = &lowered_result.lowered;
     const publication = try writeDevRunImageToSharedMemory(
         ctx,
         &shm,
@@ -5868,7 +5835,6 @@ fn lowerLirWithBuildEnv(
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
-    allow_user_errors: bool,
 ) CliMainError!LoweredCoordinatorResult {
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = max_threads,
@@ -5876,10 +5842,7 @@ fn lowerLirWithBuildEnv(
         .resolution_config = resolution_config,
         .track_watch_inputs = true,
         .source_dir_override = source_dir_override,
-        .post_check_publication_mode = if (allow_user_errors)
-            .executable_artifacts_allow_user_errors
-        else
-            .executable_artifacts,
+        .post_check_publication_mode = .executable_artifacts,
     });
     defer build_env.deinit();
     if (synthetic_default_app) |mapping| {
@@ -5939,19 +5902,10 @@ fn lowerLirWithBuildEnv(
     const watch_inputs = try build_env.collectWatchInputStates();
     errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
 
-    if (!build_env.executable_artifacts_finalized) {
-        if (reporter) |r| r.fail();
-        return .{
-            .lowered = null,
-            .internal_static_data = null,
-            .entrypoint_names = &.{},
-            .hosted_symbols = &.{},
-            .checked_host_identity = null,
-            .watch_inputs = watch_inputs,
-            .watch_inputs_allocator = ctx.gpa,
-            .counts = counts,
-        };
+    if (builtin.mode == .Debug and !build_env.executable_artifacts_finalized) {
+        std.debug.panic("CLI lowering invariant violated: executable artifacts were not finalized", .{});
     }
+    if (!build_env.executable_artifacts_finalized) unreachable;
     if (reporter) |r| r.endWithBreakdown(&frontEndBreakdown(build_env.getTimingInfo()));
 
     const root_artifact = build_env.executableRootCheckedArtifact();
@@ -6040,7 +5994,6 @@ pub fn buildLirImageWithBuildEnv(
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
-    allow_user_errors: bool,
 ) CliMainError!SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
@@ -6063,22 +6016,11 @@ pub fn buildLirImageWithBuildEnv(
         resolution_config,
         enable_checked_cache,
         reporter,
-        allow_user_errors,
     );
     defer lowered_result.deinitWatchInputs();
-    defer if (lowered_result.lowered) |*program| program.deinit();
+    defer lowered_result.lowered.deinit();
 
-    if (lowered_result.counts.errors > 0 and lowered_result.lowered == null) {
-        shm.updateHeader();
-        return sharedMemoryResult(&shm, lowered_result.counts, &.{}, &.{}, null);
-    }
-
-    const lowered = if (lowered_result.lowered) |*program| program else {
-        if (builtin.mode == .Debug) {
-            std.debug.panic("LIR image invariant violated: successful coordinator lowering produced no lowered program", .{});
-        }
-        unreachable;
-    };
+    const lowered = &lowered_result.lowered;
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
     defer ctx.gpa.free(platform_entrypoints);
     const copied = try lir.LirImage.copyProgramIntoBuffer(
@@ -6583,7 +6525,6 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs, arg0: []const u8) CliMai
                 .target = null,
                 .output = staging.exe_path,
                 .debug = false,
-                .allow_errors = false,
                 .verbose = false,
                 .no_cache = false,
                 .max_threads = args.max_threads,
@@ -8314,15 +8255,6 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
     };
 }
 
-fn stdTargetAbiForLlvmBuild(target: RocTarget) std.Target.Abi {
-    return switch (target) {
-        .x64musl, .arm64musl, .arm32musl => .musl,
-        .x64glibc, .x64linux, .arm64glibc, .arm64linux, .arm32linux => .gnu,
-        .x64win, .arm64win => .msvc,
-        else => .none,
-    };
-}
-
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
     return switch (target.toOsTag()) {
         .macos, .windows => false,
@@ -8331,75 +8263,15 @@ fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
 }
 
 fn stdTargetForLlvmBuild(ctx: *CliCtx, target: RocTarget) std.zig.system.DetectError!std.Target {
-    var query = std.Target.Query{
-        .cpu_arch = target.toCpuArch(),
-        .os_tag = target.toOsTag(),
-        .abi = stdTargetAbiForLlvmBuild(target),
-    };
-    if (target.toOsTag() == .macos) {
-        query.os_version_min = roc_target.macos_deployment.query_os_version;
-    }
-
-    // Raise the LLVM codegen floor above Zig's most-conservative per-arch
-    // baseline (2003-era x86-64 with only SSE2; ARMv8.0 for aarch64) so Roc
-    // programs may use the last two decades of instructions. The floor is an
-    // explicit, portable minimum applied to every Roc-program LLVM compile,
-    // native and cross alike, so it is independent of the CPU that the compiler
-    // binary itself targets.
-    switch (target.toCpuArch()) {
-        .x86_64 => {
-            // x86-64-v3 (Intel Haswell 2013+ / any AMD Zen) enables AVX2, BMI2,
-            // POPCNT, FMA, and more. The v-levels deliberately exclude the AES
-            // and PCLMULQDQ crypto instructions, so add those two explicitly.
-            query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
-            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.aes));
-            query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.pclmul));
-        },
-        .aarch64, .aarch64_be => {
-            // Zig's baseline for aarch64-macos is already apple_m1, and a native
-            // macOS host detects its actual (>= M1) CPU, so macOS needs no
-            // explicit model. Linux/Windows baseline to generic ARMv8.0, so pin
-            // Cortex-A76 (ARMv8.2 + crypto extension), which covers
-            // Neoverse-N1/Graviton2+, Ampere, Snapdragon, and Raspberry Pi 5.
-            if (target.toOsTag() != .macos) {
-                query.cpu_model = .{ .explicit = &std.Target.aarch64.cpu.cortex_a76 };
-            }
-        },
-        // arm32 and wasm keep their existing baselines: wasm codegen is handled
-        // by Roc's own wasm backend, not this LLVM baseline.
-        else => {},
-    }
-
-    return std.zig.system.resolveTargetQuery(ctx.io.std_io, query);
+    return std.zig.system.resolveTargetQuery(ctx.io.std_io, target.llvmTargetQuery());
 }
 
 fn llvmCpuNameForTarget(std_target: std.Target) []const u8 {
-    return std_target.cpu.model.llvm_name orelse "";
+    return roc_target.llvmCpuName(std_target);
 }
 
 fn llvmFeatureStringForTarget(allocator: Allocator, std_target: std.Target) Allocator.Error![]const u8 {
-    const all_features = std_target.cpu.arch.allFeaturesList();
-    var model_features = std_target.cpu.model.features;
-    model_features.populateDependencies(all_features);
-
-    var features = std.ArrayList(u8).empty;
-    errdefer features.deinit(allocator);
-
-    for (all_features) |feature| {
-        const llvm_name = feature.llvm_name orelse continue;
-        const enabled = std_target.cpu.features.isEnabled(feature.index);
-        const model_enabled = model_features.isEnabled(feature.index);
-        if (enabled == model_enabled) continue;
-
-        if (features.items.len > 0) {
-            try features.append(allocator, ',');
-        }
-        try features.append(allocator, if (enabled) '+' else '-');
-        try features.appendSlice(allocator, llvm_name);
-    }
-
-    if (features.items.len == 0) return "";
-    return features.toOwnedSlice(allocator);
+    return roc_target.llvmFeatureString(allocator, std_target);
 }
 
 fn compileLlvmAppObject(
@@ -8843,11 +8715,6 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     var total_warning_count = diag.warnings;
-    if (diag.errors > 0) {
-        reporter.fail();
-        if (args.allow_errors) return;
-        return error.CompilationFailed;
-    }
     total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -9030,7 +8897,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         0;
 
     if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
+        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
     if (args.warning_count_out) |warning_count_out| {
@@ -9156,11 +9023,6 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     var total_warning_count = diag.warnings;
-    if (diag.errors > 0) {
-        reporter.fail();
-        if (args.allow_errors) return;
-        return error.CompilationFailed;
-    }
     total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -9233,7 +9095,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
             0;
 
         if (!args.suppress_build_status) {
-            try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
+            try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
         }
         return;
     }
@@ -9358,7 +9220,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         0;
 
     if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
+        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
     }
 
     if (args.warning_count_out) |warning_count_out| {
@@ -9474,11 +9336,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr());
     var total_warning_count = diag.warnings;
-    if (diag.errors > 0) {
-        reporter.fail();
-        if (args.allow_errors) return;
-        return error.CompilationFailed;
-    }
     total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -9621,7 +9478,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         0;
 
     if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
+        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
     }
 
     if (args.warning_count_out) |warning_count_out| {
@@ -12302,7 +12159,6 @@ fn buildWatchChildArgv(ctx: *CliCtx, arg0: []const u8, command: WatchCommand, in
             if (args.target) |target| try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{target});
             if (args.output) |output| try appendOwnedArg(ctx.gpa, &argv, &owned, "--output={s}", .{output});
             if (args.debug) try argv.append(ctx.gpa, "--debug");
-            if (args.allow_errors) try argv.append(ctx.gpa, "--allow-errors");
             if (args.verbose) try argv.append(ctx.gpa, "--verbose");
             if (args.timings) try argv.append(ctx.gpa, "--timings");
             if (args.no_cache) try argv.append(ctx.gpa, "--no-cache");
@@ -12519,8 +12375,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     if (args.watch_inputs_file) |file_path| {
         try writeWatchInputsFile(ctx, file_path, &build_env, extra_paths);
     }
-    if (diag.errors > 0) return error.CompilationFailed;
-
     const modules = try build_env.getCompiledModules(ctx.gpa);
     defer ctx.gpa.free(modules);
 
@@ -12651,6 +12505,9 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         try stdout.writeAll(stdout_body.written());
         try stderr.writeAll(stderr_body.written());
         try stdout.print("All ({}) tests passed in {d:.1} ms.{s}\n", .{ total.passed, elapsed_ms, cached_suffix });
+        // Diagnostics determine the command status only after every independent
+        // test root has run; they never gate checked-artifact execution.
+        if (diag.errors > 0) return error.CompilationFailed;
         // Same warning exit policy as check/build/run: passing tests with
         // compile warnings exit 2.
         exitOnWarnings(ctx, diag.warnings);
@@ -13839,6 +13696,7 @@ fn frontEndBreakdown(timing: anytype) [3]progress.SubTiming {
 fn printBuildSuccess(
     ctx: *CliCtx,
     final_output_path: []const u8,
+    error_count: usize,
     warning_count: usize,
     elapsed_ns: u64,
     verbose: bool,
@@ -13848,13 +13706,16 @@ fn printBuildSuccess(
     const stdout = ctx.io.stdout();
     const use_color = ctx.usesColor(.stdout);
     const green = if (use_color) ansi_term.green else "";
+    const red = if (use_color) ansi_term.red else "";
     const yellow = if (use_color) ansi_term.yellow else "";
     const reset = if (use_color) ansi_term.reset else "";
     const warning_color = if (warning_count == 0) green else yellow;
+    const error_color = if (error_count == 0) green else red;
+    const errors_word = if (error_count == 1) "error" else "errors";
     const warnings_word = if (warning_count == 1) "warning" else "warnings";
 
-    try stdout.print("{s}0{s} errors and {s}{d}{s} {s} found in ", .{
-        green, reset, warning_color, warning_count, reset, warnings_word,
+    try stdout.print("{s}{d}{s} {s} and {s}{d}{s} {s} found in ", .{
+        error_color, error_count, reset, errors_word, warning_color, warning_count, reset, warnings_word,
     });
     try progress.writeDuration(stdout, elapsed_ns);
     try stdout.print(" while successfully building:\n\n    {s}\n", .{final_output_path});

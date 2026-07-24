@@ -97,7 +97,7 @@ match nestedList {
 									(patterns
 										(p-assign (ident "y"))))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 205)
+					(e-dispatch-call (method "plus") (constraint-fn-var 221)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))
@@ -114,7 +114,7 @@ match nestedList {
 										(p-assign (ident "x"))
 										(p-assign (ident "y"))))))))
 				(value
-					(e-dispatch-call (method "minus") (constraint-fn-var 207)
+					(e-dispatch-call (method "minus") (constraint-fn-var 223)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "x"))))

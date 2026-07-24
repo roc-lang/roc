@@ -1864,11 +1864,19 @@ const CaptureDependencyGraph = struct {
         const edge = self.edges.items[@intFromEnum(edge_id)];
         const runtime_id = slotCaptureId(self.program, capture);
         if (findSupply(edge.exact_supplies.items, runtime_id)) |supply| return supply;
-        const declared_id = switch (edge.site) {
-            .pre_lift, .call_proc => self.program.getLocal(capture.local).checked_capture_id orelse runtime_id,
-            .fn_ref => runtime_id,
+        if (findSupply(edge.declared_supplies.items, runtime_id)) |supply| return supply;
+        // Producer-authored pre-lift operands declare the slot's checked
+        // capture identity; operands rebuilt after lifting declare the
+        // runtime slot id checked above. Both are exact keys for their
+        // authoring convention.
+        const checked_id = switch (edge.site) {
+            .pre_lift, .call_proc => self.program.getLocal(capture.local).checked_capture_id,
+            .fn_ref => null,
         };
-        return findSupply(edge.declared_supplies.items, declared_id);
+        if (checked_id) |id| {
+            if (findSupply(edge.declared_supplies.items, id)) |supply| return supply;
+        }
+        return null;
     }
 
     fn applyCaptureToEdge(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) Allocator.Error!void {

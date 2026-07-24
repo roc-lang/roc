@@ -54,7 +54,7 @@ NO CHANGE
 			(e-block
 				(e-tag (name "A")))))
 	(if-else
-		(e-num (value "2"))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

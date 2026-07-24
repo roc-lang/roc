@@ -38,7 +38,7 @@ NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-num (value "999999999999999999999999999999"))
+(e-runtime-error (tag "erroneous_value_expr"))
 ~~~
 # TYPES
 ~~~clojure

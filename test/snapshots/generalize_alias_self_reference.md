@@ -56,8 +56,7 @@ NO CHANGE
 		(e-runtime-error (tag "self_referential_definition")))
 	(d-let
 		(p-assign (ident "main"))
-		(e-lookup-local
-			(p-assign (ident "x")))))
+		(e-runtime-error (tag "erroneous_value_use"))))
 ~~~
 # TYPES
 ~~~clojure

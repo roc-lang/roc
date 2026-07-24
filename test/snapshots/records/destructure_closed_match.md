@@ -90,31 +90,7 @@ describe = |rec| match rec {
 		(e-lambda
 			(args
 				(p-assign (ident "rec")))
-			(e-match
-				(match
-					(cond
-						(e-lookup-local
-							(p-assign (ident "rec"))))
-					(branches
-						(branch
-							(patterns
-								(pattern (degenerate false)
-									(p-record-destructure
-										(destructs
-											(record-destruct (label "x") (ident "x")
-												(required
-													(p-assign (ident "x"))))
-											(record-destruct (label "y") (ident "y")
-												(required
-													(p-assign (ident "y"))))))))
-							(value
-								(e-dispatch-call (method "plus") (constraint-fn-var 220)
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "x"))))
-									(args
-										(e-lookup-local
-											(p-assign (ident "y")))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-record

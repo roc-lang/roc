@@ -103,6 +103,7 @@ pub fn hasherWriteOp(primitive: MonoType.Primitive) LIR.LowLevel {
         .f32 => .hasher_write_f32,
         .f64 => .hasher_write_f64,
         .dec => .hasher_write_dec,
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .hasher_write_u128,
     };
 }
 

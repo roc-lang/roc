@@ -109,6 +109,14 @@ pub const BuiltinOwner = enum(u8) {
     f32,
     f64,
     dec,
+    u8x16,
+    i8x16,
+    u16x8,
+    i16x8,
+    u32x4,
+    i32x4,
+    u64x2,
+    i64x2,
     parse_tag_union_spec,
     crypto_sha256_digest,
     crypto_sha256_hasher,
@@ -722,6 +730,14 @@ fn builtinOwnerForRegistryEntry(
     if (type_ident.eql(common.f32) or type_ident.eql(common.f32_type)) return .f32;
     if (type_ident.eql(common.f64) or type_ident.eql(common.f64_type)) return .f64;
     if (type_ident.eql(common.dec) or type_ident.eql(common.dec_type)) return .dec;
+    if (type_ident.eql(common.u8x16_type)) return .u8x16;
+    if (type_ident.eql(common.i8x16_type)) return .i8x16;
+    if (type_ident.eql(common.u16x8_type)) return .u16x8;
+    if (type_ident.eql(common.i16x8_type)) return .i16x8;
+    if (type_ident.eql(common.u32x4_type)) return .u32x4;
+    if (type_ident.eql(common.i32x4_type)) return .i32x4;
+    if (type_ident.eql(common.u64x2_type)) return .u64x2;
+    if (type_ident.eql(common.i64x2_type)) return .i64x2;
 
     if (type_ident.eql(common.list) or type_ident.eql(common.builtin_list)) return .list;
     if (type_ident.eql(common.box) or type_ident.eql(common.builtin_box)) return .box;
@@ -1406,7 +1422,8 @@ pub const StaticDispatchPlanTable = struct {
         }
 
         const module_env = module.moduleEnvConst();
-        for (module_env.numeral_dispatch_plans.items.items) |numeral_plan| {
+        for (module_env.store.literalDispatchPlans()) |numeral_plan| {
+            if (numeral_plan.dispatchKind() != .numeral) continue;
             const node: CIR.Node.Idx = @enumFromInt(numeral_plan.node_idx);
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(numeral_plan.node_idx) orelse
@@ -1472,7 +1489,8 @@ pub const StaticDispatchPlanTable = struct {
             try numeral_by_node.put(allocator, node, plan_id);
         }
 
-        for (module_env.quote_dispatch_plans.items.items) |quote_plan| {
+        for (module_env.store.literalDispatchPlans()) |quote_plan| {
+            if (quote_plan.dispatchKind() != .quote) continue;
             const node: CIR.Node.Idx = @enumFromInt(quote_plan.node_idx);
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
                 checked_bodies.numeralConversionExprAtRawNode(quote_plan.node_idx) orelse
@@ -1977,6 +1995,14 @@ pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .f64 => .f64,
         .dec => .dec,
         .try_ => unreachable,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
         .list => .list,
         .box => .box,
         .dict => .dict,

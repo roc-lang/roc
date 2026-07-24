@@ -109,7 +109,7 @@ pub const Store = struct {
 
     // Number of sentinel layouts that are pre-populated in the layout store.
     // Must be kept in sync with the sentinel values in layout.zig Idx enum.
-    const num_primitives = 17;
+    const num_primitives = 25;
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
@@ -119,6 +119,7 @@ pub const Store = struct {
             .int => @enumFromInt(2 + @intFromEnum(scalar.getInt())),
             .frac => @enumFromInt(@as(u32, 12) + (@intFromEnum(scalar.getFrac()) - @intFromEnum(@TypeOf(scalar.getFrac()).f32))),
             .opaque_ptr => .opaque_ptr,
+            .vector => @enumFromInt(@as(u32, 17) + @intFromEnum(scalar.getVector())),
         };
     }
 
@@ -245,6 +246,11 @@ pub const Store = struct {
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.zst());
+            assertAppendIdx(expected_idx, idx);
+        }
+        inline for (std.enums.values(layout_mod.Vector)) |vector| {
+            const expected_idx = layouts.items.items.len;
+            const idx = try layouts.append(allocator, Layout.vector(vector));
             assertAppendIdx(expected_idx, idx);
         }
 
@@ -2107,6 +2113,7 @@ pub const Store = struct {
             .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
             .int_precision = if (scalar.tag == .int) scalar.getInt() else null,
             .frac_precision = if (scalar.tag == .frac) scalar.getFrac() else null,
+            .vector = if (scalar.tag == .vector) scalar.getVector() else null,
         };
     }
 
@@ -2384,6 +2391,7 @@ pub const Store = struct {
                 .frac => @intCast(layout.getScalar().getFrac().size()),
                 .str => 3 * target_usize.size(), // ptr, encoded capacity, byte length
                 .opaque_ptr => target_usize.size(),
+                .vector => 16,
             },
             .box, .box_of_zst, .erased_callable, .ptr => target_usize.size(),
             .list, .list_of_zst => 3 * target_usize.size(), // ptr, length, capacity

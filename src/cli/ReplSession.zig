@@ -621,8 +621,16 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         import_sources,
         self.prePublishedBuiltin(),
         self.roc_ctx,
-    )) |parsed| {
-        eval.test_helpers.cleanupParseAndCanonical(self.allocator, parsed);
+    )) |parsed_value| {
+        var parsed = parsed_value;
+        defer parsed.deinit(self.allocator);
+        if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
+            const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return .{ .valid = false, .error_message = null },
+            };
+            return .{ .valid = false, .error_message = msg };
+        }
         return .{ .valid = true, .error_message = null };
     } else |err| switch (err) {
         error.TypeCheckError => {
@@ -675,6 +683,16 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
         else => return err,
     };
     defer compiled.deinit(self.allocator);
+
+    // Checked publication deliberately succeeds in the presence of user
+    // errors so build/run/test can execute independent roots. A REPL
+    // expression is a single interactive transaction: report its errors and
+    // leave the session definitions intact instead of executing the explicit
+    // runtime-error node and aborting the remaining batch input. Warnings
+    // (e.g. an unused loop binder) never block evaluation.
+    if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
+        return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
+    }
 
     return switch (self.backend_kind) {
         .interpreter => .{ .output = try eval.test_helpers.lirInterpreterInspectedStr(self.allocator, &compiled.lowered) },

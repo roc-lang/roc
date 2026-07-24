@@ -129,7 +129,6 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     try builder.initHostedCatalog();
-    try builder.initComponentMethodTargets();
     try builder.loadCandidateSpecializationShards();
 
     for (roots.requests) |request| {
@@ -184,6 +183,7 @@ const ModuleView = struct {
     hosted_procs: *const checked.HostedProcTable,
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     method_registry: *const static_dispatch.MethodRegistry,
+    method_lookup_scope: []const checked.ModuleId,
     resolved_refs: *const checked.ResolvedValueTable,
     nested_proc_sites: *const checked.NestedProcSiteTable,
     exported_procedure_bindings: checked.ExportedProcedureBindingView,
@@ -675,9 +675,43 @@ fn evidenceChainEql(a: EvidenceChain, b: EvidenceChain) bool {
     }
 }
 
-const MethodDispatch = struct {
-    owner: static_dispatch.MethodOwner,
-    method: names.MethodNameId,
+const ScopedMethodDispatch = struct {
+    scope: [32]u8,
+    owner_tag: u8,
+    owner_first: u32,
+    owner_second: u32,
+    owner_third: u32,
+    method: u32,
+
+    fn init(scope: checked.ModuleId, owner: static_dispatch.MethodOwner, method: names.MethodNameId) ScopedMethodDispatch {
+        const owner_fields: struct { tag: u8, first: u32, second: u32, third: u32 } = switch (owner) {
+            .builtin => |builtin| .{
+                .tag = 1,
+                .first = @intFromEnum(builtin),
+                .second = 0,
+                .third = 0,
+            },
+            .nominal => |nominal| .{
+                .tag = 0,
+                .first = @intFromEnum(nominal.module),
+                .second = @intFromEnum(nominal.type_name),
+                .third = if (nominal.source_decl) |source_decl| source_decl +| 1 else 0,
+            },
+        };
+        return .{
+            .scope = scope.bytes,
+            .owner_tag = owner_fields.tag,
+            .owner_first = owner_fields.first,
+            .owner_second = owner_fields.second,
+            .owner_third = owner_fields.third,
+            .method = @intFromEnum(method),
+        };
+    }
+};
+
+const ScopedMethodResolution = union(enum) {
+    missing,
+    target: MethodLookup,
 };
 
 const FunctionShape = struct {
@@ -923,6 +957,11 @@ const StaticDataUse = struct {
     type_cell: DraftTypeCell,
 };
 
+const ConstNodeAddress = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+};
+
 /// Key for a memoized structural-derivation helper def. `value_ty` is the type
 /// being derived over; `result_ty` is the derivation's auxiliary type (the
 /// produced Str for inspect, the Bool for equality, the Hasher for hashing).
@@ -984,6 +1023,7 @@ const DraftGeneratedHelperDefEntry = union(enum) {
 
 fn templateSpecIdentity(
     template_ref: names.ProcTemplate,
+    method_scope: checked.ModuleId,
     source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     request_fn_ty: Type.TypeId,
@@ -995,6 +1035,7 @@ fn templateSpecIdentity(
             .proc_base = @intFromEnum(template_ref.proc_base),
             .template = @intFromEnum(template_ref.template),
         } },
+        .method_scope = moduleDigestFromId(method_scope),
         .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
         .request_fn_ty_digest = request_fn_ty_digest,
@@ -1004,6 +1045,7 @@ fn templateSpecIdentity(
 
 fn nestedSpecIdentity(
     nested: Ast.NestedFn,
+    method_scope: checked.ModuleId,
     source_fn_key: names.TypeDigest,
     evidence_digest: Ast.EvidenceDigest,
     capture_abi_digest: names.TypeDigest,
@@ -1022,6 +1064,7 @@ fn nestedSpecIdentity(
             .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
             .site = @intFromEnum(nested.site),
         } },
+        .method_scope = moduleDigestFromId(method_scope),
         .source_fn_ty_digest = source_fn_key,
         .evidence_digest = evidence_digest,
         .request_fn_ty_digest = request_fn_ty_digest,
@@ -1051,6 +1094,12 @@ const Builder = struct {
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
+    /// Static-data uses indexed by `StaticDataId`. Raw Monotype ids
+    /// are only a fast exact-key path; exact structural equality below is the
+    /// authority for reusing one representation across equivalent
+    /// instantiations.
+    static_data_uses: std.ArrayList(StaticDataUse),
+    static_data_eligibility: std.AutoHashMap(ConstNodeAddress, bool),
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry),
@@ -1060,7 +1109,12 @@ const Builder = struct {
     /// derivation internals, inspect/parser/encode helpers, path synthesis).
     /// Built once; keys use the same program-name interning as `typeDef`, so
     /// owners derived from monomorphic type content correlate directly.
-    component_method_targets: std.AutoHashMapUnmanaged(MethodDispatch, MethodLookup) = .{},
+    /// Scoped method-target resolutions. The same owner and method pair may
+    /// resolve to different targets depending on which module's method-lookup
+    /// registry scope applies. Checked modules output the ordered registry
+    /// scope; this memo only accelerates repeated exact lookups during the
+    /// build and never changes the checked outcome.
+    scoped_method_targets: std.AutoHashMapUnmanaged(ScopedMethodDispatch, ScopedMethodResolution) = .{},
     /// Exact checked identity of the compiler-provided `Try` nominal. `Try`
     /// deliberately retains nominal static-dispatch ownership, so it cannot use
     /// `builtin_owner`; structural parser lowering still needs its producer
@@ -1103,6 +1157,8 @@ const Builder = struct {
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
+            .static_data_uses = .empty,
+            .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
             .inspect_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .equality_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
             .hash_defs = std.AutoHashMap(GeneratedHelperDefAddress, GeneratedHelperDefEntry).init(allocator),
@@ -1161,11 +1217,13 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
-        self.component_method_targets.deinit(self.allocator);
+        self.scoped_method_targets.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
         self.hash_defs.deinit();
         self.equality_defs.deinit();
         self.inspect_defs.deinit();
+        self.static_data_eligibility.deinit();
+        self.static_data_uses.deinit(self.allocator);
         self.static_data_ids.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
@@ -1316,39 +1374,6 @@ const Builder = struct {
         }
 
         return .{ .keys = keys, .symbols = symbols };
-    }
-
-    fn initComponentMethodTargets(self: *Builder) Allocator.Error!void {
-        try self.appendComponentMethodTargetsFromView(moduleView(self.root_view));
-        for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
-            try self.appendComponentMethodTargetsFromView(moduleView(imported));
-        }
-        for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
-            try self.appendComponentMethodTargetsFromView(moduleView(relation));
-        }
-    }
-
-    fn appendComponentMethodTargetsFromView(self: *Builder, view: ModuleView) Allocator.Error!void {
-        for (view.method_registry.entries) |entry| {
-            const owner: static_dispatch.MethodOwner = switch (entry.key.owner) {
-                .builtin => |builtin| .{ .builtin = builtin },
-                .nominal => |nominal| .{ .nominal = .{
-                    .module = try self.moduleIdentity(view, nominal.module),
-                    .type_name = try self.typeName(view, nominal.type_name),
-                    .source_decl = nominal.source_decl,
-                } },
-            };
-            const slot = try self.component_method_targets.getOrPut(self.allocator, .{
-                .owner = owner,
-                .method = try self.methodName(view, entry.key.method),
-            });
-            if (slot.found_existing) {
-                Common.invariant("checked method registries contain duplicate dispatch targets");
-            }
-            slot.value_ptr.* = .{ .view = view, .target = entry.target };
-        }
     }
 
     fn appendHostedCatalogFromView(self: *Builder, entries: *std.ArrayList(HostedCatalogEntry), view: ModuleView) Allocator.Error!void {
@@ -1682,7 +1707,7 @@ const Builder = struct {
                     view.types.rootKey(source_fn_ty),
                     mono_fn_ty,
                 );
-                const fn_id = try self.lowerFnTemplateDef(fn_template, &.{});
+                const fn_id = try self.lowerFnTemplateDef(view, fn_template, &.{});
                 break :blk try self.program.addExpr(.{
                     .ty = self.program.fnSource(fn_id).mono_fn_ty,
                     .data = .{ .fn_def = .{ .fn_id = fn_id } },
@@ -1706,8 +1731,9 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
+            .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            else => Common.invariant("callable eval binding root did not output a callable value"),
+            .expect => Common.invariant("callable eval binding root output an expect payload"),
         };
     }
 
@@ -1918,6 +1944,7 @@ const Builder = struct {
     fn lowerTemplateWithMono(
         self: *Builder,
         template_ref: names.ProcTemplate,
+        method_scope: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         fn_ty: Type.TypeId,
@@ -1945,7 +1972,7 @@ const Builder = struct {
         const stored_source_topology = if (source_topology != null) identity_evidence else null;
         const request_digest = self.specializationTypeDigest(fn_ty);
         if (try self.spec_store.findLocal(
-            templateSpecIdentity(template_ref, source_fn_key, evidence_digest, fn_ty, request_digest),
+            templateSpecIdentity(template_ref, method_scope.key, source_fn_key, evidence_digest, fn_ty, request_digest),
             specializationEvidenceView(identity_evidence),
         )) |hit| {
             self.count("template_hits");
@@ -2001,6 +2028,7 @@ const Builder = struct {
             });
             const spec = try self.addTemplateSpecRecord(
                 template_ref,
+                method_scope.key,
                 source_fn_key,
                 identity_evidence,
                 lower_fn_ty,
@@ -2051,6 +2079,7 @@ const Builder = struct {
                 if (try self.hostedTryAdapterSourceType(hosted_try, declared_mono_fn_ty, lower_fn_ty)) |adapter_source_fn_ty| {
                     const source_def = try self.lowerTemplateWithMono(
                         template_ref,
+                        method_scope,
                         declared_source_fn_ty,
                         declared_source_fn_key,
                         adapter_source_fn_ty,
@@ -2116,7 +2145,7 @@ const Builder = struct {
         const body_draft = &body_draft_storage;
         self.active_body_draft = body_draft;
         defer self.active_body_draft = saved_body_draft;
-        var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, body_draft);
+        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, method_scope, template_ref, graph, body_draft);
         body_ctx.evidence = retained_topology orelse rootEvidence(template_ref, spec_evidence);
         const lowered_template = self.lowered_templates.getPtr(reservation.fn_id) orelse
             Common.invariant("procedure specialization lost its evidence record before body lowering");
@@ -2187,7 +2216,7 @@ const Builder = struct {
             partial_evidence
         else
             try self.completeRootTemplateEvidence(view, template_ref, template, partial_evidence);
-        const family = DraftTemplateFamilyAddress.init(template_ref, source_fn_key);
+        const family = DraftTemplateFamilyAddress.init(template_ref, source_ctx.method_scope.key, source_fn_key);
         const stored_evidence = try self.constFnEvidence(rootEvidence(template_ref, evidence));
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
         const structural_lexical_dependent = template.target != .hosted and
@@ -2387,6 +2416,7 @@ const Builder = struct {
         try source_ctx.draft.template_specs.append(self.allocator, .{
             .state = .lowering,
             .template_ref = template_ref,
+            .method_scope = source_ctx.method_scope.key,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
             .request_fn_node = request_fn_node,
@@ -2430,7 +2460,7 @@ const Builder = struct {
         defer owner_scope.leave();
         try self.registerDraftProcDebugNameForTemplate(source_ctx.draft, symbol, view, template_ref);
 
-        var body_ctx = try BodyContext.init(self.allocator, self, view, template_ref, source_ctx.graph, source_ctx.draft);
+        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, source_ctx.method_scope, template_ref, source_ctx.graph, source_ctx.draft);
         body_ctx.evidence = rootEvidence(template_ref, evidence);
         body_ctx.runtime_demand_guard_frames = source_ctx.runtime_demand_guard_frames;
         defer body_ctx.deinit();
@@ -2495,6 +2525,7 @@ const Builder = struct {
             try source_ctx.draft.template_specs.append(self.allocator, .{
                 .state = .lowered,
                 .template_ref = template_ref,
+                .method_scope = source_ctx.method_scope.key,
                 .source_fn_ty = declared_source_fn_ty,
                 .source_fn_key = declared_source_fn_key,
                 .request_fn_node = declared_node,
@@ -2631,6 +2662,7 @@ const Builder = struct {
     fn addTemplateSpecRecord(
         self: *Builder,
         template_ref: names.ProcTemplate,
+        method_scope: checked.ModuleId,
         source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         request_fn_ty: Type.TypeId,
@@ -2640,7 +2672,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            templateSpecIdentity(template_ref, source_fn_key, evidence_digest, request_fn_ty, request_fn_ty_digest),
+            templateSpecIdentity(template_ref, method_scope, source_fn_key, evidence_digest, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             status,
@@ -2650,6 +2682,7 @@ const Builder = struct {
     fn addNestedSpecRecord(
         self: *Builder,
         nested: Ast.NestedFn,
+        method_scope: checked.ModuleId,
         source_fn_key: names.TypeDigest,
         evidence: StoredConstFnEvidence,
         capture_abi_digest: names.TypeDigest,
@@ -2659,7 +2692,7 @@ const Builder = struct {
     ) Allocator.Error!Ast.SpecId {
         const evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head);
         return try self.addSpecRecord(
-            nestedSpecIdentity(nested, source_fn_key, evidence_digest, capture_abi_digest, request_fn_ty, request_fn_ty_digest),
+            nestedSpecIdentity(nested, method_scope, source_fn_key, evidence_digest, capture_abi_digest, request_fn_ty, request_fn_ty_digest),
             evidence,
             fn_id,
             .lowering,
@@ -3417,20 +3450,47 @@ const Builder = struct {
         type_cell: DraftTypeCell,
     ) Allocator.Error!Common.StaticDataId {
         const const_node = self.constNode(const_locator, node);
-        const gop = try self.static_data_ids.getOrPut(.{
+        const use = StaticDataUse{
             .module = const_node.module.key,
             .node = const_node.id,
             .checked_type = checked_type,
             .type_cell = type_cell,
-        });
-        if (!gop.found_existing) {
-            gop.value_ptr.* = try self.program.addStaticDataValue(.{
-                .const_locator = const_locator,
-                .node = node,
-                .checked_type = checked_type,
-            });
+        };
+        if (self.static_data_ids.get(use)) |existing| return existing;
+
+        // Structural dedup can only compare committed types; graph cells keep
+        // identity semantics until final sealing commits them.
+        if (use.type_cell == .sealed) {
+            for (self.static_data_uses.items, 0..) |existing, index| {
+                if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
+                    existing.node != use.node or
+                    existing.checked_type != use.checked_type)
+                {
+                    continue;
+                }
+                const existing_ty = switch (existing.type_cell) {
+                    .sealed => |ty| ty,
+                    .graph_node => continue,
+                };
+                if (!try self.program.types.typeEql(&self.program.names, existing_ty, use.type_cell.sealed)) continue;
+
+                const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
+                try self.static_data_ids.put(use, id);
+                return id;
+            }
         }
-        return gop.value_ptr.*;
+
+        const id = try self.program.addStaticDataValue(.{
+            .const_locator = const_locator,
+            .node = node,
+            .checked_type = checked_type,
+        });
+        if (@intFromEnum(id) != self.static_data_uses.items.len) {
+            Common.invariant("Monotype static-data use index diverged from program id");
+        }
+        try self.static_data_uses.append(self.allocator, use);
+        try self.static_data_ids.put(use, id);
+        return id;
     }
 
     const BareFnCandidate = enum {
@@ -3440,6 +3500,44 @@ const Builder = struct {
 
     fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId, bare_fn: BareFnCandidate) bool {
         return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node), bare_fn);
+    }
+
+    fn constNodeHasStableStaticDataRepresentation(
+        self: *Builder,
+        view: ModuleView,
+        node: checked.ConstNodeId,
+    ) Allocator.Error!bool {
+        const address = ConstNodeAddress{ .module = view.key, .node = node };
+        if (self.static_data_eligibility.get(address)) |stable| return stable;
+
+        const stable = switch (view.const_store.get(node)) {
+            .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
+            .fn_value => false,
+            .zst,
+            .scalar,
+            .str,
+            .crash,
+            => true,
+            .box => |child| try self.constNodeHasStableStaticDataRepresentation(view, child),
+            .list,
+            .tuple,
+            .record,
+            => |children| blk: {
+                for (children) |child| {
+                    if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
+                }
+                break :blk true;
+            },
+            .tag => |tag| blk: {
+                for (tag.payloads) |child| {
+                    if (!try self.constNodeHasStableStaticDataRepresentation(view, child)) break :blk false;
+                }
+                break :blk true;
+            },
+            .nominal => |nominal| try self.constNodeHasStableStaticDataRepresentation(view, nominal.backing),
+        };
+        try self.static_data_eligibility.put(address, stable);
+        return stable;
     }
 
     fn constValueMayUseStaticDataCandidate(self: *Builder, view: ModuleView, value: checked.ConstValue, bare_fn: BareFnCandidate) bool {
@@ -3470,20 +3568,67 @@ const Builder = struct {
 
     fn lookupMethodTarget(
         self: *Builder,
+        scope: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_view: ModuleView,
         method: names.MethodNameId,
-    ) ?MethodLookup {
-        return self.lookupMethodTargetByName(owner, method_view.names.methodNameText(method));
+    ) Allocator.Error!?MethodLookup {
+        return try self.lookupMethodTargetByName(scope, owner, method_view.names.methodNameText(method));
     }
 
     fn lookupMethodTargetByName(
         self: *Builder,
+        scope: ModuleView,
+        owner: static_dispatch.MethodOwner,
+        method_name: []const u8,
+    ) Allocator.Error!?MethodLookup {
+        const method = try self.program.names.internMethodName(method_name);
+        const address = ScopedMethodDispatch.init(scope.key, owner, method);
+        if (self.scoped_method_targets.get(address)) |resolution| {
+            return switch (resolution) {
+                .missing => null,
+                .target => |target| target,
+            };
+        }
+
+        const resolution: ScopedMethodResolution = if (self.findMethodTargetByName(scope, owner, method_name)) |target|
+            .{ .target = target }
+        else
+            .missing;
+
+        try self.scoped_method_targets.put(self.allocator, address, resolution);
+        return switch (resolution) {
+            .missing => null,
+            .target => |target| target,
+        };
+    }
+
+    fn findMethodTargetByName(
+        self: *Builder,
+        scope: ModuleView,
         owner: static_dispatch.MethodOwner,
         method_name: []const u8,
     ) ?MethodLookup {
-        const method = self.program.names.lookupMethodName(method_name) orelse return null;
-        return self.component_method_targets.get(.{ .owner = owner, .method = method });
+        if (self.methodTargetInView(scope, owner, method_name, true)) |target| return target;
+        for (scope.method_lookup_scope) |module_id| {
+            const candidate = self.moduleForId(module_id);
+            if (self.methodTargetInView(candidate, owner, method_name, false)) |target| return target;
+        }
+        return null;
+    }
+
+    fn methodTargetInView(
+        self: *Builder,
+        view: ModuleView,
+        owner: static_dispatch.MethodOwner,
+        method_name: []const u8,
+        allow_local_proc: bool,
+    ) ?MethodLookup {
+        const view_owner = static_dispatch.methodOwnerInImportedStore(&self.program.names, view.names, owner) orelse return null;
+        const view_method = view.names.lookupMethodName(method_name) orelse return null;
+        const target = view.method_registry.lookup(.{ .owner = view_owner, .method = view_method }) orelse return null;
+        if (!allow_local_proc and target.kind == .local_proc) return null;
+        return .{ .view = view, .target = target };
     }
 
     fn noteBuiltinTryDef(
@@ -3564,7 +3709,7 @@ const Builder = struct {
             try self.materializeRootProcedureEvidence(fn_template, evidence_ref)
         else
             &.{};
-        return try self.lowerFnTemplateCallTarget(fn_template, evidence);
+        return try self.lowerFnTemplateCallTarget(source_ty_view, fn_template, evidence);
     }
 
     fn materializeRootProcedureEvidence(
@@ -3620,7 +3765,7 @@ const Builder = struct {
     /// request reserves an id and defers the body; outside one (root and
     /// wrapper paths, whose types come from the builder-global cache without
     /// body evidence), the body lowers now.
-    fn lowerFnTemplateCallTarget(self: *Builder, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
+    fn lowerFnTemplateCallTarget(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnSlot {
         const template_ref = switch (fn_template.fn_def) {
             .local_template,
             .imported_template,
@@ -3637,13 +3782,13 @@ const Builder = struct {
         if (self.active_graph != null) {
             Common.invariant("final function-template lowering was called during an active body draft");
         }
-        const def = try self.lowerTemplateWithMono(template_ref, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty, evidence, null);
+        const def = try self.lowerTemplateWithMono(template_ref, method_scope, fn_template.source_fn_ty, fn_template.source_fn_key, fn_template.mono_fn_ty, evidence, null);
         return .{ .local = self.defFnId(def) };
     }
 
-    fn lowerFnTemplateDef(self: *Builder, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
+    fn lowerFnTemplateDef(self: *Builder, method_scope: ModuleView, fn_template: Ast.FnTemplate, evidence: []const SpecEvidence) Allocator.Error!Ast.FnId {
         return localFnIdFromSlot(
-            try self.lowerFnTemplateCallTarget(fn_template, evidence),
+            try self.lowerFnTemplateCallTarget(method_scope, fn_template, evidence),
             "Monotype function value lowering requires a local function definition",
         );
     }
@@ -3715,6 +3860,7 @@ const Builder = struct {
                 };
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
+                    fn_view,
                     fn_template.source_fn_ty,
                     fn_template.source_fn_key,
                     fn_template.mono_fn_ty,
@@ -3772,7 +3918,7 @@ const Builder = struct {
         owned_scope: ?checked.DispatchScopeId,
     ) Allocator.Error!DraftFnTarget {
         self.count("nested_requests");
-        const family = DraftNestedFamilyAddress.init(nested, source_fn_key);
+        const family = DraftNestedFamilyAddress.init(nested, source_ctx.method_scope.key, source_fn_key);
         const stored_evidence = try self.constFnEvidence(requested_evidence);
         const evidence_digest = Ast.fnEvidenceDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head);
         // Nested draft requests use the same graph-native identity discipline
@@ -3878,6 +4024,7 @@ const Builder = struct {
         try source_ctx.draft.nested_specs.append(self.allocator, .{
             .state = .lowering,
             .nested = nested,
+            .method_scope = source_ctx.method_scope.key,
             .expr_id = expr_id,
             .source_fn_ty = source_fn_ty,
             .source_fn_key = source_fn_key,
@@ -4769,7 +4916,7 @@ const Builder = struct {
             for (body_draft.template_specs.items) |spec| {
                 if (spec.fn_id == draft_id) {
                     if (!spec.local_context_dependent) {
-                        identity = templateSpecIdentity(spec.template_ref, spec.source_fn_key, sealed_template.evidence_digest, fn_ty, digest);
+                        identity = templateSpecIdentity(spec.template_ref, spec.method_scope, spec.source_fn_key, sealed_template.evidence_digest, fn_ty, digest);
                     }
                     lexical_owner = spec.lexical_owner;
                     allow_imported[raw_index] = !spec.requires_local;
@@ -4783,6 +4930,7 @@ const Builder = struct {
                         if (!spec.local_context_dependent) {
                             identity = nestedSpecIdentity(
                                 spec.nested,
+                                spec.method_scope,
                                 spec.source_fn_key,
                                 sealed_template.evidence_digest,
                                 spec.capture_abi_digest orelse Common.invariant("nested specialization identity omitted its sealed capture ABI"),
@@ -5055,11 +5203,12 @@ const Builder = struct {
             const capture_abi_digest = spec.capture_abi_digest orelse
                 Common.invariant("nested specialization finalized without its sealed capture ABI");
             if (try self.spec_store.findLocal(
-                nestedSpecIdentity(spec.nested, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, fn_ty, digest),
+                nestedSpecIdentity(spec.nested, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, capture_abi_digest, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addNestedSpecRecord(
                 spec.nested,
+                spec.method_scope,
                 spec.source_fn_key,
                 evidence,
                 capture_abi_digest,
@@ -5093,11 +5242,12 @@ const Builder = struct {
             const digest = self.specializationTypeDigest(fn_ty);
             const evidence = programViewFnEvidence(self.program.view(), fn_template);
             if (try self.spec_store.findLocal(
-                templateSpecIdentity(spec.template_ref, spec.source_fn_key, fn_template.evidence_digest, fn_ty, digest),
+                templateSpecIdentity(spec.template_ref, spec.method_scope, spec.source_fn_key, fn_template.evidence_digest, fn_ty, digest),
                 specializationEvidenceView(evidence),
             )) |_| continue;
             const spec_id = try self.addTemplateSpecRecord(
                 spec.template_ref,
+                spec.method_scope,
                 spec.source_fn_key,
                 evidence,
                 fn_ty,
@@ -6498,7 +6648,7 @@ const Builder = struct {
         self.active_body_draft = &body_draft;
         defer self.active_body_draft = saved_body_draft;
         defer body_draft.deinit();
-        var target_ctx = try BodyContext.init(self.allocator, self, lookup.view, template, graph, &body_draft);
+        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self, lookup.view, moduleView(self.root_view), template, graph, &body_draft);
         defer target_ctx.deinit();
         const callable_node = try target_ctx.instantiateTargetCallNodeFromMonoArgs(lookup.target.callable_ty, &.{value_ty}, str_ty);
         try graph.freezeRelations();
@@ -7837,13 +7987,15 @@ const DraftTemplateFamilyAddress = struct {
     module: [32]u8,
     proc_base: u32,
     template: u32,
+    method_scope: [32]u8,
     source_fn_key: [32]u8,
 
-    fn init(template_ref: names.ProcTemplate, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
+    fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(template_ref).bytes,
             .proc_base = @intFromEnum(template_ref.proc_base),
             .template = @intFromEnum(template_ref.template),
+            .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
     }
@@ -7855,15 +8007,17 @@ const DraftNestedFamilyAddress = struct {
     owner_template: u32,
     owner_fn_key: [32]u8,
     site: u32,
+    method_scope: [32]u8,
     source_fn_key: [32]u8,
 
-    fn init(nested: Ast.NestedFn, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
+    fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(nested.owner).bytes,
             .owner_proc_base = @intFromEnum(nested.owner.proc_base),
             .owner_template = @intFromEnum(nested.owner.template),
             .owner_fn_key = nested.context_fn_key.bytes,
             .site = @intFromEnum(nested.site),
+            .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
     }
@@ -7892,6 +8046,9 @@ fn draftOpenRequestKey(node: NodeId) [32]u8 {
 const DraftTemplateSpec = struct {
     state: DraftSpecState,
     template_ref: names.ProcTemplate,
+    /// Checked module whose ordered registry scope governs generated method
+    /// dispatch embedded in this specialization's body.
+    method_scope: checked.ModuleId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     request_fn_node: NodeId,
@@ -8194,6 +8351,9 @@ const DraftStructuralEqMethodCall = struct {
 const DraftNestedSpec = struct {
     state: DraftSpecState,
     nested: Ast.NestedFn,
+    /// Checked module whose ordered registry scope governs generated method
+    /// dispatch embedded in this specialization's body.
+    method_scope: checked.ModuleId,
     expr_id: checked.CheckedExprId,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
@@ -8366,6 +8526,9 @@ const BodyDraftStore = struct {
     current_owner: DraftOwner,
     owner_starts: DraftCoreLengths,
     owner_runs: std.ArrayList(DraftOwnerRun),
+    /// Closed static-data candidates are shared by every child lowering
+    /// context writing into this specialization draft.
+    static_data_candidate_exprs: std.AutoHashMap(Common.StaticDataId, DraftExprId),
 
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
@@ -8429,6 +8592,7 @@ const BodyDraftStore = struct {
             .current_owner = .root,
             .owner_starts = @splat(0),
             .owner_runs = .empty,
+            .static_data_candidate_exprs = std.AutoHashMap(Common.StaticDataId, DraftExprId).init(allocator),
         };
     }
 
@@ -8469,6 +8633,7 @@ const BodyDraftStore = struct {
         self.expr_impossibility_proofs.deinit(self.allocator);
         self.impossibility_proof_ids.deinit(self.allocator);
         self.impossibility_proofs.deinit(self.allocator);
+        self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
         self.expr_regions.deinit(self.allocator);
@@ -9743,6 +9908,10 @@ const ActiveReturnTarget = struct {
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
+    /// Checked module whose ordered registry scope governs generated method
+    /// dispatch in this specialization. This can differ from `view` when an
+    /// imported template is specialized for a caller's concrete types.
+    method_scope: ModuleView,
     view: ModuleView,
     owner_template: names.ProcTemplate,
     owner_context_fn_key: names.TypeDigest,
@@ -9985,16 +10154,16 @@ const BodyContext = struct {
                 if (self.tryJsonInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
                 }
-                if (self.missingTryInfo(shape_ty)) |info| {
+                if (try self.missingTryInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_ty, encoding_ty, plan, inputs);
                 }
-                if (self.customParserLookup(shape_ty) != null or self.jsonParseScalarMethodName(shape_ty) != null) return;
+                if ((try self.customParserLookup(shape_ty)) != null or self.jsonParseScalarMethodName(shape_ty) != null) return;
             },
             .encoder => {
                 if (self.tryJsonInfo(shape_ty)) |info| {
                     return try self.collectSerializationPlanInputs(kind, info.ok_payload_ty, encoding_ty, plan, inputs);
                 }
-                if (self.customEncoderForLookup(shape_ty) != null or self.jsonEncodeScalarMethodName(shape_ty) != null) return;
+                if ((try self.customEncoderForLookup(shape_ty)) != null or self.jsonEncodeScalarMethodName(shape_ty) != null) return;
             },
         }
         if (self.setPayloadType(shape_ty)) |payload_ty| {
@@ -10030,7 +10199,7 @@ const BodyContext = struct {
                 for (fields) |field| {
                     const child_ty = switch (kind) {
                         .parser => field.ty,
-                        .encoder => self.encodeRecordFieldPayloadType(field.ty),
+                        .encoder => try self.encodeRecordFieldPayloadType(field.ty),
                     };
                     try self.collectSerializationPlanInputs(kind, child_ty, encoding_ty, plan, inputs);
                 }
@@ -10230,7 +10399,20 @@ const BodyContext = struct {
         graph: *InstGraph,
         draft: *BodyDraftStore,
     ) Allocator.Error!BodyContext {
+        return try initWithMethodScope(allocator, builder, view, view, owner_template, graph, draft);
+    }
+
+    fn initWithMethodScope(
+        allocator: Allocator,
+        builder: *Builder,
+        view: ModuleView,
+        method_scope: ModuleView,
+        owner_template: names.ProcTemplate,
+        graph: *InstGraph,
+        draft: *BodyDraftStore,
+    ) Allocator.Error!BodyContext {
         var ctx = initTypeOnly(allocator, builder, view, owner_template, graph, draft);
+        ctx.method_scope = method_scope;
         const string_literals = try allocator.alloc(?DraftStringLiteralId, view.bodies.stringLiteralCount());
         @memset(string_literals, null);
         ctx.string_literals = string_literals;
@@ -10251,6 +10433,7 @@ const BodyContext = struct {
         return .{
             .allocator = allocator,
             .builder = builder,
+            .method_scope = view,
             .view = view,
             .owner_template = owner_template,
             .owner_context_fn_key = .{},
@@ -11180,7 +11363,10 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(&self.builder.program.types, value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "to_inspect") orelse return null);
+        const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, "to_inspect")) orelse return null);
+        if (lookup.view.types.payload(lookup.target.callable_ty) == .err) {
+            return try self.runtimeCrashExpr(str_ty, "runtime error");
+        }
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -11213,7 +11399,7 @@ const BodyContext = struct {
                     return try self.prepareInspectMethodsAtNode(named.args[0], str_ty, seen);
                 }
                 if (self.methodOwnerFromNode(node)) |owner| {
-                    if (self.builder.lookupMethodTargetByName(owner, "to_inspect")) |raw_lookup| {
+                    if (try self.builder.lookupMethodTargetByName(self.method_scope, owner, "to_inspect")) |raw_lookup| {
                         const lookup = try self.withLocalProcContext(raw_lookup);
                         for (self.draft.prepared_inspect_methods.items) |prepared| {
                             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -11513,7 +11699,7 @@ const BodyContext = struct {
         current_fn_key: names.TypeDigest,
         copy_type_cells: bool,
     ) Allocator.Error!BodyContext {
-        var child = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var child = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         child.evidence = self.evidence;
         errdefer child.deinit();
         child.owner_context_fn_key = self.owner_context_fn_key;
@@ -12471,10 +12657,11 @@ const BodyContext = struct {
     }
 
     fn freshInstNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
-        var fresh = try BodyContext.init(
+        var fresh = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
             self.view,
+            self.method_scope,
             self.owner_template,
             self.graph,
             self.draft,
@@ -12693,7 +12880,7 @@ const BodyContext = struct {
         const backing = if (moduleBytesEqual(source.view.key.bytes, self.view.key.bytes)) backing: {
             break :backing try self.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         } else backing: {
-            var source_ctx = try BodyContext.init(self.allocator, self.builder, source.view, self.owner_template, self.graph, self.draft);
+            var source_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, source.view, self.method_scope, self.owner_template, self.graph, self.draft);
             source_ctx.evidence = self.evidence;
             defer source_ctx.deinit();
             source_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -13210,6 +13397,10 @@ const BodyContext = struct {
     fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
+            // A checked runtime error is bottom: it never produces a value, so
+            // an unconstrained occurrence uses unit while contextual lowering
+            // supplies the exact expected type through lowerExprAtType.
+            .runtime_error => try self.unitType(),
             .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
             .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
             .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerTypeView(expr.ty),
@@ -13266,6 +13457,20 @@ const BodyContext = struct {
         const region = self.sourceRegionForExpr(expr);
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
+        if (self.checkedExprDivergesInLoweredRuntime(expr_id)) {
+            // An uncontextual use still has to preserve an explicitly checked
+            // non-returning path. A root error is bottom and can use unit; any
+            // other divergent value keeps its own graph node as the cell — the
+            // value never materializes, and sealing defaults the node if
+            // nothing else constrains it (e.g. a bare `break` statement).
+            if (self.view.types.payload(expr.ty) == .err) {
+                return try self.lowerDivergentExprAtType(expr_id, try self.unitType());
+            }
+            return try self.lowerDivergentExprAtTypeCell(
+                expr_id,
+                DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr_id)),
+            );
+        }
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
@@ -13273,6 +13478,7 @@ const BodyContext = struct {
                 try self.builder.primitiveType(.str),
                 self.inspectCallDemand(call),
             )) |rendered| return rendered,
+            .runtime_error => return try self.lowerExprWithType(expr_id, try self.unitType()),
             else => {},
         }
         switch (expr.data) {
@@ -13300,6 +13506,22 @@ const BodyContext = struct {
             },
             .str => |segments| {
                 const expr_node = try self.lowerExprTypeNode(expr_id);
+                // A string literal whose node the surrounding context already
+                // pinned to a different primitive is a reported
+                // literal-conversion mismatch; like a numeral that cannot fit
+                // its target, it lowers to the conversion's failure mapping
+                // instead of a value the target cannot hold. Checking reports
+                // every such literal, so this is reachable only while running
+                // a program with reported errors.
+                switch (self.graph.content(expr_node)) {
+                    .primitive => |primitive| if (primitive != .str) {
+                        return try self.addExprWithTypeCell(
+                            DraftTypeCell.fromGraphNode(expr_node),
+                            .{ .crash = try self.addStringLiteral("invalid string literal") },
+                        );
+                    },
+                    else => {},
+                }
                 try self.graph.unify(expr_node, try self.graph.importMono(try self.builder.primitiveType(.str)));
                 return try self.addExprWithTypeCell(
                     DraftTypeCell.fromGraphNode(expr_node),
@@ -14262,8 +14484,9 @@ const BodyContext = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFn(view, fn_id, mono_fn_ty, null),
+            .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
             .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
-            else => Common.invariant("callable eval binding root did not output a callable value"),
+            .expect => Common.invariant("callable eval binding root output an expect payload"),
         };
     }
 
@@ -14290,7 +14513,7 @@ const BodyContext = struct {
             wrapper_fn_ty,
         );
 
-        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
         body_ctx.evidence = rootEvidence(wrapper.template, self.restore_evidence.vector);
         defer body_ctx.deinit();
         const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.builder.program.types, &self.builder.program.names);
@@ -14337,7 +14560,7 @@ const BodyContext = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        var body_ctx = try BodyContext.init(self.allocator, self.builder, view, wrapper.template, self.graph, self.draft);
+        var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
         body_ctx.evidence = rootEvidence(wrapper.template, self.restore_evidence.vector);
         defer body_ctx.deinit();
         const root_fn_key = view.types.rootKey(wrapper.checked_fn_root);
@@ -16558,10 +16781,10 @@ const BodyContext = struct {
         if (self.tryJsonInfo(shape_ty)) |info| {
             return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
-        if (self.missingTryInfo(shape_ty)) |info| {
+        if (try self.missingTryInfo(shape_ty)) |info| {
             return try self.buildParserConstructionPrecomputedPlan(plan, info.ok_ty, encoding_expr, encoding_ty, str_ty);
         }
-        if (self.customParserLookup(shape_ty) != null) return;
+        if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.jsonParseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
@@ -16607,7 +16830,7 @@ const BodyContext = struct {
         if (self.tryJsonInfo(shape_ty)) |info| {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, info.ok_payload_ty, encoding_expr, encoding_ty, str_ty);
         }
-        if (self.customEncoderForLookup(shape_ty) != null) return;
+        if ((try self.customEncoderForLookup(shape_ty)) != null) return;
         if (self.jsonEncodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
@@ -16631,7 +16854,7 @@ const BodyContext = struct {
                 const fields = try self.dupeRecordFieldsForShape(shape_ty);
                 defer self.allocator.free(fields);
                 for (fields) |field| {
-                    try self.buildEncodeConstructionPrecomputedPlan(plan, self.encodeRecordFieldPayloadType(field.ty), encoding_expr, encoding_ty, str_ty);
+                    try self.buildEncodeConstructionPrecomputedPlan(plan, try self.encodeRecordFieldPayloadType(field.ty), encoding_expr, encoding_ty, str_ty);
                 }
             },
             .tag_union => |span| {
@@ -16662,7 +16885,7 @@ const BodyContext = struct {
         if (self.tryJsonInfo(shape_ty)) |info| {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, encoding_ty, str_ty);
         }
-        if (self.customEncoderForLookup(shape_ty) != null) return;
+        if ((try self.customEncoderForLookup(shape_ty)) != null) return;
         if (self.jsonEncodeScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
@@ -16686,7 +16909,7 @@ const BodyContext = struct {
                 const fields = try self.dupeRecordFieldsForShape(shape_ty);
                 defer self.allocator.free(fields);
                 for (fields) |field| {
-                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, self.encodeRecordFieldPayloadType(field.ty), encoding_ty, str_ty);
+                    try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, try self.encodeRecordFieldPayloadType(field.ty), encoding_ty, str_ty);
                 }
             },
             .tag_union => |span| {
@@ -16853,7 +17076,7 @@ const BodyContext = struct {
         if (self.tryJsonInfo(shape_ty)) |info| {
             return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, info.ok_payload_ty, str_ty);
         }
-        if (self.customParserLookup(shape_ty) != null) return;
+        if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.jsonParseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
@@ -16912,7 +17135,7 @@ const BodyContext = struct {
         if (self.tryJsonInfo(shape_ty)) |info| {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, info.ok_payload_ty);
         }
-        if (self.customParserLookup(shape_ty) != null) return;
+        if ((try self.customParserLookup(shape_ty)) != null) return;
         if (self.jsonParseScalarMethodName(shape_ty) != null) return;
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, payload_ty);
@@ -18086,7 +18309,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const ret_info = self.tryInfo(ret_ty);
-        const maybe_missing_try = self.missingTryInfo(field.ty);
+        const maybe_missing_try = try self.missingTryInfo(field.ty);
         const field_parse_ty = if (maybe_missing_try) |info|
             info.ok_ty
         else
@@ -18251,7 +18474,7 @@ const BodyContext = struct {
             .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
             else => {},
         }
-        if (self.customParserLookup(shape_ty)) |raw_lookup| {
+        if (try self.customParserLookup(shape_ty)) |raw_lookup| {
             return try self.lowerCustomParserFromState(
                 try self.withLocalProcContext(raw_lookup),
                 shape_ty,
@@ -19635,7 +19858,7 @@ const BodyContext = struct {
         defer self.allocator.free(field_locals);
         for (record_fields, 0..) |field, index| {
             field_locals[index] = try self.addLocal(self.builder.symbols.fresh(), field.ty);
-            const field_can_be_missing = self.missingTryInfo(field.ty) != null;
+            const field_can_be_missing = (try self.missingTryInfo(field.ty)) != null;
             if (!field_can_be_missing) {
                 const field_try_ty = try self.tryTypeLike(ret_ty, field.ty, ret_info.err_ty);
                 field_try_tys[index] = field_try_ty;
@@ -19665,7 +19888,7 @@ const BodyContext = struct {
         var field_index = record_fields.len;
         while (field_index > 0) {
             field_index -= 1;
-            const field_can_be_missing = self.missingTryInfo(record_fields[field_index].ty) != null;
+            const field_can_be_missing = (try self.missingTryInfo(record_fields[field_index].ty)) != null;
             body = if (field_can_be_missing)
                 try self.finishOptionalRecordFieldFromPresencePayload(
                     body,
@@ -20303,7 +20526,7 @@ const BodyContext = struct {
         if (try self.lowerCallThatCannotReachCallee(checked_ret_ty, call, expected_ret_node)) |lowered| return lowered;
 
         if (call.direct_target) |target| {
-            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+            var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
             call_ctx.evidence = self.evidence;
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -20380,7 +20603,7 @@ const BodyContext = struct {
             };
         }
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -21158,6 +21381,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             .promoted_top_level_proc,
@@ -21182,6 +21406,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_proc,
             .promoted_top_level_proc,
             => try self.lowerTypeView(checked_ty),
@@ -21243,7 +21468,7 @@ const BodyContext = struct {
                 return try self.activeNodeFromType(ret_ty);
             }
 
-            var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+            var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
             call_ctx.evidence = self.evidence;
             defer call_ctx.deinit();
             call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -21287,7 +21512,7 @@ const BodyContext = struct {
         if (call.direct_target == null) {
             Common.invariant("direct checked call instantiation received an indirect call");
         }
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -21668,6 +21893,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             .promoted_top_level_proc,
@@ -21703,6 +21929,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             .promoted_top_level_proc,
@@ -21723,6 +21950,10 @@ const BodyContext = struct {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
         const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
         switch (record.ref) {
+            .platform_required_checked_error => return try self.runtimeCrashExpr(ty, "platform requirement failed checking"),
+            else => {},
+        }
+        switch (record.ref) {
             .local_value,
             .pattern_binder,
             => {},
@@ -21738,6 +21969,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_const,
             .platform_required_proc,
             .promoted_top_level_proc,
@@ -21780,6 +22012,7 @@ const BodyContext = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             .platform_required_proc,
             .promoted_top_level_proc,
             => {},
@@ -21831,6 +22064,7 @@ const BodyContext = struct {
             .platform_required_const,
             => unreachable,
             .platform_required_declaration => Common.invariant("platform required declaration reached Monotype without a binding"),
+            .platform_required_checked_error => return try self.runtimeCrashExpr(ty, "platform requirement failed checking"),
         };
     }
 
@@ -21932,6 +22166,12 @@ const BodyContext = struct {
                 proc.procedure,
                 expected_node,
                 try self.evidenceForUseSite(record.expr),
+            ),
+            // The required def failed checking, so its type never resolves;
+            // crash at the use site instead of materializing the expected node.
+            .platform_required_checked_error => return try self.runtimeCrashExprAtCell(
+                DraftTypeCell.fromGraphNode(expected_node),
+                "platform requirement failed checking",
             ),
             else => {},
         }
@@ -22292,10 +22532,11 @@ const BodyContext = struct {
         const body = store_view.checked_const_bodies.get(eval.body);
         const entry_template = store_view.templates.get(eval.entry_template.template);
 
-        var body_ctx = try BodyContext.init(
+        var body_ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
             store_view,
+            self.method_scope,
             eval.entry_template,
             self.graph,
             self.draft,
@@ -22397,19 +22638,22 @@ const BodyContext = struct {
         if (!moduleBytesEqual(checked.constModuleId(const_locator).bytes, store_view.key.bytes)) {
             Common.invariant("static-data const context referenced a different ConstStore module");
         }
-        const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
-        // The candidate carries the exact restored expression. Static-data
-        // lowering turns that expression into a closed LIR initializer, so
-        // nested callable encodings come from committed LIR rather than a
-        // second structural walk over ConstStore.
-        if (self.builder.static_data_literals and self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn)) {
+        if (self.builder.static_data_literals and
+            try self.builder.constNodeHasStableStaticDataRepresentation(store_view, node) and
+            self.builder.constNodeMayUseStaticDataCandidate(store_view, node, bare_fn))
+        {
             const id = try self.builder.staticDataValue(const_locator, node, checked_type, DraftTypeCell.fromSealed(ty));
-            return try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
+            if (self.draft.static_data_candidate_exprs.get(id)) |existing| return existing;
+
+            const runtime_expr = try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
+            const candidate_expr = try self.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
                 .static_data = id,
                 .runtime_expr = runtime_expr,
             } } });
+            try self.draft.static_data_candidate_exprs.put(id, candidate_expr);
+            return candidate_expr;
         }
-        return runtime_expr;
+        return try self.restoreConstNodeAtTypeWithStaticRoot(store_view, type_view, node, ty, const_locator);
     }
 
     fn restoredStaticDataCandidateNodeAtNode(
@@ -23114,10 +23358,11 @@ const BodyContext = struct {
         return switch (fn_def) {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-                var fn_ctx = try BodyContext.init(
+                var fn_ctx = try BodyContext.initWithMethodScope(
                     self.allocator,
                     self.builder,
                     fn_view,
+                    self.method_scope,
                     ownerTemplateForConstFnDef(fn_value.fn_def),
                     self.graph,
                     self.draft,
@@ -23162,10 +23407,11 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-        var fn_ctx = try BodyContext.init(
+        var fn_ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
             fn_view,
+            self.method_scope,
             ownerTemplateForConstFnDef(fn_value.fn_def),
             self.graph,
             self.draft,
@@ -23356,7 +23602,7 @@ const BodyContext = struct {
         return switch (template.fn_def) {
             .nested => |nested| {
                 const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-                var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+                var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
                 fn_ctx.evidence = retained_evidence;
                 defer fn_ctx.deinit();
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
@@ -23397,7 +23643,7 @@ const BodyContext = struct {
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
         const fn_view = self.builder.moduleForConstFnDef(fn_value.fn_def);
-        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
+        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
         fn_ctx.evidence = retained_evidence;
         defer fn_ctx.deinit();
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
@@ -23533,7 +23779,7 @@ const BodyContext = struct {
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
-        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, runtime.owner, self.graph, self.draft);
+        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -23639,7 +23885,7 @@ const BodyContext = struct {
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
-        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, runtime.owner, self.graph, self.draft);
+        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -23801,7 +24047,7 @@ const BodyContext = struct {
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
-        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, runtime.owner, self.graph, self.draft);
+        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -23924,7 +24170,7 @@ const BodyContext = struct {
         };
         const fn_view = self.builder.moduleForDigest(names.procTemplateModuleDigest(runtime.owner));
 
-        var fn_ctx = try BodyContext.init(self.allocator, self.builder, fn_view, runtime.owner, self.graph, self.draft);
+        var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
@@ -24261,7 +24507,7 @@ const BodyContext = struct {
         call: anytype,
         expected_ret_node: NodeId,
     ) Allocator.Error!void {
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -25038,6 +25284,9 @@ const BodyContext = struct {
         const region = self.sourceRegionForExpr(expr);
         self.builder.program.current_loc = try self.sourceLocFor(region);
         self.builder.program.current_region = region;
+        if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) {
+            return try self.lowerDivergentExprAtType(checked_expr, ty);
+        }
         switch (expr.data) {
             .call => |call| if (try self.lowerInspectOnlyCall(
                 expr.ty,
@@ -25049,6 +25298,7 @@ const BodyContext = struct {
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return restored;
         switch (expr.data) {
+            .runtime_error => return try self.lowerExprWithType(checked_expr, ty),
             .call => |call| {
                 if (try self.lowerParseIntrinsicCallExpr(checked_expr, expr.ty, call, ty)) |lowered| {
                     return lowered;
@@ -25867,7 +26117,7 @@ const BodyContext = struct {
         } else null;
         const expected_ret_node = if (expected_ret_cell) |cell| try cell.toGraphNode(self.graph) else null;
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -26112,7 +26362,7 @@ const BodyContext = struct {
         if (plan.result_mode != .value) Common.invariant("checked from_numeral plan had a non-value result mode");
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -26236,7 +26486,11 @@ const BodyContext = struct {
                 const num = (try exact_numeral.decBits(self.allocator, exact)) orelse break :blk null;
                 break :blk .{ .dec = .{ .num = num } };
             },
-            .bool, .str => Common.invariant("numeric literal instantiated at a non-numeric Monotype primitive"),
+            // A non-numeric target cannot represent any numeral. Checking
+            // reports every such literal, so this is reachable only while
+            // running a program with reported errors; the caller's failure
+            // mapping (crash node / never-matching branch) is the behavior.
+            .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => null,
         };
     }
 
@@ -26732,7 +26986,7 @@ const BodyContext = struct {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -27161,7 +27415,7 @@ const BodyContext = struct {
             .local_proc => |local| self.localMethodOwnerTemplate(lookup, local),
             .structural => Common.invariant("structural method registry result has no callable body context"),
         };
-        return BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, self.graph, self.draft);
+        return BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, self.graph, self.draft);
     }
 
     fn localMethodOwnerTemplate(
@@ -27192,7 +27446,7 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_node = try target_ctx.instantiateTargetFromPlanNode(lookup.target.callable_ty, plan_ctx, plan_callable_ty);
         if (lookup.instantiation) |instantiation| {
-            var edge_ctx = try BodyContext.init(self.allocator, self.builder, instantiation.view, self.owner_template, self.graph, self.draft);
+            var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
             defer edge_ctx.deinit();
             const edge_node = try edge_ctx.instNode(instantiation.callable_ty);
             try self.graph.unify(target_node, edge_node);
@@ -27283,7 +27537,7 @@ const BodyContext = struct {
             defer graph.destroy();
             var body_draft = BodyDraftStore.init(self.allocator);
             defer body_draft.deinit();
-            var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, self.owner_template, graph, &body_draft);
+            var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, self.owner_template, graph, &body_draft);
             defer target_ctx.deinit();
             const active = try target_ctx.instantiateTargetCallTypeFromMonoArgAtIndexAndRet(lookup.target.callable_ty, arg_index, arg_ty, ret_ty);
             try graph.freezeRelations();
@@ -27312,7 +27566,7 @@ const BodyContext = struct {
             .local_proc => self.owner_template,
             .structural => Common.invariant("structural method registry result has no callable specialization context"),
         };
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, graph, &body_draft);
+        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, graph, &body_draft);
         defer target_ctx.deinit();
         // The caller owns the exact runtime interface. Relate the checked
         // target to that interface, but seal the request node itself so a
@@ -27345,7 +27599,7 @@ const BodyContext = struct {
         };
         var body_draft = BodyDraftStore.init(self.allocator);
         defer body_draft.deinit();
-        var target_ctx = try BodyContext.init(self.allocator, self.builder, lookup.view, owner_template, graph, &body_draft);
+        var target_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, lookup.view, self.method_scope, owner_template, graph, &body_draft);
         defer target_ctx.deinit();
         const fn_node = try target_ctx.instantiateTargetCallNodeFromMonoArgAtIndex(lookup.target.callable_ty, arg_index, arg_ty);
         try graph.freezeRelations();
@@ -27359,7 +27613,7 @@ const BodyContext = struct {
     ) Allocator.Error!MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, owner_ty) orelse
             Common.invariant("parser format type did not have a method owner");
-        return try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, method_name) orelse
+        return try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, method_name)) orelse
             Common.invariant("checked method registry is missing parser format method"));
     }
 
@@ -27526,7 +27780,7 @@ const BodyContext = struct {
         component_node: NodeId,
     ) Allocator.Error!SpecEvidence {
         if (self.methodOwnerFromNode(component_node)) |owner| {
-            if (self.builder.lookupMethodTarget(owner, view, method)) |found| {
+            if (try self.builder.lookupMethodTarget(self.method_scope, owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
                     return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
                 }
@@ -27599,7 +27853,7 @@ const BodyContext = struct {
         component_ty: Type.TypeId,
     ) Allocator.Error!SpecEvidence {
         if (methodOwnerFromType(&self.builder.program.types, component_ty)) |owner| {
-            if (self.builder.lookupMethodTarget(owner, view, method)) |found| {
+            if (try self.builder.lookupMethodTarget(self.method_scope, owner, view, method)) |found| {
                 if (found.target.kind == .structural) {
                     return .{ .structural = structuralDerivationWithoutMap(found.target.kind.structural) };
                 }
@@ -27862,6 +28116,7 @@ const BodyContext = struct {
         }
         const def = try self.builder.lowerTemplateWithMono(
             procedure.template,
+            self.method_scope,
             lookup.target.callable_ty,
             lookup.view.types.rootKey(lookup.target.callable_ty),
             callable_mono_ty,
@@ -28437,30 +28692,30 @@ const BodyContext = struct {
         const top_level_json_try = self.tryJsonInfo(shape_ty);
         if (self.jsonParseScalarMethodName(shape_ty) == null and top_level_json_try == null) {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
-                if (!self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser set element type was not supported");
+                if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
                 if (!self.jsonObjectKeyTypeIsSupported(dict.key_ty)) Common.invariant("structural parser dict key type was not supported");
-                if (!self.parseFieldTypeIsSupported(dict.value_ty, false)) Common.invariant("structural parser dict value type was not supported");
+                if (!try self.parseFieldTypeIsSupported(dict.value_ty, false)) Common.invariant("structural parser dict value type was not supported");
             } else {
                 switch (self.builder.shapeContent(shape_ty)) {
                     .list => |elem_ty| {
-                        if (!self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser list element type was not supported");
+                        if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser list element type was not supported");
                     },
                     .box => |payload_ty| {
-                        if (!self.parseFieldTypeIsSupported(payload_ty, false)) Common.invariant("structural parser box payload type was not supported");
+                        if (!try self.parseFieldTypeIsSupported(payload_ty, false)) Common.invariant("structural parser box payload type was not supported");
                     },
                     .tuple => |span| {
                         const elem_tys = self.builder.program.types.span(span);
                         for (0..GuardedList.borrowLen(elem_tys)) |index| {
                             const elem_ty = GuardedList.at(elem_tys, index);
-                            if (!self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser tuple element type was not supported");
+                            if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser tuple element type was not supported");
                         }
                     },
                     .record => |fields_span| blk: {
                         const fields = self.builder.program.types.fieldSpan(fields_span);
                         for (0..GuardedList.borrowLen(fields)) |index| {
                             const field = GuardedList.at(fields, index);
-                            if (!self.parseFieldTypeIsSupported(field.ty, true)) Common.invariant("structural parser record field type was not supported");
+                            if (!try self.parseFieldTypeIsSupported(field.ty, true)) Common.invariant("structural parser record field type was not supported");
                         }
                         break :blk;
                     },
@@ -28472,7 +28727,7 @@ const BodyContext = struct {
                             const payload_tys = self.builder.program.types.span(tag.payloads);
                             for (0..GuardedList.borrowLen(payload_tys)) |payload_index| {
                                 const payload_ty = GuardedList.at(payload_tys, payload_index);
-                                if (!self.parseFieldTypeIsSupported(payload_ty, false)) Common.invariant("structural parser tag-union payload type was not supported");
+                                if (!try self.parseFieldTypeIsSupported(payload_ty, false)) Common.invariant("structural parser tag-union payload type was not supported");
                             }
                         }
                         break :blk;
@@ -28570,7 +28825,7 @@ const BodyContext = struct {
         defer self.allocator.free(runtime_arg_tys);
         if (runtime_arg_tys.len != 2) Common.invariant("structural encoder_for runtime function must have value and state arguments");
 
-        if (!self.encodeFieldTypeIsSupported(shape_ty, arg_tys[0])) Common.invariant("structural encoder_for dispatcher was not a supported structural type");
+        if (!try self.encodeFieldTypeIsSupported(shape_ty, arg_tys[0])) Common.invariant("structural encoder_for dispatcher was not a supported structural type");
 
         const encoding_value = self.preLoweredOperandAt(pre_lowered, 0) orelse
             try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
@@ -28686,7 +28941,7 @@ const BodyContext = struct {
             },
             else => {},
         }
-        if (self.customEncoderForLookup(shape_ty)) |raw_lookup| {
+        if (try self.customEncoderForLookup(shape_ty)) |raw_lookup| {
             return try self.lowerCustomEncoderForState(
                 try self.withLocalProcContext(raw_lookup),
                 shape_ty,
@@ -29668,7 +29923,7 @@ const BodyContext = struct {
             } },
         });
 
-        if (self.missingTryInfo(field.ty)) |optional_info| {
+        if (try self.missingTryInfo(field.ty)) |optional_info| {
             return try self.lowerEncodeOptionalRecordFieldFrom(
                 shape_ty,
                 value_expr,
@@ -30127,18 +30382,18 @@ const BodyContext = struct {
         return try self.sequenceEncodeTry(item_try, method.container_result_ty, item_done_local, rest, method.container_result_ty);
     }
 
-    fn encodeRecordFieldPayloadType(self: *BodyContext, field_ty: Type.TypeId) Type.TypeId {
-        if (self.missingTryInfo(field_ty)) |optional_info| {
+    fn encodeRecordFieldPayloadType(self: *BodyContext, field_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+        if (try self.missingTryInfo(field_ty)) |optional_info| {
             return optional_info.ok_ty;
         }
         return field_ty;
     }
 
-    fn encodeRecordFieldTypeIsSupported(self: *BodyContext, field_ty: Type.TypeId, encoding_ty: Type.TypeId) bool {
-        return self.encodeFieldTypeIsSupported(self.encodeRecordFieldPayloadType(field_ty), encoding_ty);
+    fn encodeRecordFieldTypeIsSupported(self: *BodyContext, field_ty: Type.TypeId, encoding_ty: Type.TypeId) Allocator.Error!bool {
+        return try self.encodeFieldTypeIsSupported(try self.encodeRecordFieldPayloadType(field_ty), encoding_ty);
     }
 
-    fn encodeTagUnionTypeIsSupported(self: *BodyContext, tags_span: Type.Span, encoding_ty: Type.TypeId) bool {
+    fn encodeTagUnionTypeIsSupported(self: *BodyContext, tags_span: Type.Span, encoding_ty: Type.TypeId) Allocator.Error!bool {
         const tags = self.builder.program.types.tagSpan(tags_span);
         if (tags.len == 0) return false;
         for (0..GuardedList.borrowLen(tags)) |tag_index| {
@@ -30146,7 +30401,7 @@ const BodyContext = struct {
             const payloads = self.builder.program.types.span(tag.payloads);
             for (0..GuardedList.borrowLen(payloads)) |payload_index| {
                 const payload_ty = GuardedList.at(payloads, payload_index);
-                if (!self.encodeFieldTypeIsSupported(payload_ty, encoding_ty)) return false;
+                if (!try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty)) return false;
             }
         }
         return true;
@@ -30430,8 +30685,8 @@ const BodyContext = struct {
         };
     }
 
-    fn missingTryInfo(self: *BodyContext, try_ty: Type.TypeId) ?TryInfo {
-        if (self.typeHasParserForTarget(try_ty)) return null;
+    fn missingTryInfo(self: *BodyContext, try_ty: Type.TypeId) Allocator.Error!?TryInfo {
+        if (try self.typeHasParserForTarget(try_ty)) return null;
         const info = self.tryInfoOptional(try_ty) orelse return null;
         return if (self.typeIsExactUnitTagUnion(info.err_ty, "Missing")) info else null;
     }
@@ -30619,26 +30874,26 @@ const BodyContext = struct {
         };
     }
 
-    fn parseFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, allow_missing: bool) bool {
+    fn parseFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, allow_missing: bool) Allocator.Error!bool {
         if (self.jsonParseScalarMethodName(ty) != null) return true;
-        if (self.missingTryInfo(ty)) |info| {
+        if (try self.missingTryInfo(ty)) |info| {
             if (!allow_missing) return false;
-            return self.parseFieldTypeIsSupported(info.ok_ty, false);
+            return try self.parseFieldTypeIsSupported(info.ok_ty, false);
         }
         if (self.tryJsonInfo(ty)) |info| {
-            return self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
+            return try self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
         }
-        if (self.customParserLookup(ty) != null) return true;
-        if (self.setPayloadType(ty)) |payload_ty| return self.parseFieldTypeIsSupported(payload_ty, false);
-        if (self.dictEntryShape(ty)) |dict| return self.jsonObjectKeyTypeIsSupported(dict.key_ty) and self.parseFieldTypeIsSupported(dict.value_ty, false);
+        if ((try self.customParserLookup(ty)) != null) return true;
+        if (self.setPayloadType(ty)) |payload_ty| return try self.parseFieldTypeIsSupported(payload_ty, false);
+        if (self.dictEntryShape(ty)) |dict| return self.jsonObjectKeyTypeIsSupported(dict.key_ty) and try self.parseFieldTypeIsSupported(dict.value_ty, false);
         return switch (self.builder.shapeContent(ty)) {
-            .list => |elem_ty| self.parseFieldTypeIsSupported(elem_ty, false),
-            .box => |payload_ty| self.parseFieldTypeIsSupported(payload_ty, false),
+            .list => |elem_ty| try self.parseFieldTypeIsSupported(elem_ty, false),
+            .box => |payload_ty| try self.parseFieldTypeIsSupported(payload_ty, false),
             .tuple => |span| blk: {
                 const elem_tys = self.builder.program.types.span(span);
                 for (0..GuardedList.borrowLen(elem_tys)) |index| {
                     const elem_ty = GuardedList.at(elem_tys, index);
-                    if (!self.parseFieldTypeIsSupported(elem_ty, false)) break :blk false;
+                    if (!try self.parseFieldTypeIsSupported(elem_ty, false)) break :blk false;
                 }
                 break :blk true;
             },
@@ -30646,7 +30901,7 @@ const BodyContext = struct {
                 const fields = self.builder.program.types.fieldSpan(fields_span);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
-                    if (!self.parseFieldTypeIsSupported(field.ty, true)) break :blk false;
+                    if (!try self.parseFieldTypeIsSupported(field.ty, true)) break :blk false;
                 }
                 break :blk true;
             },
@@ -30658,7 +30913,7 @@ const BodyContext = struct {
                     const payload_tys = self.builder.program.types.span(tag.payloads);
                     for (0..GuardedList.borrowLen(payload_tys)) |payload_index| {
                         const payload_ty = GuardedList.at(payload_tys, payload_index);
-                        if (!self.parseFieldTypeIsSupported(payload_ty, false)) break :blk false;
+                        if (!try self.parseFieldTypeIsSupported(payload_ty, false)) break :blk false;
                     }
                 }
                 break :blk true;
@@ -30668,22 +30923,22 @@ const BodyContext = struct {
         };
     }
 
-    fn encodeFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, encoding_ty: Type.TypeId) bool {
+    fn encodeFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, encoding_ty: Type.TypeId) Allocator.Error!bool {
         if (self.jsonEncodeScalarMethodName(ty) != null) return true;
         if (self.tryJsonInfo(ty)) |info| {
-            return self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
+            return try self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
         }
-        if (self.customEncoderForLookup(ty) != null) return true;
-        if (self.setPayloadType(ty)) |payload_ty| return self.encodeFieldTypeIsSupported(payload_ty, encoding_ty);
-        if (self.dictEntryShape(ty)) |dict| return self.jsonObjectKeyTypeIsSupported(dict.key_ty) and self.encodeFieldTypeIsSupported(dict.value_ty, encoding_ty);
+        if ((try self.customEncoderForLookup(ty)) != null) return true;
+        if (self.setPayloadType(ty)) |payload_ty| return try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty);
+        if (self.dictEntryShape(ty)) |dict| return self.jsonObjectKeyTypeIsSupported(dict.key_ty) and try self.encodeFieldTypeIsSupported(dict.value_ty, encoding_ty);
         return switch (self.builder.shapeContent(ty)) {
-            .list => |elem_ty| self.encodeFieldTypeIsSupported(elem_ty, encoding_ty),
-            .box => |payload_ty| self.encodeFieldTypeIsSupported(payload_ty, encoding_ty),
+            .list => |elem_ty| try self.encodeFieldTypeIsSupported(elem_ty, encoding_ty),
+            .box => |payload_ty| try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty),
             .tuple => |span| blk: {
                 const elem_tys = self.builder.program.types.span(span);
                 for (0..GuardedList.borrowLen(elem_tys)) |index| {
                     const elem_ty = GuardedList.at(elem_tys, index);
-                    if (!self.encodeFieldTypeIsSupported(elem_ty, encoding_ty)) break :blk false;
+                    if (!try self.encodeFieldTypeIsSupported(elem_ty, encoding_ty)) break :blk false;
                 }
                 break :blk true;
             },
@@ -30691,17 +30946,17 @@ const BodyContext = struct {
                 const fields = self.builder.program.types.fieldSpan(fields_span);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
-                    if (!self.encodeRecordFieldTypeIsSupported(field.ty, encoding_ty)) break :blk false;
+                    if (!try self.encodeRecordFieldTypeIsSupported(field.ty, encoding_ty)) break :blk false;
                 }
                 break :blk true;
             },
-            .tag_union => |tags_span| self.encodeTagUnionTypeIsSupported(tags_span, encoding_ty),
+            .tag_union => |tags_span| try self.encodeTagUnionTypeIsSupported(tags_span, encoding_ty),
             .zst => true,
             else => false,
         };
     }
 
-    fn customParserLookup(self: *BodyContext, ty: Type.TypeId) ?MethodLookup {
+    fn customParserLookup(self: *BodyContext, ty: Type.TypeId) Allocator.Error!?MethodLookup {
         const named = switch (self.builder.program.types.get(ty)) {
             .named => |named| named,
             else => return null,
@@ -30713,7 +30968,7 @@ const BodyContext = struct {
         }
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
             Common.invariant("custom named parser type had no method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "parser_for") orelse
+        const lookup = (try self.builder.lookupMethodTargetByName(self.method_scope, owner, "parser_for")) orelse
             Common.invariant("checked method registry is missing custom parser_for target");
         return switch (lookup.target.kind) {
             .structural => |kind| if (kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
@@ -30725,7 +30980,7 @@ const BodyContext = struct {
         self: *BodyContext,
         node: NodeId,
         kind: CodecKind,
-    ) ?MethodLookup {
+    ) Allocator.Error!?MethodLookup {
         const named = switch (self.graph.content(node)) {
             .named => |named| named,
             else => return null,
@@ -30741,7 +30996,7 @@ const BodyContext = struct {
             .parser => "parser_for",
             .encoder => "encoder_for",
         };
-        const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse return null;
+        const lookup = (try self.builder.lookupMethodTargetByName(self.method_scope, owner, method_name)) orelse return null;
         return switch (lookup.target.kind) {
             .structural => |structural_kind| switch (kind) {
                 .parser => if (structural_kind == .parser) null else Common.invariant("parser_for lookup resolved to a different structural target"),
@@ -30845,7 +31100,7 @@ const BodyContext = struct {
         defer target_ctx.deinit();
         const target_node = try target_ctx.instNode(lookup.target.callable_ty);
         if (lookup.instantiation) |instantiation| {
-            var edge_ctx = try BodyContext.init(self.allocator, self.builder, instantiation.view, self.owner_template, self.graph, self.draft);
+            var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
             defer edge_ctx.deinit();
             try self.graph.unify(target_node, try edge_ctx.instNode(instantiation.callable_ty));
         }
@@ -30909,7 +31164,7 @@ const BodyContext = struct {
             const payloads = try self.graphTryPayloads(node);
             return try self.appendGraphParserRecordShapes(payloads.ok, shapes, seen);
         }
-        if (self.customCodecLookupAtNode(node, .parser) != null) return;
+        if ((try self.customCodecLookupAtNode(node, .parser)) != null) return;
 
         switch (self.graph.content(node)) {
             .list, .box => |elem| try self.appendGraphParserRecordShapes(elem, shapes, seen),
@@ -31093,7 +31348,7 @@ const BodyContext = struct {
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parse_record_field") orelse
+        const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, "parse_record_field")) orelse
             Common.invariant("checked parser encoding registry was missing parse_record_field"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
@@ -31183,7 +31438,7 @@ const BodyContext = struct {
         const outer_result = try self.graphParserResultNodes(runtime.ret);
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "skip_record_field") orelse
+        const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, "skip_record_field")) orelse
             Common.invariant("checked parser encoding registry was missing skip_record_field"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
@@ -31226,7 +31481,7 @@ const BodyContext = struct {
 
         const owner = self.methodOwnerFromNode(encoding_node) orelse
             Common.invariant("structural parser encoding node had no checked method owner");
-        const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(owner, "parse_tag_union") orelse
+        const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(self.method_scope, owner, "parse_tag_union")) orelse
             Common.invariant("checked parser encoding registry was missing parse_tag_union"));
         if (self.preparedCodecCallExists(boundary_expr, .parser, shape_node, lookup)) return false;
 
@@ -31326,7 +31581,7 @@ const BodyContext = struct {
         if (entry.found_existing) return false;
 
         if (self.graphNodeHasJsonScalarParser(node)) return false;
-        if (self.customCodecLookupAtNode(node, .parser) != null) return false;
+        if ((try self.customCodecLookupAtNode(node, .parser)) != null) return false;
         if (self.graphNodeIsBuiltinTry(node)) {
             const payloads = try self.graphTryPayloads(node);
             if (try self.graphErrorIsExactUnitTag(payloads.err, "Missing") or
@@ -31451,7 +31706,7 @@ const BodyContext = struct {
         const seen_entry = try seen.getOrPut(shape_node);
         if (seen_entry.found_existing) return false;
 
-        if (self.customCodecLookupAtNode(shape_node, kind)) |raw_lookup| {
+        if (try self.customCodecLookupAtNode(shape_node, kind)) |raw_lookup| {
             return try self.prepareCustomCodecCall(
                 boundary_expr,
                 kind,
@@ -31521,7 +31776,7 @@ const BodyContext = struct {
         return added;
     }
 
-    fn typeHasParserForTarget(self: *BodyContext, ty: Type.TypeId) bool {
+    fn typeHasParserForTarget(self: *BodyContext, ty: Type.TypeId) Allocator.Error!bool {
         const named = switch (self.builder.program.types.get(ty)) {
             .named => |named| named,
             else => return false,
@@ -31529,10 +31784,10 @@ const BodyContext = struct {
         if (self.builder.isBuiltinTryDef(named.def)) return false;
         if (named.builtin_owner != null) return false;
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse return false;
-        return self.builder.lookupMethodTargetByName(owner, "parser_for") != null;
+        return (try self.builder.lookupMethodTargetByName(self.method_scope, owner, "parser_for")) != null;
     }
 
-    fn customEncoderForLookup(self: *BodyContext, ty: Type.TypeId) ?MethodLookup {
+    fn customEncoderForLookup(self: *BodyContext, ty: Type.TypeId) Allocator.Error!?MethodLookup {
         const named = switch (self.builder.program.types.get(ty)) {
             .named => |named| named,
             else => return null,
@@ -31544,7 +31799,7 @@ const BodyContext = struct {
         }
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse
             Common.invariant("custom named encoder_for type had no method owner");
-        const lookup = self.builder.lookupMethodTargetByName(owner, "encoder_for") orelse
+        const lookup = (try self.builder.lookupMethodTargetByName(self.method_scope, owner, "encoder_for")) orelse
             Common.invariant("checked method registry is missing custom encoder_for target");
         return switch (lookup.target.kind) {
             .structural => |kind| if (kind == .encoder) null else Common.invariant("encoder_for lookup resolved to a different structural target"),
@@ -31601,7 +31856,7 @@ const BodyContext = struct {
         field_local: DraftLocalId,
     ) Allocator.Error!DraftExprId {
         const field_ty = field.ty;
-        const optional_info = self.missingTryInfo(field_ty) orelse
+        const optional_info = (try self.missingTryInfo(field_ty)) orelse
             Common.invariant("optional record finish requested for a non-optional Try field");
         const payload_local = record_slots.payload_locals[field_index];
         const payload_ty = record_slots.payload_tys[field_index];
@@ -31942,10 +32197,11 @@ const BodyContext = struct {
 
         switch (self.graph.content(raw_node)) {
             .list => {
-                const lookup = try self.withLocalProcContext(self.builder.lookupMethodTargetByName(
+                const lookup = try self.withLocalProcContext((try self.builder.lookupMethodTargetByName(
+                    self.method_scope,
                     .{ .builtin = .list },
                     structuralDerivationMethodName(mode),
-                ) orelse Common.invariant("checked method registry is missing the List structural derivation target"));
+                )) orelse Common.invariant("checked method registry is missing the List structural derivation target"));
                 if (lookup.target.kind == .structural) {
                     Common.invariant("owned List derivation resolved to a structural registry implementation");
                 }
@@ -31999,7 +32255,7 @@ const BodyContext = struct {
             .named => {
                 const named = self.graph.namedNodes(raw_node);
                 if (self.methodOwnerFromNode(raw_node)) |owner| {
-                    if (self.builder.lookupMethodTargetByName(owner, structuralDerivationMethodName(mode))) |raw_lookup| {
+                    if (try self.builder.lookupMethodTargetByName(self.method_scope, owner, structuralDerivationMethodName(mode))) |raw_lookup| {
                         const lookup = try self.withLocalProcContext(raw_lookup);
                         switch (lookup.target.kind) {
                             .structural => |kind| {
@@ -32193,7 +32449,7 @@ const BodyContext = struct {
         method_name: []const u8,
     ) Allocator.Error!?MethodLookup {
         const owner = methodOwnerFromType(&self.builder.program.types, ty) orelse return null;
-        const lookup = self.builder.lookupMethodTargetByName(owner, method_name) orelse return null;
+        const lookup = (try self.builder.lookupMethodTargetByName(self.method_scope, owner, method_name)) orelse return null;
         return try self.withLocalProcContext(lookup);
     }
 
@@ -35036,7 +35292,7 @@ const BodyContext = struct {
     ) Allocator.Error!?DraftExprId {
         const statement = self.view.bodies.statement(statement_id);
         const expr_id = switch (statement.data) {
-            .decl => |decl| if (self.statementValueIsLocalProc(decl.expr)) return null else decl.expr,
+            .decl => |decl| if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null else decl.expr,
             .var_ => |decl| decl.expr,
             .reassign => |decl| decl.expr,
             .expr => |expr| expr,
@@ -35044,6 +35300,10 @@ const BodyContext = struct {
             .expect => |expr| if (self.builder.inline_expects == .run) expr else return null,
             else => return null,
         };
+        // Explicit checked bottom has a deliberately erroneous source type and
+        // its own divergent lowering; probing its type node here would demand
+        // an instantiation checking intentionally did not produce.
+        if (self.view.bodies.expr(expr_id).data == .runtime_error) return null;
         const node = try self.lowerExprTypeNode(expr_id);
         if (!try self.nodeIsProvenUninhabited(node)) return null;
         return try self.lowerUninhabitedScrutineeAtTypeCell(expr_id, DraftTypeCell.fromGraphNode(node));
@@ -35070,7 +35330,7 @@ const BodyContext = struct {
         self.builder.program.current_region = statement.source_region;
         const pattern, const expr = switch (statement.data) {
             .decl => |decl| blk: {
-                if (self.statementValueIsLocalProc(decl.expr)) return false;
+                if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return false;
                 break :blk .{ decl.pattern, decl.expr };
             },
             .var_ => |decl| .{ decl.pattern, decl.expr },
@@ -35271,7 +35531,13 @@ const BodyContext = struct {
             Common.invariant("checked runtime statement filter referenced a missing statement");
         }
         return switch (self.view.bodies.statement(@enumFromInt(raw)).data) {
-            .decl => |decl| self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
+            .decl => |decl| switch (self.view.bodies.expr(decl.expr).data) {
+                // A dangling annotation carries diagnostics and checked type
+                // information but has no runtime value to bind.
+                .anno_only => false,
+                .pending => Common.invariant("pending checked declaration reached Monotype runtime statement filter"),
+                else => self.view.hoisted_constants.lookupByPattern(decl.pattern) == null,
+            },
             .var_,
             .var_uninitialized,
             .reassign,
@@ -35284,6 +35550,7 @@ const BodyContext = struct {
             .breakable_loop,
             .break_,
             .return_,
+            .runtime_error,
             => true,
             .expect => self.builder.inline_expects == .run,
             .import_,
@@ -35292,9 +35559,7 @@ const BodyContext = struct {
             .type_anno,
             .type_var_alias,
             => false,
-            .pending,
-            .runtime_error,
-            => Common.invariant("invalid checked statement reached Monotype runtime statement filter"),
+            .pending => Common.invariant("pending checked statement reached Monotype runtime statement filter"),
         };
     }
 
@@ -35305,8 +35570,24 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const checked_expr = self.view.bodies.expr(checked_expr_id);
         switch (checked_expr.data) {
-            .match_ => |match| return try self.lowerMatchExpr(checked_expr_id, match, ty),
-            .if_ => |if_| return try self.lowerIfExpr(checked_expr_id, if_, ty),
+            .match_ => |match| {
+                if (self.checkedExprDivergesInLoweredRuntime(match.cond)) {
+                    return try self.addExpr(.{
+                        .ty = ty,
+                        .data = try self.lowerDivergentExprForEffectDataAtType(match.cond, ty),
+                    });
+                }
+                return try self.lowerMatchExpr(checked_expr_id, match, ty);
+            },
+            .if_ => |if_| {
+                if (if_.branches.len > 0 and self.checkedExprDivergesInLoweredRuntime(if_.branches[0].cond)) {
+                    return try self.addExpr(.{
+                        .ty = ty,
+                        .data = try self.lowerDivergentExprForEffectDataAtType(if_.branches[0].cond, ty),
+                    });
+                }
+                return try self.lowerIfExpr(checked_expr_id, if_, ty);
+            },
             else => {},
         }
 
@@ -35350,10 +35631,15 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!BodyExprData {
         // A divergent expression never produces a value, so its checked result
-        // variable can legitimately remain unconstrained. Lower it at the
-        // continuation's explicit type instead of requesting a concrete view
-        // of a result that cannot exist.
-        const effect = try self.lowerDivergentExprAtType(checked_expr_id, ty);
+        // variable can legitimately remain unconstrained; the continuation's
+        // explicit type stands in for a result that cannot exist. Explicit
+        // checked bottom instead lowers only its observable path at unit,
+        // because its deliberately erroneous source type has no monotype.
+        const effect_ty = if (self.view.bodies.expr(checked_expr_id).data == .runtime_error)
+            try self.unitType()
+        else
+            ty;
+        const effect = try self.lowerDivergentExprAtType(checked_expr_id, effect_ty);
         const stmt = try self.addStmt(.{ .expr = effect });
         return .{ .block = .{
             .statements = try self.addStmtSpan(&[_]DraftStmtId{stmt}),
@@ -35442,6 +35728,7 @@ const BodyContext = struct {
         const checked_expr = self.view.bodies.expr(checked_expr_id);
         return switch (checked_expr.data) {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
+            .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| .{ .return_ = try self.lowerReturn(ret) },
@@ -35520,7 +35807,6 @@ const BodyContext = struct {
             .zero_argument_tag,
             .closure,
             .lambda,
-            .runtime_error,
             .anno_only,
             .hosted_lambda,
             => Common.invariant("non-divergent checked expression reached divergent lowering"),
@@ -35708,7 +35994,7 @@ const BodyContext = struct {
             return generated;
         }
 
-        var call_ctx = try BodyContext.init(self.allocator, self.builder, self.view, self.owner_template, self.graph, self.draft);
+        var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -36520,7 +36806,7 @@ const BodyContext = struct {
             => Common.invariant("non-runtime checked statement reached Monotype lowering"),
             .runtime_error => .{ .crash = try self.addStringLiteral("runtime error") },
             .decl => |decl| blk: {
-                if (self.statementValueIsLocalProc(decl.expr)) {
+                if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
                     try self.registerLocalProc(decl.pattern, decl.expr, statement_id);
                     const unit_ty = try self.unitType();
                     break :blk .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) };
@@ -36652,6 +36938,16 @@ const BodyContext = struct {
         expr: checked.CheckedExprId,
         source_region: base.Region,
     ) Allocator.Error!LoweredPatternStatement {
+        // The initializer is explicit checked bottom. It never produces a value
+        // to bind, so emitting a pattern would incorrectly require a monotype
+        // for its deliberately erroneous source type.
+        if (self.view.bodies.expr(expr).data == .runtime_error) {
+            const unit_ty = try self.unitType();
+            return .{
+                .stmt = .{ .expr = try self.lowerExprAtType(expr, unit_ty) },
+                .termination = .none,
+            };
+        }
         const requested_cell = DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(expr));
         // The checked pattern is explicit evidence for the value's shape.
         // Apply that relation before either the value or a shape-dependent
@@ -36987,11 +37283,16 @@ const BodyContext = struct {
         } };
     }
 
-    fn statementValueIsLocalProc(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+    fn statementDeclIsLocalProc(
+        self: *BodyContext,
+        pattern_id: checked.CheckedPatternId,
+        expr_id: checked.CheckedExprId,
+    ) bool {
+        // A local procedure declaration has a named binder. A lambda assigned
+        // to an ignored or erroneous pattern remains an ordinary value.
+        if (self.view.bodies.pattern(pattern_id).data != .assign) return false;
         return switch (self.view.bodies.expr(expr_id).data) {
-            .lambda,
-            .closure,
-            => true,
+            .lambda, .closure => true,
             else => false,
         };
     }
@@ -37700,7 +38001,7 @@ const BodyContext = struct {
         const scrutinee = try self.localExpr(entry.local, entry.ty);
         const expected = try self.lowerExpr(conversion);
         if (methodOwnerFromType(&self.builder.program.types, entry.ty)) |owner| {
-            if (self.builder.lookupMethodTargetByName(owner, "is_eq")) |raw_lookup| {
+            if (try self.builder.lookupMethodTargetByName(self.method_scope, owner, "is_eq")) |raw_lookup| {
                 const lookup = try self.withLocalProcContext(raw_lookup);
                 var target_ctx = try self.methodTargetContext(lookup);
                 defer target_ctx.deinit();
@@ -37811,7 +38112,7 @@ const BodyContext = struct {
 /// The exact-numeral target for a numeric Monotype primitive.
 fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
     return switch (primitive) {
-        .bool, .str => Common.invariant("non-numeric Monotype primitive has no numeral target"),
+        .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("non-numeric Monotype primitive has no numeral target"),
         inline else => |p| @field(exact_numeral.Target, @tagName(p)),
     };
 }
@@ -38522,6 +38823,7 @@ fn moduleView(view: checked.ImportedModuleView) ModuleView {
         .hosted_procs = view.hosted_procs,
         .static_dispatch_plans = view.static_dispatch_plans,
         .method_registry = view.method_registry,
+        .method_lookup_scope = view.method_lookup_scope,
         .resolved_refs = view.resolved_value_refs,
         .nested_proc_sites = view.nested_proc_sites,
         .exported_procedure_bindings = view.exported_procedure_bindings,
@@ -38895,6 +39197,14 @@ fn builtinOwnerFromPrimitive(primitive: Type.Primitive) static_dispatch.BuiltinO
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
     };
 }
 
@@ -38945,6 +39255,14 @@ fn builtinOwner(builtin: ?checked.CheckedBuiltinNominal) ?static_dispatch.Builti
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
+        .u8x16 => .u8x16,
+        .i8x16 => .i8x16,
+        .u16x8 => .u16x8,
+        .i16x8 => .i16x8,
+        .u32x4 => .u32x4,
+        .i32x4 => .i32x4,
+        .u64x2 => .u64x2,
+        .i64x2 => .i64x2,
         .list => .list,
         .box => .box,
         .dict => .dict,
@@ -38977,6 +39295,7 @@ fn primitiveInspectLowLevelOp(primitive: Type.Primitive) can.CIR.Expr.LowLevel {
         .f32 => .f32_to_str,
         .f64 => .f64_to_str,
         .dec => .dec_to_str,
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("SIMD inspect must lower through its explicit Builtin body"),
         .bool => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
     };
 }

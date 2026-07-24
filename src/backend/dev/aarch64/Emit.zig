@@ -1752,6 +1752,50 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emitAddressOffset(scratch, base, offset);
             try self.fstrRegMemUoff(ftype, src, scratch, 0);
         }
+
+        /// LDR <Qt>, [<Xn|SP>, #<pimm>] (128-bit SIMD register).
+        pub fn ldrQRegMemUoff(self: *Self, dst: FloatReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
+            const inst: u32 = 0x3dc00000 |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// STR <Qt>, [<Xn|SP>, #<pimm>] (128-bit SIMD register).
+        pub fn strQRegMemUoff(self: *Self, src: FloatReg, base: GeneralReg, uoffset: u12) Allocator.Error!void {
+            const inst: u32 = 0x3d800000 |
+                (@as(u32, uoffset) << 10) |
+                (@as(u32, base.enc()) << 5) |
+                src.enc();
+            try self.emit32(inst);
+        }
+
+        pub fn ldrQRegMemSoff(self: *Self, dst: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 15) == 0 and uoff / 16 <= 4095) {
+                    try self.ldrQRegMemUoff(dst, base, @intCast(uoff / 16));
+                    return;
+                }
+            }
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.ldrQRegMemUoff(dst, scratch, 0);
+        }
+
+        pub fn strQRegMemSoff(self: *Self, src: FloatReg, base: GeneralReg, offset: i32) Allocator.Error!void {
+            if (offset >= 0) {
+                const uoff: u32 = @intCast(offset);
+                if ((uoff & 15) == 0 and uoff / 16 <= 4095) {
+                    try self.strQRegMemUoff(src, base, @intCast(uoff / 16));
+                    return;
+                }
+            }
+            const scratch = addressScratchReg(base, null);
+            try self.emitAddressOffset(scratch, base, offset);
+            try self.strQRegMemUoff(src, scratch, 0);
+        }
     }; // end of struct returned by Emit
 }
 

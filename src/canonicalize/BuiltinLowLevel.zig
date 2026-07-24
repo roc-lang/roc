@@ -496,6 +496,111 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{num_type}, .num_times_wrap);
     }
 
+    const simd_types = [_][]const u8{ "U8x16", "I8x16", "U16x8", "I16x8", "U32x4", "I32x4", "U64x2", "I64x2" };
+    const shared_simd_methods = [_]struct { name: []const u8, op: CIR.Expr.LowLevel }{
+        .{ .name = "splat", .op = .simd_splat },
+        .{ .name = "to_u128_bits", .op = .simd_to_u128_bits },
+        .{ .name = "from_u128_bits", .op = .simd_from_u128_bits },
+        .{ .name = "plus_wrap", .op = .simd_add_wrap },
+        .{ .name = "minus_wrap", .op = .simd_sub_wrap },
+        .{ .name = "bitwise_and", .op = .simd_and },
+        .{ .name = "bitwise_or", .op = .simd_or },
+        .{ .name = "bitwise_xor", .op = .simd_xor },
+        .{ .name = "bitwise_not", .op = .simd_not },
+        .{ .name = "bit_select", .op = .simd_bit_select },
+        .{ .name = "eq_lanes", .op = .simd_eq_lanes },
+        .{ .name = "to_bitmask", .op = .simd_bitmask },
+        .{ .name = "shl_wrap", .op = .simd_shl_wrap },
+        .{ .name = "shr_wrap", .op = .simd_shr_wrap },
+        .{ .name = "shr_zf_wrap", .op = .simd_shr_zf_wrap },
+        .{ .name = "interleave_lo", .op = .simd_interleave_lo },
+        .{ .name = "interleave_hi", .op = .simd_interleave_hi },
+        .{ .name = "reverse_lanes", .op = .simd_reverse_lanes },
+        .{ .name = "append_to", .op = .simd_append_16 },
+    };
+    for (simd_types) |simd_type| {
+        for (shared_simd_methods) |method| {
+            try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ simd_type, method.name }, method.op);
+        }
+    }
+
+    const internal_simd_types = [_][]const u8{ "u8x16", "i8x16", "u16x8", "i16x8", "u32x4", "i32x4", "u64x2", "i64x2" };
+    for (internal_simd_types) |simd_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_get_lane_unchecked", .{simd_type}, .simd_get_lane_unchecked);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_with_lane_unchecked", .{simd_type}, .simd_with_lane_unchecked);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_load_16_unchecked", .{simd_type}, .simd_load_16_unchecked);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_{s}_store_16_unchecked", .{simd_type}, .simd_store_16_unchecked);
+    }
+    try putLowLevelFmt(&low_level_map, env, &name_scratch, "simd_u8x16_concat_shift_bytes_unchecked", .{}, .simd_concat_shift_bytes);
+
+    const simd_method_mappings = [_]struct { owner: []const u8, name: []const u8, op: CIR.Expr.LowLevel }{
+        .{ .owner = "U8x16", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "I8x16", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "U16x8", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "I16x8", .name = "plus_saturated", .op = .simd_add_sat },
+        .{ .owner = "U8x16", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "I8x16", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "U16x8", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "I16x8", .name = "minus_saturated", .op = .simd_sub_sat },
+        .{ .owner = "I8x16", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I16x8", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I32x4", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I64x2", .name = "negate_wrap", .op = .simd_neg_wrap },
+        .{ .owner = "I8x16", .name = "abs_wrap", .op = .simd_abs_wrap },
+        .{ .owner = "I16x8", .name = "abs_wrap", .op = .simd_abs_wrap },
+        .{ .owner = "I32x4", .name = "abs_wrap", .op = .simd_abs_wrap },
+        .{ .owner = "U8x16", .name = "abs_diff", .op = .simd_abs_diff },
+        .{ .owner = "U16x8", .name = "abs_diff", .op = .simd_abs_diff },
+        .{ .owner = "U8x16", .name = "avg_rounded", .op = .simd_avg_rounded },
+        .{ .owner = "U16x8", .name = "avg_rounded", .op = .simd_avg_rounded },
+        .{ .owner = "U16x8", .name = "times_high", .op = .simd_mul_high },
+        .{ .owner = "I16x8", .name = "times_high", .op = .simd_mul_high },
+        .{ .owner = "I16x8", .name = "times_fixed_q15_saturated", .op = .simd_mul_q15_sat },
+        .{ .owner = "I16x8", .name = "dot_pairs", .op = .simd_dot_pairs },
+        .{ .owner = "U8x16", .name = "dot_pairs_saturated", .op = .simd_dot_pairs_sat },
+        .{ .owner = "U8x16", .name = "sums_of_abs_diffs", .op = .simd_sad },
+        .{ .owner = "I16x8", .name = "shift_right_rounded_by", .op = .simd_shr_rounded },
+        .{ .owner = "I32x4", .name = "shift_right_rounded_by", .op = .simd_shr_rounded },
+        .{ .owner = "U8x16", .name = "table_lookup", .op = .simd_table_lookup },
+        .{ .owner = "U64x2", .name = "carryless_times_lo", .op = .simd_clmul_lo },
+        .{ .owner = "U64x2", .name = "carryless_times_hi", .op = .simd_clmul_hi },
+    };
+    for (simd_method_mappings) |mapping| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ mapping.owner, mapping.name }, mapping.op);
+    }
+
+    for (simd_types) |simd_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gt_lanes", .{simd_type}, .simd_gt_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gte_lanes", .{simd_type}, .simd_gte_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.min", .{simd_type}, .simd_min);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.max", .{simd_type}, .simd_max);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{simd_type}, .simd_mul_wrap);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_lo", .{simd_type}, .simd_mul_wide_lo);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_hi", .{simd_type}, .simd_mul_wide_hi);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.even_lanes", .{simd_type}, .simd_even_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.odd_lanes", .{simd_type}, .simd_odd_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes", .{simd_type}, .simd_sum_lanes);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes_wrap", .{simd_type}, .simd_sum_lanes_wrap);
+    }
+
+    const width_method_mappings = [_]struct { name: []const u8, op: CIR.Expr.LowLevel }{
+        .{ .name = "to_u16x8_lo", .op = .simd_widen_lo },                      .{ .name = "to_i16x8_lo", .op = .simd_widen_lo },
+        .{ .name = "to_u32x4_lo", .op = .simd_widen_lo },                      .{ .name = "to_i32x4_lo", .op = .simd_widen_lo },
+        .{ .name = "to_u64x2_lo", .op = .simd_widen_lo },                      .{ .name = "to_i64x2_lo", .op = .simd_widen_lo },
+        .{ .name = "to_u16x8_hi", .op = .simd_widen_hi },                      .{ .name = "to_i16x8_hi", .op = .simd_widen_hi },
+        .{ .name = "to_u32x4_hi", .op = .simd_widen_hi },                      .{ .name = "to_i32x4_hi", .op = .simd_widen_hi },
+        .{ .name = "to_u64x2_hi", .op = .simd_widen_hi },                      .{ .name = "to_i64x2_hi", .op = .simd_widen_hi },
+        .{ .name = "pairwise_plus_to_u16x8", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i16x8", .op = .simd_pairwise_add_widen },
+        .{ .name = "pairwise_plus_to_u32x4", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i32x4", .op = .simd_pairwise_add_widen },
+        .{ .name = "narrow_to_u8x16_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u16x8_wrap", .op = .simd_narrow_wrap },
+        .{ .name = "narrow_to_u32x4_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
+        .{ .name = "narrow_to_i8x16_saturated", .op = .simd_narrow_sat },      .{ .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
+        .{ .name = "narrow_to_i16x8_saturated", .op = .simd_narrow_sat },
+    };
+    for (simd_types) |simd_type| for (width_method_mappings) |mapping| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ simd_type, mapping.name }, mapping.op);
+    };
+
     // Numeric negate operation (signed types only)
     for (signed_types) |num_type| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.negate", .{num_type}, .num_negate);
@@ -1422,7 +1527,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
                 // Check if this identifier matches a low-level operation
                 const entry = low_level_map.fetchRemove(ident) orelse {
                     if (isIntrinsicAnnotation(env, ident)) continue;
-
                     return error.UnsupportedBuiltinAnnotationOnly;
                 };
                 const low_level_op = entry.value;

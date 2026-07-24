@@ -138,6 +138,10 @@ fn updateModeImmForArg0(unique_args: u64) i64 {
     return @intFromEnum(if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
 
+fn updateModeImmForArg1(unique_args: u64) i64 {
+    return @intFromEnum(if ((unique_args & 2) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+}
+
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
     const abi = ls.builtinListAbi(list_layout_idx);
     return .{
@@ -4292,6 +4296,62 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg_0);
                     return .{ .general_reg = result_reg };
                 },
+                .simd_load_16_unchecked => return self.generateSimdLoad(ll, args),
+                .simd_store_16_unchecked => return self.generateSimdStore(ll, args),
+                .simd_append_16 => return self.generateSimdAppend(ll, args),
+                .simd_splat,
+                .simd_get_lane_unchecked,
+                .simd_with_lane_unchecked,
+                .simd_to_u128_bits,
+                .simd_from_u128_bits,
+                .simd_add_wrap,
+                .simd_sub_wrap,
+                .simd_add_sat,
+                .simd_sub_sat,
+                .simd_neg_wrap,
+                .simd_abs_wrap,
+                .simd_min,
+                .simd_max,
+                .simd_abs_diff,
+                .simd_avg_rounded,
+                .simd_mul_wrap,
+                .simd_mul_high,
+                .simd_mul_q15_sat,
+                .simd_mul_wide_lo,
+                .simd_mul_wide_hi,
+                .simd_dot_pairs,
+                .simd_dot_pairs_sat,
+                .simd_sad,
+                .simd_and,
+                .simd_or,
+                .simd_xor,
+                .simd_not,
+                .simd_bit_select,
+                .simd_eq_lanes,
+                .simd_gt_lanes,
+                .simd_gte_lanes,
+                .simd_bitmask,
+                .simd_shl_wrap,
+                .simd_shr_wrap,
+                .simd_shr_zf_wrap,
+                .simd_shr_rounded,
+                .simd_interleave_lo,
+                .simd_interleave_hi,
+                .simd_even_lanes,
+                .simd_odd_lanes,
+                .simd_reverse_lanes,
+                .simd_table_lookup,
+                .simd_concat_shift_bytes,
+                .simd_widen_lo,
+                .simd_widen_hi,
+                .simd_pairwise_add_widen,
+                .simd_narrow_wrap,
+                .simd_narrow_sat,
+                .simd_sum_lanes,
+                .simd_sum_lanes_wrap,
+                .simd_clmul_lo,
+                .simd_clmul_hi,
+                => return self.generateSimdLowLevel(ll, args),
                 .erased_capture_load => {
                     const elem_layout_idx = ll.ret_layout;
                     const elem_layout_data = self.layout_store.getLayout(elem_layout_idx);
@@ -4506,6 +4566,160 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(parts.low);
             self.codegen.freeGeneral(parts.high);
             return try self.scalarRetReg();
+        }
+
+        fn simdKindForLayout(self: *Self, layout_idx: layout.Idx) ?builtins.simd.Kind {
+            const value_layout = self.layout_store.getLayout(layout_idx);
+            if (value_layout.tag != .scalar or value_layout.getScalar().tag != .vector) return null;
+            return switch (value_layout.getScalar().getVector()) {
+                .u8x16 => .u8x16,
+                .i8x16 => .i8x16,
+                .u16x8 => .u16x8,
+                .i16x8 => .i16x8,
+                .u32x4 => .u32x4,
+                .i32x4 => .i32x4,
+                .u64x2 => .u64x2,
+                .i64x2 => .i64x2,
+            };
+        }
+
+        fn simdArgParts(self: *Self, local: LocalId) Allocator.Error!I128Parts {
+            const arg_layout = self.localLayout(local);
+            const arg_size = self.layout_store.layoutSize(self.layout_store.getLayout(arg_layout));
+            const loc = try self.emitValueLocal(local);
+            if (arg_size == 16) {
+                const offset = try self.ensureOnStack(loc, 16);
+                const low = try self.allocTempGeneral();
+                const high = try self.allocTempGeneral();
+                try self.codegen.emitLoadStack(.w64, low, offset);
+                try self.codegen.emitLoadStack(.w64, high, offset + 8);
+                return .{ .low = low, .high = high };
+            }
+            const low = try self.ensureInGeneralReg(loc);
+            const high = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(high, 0);
+            return .{ .low = low, .high = high };
+        }
+
+        fn generateSimdLowLevel(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+            var source_kind: ?builtins.simd.Kind = null;
+            for (0..args.len) |arg_index| {
+                const arg_local = GuardedList.at(args, arg_index);
+                source_kind = self.simdKindForLayout(self.localLayout(arg_local)) orelse continue;
+                break;
+            }
+            const result_kind = self.simdKindForLayout(ll.ret_layout);
+            const arg_kind = source_kind orelse result_kind orelse unreachable;
+            const ret_kind = result_kind orelse arg_kind;
+
+            var parts: [3]I128Parts = undefined;
+            var initialized: usize = 0;
+            defer for (parts[0..initialized]) |value| {
+                self.codegen.freeGeneral(value.low);
+                self.codegen.freeGeneral(value.high);
+            };
+            while (initialized < 3) : (initialized += 1) {
+                if (initialized < args.len) {
+                    parts[initialized] = try self.simdArgParts(GuardedList.at(args, initialized));
+                } else {
+                    const low = try self.allocTempGeneral();
+                    const high = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(low, 0);
+                    try self.codegen.emitLoadImm(high, 0);
+                    parts[initialized] = .{ .low = low, .high = high };
+                }
+            }
+
+            const result_slot = self.codegen.allocStackSlot(16);
+            const inputs_slot = self.codegen.allocStackSlot(48);
+            inline for (0..3) |i| {
+                try self.codegen.emitStoreStack(.w64, inputs_slot + @as(i32, @intCast(i * 16)), parts[i].low);
+                try self.codegen.emitStoreStack(.w64, inputs_slot + @as(i32, @intCast(i * 16 + 8)), parts[i].high);
+            }
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_slot);
+            const descriptor = @as(u32, ll.op.simdOpIndex() orelse unreachable) |
+                (@as(u32, @intFromEnum(arg_kind)) << 8) |
+                (@as(u32, @intFromEnum(ret_kind)) << 16);
+            try builder.addImmArg(descriptor);
+            try builder.addLeaArg(frame_ptr, inputs_slot);
+            try self.callBuiltin(&builder, .simd_eval);
+
+            const ret_size = self.layout_store.layoutSize(self.layout_store.getLayout(ll.ret_layout));
+            if (ret_size == 16) {
+                if (result_kind != null) return .{ .stack = .{ .offset = result_slot, .layout_idx = ll.ret_layout } };
+                return .{ .stack_i128 = result_slot };
+            }
+            const result_reg = try self.allocTempGeneral();
+            try self.emitSizedLoadStack(result_reg, result_slot, ValueSize.fromByteCount(ret_size));
+            return .{ .general_reg = result_reg };
+        }
+
+        fn simdListOffset(self: *Self, local: LocalId) Allocator.Error!i32 {
+            const loc = try self.emitValueLocal(local);
+            return switch (loc) {
+                .stack => |value| value.offset,
+                .list_stack => |value| value.struct_offset,
+                else => unreachable,
+            };
+        }
+
+        fn generateSimdLoad(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+            const list_offset = try self.simdListOffset(GuardedList.at(args, 0));
+            const index_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+            const index_reg = try self.ensureInGeneralReg(index_loc);
+            defer self.codegen.freeGeneral(index_reg);
+            const result_slot = self.codegen.allocStackSlot(16);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_slot);
+            try builder.addMemArg(frame_ptr, list_offset);
+            try builder.addRegArg(index_reg);
+            try self.callBuiltin(&builder, .simd_load_16);
+            return .{ .stack = .{ .offset = result_slot, .layout_idx = ll.ret_layout } };
+        }
+
+        fn generateSimdStore(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+            const vector = try self.simdArgParts(GuardedList.at(args, 0));
+            defer self.codegen.freeGeneral(vector.low);
+            defer self.codegen.freeGeneral(vector.high);
+            const list_offset = try self.simdListOffset(GuardedList.at(args, 1));
+            const index_loc = try self.emitValueLocal(GuardedList.at(args, 2));
+            const index_reg = try self.ensureInGeneralReg(index_loc);
+            defer self.codegen.freeGeneral(index_reg);
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addRegArg(vector.low);
+            try builder.addRegArg(vector.high);
+            try builder.addMemArg(frame_ptr, list_offset);
+            try builder.addMemArg(frame_ptr, list_offset + 8);
+            try builder.addMemArg(frame_ptr, list_offset + 16);
+            try builder.addRegArg(index_reg);
+            try builder.addImmArg(updateModeImmForArg1(ll.unique_args));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, .simd_store_16);
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
+        }
+
+        fn generateSimdAppend(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
+            const vector = try self.simdArgParts(GuardedList.at(args, 0));
+            defer self.codegen.freeGeneral(vector.low);
+            defer self.codegen.freeGeneral(vector.high);
+            const list_offset = try self.simdListOffset(GuardedList.at(args, 1));
+            const roc_ops_reg = self.roc_ops_reg orelse unreachable;
+            const result_offset = self.codegen.allocStackSlot(roc_str_size);
+            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+            try builder.addLeaArg(frame_ptr, result_offset);
+            try builder.addRegArg(vector.low);
+            try builder.addRegArg(vector.high);
+            try builder.addMemArg(frame_ptr, list_offset);
+            try builder.addMemArg(frame_ptr, list_offset + 8);
+            try builder.addMemArg(frame_ptr, list_offset + 16);
+            try builder.addImmArg(updateModeImmForArg1(ll.unique_args));
+            try builder.addRegArg(roc_ops_reg);
+            try self.callBuiltin(&builder, .simd_append_16);
+            return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
         fn generateHasherLowLevel(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
@@ -12126,7 +12340,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Lower the call to the platform C ABI (shared classifier, same as the LLVM
             // backend and interpreter trampoline).
             const abi_target: layout.abi.Target = if (comptime target.toCpuArch() == .aarch64)
-                .aarch64
+                layout.abi.aarch64Target(target.toOsTag())
             else if (comptime roc_target.isWindows())
                 .x86_64_windows
             else
@@ -12134,6 +12348,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var arena_state = std.heap.ArenaAllocator.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+            const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
 
@@ -12146,27 +12361,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (lowered.leading_ops) try builder.addRegArg(roc_ops_reg);
 
-            for (lowered.args, arg_offsets, 0..) |placement, arg_offset, arg_i| {
+            for (physical.args, arg_offsets) |placement, arg_offset| {
                 const slot_off = args_slot + @as(i32, @intCast(arg_offset));
                 switch (placement) {
                     .none => {},
-                    .indirect => {
-                        const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layouts[arg_i]);
-                        const size_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout));
-                        if (abi_target == .x86_64_sysv) {
-                            // SysV memory-class aggregates are copied into the outgoing
-                            // stack argument area. AAPCS64 and Win64 pass a pointer.
-                            try builder.addStackMemArg(frame_ptr, slot_off, size_align.size);
-                        } else {
-                            try builder.addLeaArg(frame_ptr, slot_off);
-                        }
+                    .indirect => |location| switch (location) {
+                        .register => |register_index| builder.addLeaArgAt(register_index, frame_ptr, slot_off),
+                        .stack => |stack_offset| builder.addStackLeaArgAt(stack_offset, frame_ptr, slot_off),
+                    },
+                    .stack_value => |stack_value| {
+                        builder.addStackMemArgAt(stack_value.offset, frame_ptr, slot_off, stack_value.size);
                     },
                     .registers => |pieces| {
-                        for (pieces) |piece| {
+                        for (pieces) |assigned| {
+                            const piece = assigned.piece;
                             const piece_off = slot_off + @as(i32, @intCast(piece.offset));
                             switch (piece.class) {
-                                .integer => try builder.addMemArg(frame_ptr, piece_off),
-                                .float => try builder.addFloatMemArg(frame_ptr, piece_off, piece.size),
+                                .integer => builder.addMemArgAt(assigned.register_index, frame_ptr, piece_off),
+                                .float, .vector => try builder.addFloatMemArgAt(assigned.register_index, frame_ptr, piece_off, piece.size),
                             }
                         }
                     },
@@ -12189,10 +12401,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const hosted_ret_reg_1: GeneralReg = if (arch == .x86_64) .RDX else .X1;
             switch (lowered.ret) {
                 .none, .indirect => {},
-                .registers => |pieces| {
+                .registers => |registers| {
                     var gp_i: usize = 0;
                     var sse_i: usize = 0;
-                    for (pieces) |piece| {
+                    for (registers.pieces) |piece| {
                         const dst_off = ret_slot + @as(i32, @intCast(piece.offset));
                         switch (piece.class) {
                             .integer => {
@@ -12204,7 +12416,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 }
                                 gp_i += 1;
                             },
-                            .float => {
+                            .float, .vector => {
                                 try self.emitHostedFloatResultStore(dst_off, sse_i, piece.size);
                                 sse_i += 1;
                             },
@@ -12227,15 +12439,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return result;
         }
 
-        /// Store hosted-call float result register `index` (0 or 1) into the return slot.
+        /// Store a hosted-call SIMD/FP result register into the return slot.
+        /// AArch64 homogeneous aggregates may return through v0..v3; x86-64
+        /// register-class returns use xmm0..xmm1.
         fn emitHostedFloatResultStore(self: *Self, dst_off: i32, index: usize, size: u8) Allocator.Error!void {
-            const freg0: FloatReg = if (arch == .x86_64) .XMM0 else .V0;
-            const freg1: FloatReg = if (arch == .x86_64) .XMM1 else .V1;
-            const freg = if (index == 0) freg0 else freg1;
+            const freg = hostedFloatResultReg(index);
             if (comptime target.toCpuArch() == .aarch64) {
                 switch (size) {
                     4 => try self.codegen.emitStoreStackF32(dst_off, freg),
                     8 => try self.codegen.emitStoreStackF64(dst_off, freg),
+                    16 => try self.codegen.emitStoreStackV128(dst_off, freg),
                     else => unreachable,
                 }
             } else {
@@ -12246,6 +12459,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => unreachable,
                 }
             }
+        }
+
+        fn hostedFloatResultReg(index: usize) FloatReg {
+            return if (comptime target.toCpuArch() == .aarch64) switch (index) {
+                0 => .V0,
+                1 => .V1,
+                2 => .V2,
+                3 => .V3,
+                else => unreachable,
+            } else switch (index) {
+                0 => .XMM0,
+                1 => .XMM1,
+                else => unreachable,
+            };
         }
 
         /// Compare a general register against an immediate bit pattern.
@@ -12587,6 +12814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const layout_val = ls.getLayout(runtime_layout_idx);
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
+                    if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 2;
                     // Check for aggregate values > 8 bytes
                     if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
@@ -14822,6 +15050,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .stack_i128 = stack_offset };
             }
 
+            // First-class vectors use both internal integer return registers.
+            // Preserve all 128 bits and retain the vector layout on the stack
+            // location so later calls also account for both register words.
+            {
+                const runtime_layout = self.layout_store.getLayout(runtime_ret_layout);
+                if (runtime_layout.tag == .scalar and runtime_layout.getScalar().tag == .vector) {
+                    const stack_offset = self.codegen.allocStackSlot(16);
+                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
+                    return self.stackLocationForLayout(runtime_ret_layout, stack_offset);
+                }
+            }
+
             // Check if return type is a string (24 bytes)
             if (runtime_ret_layout == .str) {
                 const stack_offset = self.codegen.allocStackSlot(roc_str_size);
@@ -15282,6 +15523,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     // List parameters need 3 registers (24 bytes)
                     if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 3;
+                    if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 2;
                     // Aggregate parameters may need multiple registers
                     if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                         const size = ls.layoutSizeAlign(layout_val).size;
@@ -15726,6 +15968,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             }
                         },
                         .opaque_ptr => try self.moveOneRegToReturn(loc),
+                        .vector => {
+                            const stack_offset: i32 = switch (loc) {
+                                .stack => |s| s.offset,
+                                .stack_i128 => |off| off,
+                                .immediate_i128 => |val| blk: {
+                                    const temp = self.codegen.allocStackSlot(16);
+                                    try self.codegen.emitLoadImm(ret_reg_0, @truncate(val));
+                                    try self.codegen.emitLoadImm(ret_reg_1, @truncate(val >> 64));
+                                    try self.codegen.emitStoreStack(.w64, temp, ret_reg_0);
+                                    try self.codegen.emitStoreStack(.w64, temp + 8, ret_reg_1);
+                                    break :blk temp;
+                                },
+                                else => unreachable,
+                            };
+                            try self.codegen.emitLoadStack(.w64, ret_reg_0, stack_offset);
+                            try self.codegen.emitLoadStack(.w64, ret_reg_1, stack_offset + 8);
+                        },
                     }
                 },
                 // Structs and tag unions: size determines register count
@@ -17710,14 +17969,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// A C-ABI piece of an entrypoint argument that arrives on the
-        /// caller's stack. `incoming_slot` indexes the caller's 8-byte
-        /// outgoing argument slots.
+        /// caller's stack. The offset is byte-exact because Apple arm64 packs
+        /// sub-word stack arguments more tightly than generic AAPCS64.
         const EntryStackCopy = struct {
             dest_off: i32,
-            incoming_slot: u32,
+            incoming_byte_offset: u32,
             kind: union(enum) {
-                /// Copy one slot's value into the destination, storing
-                /// `width` bytes (4 or 8).
+                /// Copy a naturally sized 1/2/4/8-byte piece.
                 value: u8,
                 /// The slot holds a pointer; copy this many bytes from it.
                 deref: u32,
@@ -17834,7 +18092,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const abi_target: layout.abi.Target = if (comptime target.toCpuArch() == .aarch64)
-                .aarch64
+                layout.abi.aarch64Target(target.toOsTag())
             else if (comptime roc_target.isWindows())
                 .x86_64_windows
             else
@@ -17842,12 +18100,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var arena_state = std.heap.ArenaAllocator.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+            const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
 
             const int_param_regs = EmitType.CC.PARAM_REGS;
             const float_param_regs = EmitType.CC.FLOAT_PARAM_REGS;
-            // Windows x64 shares one argument position counter between
-            // integer and float registers; SysV and AAPCS64 count separately.
-            const shared_arg_positions = comptime target.toCpuArch() == .x86_64 and roc_target.isWindows();
 
             // Capture the sret pointer before anything else can clobber it.
             if (lowered.ret == .indirect) {
@@ -17858,10 +18114,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            var int_idx: usize = if (lowered.ret == .indirect and comptime target.toCpuArch() == .x86_64) 1 else 0;
-            var float_idx: usize = 0;
-            var stack_slot: u32 = 0;
-
             var reg_captures = std.ArrayList(EntryRegCapture).empty;
             defer reg_captures.deinit(self.allocator);
             var indirect_captures = std.ArrayList(EntryIndirectCapture).empty;
@@ -17869,7 +18121,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const arg_infos_start = self.scratch_arg_infos.top();
 
-            for (lowered.args, arg_layouts) |placement, arg_layout| {
+            for (physical.args, arg_layouts) |placement, arg_layout| {
                 switch (placement) {
                     .none => {
                         try self.scratch_arg_infos.append(.{
@@ -17882,57 +18134,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .registers => |pieces| {
                         const slot_size = @max(self.entrypointParamSlotSize(arg_layout), 8);
                         const slot = self.codegen.allocStackSlot(slot_size);
-                        for (pieces) |piece| {
+                        for (pieces) |assigned| {
+                            const piece = assigned.piece;
                             const dest_off = slot + @as(i32, @intCast(piece.offset));
                             switch (piece.class) {
                                 .integer => {
                                     const width: u8 = if (piece.size <= 4) 4 else 8;
-                                    const pos = int_idx;
-                                    int_idx += 1;
-                                    if (shared_arg_positions) float_idx = int_idx;
-                                    if (pos < int_param_regs.len) {
-                                        try reg_captures.append(self.allocator, .{
-                                            .dest_off = dest_off,
-                                            .width = width,
-                                            .reg_index = @intCast(pos),
-                                            .is_float = false,
-                                        });
-                                    } else {
-                                        try incoming_stack_copies.append(self.allocator, .{
-                                            .dest_off = dest_off,
-                                            .incoming_slot = stack_slot,
-                                            .kind = .{ .value = width },
-                                        });
-                                        stack_slot += 1;
-                                    }
+                                    try reg_captures.append(self.allocator, .{
+                                        .dest_off = dest_off,
+                                        .width = width,
+                                        .reg_index = assigned.register_index,
+                                        .is_float = false,
+                                    });
                                 },
-                                .float => {
+                                .float, .vector => {
                                     const width = piece.size;
-                                    const pos = if (shared_arg_positions) blk: {
-                                        const taken = int_idx;
-                                        int_idx += 1;
-                                        float_idx = int_idx;
-                                        break :blk taken;
-                                    } else blk: {
-                                        const taken = float_idx;
-                                        float_idx += 1;
-                                        break :blk taken;
-                                    };
-                                    if (pos < float_param_regs.len) {
-                                        try reg_captures.append(self.allocator, .{
-                                            .dest_off = dest_off,
-                                            .width = width,
-                                            .reg_index = @intCast(pos),
-                                            .is_float = true,
-                                        });
-                                    } else {
-                                        try incoming_stack_copies.append(self.allocator, .{
-                                            .dest_off = dest_off,
-                                            .incoming_slot = stack_slot,
-                                            .kind = .{ .value = width },
-                                        });
-                                        stack_slot += 1;
-                                    }
+                                    try reg_captures.append(self.allocator, .{
+                                        .dest_off = dest_off,
+                                        .width = width,
+                                        .reg_index = assigned.register_index,
+                                        .is_float = true,
+                                    });
                                 },
                             }
                         }
@@ -17943,36 +18165,41 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .num_regs = self.calcArgRegCount(loc, arg_layout),
                         });
                     },
-                    .indirect => {
+                    .stack_value => |stack_value| {
                         const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                         const raw_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
                         const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, 8));
                         const slot = self.codegen.allocStackSlot(slot_size);
-
-                        if (abi_target == .x86_64_sysv) {
-                            // SysV memory-class aggregates arrive by value in
-                            // the caller's outgoing argument slots.
-                            const slot_count = (raw_size + 7) / 8;
-                            var k: u32 = 0;
-                            while (k < slot_count) : (k += 1) {
-                                try incoming_stack_copies.append(self.allocator, .{
-                                    .dest_off = slot + @as(i32, @intCast(k * 8)),
-                                    .incoming_slot = stack_slot,
-                                    .kind = .{ .value = 8 },
-                                });
-                                stack_slot += 1;
-                            }
-                        } else {
-                            // AAPCS64 and Win64 pass a pointer.
-                            const pos = int_idx;
-                            int_idx += 1;
-                            if (shared_arg_positions) float_idx = int_idx;
-                            if (pos < int_param_regs.len) {
+                        var copied: u32 = 0;
+                        while (copied < raw_size) {
+                            const remaining = raw_size - copied;
+                            const piece_size: u8 = if (remaining >= 8) 8 else if (remaining >= 4) 4 else if (remaining >= 2) 2 else 1;
+                            try incoming_stack_copies.append(self.allocator, .{
+                                .dest_off = slot + @as(i32, @intCast(copied)),
+                                .incoming_byte_offset = stack_value.offset + copied,
+                                .kind = .{ .value = piece_size },
+                            });
+                            copied += piece_size;
+                        }
+                        const loc = self.stackLocationForLayout(arg_layout, slot);
+                        try self.scratch_arg_infos.append(.{
+                            .loc = loc,
+                            .layout_idx = arg_layout,
+                            .num_regs = self.calcArgRegCount(loc, arg_layout),
+                        });
+                    },
+                    .indirect => |location| {
+                        const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
+                        const raw_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
+                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, 8));
+                        const slot = self.codegen.allocStackSlot(slot_size);
+                        switch (location) {
+                            .register => |register_index| {
                                 const ptr_off = self.codegen.allocStackSlot(8);
                                 try reg_captures.append(self.allocator, .{
                                     .dest_off = ptr_off,
                                     .width = 8,
-                                    .reg_index = @intCast(pos),
+                                    .reg_index = register_index,
                                     .is_float = false,
                                 });
                                 try indirect_captures.append(self.allocator, .{
@@ -17980,14 +18207,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     .size = raw_size,
                                     .ptr_off = ptr_off,
                                 });
-                            } else {
+                            },
+                            .stack => |stack_offset| {
                                 try incoming_stack_copies.append(self.allocator, .{
                                     .dest_off = slot,
-                                    .incoming_slot = stack_slot,
+                                    .incoming_byte_offset = stack_offset,
                                     .kind = .{ .deref = raw_size },
                                 });
-                                stack_slot += 1;
-                            }
+                            },
                         }
                         const loc = self.stackLocationForLayout(arg_layout, slot);
                         try self.scratch_arg_infos.append(.{
@@ -18027,15 +18254,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // by emitEntryIncomingStackCopies right after the prologue.)
             if (comptime target.toCpuArch() == .x86_64) {
                 for (incoming_stack_copies.items) |copy| {
-                    const src_off = incoming_stack_arg_base_offset + @as(i32, @intCast(copy.incoming_slot)) * 8;
+                    const src_off = incoming_stack_arg_base_offset + @as(i32, @intCast(copy.incoming_byte_offset));
                     switch (copy.kind) {
                         .value => |width| {
-                            try self.emitLoad(.w64, scratch_reg, frame_ptr, src_off);
-                            if (width <= 4) {
-                                try self.emitStore(.w32, frame_ptr, copy.dest_off, scratch_reg);
-                            } else {
-                                try self.emitStore(.w64, frame_ptr, copy.dest_off, scratch_reg);
-                            }
+                            const register_width: x86_64.RegisterWidth = switch (width) {
+                                1 => .w8,
+                                2 => .w16,
+                                4 => .w32,
+                                8 => .w64,
+                                else => unreachable,
+                            };
+                            try self.codegen.emit.movRegMem(register_width, scratch_reg, frame_ptr, src_off);
+                            try self.codegen.emit.movMemReg(register_width, frame_ptr, copy.dest_off, scratch_reg);
                         },
                         .deref => |size| {
                             try self.emitLoad(.w64, scratch_reg, frame_ptr, src_off);
@@ -18074,12 +18304,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, .RAX, sret_reg);
                     }
                 },
-                .registers => |pieces| {
+                .registers => |registers| {
                     const ret_size = self.getLayoutSize(ret_layout);
                     const ret_slot = try self.ensureOnStack(result_loc, ret_size);
                     var gp_i: usize = 0;
                     var fp_i: usize = 0;
-                    for (pieces) |piece| {
+                    for (registers.pieces) |piece| {
                         const src_off = ret_slot + @as(i32, @intCast(piece.offset));
                         switch (piece.class) {
                             .integer => {
@@ -18091,7 +18321,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     try self.emitLoad(.w64, reg, frame_ptr, src_off);
                                 }
                             },
-                            .float => {
+                            .float, .vector => {
                                 try self.emitEntryFloatLoad(src_off, fp_i, piece.size);
                                 fp_i += 1;
                             },
@@ -18107,6 +18337,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (size) {
                     4 => try self.codegen.emitStoreStackF32(dest_off, freg),
                     8 => try self.codegen.emitStoreStackF64(dest_off, freg),
+                    16 => try self.codegen.emitStoreStackV128(dest_off, freg),
                     else => unreachable,
                 }
             } else {
@@ -18128,6 +18359,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (size) {
                     4 => try self.codegen.emitLoadStackF32(freg, src_off),
                     8 => try self.codegen.emitLoadStackF64(freg, src_off),
+                    16 => try self.codegen.emitLoadStackV128(freg, src_off),
                     else => unreachable,
                 }
             } else {
@@ -18143,22 +18375,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Copy entrypoint argument pieces from the caller's outgoing stack
-        /// slots into the frame. Emitted right after the prologue on aarch64,
-        /// where the caller's slots sit at [fp + frame_total].
+        /// area into the frame. Emitted right after the prologue on aarch64,
+        /// where that area begins at [fp + frame_total].
         fn emitEntryIncomingStackCopies(self: *Self, copies: []const EntryStackCopy, frame_total: i32) Allocator.Error!void {
             if (comptime target.toCpuArch() != .aarch64) {
                 std.debug.assert(copies.len == 0);
                 return;
             }
             for (copies) |copy| {
-                const src_off = frame_total + @as(i32, @intCast(copy.incoming_slot)) * 8;
+                const src_off = frame_total + @as(i32, @intCast(copy.incoming_byte_offset));
                 switch (copy.kind) {
                     .value => |width| {
-                        try self.emitLoad(.w64, .IP0, frame_ptr, src_off);
-                        if (width <= 4) {
-                            try self.emitStore(.w32, frame_ptr, copy.dest_off, .IP0);
-                        } else {
-                            try self.emitStore(.w64, frame_ptr, copy.dest_off, .IP0);
+                        switch (width) {
+                            1 => {
+                                try self.codegen.emit.ldrbRegMemSoff(.IP0, frame_ptr, src_off);
+                                try self.codegen.emit.strbRegMemSoff(.IP0, frame_ptr, copy.dest_off);
+                            },
+                            2 => {
+                                try self.codegen.emit.ldrhRegMemSoff(.IP0, frame_ptr, src_off);
+                                try self.codegen.emit.strhRegMemSoff(.IP0, frame_ptr, copy.dest_off);
+                            },
+                            4 => {
+                                try self.emitLoad(.w32, .IP0, frame_ptr, src_off);
+                                try self.emitStore(.w32, frame_ptr, copy.dest_off, .IP0);
+                            },
+                            8 => {
+                                try self.emitLoad(.w64, .IP0, frame_ptr, src_off);
+                                try self.emitStore(.w64, frame_ptr, copy.dest_off, .IP0);
+                            },
+                            else => unreachable,
                         }
                     },
                     .deref => |size| {
@@ -19654,4 +19899,12 @@ test "entrypoint param slots round aggregates to ABI word width" {
     try std.testing.expectEqual(@as(u32, 16), codegen.entrypointParamSlotSize(aggregate_layout));
     try std.testing.expectEqual(@as(u32, 24), codegen.entrypointParamSlotSize(.str));
     try std.testing.expectEqual(@as(u32, 8), codegen.entrypointParamSlotSize(.bool));
+}
+
+test "aarch64 hosted HFA and HVA returns expose V0 through V3" {
+    const ArmCodeGen = LirCodeGen(.arm64linux);
+    try std.testing.expectEqual(aarch64.FloatReg.V0, ArmCodeGen.hostedFloatResultReg(0));
+    try std.testing.expectEqual(aarch64.FloatReg.V1, ArmCodeGen.hostedFloatResultReg(1));
+    try std.testing.expectEqual(aarch64.FloatReg.V2, ArmCodeGen.hostedFloatResultReg(2));
+    try std.testing.expectEqual(aarch64.FloatReg.V3, ArmCodeGen.hostedFloatResultReg(3));
 }

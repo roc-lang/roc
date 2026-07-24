@@ -150,7 +150,7 @@ fn applyRelaTable(
         const r: *const elf.Elf64_Rela = @ptrFromInt(table + off);
         const r_type: u32 = @truncate(r.r_info);
         const r_sym: u32 = @truncate(r.r_info >> 32);
-        const slot: *usize = @ptrFromInt(base + r.r_offset);
+        const slot: *usize = @ptrFromInt(base + @as(usize, @intCast(r.r_offset)));
 
         switch (classifyReloc(r_type)) {
             .relative => slot.* = base +% @as(usize, @bitCast(@as(isize, @intCast(r.r_addend)))),
@@ -170,7 +170,7 @@ fn applyRelaTable(
                     }
                     continue;
                 }
-                slot.* = base +% sym.st_value +% addend;
+                slot.* = base +% @as(usize, @intCast(sym.st_value)) +% addend;
             },
             .unsupported => {},
         }

@@ -126,11 +126,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 254)
-				(e-lookup-local
-					(p-assign (ident "swapPair")))
-				(e-num (value "1"))
-				(e-num (value "2")))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args

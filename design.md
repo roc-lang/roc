@@ -117,6 +117,31 @@ constructor specialization bounds its substitution-candidate value walk
 (`valueCanSubstitute`), because a loop-carried value can reference itself and
 a cyclic value is correctly non-substitutable anyway.
 
+Cycles in a constructor-specialization `Value` tree form through two pointer
+edges — a nominal value's backing and a static-data candidate's runtime
+value — and a callable value's captures can carry either edge inside them, so
+every walk that follows the pointer edges or descends through callable
+captures carries an explicit bound. The size, substitution, unsafe-leaf, and reusability measures
+spend a shared per-node work budget and report the conservative answer when it
+runs out; the constructor-size measure saturates its sums so an exhausted child
+propagates the cap rather than overflowing, which makes "measured size equals
+the cap" a reliable exhaustion signal. A value flagged by that signal is never
+materialized: the inliners rebind it through a plain clone of its source
+expression, and a match over such a scrutinee emits a residual runtime match
+over a plain clone of the source scrutinee, both finite by construction. The
+value matchers (`bindPatToValue`, `bindPatToMatchValue`, `bindPatToFlowValue`),
+the field, item, and tag readers (`fieldFromValue`, `itemFromValue`,
+`tagFromValue`, `recordFromValue`, `tupleFromValue`), and `materialize` each
+count the pointer edges they follow against a shared strip cap; the matchers
+decline toward a residual runtime match on exhaustion, while those readers and
+`materialize` — which only ever run on values already proven acyclic by the
+rules above — treat reaching the cap as a compiler bug. The shape-driven walks (`valueFromShapeArgs`,
+`appendExprsFromValue`, `supplyLoopSlotLeaves`, `shapeMatchesValue`, `shapeEql`)
+carry no budget: `Shape` trees are finite and acyclic by construction — they are
+produced only by the budgeted derivations and a nominal shape's backing is a
+fresh allocation, never a back-reference — so those walks terminate on the
+structure alone.
+
 ## Checking Effects And Const Roots
 
 Checking owns Roc effect validation, compile-time evaluation eligibility, and
@@ -438,18 +463,29 @@ they remain explicit reconstructions. Eligibility is computed by a memoized walk
 over explicit `ConstStore` edges, never inferred from runtime bytes or layout
 coincidence.
 
+The explicit static-root locator is recursive context. Restoration propagates
+it through every transparent and nominal construction layer and into tag,
+record, tuple, box, list, string, and callable captures. A wrapper must not drop
+that context and thereby turn a representation-stable descendant back into a
+runtime construction.
+
 Object emission, native compile-time execution, and interpreter compile-time
 execution consume the same target-layout static-data materializer. In-process
 evaluators own a relocated immutable data image and index its root addresses
 directly by compact `StaticDataId`; callable relocations carry explicit
 capture-offset metadata so the interpreter does not reconstruct ABI meaning from
-bytes or symbols. A static-data candidate is identified by its stored const node
-and concrete Monotype type; a checked type id alone cannot identify its
-representation across distinct specialization contexts. Direct LIR lowering
-deduplicates those candidates only when their concrete destination const plan and
-runtime layout also match. This preserves distinct specialized and narrowed
-representations of the same stored value while allowing each one to be emitted
-directly in the representation its consumer requires.
+bytes or symbols. A static-data candidate is identified by its stored const node,
+checked type, and concrete Monotype type; a checked type id alone cannot identify
+its representation across distinct specialization contexts. Raw stage-local
+Monotype ids are not representation identity. Candidates for the same stored node
+and checked type share one `StaticDataId` only after exact structural
+Monotype equality succeeds. All child lowering contexts in one specialization
+draft reuse that one closed candidate expression. Direct LIR lowering then reuses
+one initializer only for the same identified candidate and committed runtime
+layout. This is at least as strict as requiring identical destination const plans
+and layouts, preserves distinct specialized and narrowed representations, and
+prevents equivalent instantiations from rebuilding or repeatedly walking a large
+stored graph.
 
 Compile-time evaluation is allowed to fail with user diagnostics only during
 checking. After checking, stored constant data is ordinary checked output. A
@@ -510,6 +546,14 @@ Encoders may distinguish NaN, positive infinity, and negative infinity, but not
 individual NaN representations. A new float operation or observation boundary
 must preserve these rules explicitly; a backend must never infer from its use
 whether normalization is required.
+
+Finite float bits remain observable through `to_bits`. A transcendental whose
+finite result is not fixed by a correctly-rounded IEEE operation must therefore
+use one explicit target-independent implementation for each float width across
+compile-time evaluation, the interpreter, and every backend. Backends must not
+substitute a target libm call or LLVM intrinsic for that implementation. The
+implementation must keep F32 operations binary32 and F64 operations binary64,
+and exact-bit backend tests pin representative finite results.
 
 Static initializer execution uses target-width symbolic memory rather than host
 pointers. Every allocation records its committed target layout, alignment,
@@ -1122,28 +1166,29 @@ alias roots union-find representatives for concrete structures.
 
 ## Module Completion Boundary
 
-The compile coordinator records phase progress separately from terminal module
-outcome. A terminal module has exactly one explicit outcome: success or failure.
-Successful completion means the module produced the complete `ModuleEnv` and
-checked module data required by importers, including its final content identity.
-Failed completion is terminal only for scheduling and accounting; any partial
-`ModuleEnv` retained for diagnostics or watch inputs is not valid importer input.
+The compile coordinator records phase progress separately from user diagnostics.
+A source module that reaches checking has no user-error `Failure` outcome. It
+must produce its complete `ModuleEnv`, final content identity, and CheckedModule
+data required by importers. The Check type-check result carries exactly one of:
 
-Every scheduling edge that consumes imported `ModuleEnv` or checked module data
-requires successful completion. Canonicalization, content-identity construction,
-checking, checked module cache construction, and platform requirement checking
-may consume only successful imported modules. A known failed module causes
-failure to propagate iteratively through all local-import, cross-package-import,
-and registered platform/app dependency edges. An import that cannot be resolved
-is distinct from a known failed module and proceeds only far enough for
-canonicalization to emit its source diagnostic.
+- the complete CheckedModule
+- the complete checker-owned continuation for platform/app relation
+  construction, which waits for both CheckedModule inputs
 
-When a local import closes a cycle, the coordinator records the closing edge
-before reporting it. It then identifies the exact strongly connected component
-by mutual reachability, marks every member failed, and applies ordinary iterative
-failure propagation to all transitive dependents. Cycle members never masquerade
-as successfully completed modules and never provide partial environments or
-missing content identities to downstream stages.
+User diagnostics never select a third outcome and never propagate dependency
+failure. Every invalid source construct is represented at its first owning
+producer boundary by explicit checked data: a checked runtime-error expression,
+a checked-error dispatch plan, a crash constant, or a checked-error platform
+requirement. Importers and every post-check stage consume that data normally.
+Independent definitions, imports, compile-time roots, and runtime paths remain
+available; execution crashes only if it reaches a recorded checked error.
+
+Parsing and error reporting may recover malformed source in order to construct
+the explicit malformed/runtime-error nodes that later stages consume. I/O,
+allocation failure, unsupported compiler hosts, corrupt serialized CheckedModule
+inputs, and compiler invariant violations are operational aborts, not user-error
+module outcomes. They must propagate as operation errors rather than being
+converted into a user diagnostic or a module `Failure` value.
 
 ## Cache Boundary
 
@@ -1488,10 +1533,13 @@ and pairs the platform requirement payload's identity nodes with the recorded
 solutions slot by slot. No stage after check completion resolves an app export
 by name, re-checks requirement/provided type compatibility, or re-derives
 identity bindings by structurally matching platform types against app types. A
-requirement/app mismatch is only ever a check-time diagnostic; a missing
-solution row is the record of an app-side check failure and is consumed only by
-flows that permit user errors, which output the platform root without a
-relation.
+requirement/app mismatch is only ever a check-time diagnostic. Finalization
+constructs one total outcome per platform requirement: an exact relation/binding
+for a successful solution or an explicit checked-error requirement index for a
+failed solution. The relation-bearing platform CheckedModule preserves successful
+sibling bindings, and a lookup at a checked-error index lowers to a runtime
+crash. There is no relation-less error fallback and no separate flow that
+"permits" user errors.
 
 A platform requirement's for-clause alias is a binder over an app-supplied
 type: the requirement's `Model` IS the app's `Model` by the for-clause's own
@@ -2352,6 +2400,42 @@ values agree on one structure skeleton, so specialization inside the shared
 body still sees the shape; and a join with exactly one jump site is not shared
 control at all — its body is cloned directly at that site against the site's
 full symbolic values.
+
+SpecConstr's symbolic values carry only pure structure; effects live in
+bindings. A pending binding created for an effectful computation may move to
+its region boundary only when its recorded emission window proves the hoist
+crosses no other effect: windows chain from the region entry, effect-free
+bindings commute and need no window, and an effectful binding with no window
+pins its value in place. Emission windows belong to values, not call paths —
+they are keyed by the expression node, which substitution preserves, so a
+producer cloned once as an argument still proves its window when it becomes a
+binding at a later use site. Two properties are load-bearing for this policy.
+First, the effect-mark counter must observe every observable-effect emission,
+expression and statement position alike — a window that silently spanned an
+uncounted emission could hoist a binding across it. Second, any construct that
+can conditionally skip the code after it without advancing the effect marks (a
+`try` sequence's early return) must clone its continuation inside its own
+region: the region boundary is what keeps a producer created after the
+divergence from becoming a hoist candidate beside it. A rewrite that cloned a
+try continuation in its enclosing region would silently reopen effect
+reordering, and the window chain check cannot detect that itself.
+
+A loop-carried variable's reassigned copies share its source binder but not
+its local id, so once a loop clone rebinds the carried slot, binder identity
+is the only path those copies resolve through. Cloning a loop therefore drops
+the pre-loop binder value, installs the emitted param under the slot's binder
+identity for any value variant — an opaque scalar param must reach the copies
+too — and, while the loop clone is active, keeps a reassigned carried binder's
+entry pointing at its latest merged value across the restores of escaping
+`let` clones. Arm and join boundaries restore plainly, so a reassignment
+inside one branch never leaks to its sibling or past the join. Resolving a
+carried read to anything else is unsound in one of two ways: a read that
+reaches a vanished pre-loop local becomes a phantom argument when capture
+recomputation promotes the dangling reference, and a read that reaches the
+loop-entry value silently discards the reassignment. Two Debug validators
+guard the pair: no rewritten function may gain a capture its source did not
+declare, and every local reference in a rewritten body must resolve to an
+in-scope binding, argument, or recomputed capture.
 
 Every SpecConstr clone is hygienic. A retained pattern, loop parameter, join
 parameter, try-sequence local, or other runtime binder receives a fresh lifted
@@ -5388,9 +5472,11 @@ that value kind must be added explicitly here with a checked cache rule.
 Compile-time evaluation failures are owned by checking finalization because the
 module has not been output yet. User-written compile-time crashes, invalid
 compile-time host interaction, and unsupported compile-time operations become
-checking diagnostics attached to the checked root being finalized. OOM remains
-OOM. A post-check invariant failure while lowering or interpreting a
-compile-time root is still a compiler bug, not a user-facing diagnostic.
+checking diagnostics attached to the checked root being finalized, and the
+root's `ConstStore` entry is completed with an explicit crash constant. Sibling
+roots continue finalizing. OOM remains OOM. A post-check invariant failure while
+lowering or interpreting a compile-time root is still a compiler bug, not a
+user-facing diagnostic.
 
 While storing an eval result, the builder may reserve a `ConstNodeId` before
 storing its children so repeated references to the same acyclic runtime value
@@ -5983,3 +6069,473 @@ Minimum boundary checks:
   their declaring modules are byte-identical.
 
 If a boundary check fails, the compiler stops as a compiler bug.
+
+
+## Integer SIMD Builtins
+
+This section describes the design of Roc's 128-bit integer SIMD builtins: the
+goals, the invariants they must preserve, the target architecture floors they
+assume, the type and naming design, and the pinned meaning of every
+operation class. The API itself lives in `src/build/roc/Builtin.roc` as eight
+nominal vector types nested in `Num`.
+
+### Goals
+
+The purpose of these builtins is to make it possible to write pure-Roc
+implementations of compression and image codecs — DEFLATE (plus zlib/gzip
+framing), PNG, JPEG, WebP, and AVIF, both encoding and decoding — whose
+performance approaches state-of-the-art native implementations (libdeflate,
+libjpeg-turbo, libwebp, dav1d, libaom) when both sides are held to 128-bit
+vectors and a single thread. The same operations also cover zstd, brotli,
+LZ4, base64/hex, UTF-8 validation and transcoding, JSON structural scanning,
+hashing (xxh3-class, CRC-32), and FLAC.
+
+The design center is *portable operations with pinned meaning*, not
+per-ISA intrinsics: each operation has exactly one meaning, and each backend
+lowers it to the best instruction sequence for that target. The one-line
+design law:
+
+> **Target-specific lowering is fine; target-specific meaning is not.**
+> Speed may vary by target. Bits may not.
+
+The op set was derived from the hot-kernel inventories of the codecs above —
+every operation is justified by named kernels that need it (DCT/IDCT
+multiply-accumulate, scanline filters, loop filters, CDEF, palette lookups,
+LZ77 copies, CRC folding, SAD-based encoder search, and so on). Nothing is
+included merely because some ISA has an instruction for it.
+
+### Invariants
+
+1. **Bit-identical results everywhere.** Pure Roc code produces the same
+   answer on every target and every backend — LLVM, both dev backends, wasm,
+   and the interpreter — and compile-time evaluation, which runs Roc code
+   on the dev backend, must agree with all of them. Every SIMD
+   operation therefore has a precise scalar reference meaning, including
+   its edge cases: shift counts at or past the lane width, out-of-range
+   table-lookup indices, saturation boundaries, the `q15` multiply's
+   `-32768 × -32768` corner. Where an ISA's native behavior deviates from
+   the pinned meaning, that backend emits fixup instructions; it never
+   gets to leak its own behavior through.
+2. **No target-conditional Roc code.** There is no way, and will be no way,
+   for Roc source to ask "which CPU am I on?" The compiler alone knows.
+3. **Fixed 128-bit width.** A vector type is 128 bits, always, on every
+   target. This is itself a determinism feature: width-polymorphic APIs
+   (Highway-style) make *code* portable but let intermediate states vary by
+   target, which would leak target-dependence into observable results.
+   128-bit is the width that x86-64 (SSE through AVX2's 128-bit forms),
+   AArch64 NEON, and wasm simd128 all share natively. Wider types (`U8x32`,
+   …) can be added later as *new types* without changing what any existing
+   code means.
+4. **Ordinary host ABI values.** SIMD vectors may appear anywhere an ordinary
+   Roc value may appear, including directly or recursively inside hosted and
+   `provides` arguments and results. Every host boundary follows the selected
+   target's natural C ABI. Generated C, Zig, and Rust declarations use native
+   vector leaf types and C-layout aggregates whose size, alignment, field
+   offsets, argument placement, and result placement match the compiled Roc
+   code.
+
+Where an operation exists in wasm simd128, we pin wasm's meaning — that
+spec already solved "deterministic 128-bit SIMD that lowers well to both SSE
+and NEON," and it makes the wasm backend nearly free. (Operations from
+wasm's *relaxed-simd* extension are explicitly nondeterministic there;
+anything we take from that family gets pinned meaning here instead.)
+
+### Why integer-only (for now)
+
+All five target formats are integer in their specifications: AV1 decode is
+bit-exact integer by spec, libjpeg-turbo's production DCT is fixed-point
+integer, and DEFLATE/PNG/WebP have no arithmetic beyond integers. Float
+shows up only in encoder decision heuristics (rate-distortion lambdas,
+perceptual tuning), which convert cleanly to fixed-point — with the side
+benefit that Roc encoders become bit-reproducible across targets, which none
+of the C encoders guarantee. Float SIMD raises real cross-target determinism
+questions (FMA contraction, approximation instructions) that integer SIMD
+simply does not have, so it is deferred until something actually needs it.
+
+### Target floors
+
+Because SIMD operations inline into user code, there is no seam where
+runtime CPU dispatch could live (dispatch requires an out-of-line call
+boundary at kernel granularity, which is exactly what an inlined builtin
+does not have — and Roc has no startup hook for eager dispatch either).
+Instead, each (architecture, OS) target has a static floor:
+
+- **x86-64:** `x86-64-v3` **plus AES-NI and PCLMULQDQ** — i.e. Intel Haswell
+  (2013) and later, every AMD Zen. The v-levels deliberately exclude the two
+  crypto instructions (they were fused off on some budget parts before
+  ~2017), so the floor names them explicitly. Rationale: `pshufb`-class
+  byte shuffles (SSSE3) are load-bearing for nearly every codec kernel; the
+  VEX three-operand encodings and scalar BMI2 that v3 brings materially
+  speed up entropy-decode loops even at 128-bit vector width; carryless
+  multiply is required for competitive CRC-32. As of 2026 this floor covers
+  ~95% of the consumer installed base and 100% of what Windows 11 supports;
+  RHEL 10 already requires v3.
+- **AArch64:** ARMv8.2-class with the crypto extension — Cortex-A76 /
+  Neoverse-N1 (2018) and later. Covers every Apple Silicon Mac, every
+  Windows-on-ARM machine, every major ARM cloud chip (Graviton2+, Ampere,
+  Cobalt, Axion), and Raspberry Pi 5. Excludes Raspberry Pi 3/4 (their
+  cores lack the crypto extension carrying `pmull`).
+- **wasm:** the `simd128` feature (universally shipped in engines since
+  2021; the wasm backend already assumes it). wasm has no carryless
+  multiply and no AES instructions, so those two operations get slower —
+  but bit-identical — software lowerings on wasm.
+
+Under these floors both native architectures guarantee the same capability
+set: full 128-bit integer SIMD, a one-instruction byte shuffle, carryless
+multiply, and AES rounds. Floors only ever affect speed, never results, so
+adding a more conservative x64 variant target later would not violate
+anything.
+
+### Type design
+
+Eight concrete nominal types, siblings of the scalar number types in `Num`:
+
+```
+U8x16  I8x16  U16x8  I16x8  U32x4  I32x4  U64x2  I64x2
+```
+
+Deliberately **not** one parameterized `Vec(lane)` type, for three reasons:
+
+1. A large fraction of the op surface is lane-specific with cross-type
+   signatures (widening `U8x16 -> U16x8`, narrowing takes two `U16x8` to
+   one `U8x16`, `dot_pairs : I16x8, I16x8 -> I32x4`, byte shuffles only at
+   lane width 8, carryless multiply only at width 64). Under `Vec(lane)`
+   these all need concrete signatures anyway, so the parameterization buys
+   sharing only for the plain lane-wise suite while creating a "what rules
+   out `Vec(Str)`" problem and demanding a type-level next-wider-lane
+   function.
+2. Generic user code over vector types falls out of `where` method
+   constraints on the concrete types, exactly the way `List.sum` is generic
+   over `plus`/`default` — no `Lane` type or new machinery needed.
+3. It matches the house style: `Num` spells out thirteen scalar types
+   longhand; eight more siblings are stylistically seamless, and every op
+   stays monomorphic, which is what predictable lowering wants.
+
+Comparison results are **same-typed vectors** whose lanes are all-ones or
+all-zero (wasm-style) — there is no separate mask type. That is the machine
+representation on all three ISAs, and it composes with the bitwise ops and
+`bit_select` for free.
+
+#### Naming conventions
+
+- Lane-wise wrapping arithmetic is `plus_wrap` / `minus_wrap` /
+  `times_wrap` (never bare `plus`): scalar `plus` is
+  overflow-checked-and-crash, vectors cannot cheaply lane-check, and
+  hardware vector arithmetic wraps or saturates. The `_wrap` suffix keeps
+  the house rule that the suffix names the overflow behavior. Saturating
+  variants are `_saturated`, matching the scalars.
+- Operations returning per-lane comparison masks end in `_lanes`
+  (`eq_lanes`, `gt_lanes`, …); `is_eq` (returning `Bool`, all 128 bits
+  equal) keeps its usual meaning for `==` and tests.
+- Conversions follow scalar conventions: `to_u16x8_lo`/`_hi` for widening
+  halves, `narrow_to_u8x16_saturated`/`_wrap` for (two-input) narrowing,
+  `to_u32x4_bits` / `to_u128_bits` / `from_u128_bits` for free
+  reinterpretation of the same 128 bits.
+- Shifts are `shl_wrap` / `shr_wrap` / `shr_zf_wrap` with
+  a scalar `U8` count applied uniformly to every lane, matching the scalar
+  methods bit-for-bit per lane (see meaning below).
+- Every type carries the standard citizenship methods: `default` (zero
+  vector), `is_eq`, `to_hash`, `to_inspect`, plus `splat`, `from_list`,
+  `to_list`. The vector types deliberately do not participate in
+  `parser_for`/`encoder_for` derivation and have no `from_numeral` —
+  vectors are not literals or serialization leaves.
+
+#### Lane order
+
+Lane `i` of a vector occupies bits `[i * lane_bits, (i + 1) * lane_bits)`
+of the 128-bit value, and the vector's byte-serialized form (for `load`,
+`store`, `to_list` on `U8x16`, hashing) is little-endian — lane 0 first,
+each lane's bytes least-significant first. This matches the in-register and
+in-memory reality of x86-64, AArch64, and wasm, so no target pays a
+byte-swap tax.
+
+### Host ABI
+
+The vector types are full participants in the Host Symbol ABI. There is no
+internal-only restriction, wrapper-call convention, byte-array boundary type,
+or source-level adapter. A Roc programmer may use a vector directly, place one
+inside a record, tuple, tag payload, list element, box payload, or another
+ordinary type, and use that type in either direction across a hosted or
+`provides` symbol.
+
+Layout commitment records each vector as a 16-byte, 16-byte-aligned native
+vector with its lane width and signedness. Host-call classification walks the
+complete committed argument and result layouts, including nested aggregates,
+and applies the target's C ABI:
+
+- On System V x86-64, a direct 128-bit vector has SSE/SSEUP class and occupies
+  one XMM register. A vector member contributes those classes to the containing
+  aggregate's recursive eightbyte classification.
+- On Windows x86-64's default C convention, a direct 128-bit vector argument
+  is passed through an aligned caller temporary and a pointer, while a direct
+  vector result is returned in XMM0. An aggregate containing a vector follows
+  the Win64 aggregate rules; it is not treated as the vector it contains.
+- Under AArch64 C ABIs, including fixed-prototype Windows-on-ARM64, a direct
+  128-bit short vector occupies one Q register, and an aggregate that
+  transparently wraps exactly one vector is the same Q-register value. Other
+  aggregates follow the platform's AAPCS64-derived size rules; in particular,
+  an aggregate with two or more vector members is memory-class in both call
+  directions. That is the host-boundary contract every supported host
+  language's natural declarations compile to: Zig `extern struct`s and Rust
+  `repr(C)` structs of vectors use the memory-class convention, and generated C
+  glue spells the vector members of such aggregates as vector/byte unions so C
+  compilers do not classify them as homogeneous vector aggregates (whose
+  AAPCS64 register rule only C toolchains implement). Homogeneity and
+  transparent-wrapper discovery recursively erase the same single-variant
+  wrappers as generated glue.
+- Under the WebAssembly Basic C ABI, a direct vector is `v128`. Transparent
+  one-field aggregates retain the field's direct classification; other
+  aggregates follow the WebAssembly aggregate rules. An erased callable is the
+  direct pointer value exposed by the C, Zig, and Rust glue aliases.
+
+These are target rules, not backend choices. LLVM, the native dev backends, the
+interpreter translation shim, wasm, and generated host declarations consume the
+same explicit ABI placements. A backend must not classify a vector from its
+name or reinterpret it as `U128`; in particular, two general-purpose 64-bit
+pieces are not interchangeable with one 128-bit vector register value.
+
+Generated glue makes the same contract usable without handwritten declarations.
+C glue selects the target's native integer-vector types, Zig glue uses
+lane-typed `@Vector` types with `callconv(.c)`, and Rust glue uses distinct
+`repr(transparent)` wrappers over the stable target-architecture SIMD types in
+C-ABI extern declarations together with `repr(C)` aggregates. All eight Roc
+vector names remain distinct binding names even where the target uses one
+underlying register type. C records expose their committed fields, and C tag
+unions expose named discriminants, concrete payload storage, and typed
+constructors/accessors. Generated size, alignment, discriminant, payload, and
+field-offset assertions lock aggregate layout. Cross-language tests compile the
+generated C, Zig, and Rust output and call every direct and aggregate shape in
+both directions, so a host compiler and Roc must independently choose the same
+ABI.
+
+ABI class assignment, LLVM carrier selection, and concrete argument/result
+placement are separate explicit steps. Every register placement records both
+its byte pieces and their atomic carrier. Piecewise carriers become independent
+LLVM parameters, structure carriers preserve aggregate results even when they
+contain one field, scalar 128-bit integer arguments remain one naturally aligned
+`i128`, and AArch64 integer pairs, HFAs, and transparent vector aggregates
+remain one homogeneous array. On ELF AArch64, those array parameters
+additionally carry `alignstack(8)` for F32/F64 HFAs or `alignstack(16)` for
+vector aggregates; Mach-O and Windows use the same array carrier without that
+LLVM attribute. LLVM wrappers marshal exactly that carrier instead of
+flattening it and relying on a later stage to reconstruct argument identity.
+Structure returns retain each committed field's exact vector kind.
+
+Concrete argument assignment accounts for each register class's remaining capacity,
+preserves a SysV SSE/SSEUP vector as one value, applies the base AAPCS64 and
+Windows even-X-register rule for 16-byte-aligned multiword arguments, and
+spills an entire atomic value (such as a complete HFA) when the remaining
+registers cannot hold it. Apple arm64 removes that
+even-register rule and packs stack arguments at their natural alignment; both
+differences are explicit target data. On SysV, scalar `I128`/`U128` uses two
+`i64` parameters while both INTEGER eightbytes fit and one `i128` parameter
+when the complete scalar must go to the stack. Generated `RocDec` is an
+aggregate instead and becomes aligned `byval` when both INTEGER eightbytes do
+not fit. Wrappers and machine-call consumers follow this explicit data
+directly.
+
+The concrete ABI placement is authoritative all the way through native call
+emission. Consumers address the recorded register index directly, including
+intentional holes before aligned AArch64 multi-register values. Stack
+placements remain byte offsets rather than being converted back into abstract
+eightbyte slots: this is required for Apple arm64's naturally aligned compact
+1/2/4-byte arguments. The inverse entrypoint wrappers copy from those same
+byte-exact offsets. AArch64 hosted result capture includes V0 through V3, the
+complete result-register set required by legal one-to-four-member HFAs.
+
+On Windows x64, scalar `I128`/`U128` is indirect as an argument and returned in
+XMM0 with the compiler's `<2 x i64>` carrier. Generated `RocDec` remains an
+aggregate and is indirect in both directions. The ABI classifier distinguishes
+the C spelling even though both Roc layouts contain the same 128 payload bits.
+
+The cross-language ABI fixture exercises these exhaustion rules in both call
+directions with generated C, Zig, and Rust declarations: nested transparent
+HFAs and memory-class vector aggregates after seven SIMD arguments, integer
+pairs after seven GP arguments, platform-specific `I128` register alignment,
+and exhausted SysV `I128`/`Dec`.
+It also exhausts all eight AArch64 GP argument registers before passing
+`U8`/`U16`/`U32`, which pins Apple's compact stack offsets in hosted and
+provided directions.
+
+### Pinned meaning — the edge cases
+
+These are the cases where ISAs disagree natively and the spec must choose.
+The choices below are implemented by the reference implementations and are
+the contract every backend must match:
+
+- **Shifts** take the count modulo the lane width: `shl_wrap`, `shr_wrap`,
+  and `shr_zf_wrap` shift every lane by `count % lane_bits`, so a count equal
+  to the lane width leaves every lane unchanged and larger counts wrap around.
+  This matches the scalar `shl_wrap` family.
+- **`table_lookup`** (`pshufb` / `tbl` / `i8x16.swizzle`): any index ≥ 16
+  yields 0. (wasm/NEON meaning; on x86 `pshufb` needs a one-instruction
+  fixup because it wraps indices 16–127.)
+- **`times_fixed_q15_saturated`** (`pmulhrsw` / `sqrdmulh` /
+  `i16x8.q15mulr_sat_s`): `(-32768, -32768)` **saturates to +32767**
+  (wasm/NEON behavior; x86 `pmulhrsw` wraps on exactly this input and
+  needs a fixup, elidable whenever one operand is a constant that is not
+  -32768).
+- **`dot_pairs_saturated`** (`pmaddubsw`): unsigned × signed byte products
+  summed pairwise into `I16` lanes **with signed saturation** (x86
+  meaning, the useful one for filter kernels; NEON lowers via widening
+  multiplies plus a saturating pairwise combine).
+- **`sums_of_abs_diffs`** (`psadbw`): result lane 0 holds the sum of
+  absolute differences of bytes 0–7, lane 1 of bytes 8–15 (x86 layout,
+  pinned; NEON lowers via `uabdl`/`uadalp`).
+- **`avg_rounded`** (`pavgb` / `urhadd` / `avgr_u`): `(a + b + 1) >> 1` —
+  all three ISAs already agree.
+- **Saturating narrowing** uses the source signedness to clamp into the
+  destination range exactly as the scalar `to_*_try` bounds would define
+  (`packsswb`/`packuswb`-family, `sqxtn`/`sqxtun`, `narrow_i16x8_*`).
+- **`get_lane` / `with_lane` / `broadcast_lane`** crash on an out-of-range
+  lane index (like `div_by` crashes on zero), and `concat_shift_bytes`
+  crashes on a shift count > 16. For `concat_shift_bytes`, a constant count
+  selects the immediate `palignr`, AArch64 `ext`, or wasm `i8x16.shuffle`
+  form. A runtime count is equally valid and uses shift/combine sequences on
+  native targets or a spill plus dynamic 16-byte load on wasm, because those
+  three instructions have immediate-only indices.
+- **`to_bitmask`** collects each lane's most-significant bit, lane 0 in
+  bit 0 (`pmovmskb` / `i8x16.bitmask`; NEON emulates in a few
+  instructions). `any_lanes_set`/`all_lanes_set` are defined in terms of
+  it.
+
+### Compiler representation and lowering
+
+Each vector type is compiler-provided and has its own first-class committed
+layout. The eight layouts share size, alignment, and vector register class but
+retain distinct lane width and signedness. Low-level operations are
+lane-parameterized; their argument and result layouts encode lane width and
+signedness, including both source and destination kinds for widening and
+narrowing.
+
+Methods implemented directly by the compiler are bodiless declarations in
+`Builtin.roc`. Thin checked methods remain in Roc for range checks and for
+one-line compositions such as flipped comparisons, lane broadcast, bit casts
+between sibling vector types, collection conversions, inspection, hashing, and
+streaming. Every compiler-backed operation is implemented by LLVM, both native
+dev backends, wasm, the interpreter, and the Lambda Mono evaluator. Compile-time
+evaluation uses the same vector layouts and dev lowering as runtime dev code,
+and `ConstStore` preserves all 16 vector bytes under the checked vector type.
+
+The correctness-oriented native consumers use the exhaustive bit-level SIMD
+evaluator in `src/builtins/simd.zig`. Dev code passes the operation descriptor,
+explicit source/destination lane kinds, and operand bits through its ordinary
+internal call ABI; x86-64 and AArch64 wrappers preserve the corresponding
+two-register vector values and AArch64 has native Q-register movement. The
+interpreter and Lambda Mono evaluator invoke the same operation contract from
+their explicit layouts. A Lambda Mono value that does not have an integer bit
+representation is rejected explicitly rather than being replaced with zero.
+Wasm instead emits `v128` operations and exact helper
+sequences, including software carryless multiplication where simd128 has no
+instruction.
+
+Structural equality treats vectors as ordinary value leaves. Solved-to-LIR
+lowering converts each vector operand to its complete 128-bit bit image and
+uses scalar `U128` equality, so every backend compares every lane without
+needing a vector-specific equality code path. This LIR bitcast does not alter
+host ABI classification.
+
+LLVM emits generic vector IR for ordinary operations and target intrinsics for
+operations whose pinned edge behavior or instruction selection requires them.
+The generic `dot_pairs_saturated` lowering widens unsigned and signed bytes to
+32-bit lanes, multiplies and pairwise-adds at that width, clamps to signed
+16-bit bounds, and narrows only after saturation; no intermediate 16-bit sum
+is permitted to wrap.
+`src/target/mod.zig` is the single authority for the LLVM target query, CPU
+name, and feature delta. Linked builds, optimized tests, and LLVM evaluation
+therefore all compile under the same x86-64-v3 plus AES/PCLMULQDQ, AArch64, or
+wasm simd128 floor.
+
+The former pure-Roc `{ bits : U128 }` implementations live only in the SIMD
+test oracle. They define each operation lane by lane without depending on the
+compiler vector types. The differential suite compares the oracle with runtime
+LLVM, both dev targets, wasm, the interpreter, the Lambda Mono evaluator, and
+compile-time evaluation over fixed edge corpora and deterministic generated
+inputs. The host-ABI suite separately compiles generated C, Zig, and Rust glue
+and verifies direct and nested vector values in both call directions.
+
+`zig build run-test-simd-differential` owns the shared proof source and runs the
+standalone dev and LLVM programs, optimized compile-time tests, every evaluator
+backend, and the Lambda Mono comparison in sequence. The corpus contains 294
+operation/type cases, fixed boundary values, algebraic properties, and at least
+64 deterministic generated inputs per applicable case. Every shift operation is
+checked directly against the scalar oracle for every count from zero through one
+less than the lane width,
+then all 256 possible `U8` counts are proven equal to their oracle-checked
+modulo-lane-width count. This targeted loop does not repeat count-independent
+cases. Checked memory access pins the final valid 16-byte window, the first
+invalid offset, and `U64.highest`; every public
+lane accessor pins its exact first-invalid index. The corpus is opt-in to
+ordinary test enumeration so the normal eval and Lambda Mono steps do not run
+it twice, but MiniCI runs the dedicated no-skip gate explicitly.
+The full Lambda Mono body-lowering differential sweep over the ordinary eval
+corpus runs once per day on Ubuntu through `nightly_gate.yml`; it is not part of
+PR MiniCI. This does not remove the dedicated SIMD gate's Lambda Mono lane.
+`zig build run-check-simd-codegen` separately requires optimized
+x86-64 output to contain representative byte-add, pairwise-dot, table-shuffle,
+and carryless-multiply instructions. `zig build run-check-glue-abi` compiles
+generated Zig and C declarations for x86-64 and AArch64 Linux/macOS/Windows plus
+wasm, compiles Rust for native and wasm, and the native/wasm glue runtime matrix
+calls the generated contracts in both directions.
+
+### Doc comments name the instructions
+
+Every operation's doc comment states the instruction (or short sequence)
+that implements it on x86-64, AArch64/NEON, and wasm simd128 — e.g.
+`table_lookup` names `pshufb`, `tbl`, and `i8x16.swizzle` — so that
+searching the docs for an instruction name finds the Roc builtin that
+provides it. Where a target needs a fixup or emulation, the doc says so.
+
+### Memory interop and streaming
+
+- `load : List(U8), U64 -> Try(V, [OutOfBounds, ..])` and
+  `store : V, List(U8), U64 -> Try(List(U8), [OutOfBounds, ..])` are the
+  checked bulk accessors (bytes, little-endian, any alignment — unaligned
+  128-bit access is effectively free on every supported CPU). The checked
+  form costs nothing in optimized loops: LLVM already merges the bounds
+  check of exactly this shape into the loop condition (see issue #10301,
+  case 1, where the checked `List.get` loop compiles to the same machine
+  loop as C).
+- `append_to : V, List(U8) -> List(U8)` appends 16 bytes for output
+  assembly.
+- `U8x16.iter_list : List(U8) -> { chunks : Iter(U8x16), tail : List(U8) }`
+  is the streaming chunk driver. Its current per-chunk overhead is tracked
+  in #10301 (case 4); codecs stream via `Iter` of chunks/rows, never per
+  byte.
+
+### Scalar-side gaps (tracked separately)
+
+Competitive codecs need the scalar side of the language to hold up too; the
+known gaps, deliberately excluded from the SIMD effort, are:
+
+- wrapping scalar arithmetic does not exist, and plain `+`/`-`/`*` are
+  checked (crash-on-overflow) even at `--opt=speed`, which also blocks
+  auto-vectorization of reductions — #10300;
+- `for`/`Iter` loops carry per-element step calls and refcount traffic
+  that the equivalent `while` loop does not — #10301;
+- no scalar rotate, byte-swap, or unaligned multi-byte loads from
+  `List(U8)` (bit-reader fuel for entropy decoders).
+
+### Benchmarking ground rules (for later)
+
+Single-threaded, competitors pinned to their 128-bit code paths (e.g.
+dav1d `--cpumask`, libjpeg-turbo's SSE2/NEON paths), same machine,
+CI-based. Encoder comparisons are speed at matched output quality
+(SSIMULACRA2-class metrics for images), not raw throughput. Their
+unrestricted AVX2/AVX-512 numbers may be recorded as context but are not
+the pass/fail bar while the language is 128-bit-only.
+
+### Open questions
+
+- Whether `get_lane`-style constant-index ops should eventually require
+  compile-time-constant arguments (today: crash on out-of-range, fast
+  paths when the optimizer sees a constant).
+- Whether a 32/48/64-byte `table_lookup` tier (NEON `tbl2`–`tbl4`) earns
+  its place once real kernels are measured (expressible today as multiple
+  16-byte lookups plus selects).
+- Typed-element loads (`List(U16)` → `U16x8`, etc.) — deferred until a
+  kernel wants them; byte buffers are the codec substrate.
+- Saturating arithmetic on 32/64-bit lanes, `abs` on `I64x2`, and unsigned
+  ordering compares on `U64x2` are omitted because no cataloged kernel
+  uses them and hardware support is ragged; any of them can be added later
+  without disturbing existing meaning.

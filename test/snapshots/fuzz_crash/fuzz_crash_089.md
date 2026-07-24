@@ -54,8 +54,7 @@ e = {
 (can-ir
 	(d-let
 		(p-assign (ident "e"))
-		(e-block
-			(e-runtime-error (tag "expr_not_canonicalized")))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

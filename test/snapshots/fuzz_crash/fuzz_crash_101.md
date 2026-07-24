@@ -94,12 +94,7 @@ a = {}
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-lambda
-			(args
-				(p-tuple
-					(patterns)))
-			(e-call
-				(e-runtime-error (tag "empty_tuple"))))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-tuple)

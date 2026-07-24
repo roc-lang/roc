@@ -1,4 +1,4 @@
-//! Internal implementation for Roc's F64 tangent builtin.
+//! Internal implementation for Roc's F64 sine, cosine, and tangent builtins.
 //!
 //! The algorithm is ported from Zig compiler_rt, which is in turn ported from
 //! musl. This module intentionally exports only Roc-facing helpers; it does not
@@ -10,8 +10,56 @@ const math = std.math;
 const kernel = @import("trig.zig");
 const rem_pio2 = @import("rem_pio2.zig").rem_pio2;
 
+/// Sine for an F64 input, returned as F64.
+pub fn sin64(x: f64) f64 {
+    @setFloatMode(.strict);
+
+    var ix = @as(u64, @bitCast(x)) >> 32;
+    ix &= 0x7fff_ffff;
+
+    if (ix <= 0x3fe9_21fb) {
+        if (ix < 0x3e50_0000) return x;
+        return kernel.sin(x, 0.0, 0);
+    }
+    if (ix >= 0x7ff0_0000) return x - x;
+
+    var y: [2]f64 = undefined;
+    const n = rem_pio2(x, &y);
+    return switch (n & 3) {
+        0 => kernel.sin(y[0], y[1], 1),
+        1 => kernel.cos(y[0], y[1]),
+        2 => -kernel.sin(y[0], y[1], 1),
+        else => -kernel.cos(y[0], y[1]),
+    };
+}
+
+/// Cosine for an F64 input, returned as F64.
+pub fn cos64(x: f64) f64 {
+    @setFloatMode(.strict);
+
+    var ix = @as(u64, @bitCast(x)) >> 32;
+    ix &= 0x7fff_ffff;
+
+    if (ix <= 0x3fe9_21fb) {
+        if (ix < 0x3e46_a09e) return 1.0;
+        return kernel.cos(x, 0.0);
+    }
+    if (ix >= 0x7ff0_0000) return x - x;
+
+    var y: [2]f64 = undefined;
+    const n = rem_pio2(x, &y);
+    return switch (n & 3) {
+        0 => kernel.cos(y[0], y[1]),
+        1 => -kernel.sin(y[0], y[1], 1),
+        2 => -kernel.cos(y[0], y[1]),
+        else => kernel.sin(y[0], y[1], 1),
+    };
+}
+
 /// Tangent for an F64 input, returned as F64.
 pub fn tan64(x: f64) f64 {
+    @setFloatMode(.strict);
+
     var ix = @as(u64, @bitCast(x)) >> 32;
     ix &= 0x7fffffff;
 

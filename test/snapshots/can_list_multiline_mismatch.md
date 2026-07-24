@@ -53,8 +53,7 @@ EndOfFile,
 (e-list
 	(elems
 		(e-num (value "42"))
-		(e-string
-			(e-literal (string "hello world")))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-num (value "100"))))
 ~~~
 # TYPES

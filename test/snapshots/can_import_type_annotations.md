@@ -496,10 +496,7 @@ combineTrys = |result1, result2|
 		(e-lambda
 			(args
 				(p-assign (ident "input")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "input")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -509,41 +506,7 @@ combineTrys = |result1, result2|
 		(e-lambda
 			(args
 				(p-assign (ident "request")))
-			(e-block
-				(s-let
-					(p-assign (ident "result"))
-					(e-call
-						(e-runtime-error (tag "ident_not_in_scope"))
-						(e-field-access (field "body")
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "request")))))))
-				(e-match
-					(match
-						(cond
-							(e-lookup-local
-								(p-assign (ident "result"))))
-						(branches
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Ok")
-										(args
-											(e-call
-												(e-runtime-error (tag "ident_not_in_scope"))
-												(e-lookup-local
-													(p-assign (ident "data"))))))))
-							(branch
-								(patterns
-									(pattern (degenerate false)
-										(p-applied-tag)))
-								(value
-									(e-tag (name "Err")
-										(args
-											(e-lookup-local
-												(p-assign (ident "err"))))))))))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -561,12 +524,7 @@ combineTrys = |result1, result2|
 			(args
 				(p-assign (ident "parserConfig"))
 				(p-assign (ident "input")))
-			(e-call
-				(e-runtime-error (tag "ident_not_in_scope"))
-				(e-lookup-local
-					(p-assign (ident "parserConfig")))
-				(e-lookup-local
-					(p-assign (ident "input")))))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)

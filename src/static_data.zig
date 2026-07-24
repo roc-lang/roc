@@ -230,7 +230,21 @@ const StaticInitializerMachine = struct {
         if (result.bytes.len != source.bytes.len) {
             const target_layout = self.layoutValue(layout_idx);
             if (target_layout.tag == .box_of_zst) return result;
-            staticDataInvariant("static initializer explicit reinterpret changed target byte size");
+            if (@import("builtin").mode == .Debug) {
+                const source_layout = self.layoutValue(source.layout_idx);
+                std.debug.panic(
+                    "static data invariant violated: static initializer explicit reinterpret changed target byte size from layout {d} ({s}, {d} bytes) to layout {d} ({s}, {d} bytes)",
+                    .{
+                        @intFromEnum(source.layout_idx),
+                        @tagName(source_layout.tag),
+                        source.bytes.len,
+                        @intFromEnum(layout_idx),
+                        @tagName(target_layout.tag),
+                        result.bytes.len,
+                    },
+                );
+            }
+            unreachable;
         }
         @memcpy(result.bytes, source.bytes);
         try result.relocations.appendSlice(self.allocator(), source.relocations.items);

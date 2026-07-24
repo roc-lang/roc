@@ -171,8 +171,7 @@ processColor = |color| {
 				(e-match
 					(match
 						(cond
-							(e-lookup-local
-								(p-assign (ident "color"))))
+							(e-runtime-error (tag "erroneous_value_use")))
 						(branches
 							(branch
 								(patterns

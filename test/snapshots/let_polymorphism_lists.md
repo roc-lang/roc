@@ -391,56 +391,20 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 323)
+		(e-call (constraint-fn-var 339)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 336)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-lambda
-			(args
-				(p-underscore))
-			(e-block
-				(s-let
-					(p-assign (ident "len1"))
-					(e-call
-						(e-lookup-external
-							(builtin))
-						(e-lookup-local
-							(p-assign (ident "all_int_list")))))
-				(s-let
-					(p-assign (ident "len2"))
-					(e-call
-						(e-lookup-external
-							(builtin))
-						(e-lookup-local
-							(p-assign (ident "all_str_list")))))
-				(s-let
-					(p-assign (ident "len3"))
-					(e-call
-						(e-lookup-external
-							(builtin))
-						(e-lookup-local
-							(p-assign (ident "all_float_list")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 355)
-					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 353)
-							(receiver
-								(e-lookup-local
-									(p-assign (ident "len1"))))
-							(args
-								(e-lookup-local
-									(p-assign (ident "len2"))))))
-					(args
-						(e-lookup-local
-							(p-assign (ident "len3")))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

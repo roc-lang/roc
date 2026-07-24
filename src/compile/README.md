@@ -48,19 +48,16 @@ try coord.start();
 try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
 try coord.coordinatorLoop();
 
-// 3. Render or collect diagnostics, then check for errors before finalizing.
+// 3. Finalize executable artifacts. User diagnostics are represented by
+//    explicit checked-error/crash facts and never prevent publication.
+try coord.finalizeExecutableArtifacts();
+
+// 4. Render or collect diagnostics. Embedders may use these to choose a
+//    command status or presentation, but must not use them to gate lowering.
 var it = coord.iterReports();
 while (it.next()) |entry| {
     // entry.package_name, entry.module_name, entry.report
 }
-if (coord.hasUserErrors()) return error.CompilationFailed;
-
-// 4. Finalize — links the platform-app relation. Must come after the
-//    error check; calling this with outstanding user errors returns
-//    error.HasUserErrors.
-try coord.finalizeExecutableArtifacts();
-// finalize can surface new errors of its own — check once more.
-if (coord.hasUserErrors()) return error.CompilationFailed;
 
 // 5. Lower to LIR. The allocator must own a single contiguous buffer —
 //    see "Runtime arena" below.

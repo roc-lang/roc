@@ -106,14 +106,8 @@ NO CHANGE
 		(e-nominal-external
 			(builtin)
 			(e-tag (name "False")))
-		(e-dispatch-call (method "not") (constraint-fn-var 213)
-			(receiver
-				(e-tag (name "True")))
-			(args))
-		(e-dispatch-call (method "not") (constraint-fn-var 217)
-			(receiver
-				(e-tag (name "False")))
-			(args))
+		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-runtime-error (tag "erroneous_value_expr"))
 		(e-if
 			(if-branches
 				(if-branch
@@ -126,18 +120,12 @@ NO CHANGE
 		(e-if
 			(if-branches
 				(if-branch
-					(e-dispatch-call (method "not") (constraint-fn-var 235)
-						(receiver
-							(e-tag (name "True")))
-						(args))
+					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-nominal-external
 						(builtin)
 						(e-tag (name "True")))))
 			(if-else
-				(e-dispatch-call (method "not") (constraint-fn-var 245)
-					(receiver
-						(e-tag (name "True")))
-					(args))))))
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure

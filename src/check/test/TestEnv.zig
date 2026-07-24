@@ -109,6 +109,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
         .env = other_test_env.module_env,
         .statement_idx = statement_idx,
         .qualified_type_ident = other_qualified_ident,
+        .import_identity = .{ .module = other_module_ident },
     });
 
     // Parse the AST

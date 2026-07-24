@@ -22,6 +22,7 @@ pub const LayoutData = @import("layout.zig").LayoutData;
 pub const Idx = @import("layout.zig").Idx;
 pub const Scalar = @import("layout.zig").Scalar;
 pub const ScalarTag = @import("layout.zig").ScalarTag;
+pub const Vector = @import("layout.zig").Vector;
 pub const ScalarData = @import("layout.zig").ScalarData;
 pub const Closure = @import("layout.zig").Closure;
 // Unified struct types (records and tuples are both structs at the layout level)

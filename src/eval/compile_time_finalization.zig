@@ -155,8 +155,6 @@ fn finalize(
     else
         .{};
     const requests = module.root_requests.compile_time_requests;
-    var had_problem = false;
-
     if (requests.len != 0) {
         var coverage = ComptimeCoverage.init(allocator);
         defer coverage.deinit();
@@ -178,7 +176,7 @@ fn finalize(
                 if (batch_requests.items.len == 0) {
                     finalizationInvariant("compile-time root request order referenced an unfinished dependency");
                 }
-                if (try lowerEvalAndFinishRoots(
+                _ = try lowerEvalAndFinishRoots(
                     allocator,
                     module,
                     lowering_imports,
@@ -189,7 +187,7 @@ fn finalize(
                     problem_store,
                     &coverage,
                     options,
-                )) had_problem = true;
+                );
                 batch_requests.clearRetainingCapacity();
                 batch_root_ids.clearRetainingCapacity();
 
@@ -202,7 +200,7 @@ fn finalize(
         }
 
         if (batch_requests.items.len != 0) {
-            if (try lowerEvalAndFinishRoots(
+            _ = try lowerEvalAndFinishRoots(
                 allocator,
                 module,
                 lowering_imports,
@@ -213,20 +211,17 @@ fn finalize(
                 problem_store,
                 &coverage,
                 options,
-            )) had_problem = true;
+            );
         }
 
         try coverage.reportUnusedBranches(allocator, problem_store);
     }
 
     if (problem_store) |store| {
-        if (try store.flushPendingStaticExhaustiveness(allocator) != 0) {
-            return error.CompileTimeProblem;
-        }
+        _ = try store.flushPendingStaticExhaustiveness(allocator);
     }
 
     try module.const_store.verifyComplete();
-    if (had_problem) return error.CompileTimeProblem;
 }
 
 const RootStatus = enum {
@@ -383,6 +378,7 @@ const RootCompletionState = struct {
             .imported_proc,
             .hosted_proc,
             .platform_required_declaration,
+            .platform_required_checked_error,
             => true,
         };
     }
@@ -667,8 +663,13 @@ fn lowerEvalAndFinishRoots(
 
             const eval_result = try evalCompileTimeRoot(allocator, &interpreter, problem_store, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout);
             try recordComptimeSiteHits(problem_store, coverage, module, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
-            defer interpreter.dropValue(eval_result.value, root.ret_layout);
-            break :blk try writer.storeRoot(root, eval_result.value);
+            switch (eval_result) {
+                .value => |value| {
+                    defer interpreter.dropValue(value.value, root.ret_layout);
+                    break :blk try writer.storeRoot(root, value.value);
+                },
+                .failed => |failed_payload| break :blk failed_payload,
+            }
         };
 
         if (try reportCompileTimeExpectFailures(
@@ -1419,7 +1420,7 @@ fn devComptimeExhaustivenessRootPayload(
     };
     try appendCompileTimeExhaustivenessProblem(allocator, store, module, root, lir_result, root_proc, site_id);
     had_problem.* = true;
-    return .{ .const_node = try appendCrashConst(module, "compile-time exhaustiveness failure") };
+    return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
 }
 
 fn devCrashedRootPayload(
@@ -1445,7 +1446,7 @@ fn devCrashedRootPayload(
         .region = region,
     } });
     had_problem.* = true;
-    return .{ .const_node = try appendCrashConst(module, message) };
+    return try failedRootPayload(module, root, message);
 }
 
 fn reportDevHostEvents(
@@ -1495,7 +1496,6 @@ fn finishLiteralConversionRoot(
     payload: checked.CompileTimeRootPayload,
 ) FinalizeError!checked.CompileTimeRootPayload {
     const result = try finishLiteralConversionRootDetailed(allocator, module, problem_store, root, payload);
-    if (result.had_problem) return error.CompileTimeProblem;
     return result.payload;
 }
 
@@ -1608,33 +1608,39 @@ fn reportCompileTimeExpectFailures(
     return true;
 }
 
+const CompileTimeEvalResult = union(enum) {
+    value: Interpreter.EvalResult,
+    failed: checked.CompileTimeRootPayload,
+};
+
 fn evalCompileTimeRoot(
     allocator: Allocator,
     interpreter: *Interpreter,
     problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     proc: lir.LIR.LirProcSpecId,
     ret_layout: @import("layout").Idx,
-) FinalizeError!Interpreter.EvalResult {
-    return interpreter.eval(.{
+) FinalizeError!CompileTimeEvalResult {
+    const result = interpreter.eval(.{
         .proc_id = proc,
         .ret_layout = ret_layout,
     }) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.RuntimeError => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed"),
-        error.ComptimeExhaustiveness => try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc),
-        error.DivisionByZero => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero"),
-        error.Crash => try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed"),
+        error.OutOfMemory => return error.OutOfMemory,
+        error.RuntimeError => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "compile-time evaluation failed") },
+        error.ComptimeExhaustiveness => return .{ .failed = try reportCompileTimeExhaustiveness(allocator, problem_store, module, root, lir_result, interpreter, proc) },
+        error.DivisionByZero => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getRuntimeErrorMessage() orelse "Division by zero") },
+        error.Crash => return .{ .failed = try reportCompileTimeCrash(allocator, problem_store, module, root, interpreter, interpreter.getCrashMessage() orelse "Roc crashed") },
         error.ExpectErr => finalizationInvariant("compile-time root reached an expect_err statement"),
     };
+    return .{ .value = result };
 }
 
 fn recordComptimeSiteHits(
     maybe_problem_store: ?*check.problem.Store,
     coverage: *ComptimeCoverage,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     compile_time_root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     hits: anytype,
@@ -1671,12 +1677,12 @@ fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
 fn reportCompileTimeExhaustiveness(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     interpreter: *const Interpreter,
     root_proc: lir.LIR.LirProcSpecId,
-) FinalizeError!Interpreter.EvalResult {
+) FinalizeError!checked.CompileTimeRootPayload {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
@@ -1684,7 +1690,7 @@ fn reportCompileTimeExhaustiveness(
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
     try appendCompileTimeExhaustivenessProblem(allocator, problem_store, module, root, lir_result, root_proc, site_id);
-    return error.CompileTimeProblem;
+    return try failedRootPayload(module, root, "compile-time exhaustiveness failure");
 }
 
 fn appendCompileTimeExhaustivenessProblem(
@@ -1775,11 +1781,11 @@ fn comptimeSiteEmpiricalKind(
 fn reportCompileTimeCrash(
     allocator: Allocator,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     interpreter: *const Interpreter,
     message: []const u8,
-) FinalizeError!Interpreter.EvalResult {
+) FinalizeError!checked.CompileTimeRootPayload {
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
@@ -1789,7 +1795,23 @@ fn reportCompileTimeCrash(
         .message = message_idx,
         .region = region,
     } });
-    return error.CompileTimeProblem;
+    return try failedRootPayload(module, root, message);
+}
+
+fn failedRootPayload(
+    module: *checked.CheckedModuleArtifact,
+    root: checked.CompileTimeRoot,
+    message: []const u8,
+) Allocator.Error!checked.CompileTimeRootPayload {
+    return switch (root.kind) {
+        .expect => .expect,
+        .constant,
+        .hoisted_constant,
+        .callable_binding,
+        .numeral_conversion,
+        .quote_conversion,
+        => .{ .const_node = try appendCrashConst(module, message) },
+    };
 }
 
 fn compileTimeCrashRegion(

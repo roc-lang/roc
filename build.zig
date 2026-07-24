@@ -2581,6 +2581,7 @@ pub fn build(b: *std.Build) void {
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
     const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
+    const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized x86-64 integer SIMD kernels select native instructions");
     const build_snapshot_tool_step = b.step("build-snapshot-tool", "Build the snapshot tool");
     const run_check_snapshots_step = b.step("run-check-snapshots", "Regenerate snapshots and fail if tracked snapshots changed");
     const build_test_zig_step = b.step("build-test-zig", "Build Zig unit-test binaries");
@@ -2588,6 +2589,7 @@ pub fn build(b: *std.Build) void {
     const build_test_lsp_integration_runner_step = b.step("build-test-lsp-integration-runner", "Build LSP integration test harness");
     const build_test_eval_runner_step = b.step("build-test-eval-runner", "Build eval test runner");
     const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
+    const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
     const build_test_lambda_mono_differential_step = b.step("build-test-lambda-mono-differential", "Build the Lambda Mono differential harness");
@@ -3094,11 +3096,17 @@ pub fn build(b: *std.Build) void {
     run_builtin_format.step.dependOn(build_roc_step);
     run_check_builtin_format_step.dependOn(&run_builtin_format.step);
 
-    // Glue ABI lock: generate Zig glue with the freshly built compiler, then
-    // compile test/glue/zig_abi_lock.zig against the generated file and the
-    // canonical builtins definitions on both pointer widths. This is the
-    // enforcement for the ABI text the glue templates restate: template drift
-    // from host_abi/RocStr/RocList/erased-callable is a compile error here.
+    const run_simd_codegen_check = b.addSystemCommand(&.{ "bash", "ci/check_simd_codegen.sh" });
+    run_simd_codegen_check.addArtifactArg(roc_exe);
+    run_simd_codegen_check.step.dependOn(build_test_hosts_step);
+    run_check_simd_codegen_step.dependOn(&run_simd_codegen_check.step);
+
+    // Glue ABI locks compile the generated bindings themselves. Zig is checked
+    // for every native architecture/OS plus wasm, C is checked against the
+    // vector-heavy layout probe over the same matrix, and Rust is checked for
+    // the configured native target plus wasm (rustc requires an installed core
+    // library for each cross target). Native integration tests execute all
+    // three languages in both directions on each CI host OS/architecture.
     {
         const run_glue_abi = b.addRunArtifact(roc_exe);
         run_glue_abi.addArgs(&.{ "glue", "--no-cache" });
@@ -3109,16 +3117,21 @@ pub fn build(b: *std.Build) void {
         // track as inputs, so always regenerate.
         run_glue_abi.has_side_effects = true;
 
-        const lock_targets = [_]std.Build.ResolvedTarget{
-            target,
-            b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none }),
+        const lock_targets = [_]struct { name: []const u8, target: std.Build.ResolvedTarget }{
+            .{ .name = "x64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl }) },
+            .{ .name = "arm64_linux", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl }) },
+            .{ .name = "x64_macos", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .macos }) },
+            .{ .name = "arm64_macos", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .macos }) },
+            .{ .name = "x64_windows", .target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc }) },
+            .{ .name = "arm64_windows", .target = b.resolveTargetQuery(.{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc }) },
+            .{ .name = "wasm32", .target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none }) },
         };
         for (lock_targets) |lock_target| {
             const lock_obj = b.addObject(.{
-                .name = b.fmt("glue_zig_abi_lock_{s}", .{@tagName(lock_target.result.cpu.arch)}),
+                .name = b.fmt("glue_zig_abi_lock_{s}", .{lock_target.name}),
                 .root_module = b.createModule(.{
                     .root_source_file = b.path("test/glue/zig_abi_lock.zig"),
-                    .target = lock_target,
+                    .target = lock_target.target,
                     .optimize = optimize,
                 }),
             });
@@ -3127,6 +3140,93 @@ pub fn build(b: *std.Build) void {
                 .root_source_file = glue_abi_dir.path(b, "roc_platform_abi.zig"),
             });
             run_check_glue_abi_step.dependOn(&lock_obj.step);
+        }
+
+        const run_c_glue_abi = b.addRunArtifact(roc_exe);
+        run_c_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_c_glue_abi.addFileArg(b.path("src/glue/src/CGlue.roc"));
+        const c_glue_abi_dir = run_c_glue_abi.addOutputDirectoryArg("glue-c-abi");
+        run_c_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
+        run_c_glue_abi.has_side_effects = true;
+
+        const c_lock_targets = [_]struct { name: []const u8, triple: []const u8, simd128: bool }{
+            .{ .name = "x64_linux", .triple = "x86_64-linux-musl", .simd128 = false },
+            .{ .name = "arm64_linux", .triple = "aarch64-linux-musl", .simd128 = false },
+            .{ .name = "x64_macos", .triple = "x86_64-macos", .simd128 = false },
+            .{ .name = "arm64_macos", .triple = "aarch64-macos", .simd128 = false },
+            .{ .name = "x64_windows", .triple = "x86_64-windows-msvc", .simd128 = false },
+            .{ .name = "arm64_windows", .triple = "aarch64-windows-msvc", .simd128 = false },
+            .{ .name = "wasm32", .triple = "wasm32-freestanding", .simd128 = true },
+        };
+        for (c_lock_targets) |lock_target| {
+            const compile_c_lock = b.addSystemCommand(&.{
+                "zig",
+                "cc",
+                "-target",
+                lock_target.triple,
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-c",
+            });
+            if (lock_target.simd128) compile_c_lock.addArg("-msimd128");
+            compile_c_lock.addArg("-I");
+            compile_c_lock.addDirectoryArg(c_glue_abi_dir);
+            compile_c_lock.addFileArg(b.path("test/glue/c_abi_compile_lock.c"));
+            compile_c_lock.addArg("-o");
+            _ = compile_c_lock.addOutputFileArg(b.fmt("c-abi-lock-{s}.o", .{lock_target.name}));
+            run_check_glue_abi_step.dependOn(&compile_c_lock.step);
+        }
+
+        const run_rust_glue_abi = b.addRunArtifact(roc_exe);
+        run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
+        run_rust_glue_abi.addFileArg(b.path("src/glue/src/RustGlue.roc"));
+        const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
+        run_rust_glue_abi.addFileArg(b.path("test/glue/layout-probe/main.roc"));
+        run_rust_glue_abi.has_side_effects = true;
+
+        const native_rust_target: ?[]const u8 = switch (target.result.os.tag) {
+            .linux => switch (target.result.cpu.arch) {
+                .x86_64 => "x86_64-unknown-linux-musl",
+                .aarch64 => "aarch64-unknown-linux-musl",
+                else => null,
+            },
+            .macos => switch (target.result.cpu.arch) {
+                .x86_64 => "x86_64-apple-darwin",
+                .aarch64 => "aarch64-apple-darwin",
+                else => null,
+            },
+            .windows => switch (target.result.cpu.arch) {
+                .x86_64 => "x86_64-pc-windows-msvc",
+                .aarch64 => "aarch64-pc-windows-msvc",
+                else => null,
+            },
+            else => null,
+        };
+        const rust_lock_targets = [_]?struct { name: []const u8, triple: []const u8, simd128: bool }{
+            if (native_rust_target) |triple| .{ .name = "native", .triple = triple, .simd128 = false } else null,
+            .{ .name = "wasm32", .triple = "wasm32-unknown-unknown", .simd128 = true },
+        };
+        for (rust_lock_targets) |maybe_lock_target| {
+            const lock_target = maybe_lock_target orelse continue;
+            const compile_rust_lock = b.addSystemCommand(&.{
+                "rustc",
+                "--edition=2021",
+                "-D",
+                "warnings",
+                "--crate-type=lib",
+                "--emit=metadata",
+                "--cfg",
+                "no_roc_std_helpers",
+                "--target",
+                lock_target.triple,
+            });
+            if (lock_target.simd128) compile_rust_lock.addArgs(&.{ "-C", "target-feature=+simd128" });
+            compile_rust_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
+            compile_rust_lock.addArg("-o");
+            _ = compile_rust_lock.addOutputFileArg(b.fmt("rust-abi-lock-{s}.rmeta", .{lock_target.name}));
+            run_check_glue_abi_step.dependOn(&compile_rust_lock.step);
         }
     }
 
@@ -3594,6 +3694,9 @@ pub fn build(b: *std.Build) void {
     run_check_snapshots_step.dependOn(&check_snapshot_diff.step);
 
     // Add parallel eval test runner
+    const simd_test_sources_module = b.createModule(.{
+        .root_source_file = b.path("test/simd/eval_sources.zig"),
+    });
     const eval_test_exe = b.addExecutable(.{
         .name = "eval-test-runner",
         .root_module = b.createModule(.{
@@ -3617,6 +3720,7 @@ pub fn build(b: *std.Build) void {
     eval_test_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     eval_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     eval_test_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    eval_test_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
     eval_test_exe.step.dependOn(&write_compiled_builtins.step);
     try addLlvmSupportToStep(
         b,
@@ -3654,6 +3758,17 @@ pub fn build(b: *std.Build) void {
         run_test_eval_step,
         eval_run_args,
     );
+
+    const run_simd_eval = b.addRunArtifact(eval_test_exe);
+    run_simd_eval.addArgs(&.{
+        "--filter",
+        "SIMD full differential corpus",
+        "--threads",
+        "1",
+        "--timeout",
+        "900000",
+        "--llvm",
+    });
 
     const eval_host_effects_exe = b.addExecutable(.{
         .name = "eval-host-effects-runner",
@@ -3708,6 +3823,11 @@ pub fn build(b: *std.Build) void {
 
     const lambda_mono_differential_exe = b.addExecutable(.{
         .name = "lambda-mono-differential-runner",
+        // Linux compiler targets use musl so Roc-produced binaries are portable.
+        // Keep this host-executed test runner portable too instead of requiring
+        // the host to provide musl's dynamic loader. Other hosts retain their
+        // platform's ordinary executable linkage.
+        .linkage = if (target.result.os.tag == .linux and target.result.abi.isMusl()) .static else null,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/eval/test/lambda_mono_differential_runner.zig"),
             .target = target,
@@ -3723,6 +3843,7 @@ pub fn build(b: *std.Build) void {
     lambda_mono_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     lambda_mono_differential_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
     lambda_mono_differential_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    lambda_mono_differential_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
     lambda_mono_differential_exe.root_module.addOptions("coverage_options", blk: {
         const opts = b.addOptions();
         opts.addOption(bool, "coverage", false);
@@ -3756,7 +3877,7 @@ pub fn build(b: *std.Build) void {
         }
         break :blk lm_args_list.toOwnedSlice(b.allocator) catch @panic("OOM");
     } else run_args;
-    _ = install_and_run(
+    const lambda_mono_differential_install = install_and_run(
         b,
         no_bin,
         lambda_mono_differential_exe,
@@ -3764,6 +3885,45 @@ pub fn build(b: *std.Build) void {
         run_test_lambda_mono_differential_step,
         lambda_mono_differential_run_args,
     );
+
+    // One explicitly expensive proof gate owns every execution lane. Keep the
+    // commands sequential: each corpus is intentionally large, and running
+    // several compiler instances concurrently obscures failures and wastes RAM.
+    const run_simd_runtime_dev = b.addRunArtifact(roc_exe);
+    run_simd_runtime_dev.addArgs(&.{ "--opt=dev", "--no-cache", "test/simd/differential.roc" });
+    run_simd_runtime_dev.step.dependOn(build_test_hosts_step);
+
+    const run_simd_runtime_speed = b.addRunArtifact(roc_exe);
+    run_simd_runtime_speed.addArgs(&.{ "--opt=speed", "--no-cache", "test/simd/differential.roc" });
+    run_simd_runtime_speed.step.dependOn(&run_simd_runtime_dev.step);
+
+    const run_simd_ctfe = b.addRunArtifact(roc_exe);
+    run_simd_ctfe.addArgs(&.{ "test", "--opt=speed", "--no-cache", "test/simd/differential.roc" });
+    run_simd_ctfe.step.dependOn(&run_simd_runtime_speed.step);
+
+    run_simd_eval.step.dependOn(&run_simd_ctfe.step);
+
+    if (lambda_mono_differential_install) |install| {
+        // Evaluator tests compile temporary Roc programs beneath `.zig-cache`.
+        // Run the installed Lambda Mono runner so this final gate does not
+        // depend on a cache artifact surviving the preceding evaluator.
+        const run_simd_lambda_mono = b.addSystemCommand(&.{b.getInstallPath(.bin, lambda_mono_differential_exe.out_filename)});
+        run_simd_lambda_mono.addArgs(&.{
+            "--filter",
+            "SIMD full differential corpus",
+            "--threads",
+            "1",
+            "--timeout",
+            "900000",
+            "corpus-only",
+        });
+        run_simd_lambda_mono.addArgs(run_args);
+        run_simd_lambda_mono.step.dependOn(&install.step);
+        run_simd_lambda_mono.step.dependOn(&run_simd_eval.step);
+        run_test_simd_differential_step.dependOn(&run_simd_lambda_mono.step);
+    } else {
+        run_test_simd_differential_step.dependOn(&lambda_mono_differential_exe.step);
+    }
 
     const playground_exe = b.addExecutable(.{
         .name = "playground",
@@ -5281,6 +5441,7 @@ pub fn build(b: *std.Build) void {
                 eval_coverage_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
                 eval_coverage_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
                 eval_coverage_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+                eval_coverage_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
                 eval_coverage_exe.step.dependOn(&write_compiled_builtins.step);
                 try addLlvmSupportToStep(
                     b,

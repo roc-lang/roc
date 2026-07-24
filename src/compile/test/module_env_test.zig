@@ -109,7 +109,8 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 1 synthetic identifier for .. implicit rigids in open tag unions or records
     // Plus 2 numeric method identifiers: abs, abs_diff
     // Plus 1 inspect method identifier: to_inspect
-    // Plus 15 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec
+    // Plus 23 unqualified builtin type names: Num, Bool, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec,
+    // and the eight integer SIMD vector types.
     // Plus 2 fully qualified builtin type names: Builtin.List, Builtin.Box
     // Plus 2 fully qualified Box intrinsic method names: Builtin.Box.box, Builtin.Box.unbox
     // Plus 1 fully qualified Bool type name: Builtin.Bool
@@ -117,7 +118,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // Plus 2 range method identifiers: range_exclusive, range_inclusive
     // Count reflects the merged builtin set, including structural parser/encoder
     // method identifiers, Builtin.Json.Encoding's parse/encode helpers, and Crypto.
-    try testing.expectEqual(@as(u32, 110), original.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 118), original.common.idents.interner.entry_count);
     try testing.expectEqualStrings("hello", original.getIdent(hello_idx));
     try testing.expectEqualStrings("world", original.getIdent(world_idx));
 
@@ -128,7 +129,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // First verify that the CommonEnv data was preserved after deserialization
     // Should have same identifiers as original, including the builtin structural method identifiers.
     // (Note: "Try" is now shared with well-known identifiers, reducing total by 1)
-    try testing.expectEqual(@as(u32, 110), env.common.idents.interner.entry_count);
+    try testing.expectEqual(@as(u32, 118), env.common.idents.interner.entry_count);
 
     try testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

@@ -139,7 +139,7 @@ NO CHANGE
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-call (constraint-fn-var 267)
+								(e-call (constraint-fn-var 283)
 									(e-lookup-local
 										(p-assign (ident "RBMut.delB")))
 									(e-lookup-local
@@ -173,7 +173,7 @@ NO CHANGE
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-call (constraint-fn-var 300)
+								(e-call (constraint-fn-var 316)
 									(e-lookup-local
 										(p-assign (ident "RBMut.delA")))
 									(e-lookup-local

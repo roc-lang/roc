@@ -92,19 +92,18 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 209)
+				(e-call (constraint-fn-var 225)
 					(e-field-access (field "f")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r")))))
 					(e-num (value "1")))
-				(e-call (constraint-fn-var 221)
+				(e-call (constraint-fn-var 237)
 					(e-field-access (field "f")
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "r")))))
-					(e-string
-						(e-literal (string "a"))))))))
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

@@ -418,14 +418,14 @@ CliHostManyResult roc_cli_many(
     (void)arg13;
     roc_str_decref(arg14);
     record_failure("roc_cli_many was called");
-    return (CliHostManyResult){{0}};
+    return (CliHostManyResult){0};
 }
 
 CliHostNamedRecord roc_cli_shape(CircleOrEmptyOrRect arg0, CliHostShapeArg1 arg1) {
     (void)arg0;
     (void)arg1;
     record_failure("roc_cli_shape was called");
-    return (CliHostNamedRecord){{0}};
+    return (CliHostNamedRecord){0};
 }
 
 CliHostWide roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
@@ -433,7 +433,7 @@ CliHostWide roc_cli_wide(RocDec arg0, __int128 arg1, unsigned __int128 arg2) {
     (void)arg1;
     (void)arg2;
     record_failure("roc_cli_wide was called");
-    return (CliHostWide){{0}};
+    return (CliHostWide){0};
 }
 
 static void reset_contract(void) {
@@ -461,8 +461,8 @@ static void run_contract(void) {
     RocList args = make_args();
     if (failure_count == 0) {
         MainForHostResult result = roc_main(args);
-        const uint8_t tag = result.bytes[4];
-        if (tag != 1) {
+        const uint8_t tag = result.tag;
+        if (tag != MainForHostResultTag_Ok) {
             record_failure("roc_main returned Err");
         }
     }

@@ -258,6 +258,13 @@ jobs:
       - name: Run MiniCI
         run: zig build minici -- --minici-skip-build ${{ join(matrix.minici_args, ' ') }}
 
+      # LLVM evaluation is deliberately excluded from the general MiniCI eval
+      # suite for speed. Keep the exact-bit float contract PR-gated with a
+      # focused invocation so backend drift cannot wait for the nightly suite.
+      - name: Check exact float bits with LLVM
+        if: matrix.shard == 'ubuntu-full' || matrix.shard == 'macos-harness' || matrix.shard == 'windows-harness'
+        run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
+
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so report
       # the composition after each shard to measure artifact size and growth

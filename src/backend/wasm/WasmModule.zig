@@ -61,6 +61,7 @@ pub const ValType = enum(u8) {
     i64 = 0x7E,
     f32 = 0x7D,
     f64 = 0x7C,
+    v128 = 0x7B,
 };
 
 /// Wasm export kinds
@@ -296,12 +297,132 @@ pub const Op = struct {
     pub const i32_extend8_s: u8 = 0xC0;
     pub const i32_extend16_s: u8 = 0xC1;
 
-    // SIMD prefix and selected 128-bit SIMD sub-opcodes.
+    // SIMD prefix and 128-bit integer SIMD sub-opcodes. Sub-opcodes are
+    // varuint32 values from the WebAssembly SIMD specification.
     pub const simd_prefix: u8 = 0xFD;
     pub const v128_load: u32 = 0x00;
+    pub const v128_store: u32 = 0x0B;
+    pub const v128_const: u32 = 0x0C;
+    pub const i8x16_shuffle: u32 = 0x0D;
+    pub const i8x16_swizzle: u32 = 0x0E;
     pub const i8x16_splat: u32 = 0x0F;
+    pub const i16x8_splat: u32 = 0x10;
+    pub const i32x4_splat: u32 = 0x11;
+    pub const i64x2_splat: u32 = 0x12;
     pub const i8x16_eq: u32 = 0x23;
+    pub const i8x16_gt_s: u32 = 0x27;
+    pub const i8x16_gt_u: u32 = 0x28;
+    pub const i8x16_ge_s: u32 = 0x2B;
+    pub const i8x16_ge_u: u32 = 0x2C;
+    pub const i16x8_eq: u32 = 0x2D;
+    pub const i16x8_gt_s: u32 = 0x31;
+    pub const i16x8_gt_u: u32 = 0x32;
+    pub const i16x8_ge_s: u32 = 0x35;
+    pub const i16x8_ge_u: u32 = 0x36;
+    pub const i32x4_eq: u32 = 0x37;
+    pub const i32x4_gt_s: u32 = 0x3B;
+    pub const i32x4_gt_u: u32 = 0x3C;
+    pub const i32x4_ge_s: u32 = 0x3F;
+    pub const i32x4_ge_u: u32 = 0x40;
+    pub const v128_not: u32 = 0x4D;
+    pub const v128_and: u32 = 0x4E;
+    pub const v128_or: u32 = 0x50;
+    pub const v128_xor: u32 = 0x51;
+    pub const v128_bitselect: u32 = 0x52;
+    pub const i8x16_abs: u32 = 0x60;
+    pub const i8x16_neg: u32 = 0x61;
     pub const i8x16_bitmask: u32 = 0x64;
+    pub const i8x16_narrow_i16x8_s: u32 = 0x65;
+    pub const i8x16_narrow_i16x8_u: u32 = 0x66;
+    pub const i8x16_shl: u32 = 0x6B;
+    pub const i8x16_shr_s: u32 = 0x6C;
+    pub const i8x16_shr_u: u32 = 0x6D;
+    pub const i8x16_add: u32 = 0x6E;
+    pub const i8x16_add_sat_s: u32 = 0x6F;
+    pub const i8x16_add_sat_u: u32 = 0x70;
+    pub const i8x16_sub: u32 = 0x71;
+    pub const i8x16_sub_sat_s: u32 = 0x72;
+    pub const i8x16_sub_sat_u: u32 = 0x73;
+    pub const i8x16_min_s: u32 = 0x76;
+    pub const i8x16_min_u: u32 = 0x77;
+    pub const i8x16_max_s: u32 = 0x78;
+    pub const i8x16_max_u: u32 = 0x79;
+    pub const i8x16_avgr_u: u32 = 0x7B;
+    pub const i16x8_extadd_pairwise_i8x16_s: u32 = 0x7C;
+    pub const i16x8_extadd_pairwise_i8x16_u: u32 = 0x7D;
+    pub const i32x4_extadd_pairwise_i16x8_s: u32 = 0x7E;
+    pub const i32x4_extadd_pairwise_i16x8_u: u32 = 0x7F;
+    pub const i16x8_abs: u32 = 0x80;
+    pub const i16x8_neg: u32 = 0x81;
+    pub const i16x8_q15mulr_sat_s: u32 = 0x82;
+    pub const i16x8_bitmask: u32 = 0x84;
+    pub const i16x8_narrow_i32x4_s: u32 = 0x85;
+    pub const i16x8_narrow_i32x4_u: u32 = 0x86;
+    pub const i16x8_extend_low_i8x16_s: u32 = 0x87;
+    pub const i16x8_extend_high_i8x16_s: u32 = 0x88;
+    pub const i16x8_extend_low_i8x16_u: u32 = 0x89;
+    pub const i16x8_extend_high_i8x16_u: u32 = 0x8A;
+    pub const i16x8_shl: u32 = 0x8B;
+    pub const i16x8_shr_s: u32 = 0x8C;
+    pub const i16x8_shr_u: u32 = 0x8D;
+    pub const i16x8_add: u32 = 0x8E;
+    pub const i16x8_add_sat_s: u32 = 0x8F;
+    pub const i16x8_add_sat_u: u32 = 0x90;
+    pub const i16x8_sub: u32 = 0x91;
+    pub const i16x8_sub_sat_s: u32 = 0x92;
+    pub const i16x8_sub_sat_u: u32 = 0x93;
+    pub const i16x8_mul: u32 = 0x95;
+    pub const i16x8_min_s: u32 = 0x96;
+    pub const i16x8_min_u: u32 = 0x97;
+    pub const i16x8_max_s: u32 = 0x98;
+    pub const i16x8_max_u: u32 = 0x99;
+    pub const i16x8_avgr_u: u32 = 0x9B;
+    pub const i16x8_extmul_low_i8x16_s: u32 = 0x9C;
+    pub const i16x8_extmul_high_i8x16_s: u32 = 0x9D;
+    pub const i16x8_extmul_low_i8x16_u: u32 = 0x9E;
+    pub const i16x8_extmul_high_i8x16_u: u32 = 0x9F;
+    pub const i32x4_abs: u32 = 0xA0;
+    pub const i32x4_neg: u32 = 0xA1;
+    pub const i32x4_bitmask: u32 = 0xA4;
+    pub const i32x4_extend_low_i16x8_s: u32 = 0xA7;
+    pub const i32x4_extend_high_i16x8_s: u32 = 0xA8;
+    pub const i32x4_extend_low_i16x8_u: u32 = 0xA9;
+    pub const i32x4_extend_high_i16x8_u: u32 = 0xAA;
+    pub const i32x4_shl: u32 = 0xAB;
+    pub const i32x4_shr_s: u32 = 0xAC;
+    pub const i32x4_shr_u: u32 = 0xAD;
+    pub const i32x4_add: u32 = 0xAE;
+    pub const i32x4_sub: u32 = 0xB1;
+    pub const i32x4_mul: u32 = 0xB5;
+    pub const i32x4_min_s: u32 = 0xB6;
+    pub const i32x4_min_u: u32 = 0xB7;
+    pub const i32x4_max_s: u32 = 0xB8;
+    pub const i32x4_max_u: u32 = 0xB9;
+    pub const i32x4_dot_i16x8_s: u32 = 0xBA;
+    pub const i32x4_extmul_low_i16x8_s: u32 = 0xBC;
+    pub const i32x4_extmul_high_i16x8_s: u32 = 0xBD;
+    pub const i32x4_extmul_low_i16x8_u: u32 = 0xBE;
+    pub const i32x4_extmul_high_i16x8_u: u32 = 0xBF;
+    pub const i64x2_abs: u32 = 0xC0;
+    pub const i64x2_neg: u32 = 0xC1;
+    pub const i64x2_bitmask: u32 = 0xC4;
+    pub const i64x2_extend_low_i32x4_s: u32 = 0xC7;
+    pub const i64x2_extend_high_i32x4_s: u32 = 0xC8;
+    pub const i64x2_extend_low_i32x4_u: u32 = 0xC9;
+    pub const i64x2_extend_high_i32x4_u: u32 = 0xCA;
+    pub const i64x2_shl: u32 = 0xCB;
+    pub const i64x2_shr_s: u32 = 0xCC;
+    pub const i64x2_shr_u: u32 = 0xCD;
+    pub const i64x2_add: u32 = 0xCE;
+    pub const i64x2_sub: u32 = 0xD1;
+    pub const i64x2_mul: u32 = 0xD5;
+    pub const i64x2_eq: u32 = 0xD6;
+    pub const i64x2_gt_s: u32 = 0xD9;
+    pub const i64x2_ge_s: u32 = 0xDB;
+    pub const i64x2_extmul_low_i32x4_s: u32 = 0xDC;
+    pub const i64x2_extmul_high_i32x4_s: u32 = 0xDD;
+    pub const i64x2_extmul_low_i32x4_u: u32 = 0xDE;
+    pub const i64x2_extmul_high_i32x4_u: u32 = 0xDF;
 };
 
 /// Block type for structured control flow
@@ -311,6 +432,7 @@ pub const BlockType = enum(u8) {
     i64 = 0x7E,
     f32 = 0x7D,
     f64 = 0x7C,
+    v128 = 0x7B,
 };
 
 /// A function type (signature)
@@ -702,6 +824,34 @@ pub fn addFuncType(self: *Self, params: []const ValType, results: []const ValTyp
     return idx;
 }
 
+/// Return whether a type-table entry has exactly the requested signature.
+///
+/// WebAssembly permits multiple type-table entries with the same structural
+/// signature, so ABI compatibility must not be decided by comparing type
+/// indices alone.
+pub fn funcTypeMatches(self: *const Self, type_idx: u32, params: []const ValType, results: []const ValType) bool {
+    if (type_idx >= self.func_types.items.len or results.len > 1) return false;
+
+    const actual_params = self.func_types.items[type_idx].params;
+    if (!std.mem.eql(ValType, actual_params, params)) return false;
+
+    const actual_result = self.func_type_results.items[type_idx];
+    return if (results.len == 0)
+        actual_result == null
+    else
+        actual_result == results[0];
+}
+
+/// Find an existing type-table entry with exactly the requested signature.
+pub fn findFuncType(self: *const Self, params: []const ValType, results: []const ValType) ?u32 {
+    for (0..self.func_types.items.len) |type_idx| {
+        if (self.funcTypeMatches(@intCast(type_idx), params, results)) {
+            return @intCast(type_idx);
+        }
+    }
+    return null;
+}
+
 /// Add a function (maps to a type index) and return the global function index.
 /// Global indices account for imports: imports occupy indices 0..import_count-1,
 /// and locally-defined functions start at import_count.
@@ -974,6 +1124,15 @@ pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
     if (self.has_stack_pointer and self.stack_pointer_init < self.memory_min_pages * @as(u32, 65536)) {
         self.stack_pointer_init = self.memory_min_pages * @as(u32, 65536);
     }
+}
+
+/// First byte after all statically assigned data addresses.
+///
+/// This remains conservative after data DCE because segments keep their
+/// assigned offsets; runtime allocation must never reuse any address that was
+/// part of the module's static-data address space.
+pub fn heapBase(self: *const Self) u32 {
+    return self.data_offset;
 }
 
 /// Add a data segment to linear memory. Returns the offset where the data
@@ -2459,11 +2618,17 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
     defer live_import_fns.deinit(gpa);
     try live_import_fns.ensureTotalCapacity(gpa, import_count);
 
+    const dead_import = std.math.maxInt(u32);
+    const import_remap = try gpa.alloc(u32, import_count);
+    defer gpa.free(import_remap);
+    @memset(import_remap, dead_import);
+
     var fn_index: u32 = 0;
     var eliminated_import_count: u32 = 0;
     var write_idx: usize = 0;
     for (self.imports.items) |imp| {
         if (fn_index < import_count and live_flags[fn_index]) {
+            import_remap[fn_index] = @intCast(write_idx);
             live_import_fns.appendAssumeCapacity(fn_index);
             self.imports.items[write_idx] = imp;
             write_idx += 1;
@@ -2490,6 +2655,24 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
         if (self.linking.findAndReindexImportedFn(old_index, @intCast(new_idx))) |sym_index| {
             self.reloc_code.applyRelocsU32(self.code_bytes.items, sym_index, @intCast(new_idx));
         }
+    }
+
+    // Table elements store function indices directly rather than through
+    // relocations. Imports referenced by the table are necessarily live, but
+    // their indices still change when earlier dead imports are removed.
+    for (self.table_func_indices.items) |*table_func_idx| {
+        if (table_func_idx.* >= import_count) continue;
+        const remapped = import_remap[table_func_idx.*];
+        std.debug.assert(remapped != dead_import);
+        table_func_idx.* = remapped;
+    }
+
+    // Function exports also store direct function indices.
+    for (self.exports.items) |*exp| {
+        if (exp.kind != .func or exp.idx >= import_count) continue;
+        const remapped = import_remap[exp.idx];
+        std.debug.assert(remapped != dead_import);
+        exp.idx = remapped;
     }
 
     try self.eliminateDeadData(live_flags, fn_index_min, fn_count);
@@ -4628,6 +4811,22 @@ test "preload — parses export section" {
     try std.testing.expectEqual(@as(u32, 1), module.exports.items[0].idx);
 }
 
+test "function types match structurally rather than by table index" {
+    const allocator = std.testing.allocator;
+    var module = init(allocator);
+    defer module.deinit();
+
+    const first = try module.addFuncType(&.{ .i32, .v128 }, &.{.i64});
+    const duplicate = try module.addFuncType(&.{ .i32, .v128 }, &.{.i64});
+
+    try std.testing.expect(first != duplicate);
+    try std.testing.expect(module.funcTypeMatches(first, &.{ .i32, .v128 }, &.{.i64}));
+    try std.testing.expect(module.funcTypeMatches(duplicate, &.{ .i32, .v128 }, &.{.i64}));
+    try std.testing.expectEqual(first, module.findFuncType(&.{ .i32, .v128 }, &.{.i64}).?);
+    try std.testing.expect(!module.funcTypeMatches(duplicate, &.{ .i64, .v128 }, &.{.i64}));
+    try std.testing.expect(!module.funcTypeMatches(duplicate, &.{ .i32, .v128 }, &.{.i32}));
+}
+
 test "removeFunctionExports — removes only named function exports" {
     const allocator = std.testing.allocator;
     var module = init(allocator);
@@ -5148,6 +5347,17 @@ test "setup — table size matches element count after finalization" {
 
     // The table should exist
     try std.testing.expect(decoded.has_table);
+}
+
+test "heapBase follows the complete static-data address space" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+
+    try std.testing.expectEqual(@as(u32, 1024), module.heapBase());
+    try std.testing.expectEqual(@as(u32, 1024), try module.addDataSegment(&.{ 1, 2, 3 }, 1));
+    try std.testing.expectEqual(@as(u32, 1040), try module.addDataSegment(&.{4}, 16));
+    try std.testing.expectEqual(@as(u32, 1041), module.heapBase());
 }
 
 test "setup — memory exported as 'memory'" {
@@ -6994,6 +7204,23 @@ test "eliminateDeadCode — indirect call targets (element section) preserved" {
     const dummy_count = module.dead_import_dummy_count;
     const dead_body = module.func_bodies.items[dummy_count + 2].body;
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
+}
+
+test "eliminateDeadCode — table indices follow compacted function imports" {
+    const allocator = std.testing.allocator;
+    var module = try buildDCETestModule(allocator);
+    defer module.deinit();
+
+    // js_helper is import 2. Keeping it in the table makes it live, while the
+    // dead import before it is removed and shifts js_helper to function index 1.
+    try module.table_func_indices.append(allocator, 2);
+
+    var called_fns = [_]bool{false} ** 6;
+    try module.eliminateDeadCode(&called_fns);
+
+    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
+    try std.testing.expectEqualStrings("js_helper", module.imports.items[1].field_name);
+    try std.testing.expectEqual(@as(u32, 1), module.table_func_indices.items[0]);
 }
 
 test "eliminateDeadCode — transitive callees preserved (A calls B calls C → all live)" {

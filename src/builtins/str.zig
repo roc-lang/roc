@@ -2187,7 +2187,10 @@ pub fn strWithAsciiUppercased(
 
 /// TODO: Document strCaselessAsciiEquals.
 pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.c) bool {
-    if (self.bytes == other.bytes and self.length == other.length) {
+    if (self.bytes == other.bytes and
+        self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr and
+        self.length == other.length)
+    {
         return true;
     }
 

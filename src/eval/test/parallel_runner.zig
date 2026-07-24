@@ -114,6 +114,9 @@ pub const TestCase = struct {
     imports: []const helpers.ModuleSource = &.{},
     expected: Expected,
     skip: Skip = .{},
+    /// Expensive proof cases are excluded from an unfiltered run and are
+    /// selected explicitly by name by their dedicated build step.
+    opt_in: bool = false,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -2462,6 +2465,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         }
     } else {
         for (all_tests) |tc| {
+            if (tc.opt_in) continue;
             try filtered_buf.append(gpa, tc);
         }
     }
