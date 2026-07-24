@@ -1852,6 +1852,10 @@ pub const GraphTypeFinals = struct {
             .committed => {
                 const shared = try self.graph.types.internFilledNode(self.graph.name_store, built);
                 if (shared != built) try self.sealed.put(node, shared);
+                // Debug/probe-only: record the committed final seal so the Slice 7
+                // Stage A probe can compare the full sealed population against a
+                // directed re-translation (a no-op when no sink is connected).
+                try self.graph.types.noteCommittedSeal(shared);
                 return shared;
             },
         }

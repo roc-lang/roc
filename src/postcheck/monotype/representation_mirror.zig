@@ -32,11 +32,9 @@ const reunify_shadow = @import("../reunify_shadow/shadow.zig");
 
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
-const checked = check.CheckedModule;
 const InstGraph = solve.InstGraph;
 const NodeId = solve.NodeId;
 const InstNamed = solve.InstNamed;
-const InstVariable = solve.InstVariable;
 
 /// The maximum depth `slotForNode` builds representation slots before treating a
 /// node as an opaque leaf. Representation-carrying spines (iterators, evidence,
@@ -62,6 +60,9 @@ const InterfacePosition = struct {
     node: NodeId,
 };
 
+/// Mirrors the instantiation graph's representation decisions into the closure
+/// engine so the engine's sealed descriptors can be compared against the
+/// graph's. The graph stays the authority; this sidecar only observes.
 pub const RepresentationMirror = struct {
     allocator: Allocator,
     graph: *InstGraph,
@@ -423,13 +424,13 @@ pub const RepresentationMirror = struct {
         return self.engine.createSlot(token, self.freshProducer(), .{ .leaf = @intFromEnum(token) }) catch return null;
     }
 
-    /// A shared placeholder-backing leaf for a backing-less iterator. It carries
-    /// token 0, which `tokenForNode` (numbering from 1) never mints, so all
-    /// placeholder backings share one logical token: a minted-join backing
+    /// A shared stand-in backing leaf for a backing-less iterator. It carries
+    /// the engine's `stand_in` token, which `tokenForNode` (numbering from 1)
+    /// never mints, so all stand-in backings share one token: a minted-join backing
     /// relation between two backing-less iterators still relates them, while
     /// public-and-minted keeps them separate as its rule already dictates.
     fn placeholderBacking(self: *RepresentationMirror) ?closure.RepresentationSlotId {
-        return self.engine.createSlot(@enumFromInt(0), self.freshProducer(), .{ .leaf = 0 }) catch null;
+        return self.engine.createSlot(.stand_in, self.freshProducer(), .{ .leaf = 0 }) catch null;
     }
 
     fn freshProducer(self: *RepresentationMirror) closure.ProducerAtom {
@@ -533,7 +534,7 @@ const MirrorFixture = struct {
     unsolved_monos: std.AutoHashMap(Type.TypeId, void),
     graph: *InstGraph,
 
-    fn init(allocator: Allocator) !MirrorFixture {
+    fn init(allocator: Allocator) Allocator.Error!MirrorFixture {
         var fixture: MirrorFixture = .{
             .type_store = Type.Store.init(allocator),
             .name_store = names.NameStore.init(allocator),
@@ -549,7 +550,7 @@ const MirrorFixture = struct {
         return fixture;
     }
 
-    fn attachMirror(self: *MirrorFixture) !void {
+    fn attachMirror(self: *MirrorFixture) Allocator.Error!void {
         self.graph.mirror = try RepresentationMirror.create(self.graph);
     }
 
@@ -570,7 +571,7 @@ const IterNodes = struct {
 
 /// Build a public iterator and a distinct minted iterator over the same
 /// declaration and item type, mirroring the solve.zig iterator-join fixture.
-fn buildPublicAndMinted(fixture: *MirrorFixture, allocator: Allocator) !IterNodes {
+fn buildPublicAndMinted(fixture: *MirrorFixture) Allocator.Error!IterNodes {
     const graph = fixture.graph;
     const module_identity = try fixture.name_store.internModuleIdentity(&([_]u8{0xC1} ** 32));
     const type_name = try fixture.name_store.internTypeName("Builtin.Iter");
@@ -593,7 +594,6 @@ fn buildPublicAndMinted(fixture: *MirrorFixture, allocator: Allocator) !IterNode
     public_args[0] = item;
     const minted_args = try graph.arena().alloc(NodeId, 1);
     minted_args[0] = item;
-    _ = allocator;
 
     const public_iter = try graph.newNode(.{ .named = .{
         .named_type = named_type,
@@ -625,7 +625,7 @@ test "graph iterator join drives the mirror engine to the same class" {
     defer fixture.deinit();
     try fixture.attachMirror();
 
-    const iters = try buildPublicAndMinted(&fixture, allocator);
+    const iters = try buildPublicAndMinted(&fixture);
     try fixture.graph.unify(iters.public_iter, iters.minted_iter);
 
     const mirror = fixture.graph.mirror.?;
@@ -652,7 +652,7 @@ test "sealed engine descriptor agrees with the graph node on a hand-built join" 
     defer fixture.deinit();
     try fixture.attachMirror();
 
-    const iters = try buildPublicAndMinted(&fixture, allocator);
+    const iters = try buildPublicAndMinted(&fixture);
     try fixture.graph.unify(iters.public_iter, iters.minted_iter);
 
     const mirror = fixture.graph.mirror.?;

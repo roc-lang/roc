@@ -335,8 +335,13 @@ my @categories = (
         name    => 'direct-translation',
         exempt  => [],
         patterns => [
+            # $DTRAN grew 15 -> 21 as Stage A gained recursive-group construction
+            # and the engine_input_needed skip class: the new self-recursive,
+            # mutually-recursive, nested-list, and generated-evidence unit tests
+            # each drive `translateGroundRoot`. It stays inert (probe-only) until
+            # Stage E repoints the seam.
             { label => 'translateGroundRoot', re => qr/\btranslateGroundRoot\b/,
-              counts => { $DTRAN => 15, $LOWER => 1 } },
+              counts => { $DTRAN => 21, $LOWER => 1 } },
             { label => 'instantiateStoredScheme', re => qr/\binstantiateStoredScheme\b/,
               counts => { $DTRAN => 4 } },
             { label => 'runDirectTranslateProbe', re => qr/\brunDirectTranslateProbe\b/,

@@ -137,10 +137,20 @@ pub const Resolver = struct {
 };
 
 /// Why a checked root or an instantiation edge fell outside the translatable
-/// subset. Recorded by the caller; never a panic. The subset matches the
-/// closed population the Slice 5 shadow compares, so recursive cycles and open
-/// rows are recorded rather than translated — the recursive-group builder wiring
-/// lands with the later flip stages, which is where the population needs it.
+/// subset. Recorded by the caller; never a panic.
+///
+/// `recursive_cycle` is now emitted only when the recursive-group builder cannot
+/// close a cycle (a degenerate cycle through a node that reserves no slot);
+/// ordinary recursive types are built through the store's recursive-group
+/// builder (reunify.md section 9.2, 10.6).
+///
+/// `engine_input_needed` marks a position whose representation content the
+/// checked data cannot dictate — a generated opaque-evidence backing that the
+/// section 10 closure engine mints in step (b) (reunify.md section 9.1's
+/// minted/forced-dynamic content). The identity is derivable, but emitting a
+/// backing the checked data does not contain would be wrong output, so the walk
+/// skips instead. Its count, together with `direct_stored_mismatch_representation`,
+/// bounds the representation content step (b) must supply.
 pub const SkipReason = enum {
     recursive_cycle,
     pending_or_err,
@@ -149,6 +159,7 @@ pub const SkipReason = enum {
     malformed_builtin_arity,
     binder_not_found,
     missing_backing,
+    engine_input_needed,
 };
 
 /// A walk left the translatable subset (with `reason` recorded on the walker),
@@ -223,16 +234,41 @@ pub const Translator = struct {
         checked_ty: checked.CheckedTypeId,
         skip_reason: *SkipReason,
     ) WalkError!TypeId {
+        const owner_node = checked.checked_residual_disposition_module_body_owner;
+        return self.eagerWalk(cursor, null, owner_node, checked_ty, skip_reason) catch |err| switch (err) {
+            error.Skip => {
+                if (skip_reason.* == .recursive_cycle) {
+                    return try self.translateRecursiveRoot(cursor, null, owner_node, checked_ty, skip_reason);
+                }
+                return err;
+            },
+            else => return err,
+        };
+    }
+
+    /// Run one acyclic (eager, child-first interning) walk. A recursive cycle
+    /// leaves this walk through the cycle guard so the caller can translate the
+    /// root through the recursive-group builder instead (reunify.md section 9.2).
+    fn eagerWalk(
+        self: *Translator,
+        cursor: ModuleCursor,
+        binding_env: ?*const BindingEnvironment,
+        scheme_owner_node: u32,
+        root: checked.CheckedTypeId,
+        skip_reason: *SkipReason,
+    ) WalkError!TypeId {
         var walk = Walk{
             .owner = self,
             .cursor = cursor,
-            .binding_env = null,
-            .scheme_owner_node = checked.checked_residual_disposition_module_body_owner,
+            .build_store = self.store,
+            .binding_env = binding_env,
+            .scheme_owner_node = scheme_owner_node,
             .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
+            .recursion_slots = null,
             .skip_reason = skip_reason,
         };
         defer walk.active.deinit();
-        return try walk.node(checked_ty);
+        return try walk.node(root);
     }
 
     /// Instantiate a scheme's root under a dense binding and captured binding
@@ -260,19 +296,72 @@ pub const Translator = struct {
             .captured = captured,
             .parent = null,
         };
+
+        const result = self.eagerWalk(cursor, &env, scheme_owner_node, root, skip_reason) catch |err| switch (err) {
+            error.Skip => if (skip_reason.* == .recursive_cycle)
+                try self.translateRecursiveRoot(cursor, &env, scheme_owner_node, root, skip_reason)
+            else
+                return err,
+            else => return err,
+        };
+        try self.represented_memo.put(key, result);
+        return result;
+    }
+
+    /// Translate a root the eager walk found recursive, through the store's
+    /// recursive-group builder (reunify.md section 9.2). A cyclic group with no
+    /// representation-bearing position is built reserve-before-descend: every
+    /// compound node reserves its stored slot before its children are translated,
+    /// so a back-reference resolves to the reserved slot. When the target store
+    /// deduplicates and no binder environment is active, the group is first built
+    /// into an isolated non-interning scratch store and then re-interned into the
+    /// target so symmetric members collapse to one id; otherwise it is built in
+    /// place (the probe target does not deduplicate, and a binder environment
+    /// binds ids that live only in the target store).
+    fn translateRecursiveRoot(
+        self: *Translator,
+        cursor: ModuleCursor,
+        binding_env: ?*const BindingEnvironment,
+        scheme_owner_node: u32,
+        root: checked.CheckedTypeId,
+        skip_reason: *SkipReason,
+    ) WalkError!TypeId {
+        if (binding_env == null and self.store.internEnabled()) {
+            var scratch = MonoType.Store.init(self.allocator);
+            defer scratch.deinit();
+            const scratch_root = try self.reserveFillWalk(&scratch, cursor, binding_env, scheme_owner_node, root, skip_reason);
+            return try MonoType.reintern(self.store, self.target_names, scratch.view(), scratch_root);
+        }
+        return try self.reserveFillWalk(self.store, cursor, binding_env, scheme_owner_node, root, skip_reason);
+    }
+
+    /// Build `root` and its recursive component into `build_store` with
+    /// reserve-before-descend cycle closure. Names always intern into the target
+    /// name store, so a scratch build shares row/tag/name ids with the target and
+    /// re-interns cleanly.
+    fn reserveFillWalk(
+        self: *Translator,
+        build_store: *MonoType.Store,
+        cursor: ModuleCursor,
+        binding_env: ?*const BindingEnvironment,
+        scheme_owner_node: u32,
+        root: checked.CheckedTypeId,
+        skip_reason: *SkipReason,
+    ) WalkError!TypeId {
+        var slots = std.AutoHashMap(ActiveNode, TypeId).init(self.allocator);
+        defer slots.deinit();
         var walk = Walk{
             .owner = self,
             .cursor = cursor,
-            .binding_env = &env,
+            .build_store = build_store,
+            .binding_env = binding_env,
             .scheme_owner_node = scheme_owner_node,
             .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
+            .recursion_slots = &slots,
             .skip_reason = skip_reason,
         };
         defer walk.active.deinit();
-
-        const result = try walk.node(root);
-        try self.represented_memo.put(key, result);
-        return result;
+        return try walk.node(root);
     }
 
     /// The represented section 9.4 memo key: the qualified scheme plus the
@@ -297,32 +386,6 @@ pub const Translator = struct {
         for (captured) |value| {
             const digest = self.store.typeDigest(self.target_names, value.stored);
             hasher.update(&digest.bytes);
-        }
-        return hasher.finalResult();
-    }
-
-    /// The logical section 9.4 memo key: the qualified scheme plus the ordered
-    /// bound and captured logical ids. Declared and keyed for the flip's
-    /// logical/represented split; unused while this stage emits stored form.
-    fn logicalDigest(
-        scheme: SchemeIdent,
-        bound_logical: []const TypeId,
-        captured_logical: []const TypeId,
-    ) InstantiationDigest {
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(&scheme.module_bytes);
-        hasher.update(std.mem.asBytes(&scheme.scheme));
-        const bound_len: u32 = @intCast(bound_logical.len);
-        hasher.update(std.mem.asBytes(&bound_len));
-        for (bound_logical) |id| {
-            const raw: u32 = @intFromEnum(id);
-            hasher.update(std.mem.asBytes(&raw));
-        }
-        const captured_len: u32 = @intCast(captured_logical.len);
-        hasher.update(std.mem.asBytes(&captured_len));
-        for (captured_logical) |id| {
-            const raw: u32 = @intFromEnum(id);
-            hasher.update(std.mem.asBytes(&raw));
         }
         return hasher.finalResult();
     }
@@ -388,13 +451,28 @@ pub const BindingEnvironment = struct {
 /// map for cycle detection, the reading cursor (which changes when descending a
 /// backing declaration in another module), the optional binder environment for
 /// substitution, and the scheme owner node for residual disposition lookup.
+///
+/// `build_store` is the store this walk emits into: the target for an eager
+/// walk, and the target or an isolated scratch for a reserve-fill recursive
+/// build (reunify.md section 9.2). Names always intern into `owner.target_names`.
+/// When `recursion_slots` is non-null the walk is in reserve-before-descend mode:
+/// every compound node reserves its stored slot and records it in the map before
+/// its children are translated, so a back-reference closes the cycle onto the
+/// reserved slot.
 const Walk = struct {
     owner: *Translator,
     cursor: ModuleCursor,
+    build_store: *MonoType.Store,
     binding_env: ?*const BindingEnvironment,
     scheme_owner_node: u32,
     active: std.AutoHashMap(ActiveNode, void),
+    recursion_slots: ?*std.AutoHashMap(ActiveNode, TypeId),
     skip_reason: *SkipReason,
+    /// Set when a reserve-fill node left the subset. The recursive-group builder
+    /// (`Store.addRecursive`) cannot carry `error.Skip` out of its fill callback,
+    /// so the skip is recorded here and re-raised once the reserved slot returns.
+    /// `skip_reason` already holds the recorded reason.
+    reserve_fill_skipped: bool = false,
 
     fn skip(self: *Walk, reason: SkipReason) WalkError {
         self.skip_reason.* = reason;
@@ -417,6 +495,8 @@ const Walk = struct {
     }
 
     fn node(self: *Walk, checked_ty: checked.CheckedTypeId) WalkError!TypeId {
+        if (self.recursion_slots != null) return try self.nodeReserveFill(checked_ty);
+
         // A binder owned by the active scheme (or a lexically enclosing one)
         // substitutes its bound stored id (reunify.md section 9.2), checked
         // before the cycle guard so a binder never registers as a cyclic node.
@@ -430,12 +510,89 @@ const Walk = struct {
         return try self.payload(checked_ty, self.cursor.view.payload(checked_ty));
     }
 
+    /// Reserve-before-descend translation of one node (reunify.md section 9.2,
+    /// 10.6). Leaf and transparent-alias nodes need no reserved slot; a compound
+    /// node reserves its stored slot, records it so a back-reference resolves,
+    /// then fills it with content whose children were translated in the same
+    /// mode. The finished component is a valid rooted cyclic stored graph.
+    fn nodeReserveFill(self: *Walk, checked_ty: checked.CheckedTypeId) WalkError!TypeId {
+        if (self.envBinder(checked_ty)) |bound| return bound;
+
+        const key = self.activeKey(checked_ty);
+        if (self.recursion_slots.?.get(key)) |reserved| return reserved;
+
+        const p = self.cursor.view.payload(checked_ty);
+        switch (p) {
+            .pending, .err => return self.skip(.pending_or_err),
+            .flex, .rigid => |v| return try self.variable(checked_ty, v),
+            .empty_record => return try self.build_store.internRecord(self.owner.target_names, &.{}),
+            .empty_tag_union => return try self.build_store.internTagUnion(self.owner.target_names, &.{}),
+            // A transparent alias erases to its backing, so it holds no stored
+            // slot of its own; the cycle closes on the reserved node its backing
+            // reaches. The active guard turns a degenerate alias-only cycle into a
+            // recorded skip instead of a nonterminating descent.
+            .alias => |alias_ty| {
+                if (self.active.contains(key)) return self.skip(.recursive_cycle);
+                try self.active.put(key, {});
+                defer _ = self.active.remove(key);
+                return try self.alias(checked_ty, alias_ty);
+            },
+            else => {},
+        }
+
+        const Ctx = struct {
+            walk: *Walk,
+            checked_ty: checked.CheckedTypeId,
+            key: ActiveNode,
+            p: checked.CheckedTypePayload,
+
+            fn fill(ctx: @This(), reserved: TypeId) Allocator.Error!MonoType.Content {
+                try ctx.walk.recursion_slots.?.put(ctx.key, reserved);
+                return ctx.walk.payloadContent(ctx.checked_ty, ctx.p) catch |err| switch (err) {
+                    // `skip_reason` is already recorded; signal the skip through
+                    // the walk so `nodeReserveFill` re-raises it after the slot is
+                    // returned (the group builder only carries allocation errors).
+                    error.Skip => {
+                        ctx.walk.reserve_fill_skipped = true;
+                        return .zst;
+                    },
+                    else => |other| return other,
+                };
+            }
+        };
+        const built = try self.build_store.addRecursive(Ctx{
+            .walk = self,
+            .checked_ty = checked_ty,
+            .key = key,
+            .p = p,
+        }, Ctx.fill);
+        if (self.reserve_fill_skipped) return error.Skip;
+        return built;
+    }
+
+    /// Assemble the stored content of one reserved compound node (reunify.md
+    /// section 9.2). The children were translated through `node` in reserve-fill
+    /// mode, so a back-reference already resolved to a reserved sibling slot.
+    fn payloadContent(self: *Walk, checked_ty: checked.CheckedTypeId, p: checked.CheckedTypePayload) WalkError!MonoType.Content {
+        return switch (p) {
+            .record_unbound => |fields| .{ .record = try self.recordSpan(fields, null) },
+            .record => |record| .{ .record = try self.recordSpan(record.fields, record.ext) },
+            .tuple => |items| .{ .tuple = try self.tupleSpan(items) },
+            .tag_union => |tag_union| .{ .tag_union = try self.tagSpan(tag_union.tags, tag_union.ext) },
+            .function => |fn_ty| try self.functionContent(fn_ty),
+            .nominal => |nominal_ty| try self.nominalContent(checked_ty, nominal_ty),
+            // Leaves and aliases never reach a reserved slot (nodeReserveFill
+            // builds them directly), so no other payload assembles content here.
+            .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union, .alias => unreachable,
+        };
+    }
+
     fn payload(self: *Walk, checked_ty: checked.CheckedTypeId, p: checked.CheckedTypePayload) WalkError!TypeId {
         return switch (p) {
             .pending, .err => self.skip(.pending_or_err),
             .flex, .rigid => |v| try self.variable(checked_ty, v),
-            .empty_record => try self.owner.store.internRecord(self.owner.target_names, &.{}),
-            .empty_tag_union => try self.owner.store.internTagUnion(self.owner.target_names, &.{}),
+            .empty_record => try self.build_store.internRecord(self.owner.target_names, &.{}),
+            .empty_tag_union => try self.build_store.internTagUnion(self.owner.target_names, &.{}),
             .record_unbound => |fields| try self.recordFrom(fields, null),
             .record => |record| try self.recordFrom(record.fields, record.ext),
             .tuple => |items| try self.tupleFrom(items),
@@ -457,7 +614,7 @@ const Walk = struct {
             if (disposition.scheme_owner_node != self.scheme_owner_node) continue;
             if (disposition.type_id != @intFromEnum(checked_ty)) continue;
             switch (disposition.kind) {
-                .uninhabited => return try self.owner.store.internTagUnion(self.owner.target_names, &.{}),
+                .uninhabited => return try self.build_store.internTagUnion(self.owner.target_names, &.{}),
                 .contextual => {
                     const target = disposition.contextualTarget() orelse break;
                     return try self.node(target);
@@ -469,17 +626,17 @@ const Walk = struct {
             const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
                 return self.skip(.numeric_default_unresolved);
             return switch (target) {
-                .dec => try self.owner.store.internPrimitive(self.owner.target_names, .dec),
-                .str => try self.owner.store.internPrimitive(self.owner.target_names, .str),
+                .dec => try self.build_store.internPrimitive(self.owner.target_names, .dec),
+                .str => try self.build_store.internPrimitive(self.owner.target_names, .str),
             };
         }
         if (v.row_default) |row_default| {
             return switch (row_default) {
-                .empty_record => try self.owner.store.internRecord(self.owner.target_names, &.{}),
-                .empty_tag_union => try self.owner.store.internTagUnion(self.owner.target_names, &.{}),
+                .empty_record => try self.build_store.internRecord(self.owner.target_names, &.{}),
+                .empty_tag_union => try self.build_store.internTagUnion(self.owner.target_names, &.{}),
             };
         }
-        return try self.owner.store.internTagUnion(self.owner.target_names, &.{});
+        return try self.build_store.internTagUnion(self.owner.target_names, &.{});
     }
 
     fn function(self: *Walk, fn_ty: checked.CheckedFunctionType) WalkError!TypeId {
@@ -489,7 +646,7 @@ const Walk = struct {
             try args.append(self.owner.allocator, try self.node(arg));
         }
         const ret = try self.node(fn_ty.ret);
-        return try self.owner.store.internFunc(self.owner.target_names, args.items, ret);
+        return try self.build_store.internFunc(self.owner.target_names, args.items, ret);
     }
 
     fn tupleFrom(self: *Walk, items: []const checked.CheckedTypeId) WalkError!TypeId {
@@ -498,51 +655,67 @@ const Walk = struct {
         for (items) |item| {
             try lowered.append(self.owner.allocator, try self.node(item));
         }
-        return try self.owner.store.internTuple(self.owner.target_names, lowered.items);
+        return try self.build_store.internTuple(self.owner.target_names, lowered.items);
     }
 
     /// Collect a record's fields, flattening its extension row exactly as
     /// production record lowering does (walk aliases, an empty-record default,
     /// and nested record rows). A row-extension binder substitutes its bound
-    /// stored record, whose fields splice into this row.
+    /// stored record, whose fields splice into this row. Shared by the eager and
+    /// reserve-fill record builders.
+    fn collectRecordFields(
+        self: *Walk,
+        out: *std.ArrayList(MonoType.Field),
+        head: []const checked.CheckedRecordField,
+        ext: ?checked.CheckedTypeId,
+    ) WalkError!void {
+        try self.appendRecordFields(out, head);
+
+        const ext_start = ext orelse return;
+        var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.owner.allocator);
+        defer seen.deinit();
+        var current = ext_start;
+        while (true) {
+            if (seen.contains(current)) break;
+            try seen.put(current, {});
+            if (self.envBinder(current)) |bound| {
+                try self.spliceStoredRecord(out, bound);
+                break;
+            }
+            switch (self.cursor.view.payload(current)) {
+                .alias => |a| current = a.backing,
+                .empty_record => break,
+                .flex, .rigid => |v| {
+                    if (v.row_default == .empty_record) break;
+                    return self.skip(.open_row);
+                },
+                .record_unbound => |tail| {
+                    try self.appendRecordFields(out, tail);
+                    break;
+                },
+                .record => |record| {
+                    try self.appendRecordFields(out, record.fields);
+                    current = record.ext;
+                },
+                else => return self.skip(.open_row),
+            }
+        }
+    }
+
     fn recordFrom(self: *Walk, head: []const checked.CheckedRecordField, ext: ?checked.CheckedTypeId) WalkError!TypeId {
         var fields = std.ArrayList(MonoType.Field).empty;
         defer fields.deinit(self.owner.allocator);
+        try self.collectRecordFields(&fields, head, ext);
+        return try self.build_store.internRecord(self.owner.target_names, fields.items);
+    }
 
-        try self.appendRecordFields(&fields, head);
-
-        if (ext) |ext_start| {
-            var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.owner.allocator);
-            defer seen.deinit();
-            var current = ext_start;
-            while (true) {
-                if (seen.contains(current)) break;
-                try seen.put(current, {});
-                if (self.envBinder(current)) |bound| {
-                    try self.spliceStoredRecord(&fields, bound);
-                    break;
-                }
-                switch (self.cursor.view.payload(current)) {
-                    .alias => |a| current = a.backing,
-                    .empty_record => break,
-                    .flex, .rigid => |v| {
-                        if (v.row_default == .empty_record) break;
-                        return self.skip(.open_row);
-                    },
-                    .record_unbound => |tail| {
-                        try self.appendRecordFields(&fields, tail);
-                        break;
-                    },
-                    .record => |record| {
-                        try self.appendRecordFields(&fields, record.fields);
-                        current = record.ext;
-                    },
-                    else => return self.skip(.open_row),
-                }
-            }
-        }
-
-        return try self.owner.store.internRecord(self.owner.target_names, fields.items);
+    /// Reserve-fill record content: the same flattened fields as `recordFrom`,
+    /// added to the build store as a field span rather than interned as a root.
+    fn recordSpan(self: *Walk, head: []const checked.CheckedRecordField, ext: ?checked.CheckedTypeId) WalkError!MonoType.Span {
+        var fields = std.ArrayList(MonoType.Field).empty;
+        defer fields.deinit(self.owner.allocator);
+        try self.collectRecordFields(&fields, head, ext);
+        return try self.build_store.addRecordFields(self.owner.target_names, fields.items);
     }
 
     fn appendRecordFields(self: *Walk, out: *std.ArrayList(MonoType.Field), fields: []const checked.CheckedRecordField) WalkError!void {
@@ -557,9 +730,9 @@ const Walk = struct {
     /// record-extension binder) into `out`. A stored record node closes the row;
     /// any other head leaves the row genuinely open, outside the subset.
     fn spliceStoredRecord(self: *Walk, out: *std.ArrayList(MonoType.Field), id: TypeId) WalkError!void {
-        switch (self.owner.store.get(id)) {
+        switch (self.build_store.get(id)) {
             .record => |span| {
-                const field_span = self.owner.store.fieldSpan(span);
+                const field_span = self.build_store.fieldSpan(span);
                 for (0..collections.GuardedList.borrowLen(field_span)) |i| {
                     try out.append(self.owner.allocator, collections.GuardedList.at(field_span, i));
                 }
@@ -569,12 +742,16 @@ const Walk = struct {
     }
 
     /// Collect a tag union's tags, flattening its extension row exactly as
-    /// production tag-union lowering does.
-    fn tagUnionFrom(self: *Walk, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!TypeId {
-        var tags = std.ArrayList(MonoType.Store.TagInput).empty;
-        defer self.freeTagInputs(&tags);
-
-        try self.appendTags(&tags, head);
+    /// production tag-union lowering does. Shared by the eager and reserve-fill
+    /// tag-union builders. The caller owns the returned inputs and frees them
+    /// through `freeTagInputs`.
+    fn collectTags(
+        self: *Walk,
+        out: *std.ArrayList(MonoType.Store.TagInput),
+        head: []const checked.CheckedTag,
+        ext: checked.CheckedTypeId,
+    ) WalkError!void {
+        try self.appendTags(out, head);
 
         var seen = std.AutoHashMap(checked.CheckedTypeId, void).init(self.owner.allocator);
         defer seen.deinit();
@@ -583,7 +760,7 @@ const Walk = struct {
             if (seen.contains(current)) break;
             try seen.put(current, {});
             if (self.envBinder(current)) |bound| {
-                try self.spliceStoredTags(&tags, bound);
+                try self.spliceStoredTags(out, bound);
                 break;
             }
             switch (self.cursor.view.payload(current)) {
@@ -594,14 +771,38 @@ const Walk = struct {
                     return self.skip(.open_row);
                 },
                 .tag_union => |tag_union| {
-                    try self.appendTags(&tags, tag_union.tags);
+                    try self.appendTags(out, tag_union.tags);
                     current = tag_union.ext;
                 },
                 else => return self.skip(.open_row),
             }
         }
+    }
 
-        return try self.owner.store.internTagUnion(self.owner.target_names, tags.items);
+    fn tagUnionFrom(self: *Walk, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!TypeId {
+        var tags = std.ArrayList(MonoType.Store.TagInput).empty;
+        defer self.freeTagInputs(&tags);
+        try self.collectTags(&tags, head, ext);
+        return try self.build_store.internTagUnion(self.owner.target_names, tags.items);
+    }
+
+    /// Reserve-fill tag-union content: the same flattened tags as `tagUnionFrom`,
+    /// added to the build store as a tag span rather than interned as a root.
+    fn tagSpan(self: *Walk, head: []const checked.CheckedTag, ext: checked.CheckedTypeId) WalkError!MonoType.Span {
+        var tags = std.ArrayList(MonoType.Store.TagInput).empty;
+        defer self.freeTagInputs(&tags);
+        try self.collectTags(&tags, head, ext);
+
+        var variants = std.ArrayList(MonoType.Tag).empty;
+        defer variants.deinit(self.owner.allocator);
+        for (tags.items) |tag| {
+            try variants.append(self.owner.allocator, .{
+                .name = tag.name,
+                .checked_name = tag.checked_name,
+                .payloads = try self.build_store.addSpan(tag.payloads),
+            });
+        }
+        return try self.build_store.addTagVariants(self.owner.target_names, variants.items);
     }
 
     fn appendTags(self: *Walk, out: *std.ArrayList(MonoType.Store.TagInput), tags: []const checked.CheckedTag) WalkError!void {
@@ -623,12 +824,12 @@ const Walk = struct {
     /// Splice the tags of an already-stored tag union (the value bound to a
     /// row-extension binder) into `out`.
     fn spliceStoredTags(self: *Walk, out: *std.ArrayList(MonoType.Store.TagInput), id: TypeId) WalkError!void {
-        switch (self.owner.store.get(id)) {
+        switch (self.build_store.get(id)) {
             .tag_union => |span| {
-                const tag_span = self.owner.store.tagSpan(span);
+                const tag_span = self.build_store.tagSpan(span);
                 for (0..collections.GuardedList.borrowLen(tag_span)) |i| {
                     const tag = collections.GuardedList.at(tag_span, i);
-                    const payload_span = self.owner.store.span(tag.payloads);
+                    const payload_span = self.build_store.span(tag.payloads);
                     var payloads = std.ArrayList(TypeId).empty;
                     errdefer payloads.deinit(self.owner.allocator);
                     for (0..collections.GuardedList.borrowLen(payload_span)) |j| {
@@ -662,7 +863,7 @@ const Walk = struct {
             try args.append(self.owner.allocator, try self.node(arg));
         }
         const backing = try self.node(alias_ty.backing);
-        return try self.owner.store.internNamed(self.owner.target_names, .{
+        return try self.build_store.internNamed(self.owner.target_names, .{
             .named_type = .{ .module = .{ .bytes = alias_ty.owner_module.bytes }, .ty = checked_ty },
             .def = try self.owner.typeDef(self.cursor, alias_ty.origin_module, alias_ty.name, alias_ty.source_decl),
             .kind = .alias,
@@ -672,6 +873,49 @@ const Walk = struct {
         });
     }
 
+    /// How a nominal's builtin runtime encoding lowers before the general named
+    /// build (reunify.md section 9.2). A primitive/list/box encoding lowers to that
+    /// structural shape; a generated opaque-evidence encoding needs a backing the
+    /// section 10 closure engine mints (reunify.md section 9.1), which the checked
+    /// data cannot dictate, so it is `engine_input_needed`; every other encoding
+    /// keeps declaration identity as a named node.
+    const BuiltinDisposition = union(enum) {
+        primitive: MonoType.Primitive,
+        list,
+        box,
+        named,
+        engine_input_needed,
+    };
+
+    fn builtinDisposition(n: checked.CheckedNominalType) BuiltinDisposition {
+        return switch (n.representation) {
+            .builtin => |builtin_nominal| switch (checked.builtinRuntimeEncoding(builtin_nominal)) {
+                .primitive => |value| .{ .primitive = value },
+                .list => .list,
+                .box => .box,
+                // Generated opaque-evidence nominals with no declaration backing:
+                // the identity is derivable, but the backing the graph mints is a
+                // step (b) engine decision, so emitting a named node without it
+                // would be wrong output (reunify.md section 10.3). The crypto
+                // digest/hasher nominals are excluded: they carry a fixed
+                // declaration backing and are translated like any other nominal.
+                .parse_tag_union_spec,
+                .fields,
+                .field,
+                => .engine_input_needed,
+                .bool_tag_union,
+                .dict,
+                .set,
+                .crypto_sha256_digest,
+                .crypto_sha256_hasher,
+                .crypto_blake3_digest,
+                .crypto_blake3_hasher,
+                => .named,
+            },
+            else => .named,
+        };
+    }
+
     /// A nominal or opaque. Builtin nominals whose runtime encoding is a
     /// primitive, list, or box lower to that structural shape, matching
     /// production; the rest keep declaration identity as a stored named node with
@@ -679,30 +923,18 @@ const Walk = struct {
     /// generated owner are graph-minted, not in checked module data, so they stay
     /// at their defaults here.
     fn nominal(self: *Walk, checked_ty: checked.CheckedTypeId, n: checked.CheckedNominalType) WalkError!TypeId {
-        switch (n.representation) {
-            .builtin => |builtin_nominal| switch (checked.builtinRuntimeEncoding(builtin_nominal)) {
-                .primitive => |value| return try self.owner.store.internPrimitive(self.owner.target_names, value),
-                .list => {
-                    if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
-                    return try self.owner.store.internList(self.owner.target_names, try self.node(n.args[0]));
-                },
-                .box => {
-                    if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
-                    return try self.owner.store.internBox(self.owner.target_names, try self.node(n.args[0]));
-                },
-                .bool_tag_union,
-                .dict,
-                .set,
-                .parse_tag_union_spec,
-                .fields,
-                .field,
-                .crypto_sha256_digest,
-                .crypto_sha256_hasher,
-                .crypto_blake3_digest,
-                .crypto_blake3_hasher,
-                => {},
+        switch (builtinDisposition(n)) {
+            .primitive => |value| return try self.build_store.internPrimitive(self.owner.target_names, value),
+            .list => {
+                if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
+                return try self.build_store.internList(self.owner.target_names, try self.node(n.args[0]));
             },
-            else => {},
+            .box => {
+                if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
+                return try self.build_store.internBox(self.owner.target_names, try self.node(n.args[0]));
+            },
+            .engine_input_needed => return self.skip(.engine_input_needed),
+            .named => {},
         }
 
         var args = std.ArrayList(TypeId).empty;
@@ -715,7 +947,7 @@ const Walk = struct {
         const declared_order = try self.declaredOrder(n);
         defer self.owner.allocator.free(declared_order);
 
-        return try self.owner.store.internNamed(self.owner.target_names, .{
+        return try self.build_store.internNamed(self.owner.target_names, .{
             .named_type = .{ .module = .{ .bytes = n.owner_module.bytes }, .ty = checked_ty },
             .def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl),
             .kind = if (n.is_opaque) .@"opaque" else .nominal,
@@ -724,6 +956,72 @@ const Walk = struct {
             .backing = backing,
             .declared_order = declared_order,
         });
+    }
+
+    // --- Reserve-fill content assembly (reunify.md section 9.2, 10.6) ---
+    //
+    // These build the stored content of one reserved compound node: children were
+    // translated through `node` in reserve-fill mode, so back-references already
+    // resolved to reserved sibling slots. Each mirrors the eager builder of the
+    // same shape but returns `Content` for the reserved slot rather than interning
+    // a fresh root.
+
+    fn functionContent(self: *Walk, fn_ty: checked.CheckedFunctionType) WalkError!MonoType.Content {
+        var args = std.ArrayList(TypeId).empty;
+        defer args.deinit(self.owner.allocator);
+        for (fn_ty.args) |arg| {
+            try args.append(self.owner.allocator, try self.node(arg));
+        }
+        const ret = try self.node(fn_ty.ret);
+        return .{ .func = .{ .args = try self.build_store.addSpan(args.items), .ret = ret } };
+    }
+
+    fn tupleSpan(self: *Walk, items: []const checked.CheckedTypeId) WalkError!MonoType.Span {
+        var lowered = std.ArrayList(TypeId).empty;
+        defer lowered.deinit(self.owner.allocator);
+        for (items) |item| {
+            try lowered.append(self.owner.allocator, try self.node(item));
+        }
+        return try self.build_store.addSpan(lowered.items);
+    }
+
+    /// Reserve-fill named/nominal content. A builtin primitive/list/box encoding
+    /// still reserved its slot, so it fills that slot with the leaf shape; a
+    /// generated opaque-evidence nominal is an engine step (b) input and skips.
+    fn nominalContent(self: *Walk, checked_ty: checked.CheckedTypeId, n: checked.CheckedNominalType) WalkError!MonoType.Content {
+        switch (builtinDisposition(n)) {
+            .primitive => |value| return .{ .primitive = value },
+            .list => {
+                if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
+                return .{ .list = try self.node(n.args[0]) };
+            },
+            .box => {
+                if (n.args.len != 1) return self.skip(.malformed_builtin_arity);
+                return .{ .box = try self.node(n.args[0]) };
+            },
+            .engine_input_needed => return self.skip(.engine_input_needed),
+            .named => {},
+        }
+
+        var args = std.ArrayList(TypeId).empty;
+        defer args.deinit(self.owner.allocator);
+        for (n.args) |arg| {
+            try args.append(self.owner.allocator, try self.node(arg));
+        }
+
+        const backing = try self.nominalBacking(n, args.items);
+        const declared_order = try self.declaredOrder(n);
+        defer self.owner.allocator.free(declared_order);
+
+        return .{ .named = .{
+            .named_type = .{ .module = .{ .bytes = n.owner_module.bytes }, .ty = checked_ty },
+            .def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl),
+            .kind = if (n.is_opaque) .@"opaque" else .nominal,
+            .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
+            .args = try self.build_store.addSpan(args.items),
+            .backing = backing,
+            .declared_order = try self.build_store.addDeclaredFields(declared_order),
+        } };
     }
 
     /// Instantiate a nominal's backing by binding the declaration's formals to
@@ -879,6 +1177,59 @@ const TestFixture = struct {
         } });
     }
 
+    fn addBuiltinNominal(self: *TestFixture, builtin_nominal: checked.CheckedBuiltinNominal, name_text: []const u8) Allocator.Error!checked.CheckedTypeId {
+        return try self.addPrimitiveNominal(builtin_nominal, name_text);
+    }
+
+    /// A builtin `List elem` nominal, whose runtime encoding lowers to a stored
+    /// list of the translated element.
+    fn addUserBuiltinList(self: *TestFixture, elem: checked.CheckedTypeId) Allocator.Error!checked.CheckedTypeId {
+        const name = try self.source_names.internTypeName("List");
+        const module = try self.source_names.internModuleIdentity(&self.module_hash);
+        const start: u32 = @intCast(self.type_id_pool.items.len);
+        try self.type_id_pool.append(self.allocator, elem);
+        return try self.add(.{ .nominal = .{
+            .name = name,
+            .origin_module = module,
+            .owner_module = .{ .bytes = self.module_hash },
+            .is_opaque = false,
+            .representation = .{ .builtin = .list },
+            .args = .{ .start = start, .len = 1 },
+        } });
+    }
+
+    /// One tag with its payload type ids appended into `type_id_pool`.
+    const TagSpec = struct {
+        name_text: []const u8,
+        payloads: []const checked.CheckedTypeId,
+    };
+
+    /// Add a tag union with an empty closed extension. `tags` payloads may name
+    /// any already-reserved id, including `self_id` to build a recursive knot.
+    fn addTagUnion(self: *TestFixture, tags: []const TagSpec, ext: checked.CheckedTypeId) Allocator.Error!checked.CheckedTypeId {
+        const tags_start: u32 = @intCast(self.tags.items.len);
+        for (tags) |tag| {
+            const name = try self.source_names.internTagLabel(tag.name_text);
+            const args_start: u32 = @intCast(self.type_id_pool.items.len);
+            try self.type_id_pool.appendSlice(self.allocator, tag.payloads);
+            try self.tags.append(self.allocator, .{
+                .name = name,
+                .args_start = args_start,
+                .args_len = @intCast(tag.payloads.len),
+            });
+        }
+        return try self.add(.{ .tag_union = .{
+            .tags = .{ .start = tags_start, .len = @intCast(tags.len) },
+            .ext = ext,
+        } });
+    }
+
+    /// The id the next `add` will assign, so a recursive payload can name the
+    /// node it belongs to before the node itself is added.
+    fn nextId(self: *TestFixture) checked.CheckedTypeId {
+        return @enumFromInt(@as(u32, @intCast(self.payloads.items.len)));
+    }
+
     fn view(self: *TestFixture) checked.CheckedTypeStoreView {
         return .{
             .stored_payloads = self.payloads.items,
@@ -1024,12 +1375,13 @@ test "records translate child-first and share a stored id by content" {
     }
 }
 
-test "a self-referential root leaves the subset through the cycle guard" {
+test "a self-referential record is built through the recursive-group builder" {
     var fixture = TestFixture.init(testing.allocator);
     defer fixture.deinit();
 
     // A record { self: <this record> }: the field type is the record's own id,
-    // so the insert-before-descend guard reaches it a second time.
+    // so the eager walk's cycle guard fires and the root is rebuilt through the
+    // recursive-group builder into a closed self-recursive record.
     const empty = try fixture.add(.empty_record);
     const record_id: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(fixture.payloads.items.len)));
     const self_label = try fixture.source_names.internRecordFieldLabel("self");
@@ -1051,8 +1403,15 @@ test "a self-referential root leaves the subset through the cycle guard" {
     defer translator.deinit();
 
     var reason: SkipReason = undefined;
-    try testing.expectError(error.Skip, translator.translateGroundRoot(fixture.cursor(), record_ty, &reason));
-    try testing.expectEqual(SkipReason.recursive_cycle, reason);
+    const root = try translator.translateGroundRoot(fixture.cursor(), record_ty, &reason);
+    switch (store.get(root)) {
+        .record => |span| {
+            const field_span = store.fieldSpan(span);
+            try testing.expectEqual(@as(usize, 1), collections.GuardedList.borrowLen(field_span));
+            try testing.expectEqual(root, collections.GuardedList.at(field_span, 0).ty);
+        },
+        else => try testing.expect(false),
+    }
 }
 
 test "unconstrained residual variables reach the stored empty tag union" {
@@ -1230,6 +1589,196 @@ test "a nominal instance carries its declaration backing, matching the sealed re
         },
         else => try testing.expect(false),
     }
+}
+
+/// Assert a stored root is a self-recursive tag union: its single tag's payload
+/// resolves back to the root id, so the cycle closed through a reserved slot.
+/// True when `root` is a single-tag, single-payload tag union whose payload
+/// resolves back to the root id: a self-recursive knot closed through a reserved
+/// slot. Non-fallible so the assertion stays inside the test block.
+fn isSelfRecursiveTagUnion(store: *MonoType.Store, root: TypeId) bool {
+    switch (store.get(root)) {
+        .tag_union => |span| {
+            const tag_span = store.tagSpan(span);
+            if (collections.GuardedList.borrowLen(tag_span) != 1) return false;
+            const tag = collections.GuardedList.at(tag_span, 0);
+            const payloads = store.span(tag.payloads);
+            if (collections.GuardedList.borrowLen(payloads) != 1) return false;
+            return collections.GuardedList.at(payloads, 0) == root;
+        },
+        else => return false,
+    }
+}
+
+test "a self-recursive tag union is built through the recursive-group builder" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const empty = try fixture.add(.empty_tag_union);
+    const self_id = fixture.nextId();
+    const root = try fixture.addTagUnion(&.{.{ .name_text = "Node", .payloads = &.{self_id} }}, empty);
+    try testing.expectEqual(self_id, root);
+
+    // Off: the recursive group is built reserve-fill in place. On: it is built
+    // into a scratch store and re-interned. Either way the knot stays closed.
+    inline for (.{ false, true }) |intern_on| {
+        var store = initTargetStore();
+        defer store.deinit();
+        if (intern_on) store.enableInterning();
+        var target_names = names.NameStore.init(testing.allocator);
+        defer target_names.deinit();
+
+        var no_backing = NoBackingResolver{};
+        var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
+        defer translator.deinit();
+
+        var reason: SkipReason = undefined;
+        const built = try translator.translateGroundRoot(fixture.cursor(), root, &reason);
+        try testing.expect(isSelfRecursiveTagUnion(&store, built));
+    }
+}
+
+test "two structurally equal recursive tag unions dedup with interning on, differ off" {
+    // Build the same self-recursive tag union from two independent checked roots
+    // and translate each with one translator, so the second reaches the first's
+    // registered rooted group under interning.
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const empty = try fixture.add(.empty_tag_union);
+    const first_id = fixture.nextId();
+    const first = try fixture.addTagUnion(&.{.{ .name_text = "Node", .payloads = &.{first_id} }}, empty);
+    const second_id = fixture.nextId();
+    const second = try fixture.addTagUnion(&.{.{ .name_text = "Node", .payloads = &.{second_id} }}, empty);
+
+    inline for (.{ true, false }) |intern_on| {
+        var store = initTargetStore();
+        defer store.deinit();
+        if (intern_on) store.enableInterning();
+        var target_names = names.NameStore.init(testing.allocator);
+        defer target_names.deinit();
+
+        var no_backing = NoBackingResolver{};
+        var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
+        defer translator.deinit();
+
+        var reason: SkipReason = undefined;
+        const a = try translator.translateGroundRoot(fixture.cursor(), first, &reason);
+        const b = try translator.translateGroundRoot(fixture.cursor(), second, &reason);
+        try testing.expect(isSelfRecursiveTagUnion(&store, a));
+        try testing.expect(isSelfRecursiveTagUnion(&store, b));
+        if (intern_on) {
+            try testing.expectEqual(a, b);
+        } else {
+            try testing.expect(a != b);
+        }
+    }
+}
+
+test "a mutually recursive tag-union pair builds a closed two-node group" {
+    // A = [ToB B], B = [ToA A]: a two-node cycle with distinct heads.
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const empty = try fixture.add(.empty_tag_union);
+    const a_id = fixture.nextId();
+    const b_id: checked.CheckedTypeId = @enumFromInt(@intFromEnum(a_id) + 1);
+    const a = try fixture.addTagUnion(&.{.{ .name_text = "ToB", .payloads = &.{b_id} }}, empty);
+    const b = try fixture.addTagUnion(&.{.{ .name_text = "ToA", .payloads = &.{a_id} }}, empty);
+    try testing.expectEqual(a_id, a);
+    try testing.expectEqual(b_id, b);
+
+    var store = initTargetStore();
+    defer store.deinit();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var no_backing = NoBackingResolver{};
+    var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
+    defer translator.deinit();
+
+    var reason: SkipReason = undefined;
+    const a_root = try translator.translateGroundRoot(fixture.cursor(), a, &reason);
+
+    // A's single tag payload is B; B's single tag payload is A's root — a closed
+    // cycle back to the entered root.
+    const b_root = payload_of: {
+        switch (store.get(a_root)) {
+            .tag_union => |span| {
+                const tag_span = store.tagSpan(span);
+                const tag = collections.GuardedList.at(tag_span, 0);
+                break :payload_of collections.GuardedList.at(store.span(tag.payloads), 0);
+            },
+            else => return testing.expect(false),
+        }
+    };
+    try testing.expect(a_root != b_root);
+    switch (store.get(b_root)) {
+        .tag_union => |span| {
+            const tag_span = store.tagSpan(span);
+            const tag = collections.GuardedList.at(tag_span, 0);
+            try testing.expectEqual(a_root, collections.GuardedList.at(store.span(tag.payloads), 0));
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "a recursive tag union nested under a list reproduces the graph shape" {
+    // Rec = [Node (List Rec)]: the cycle passes through a builtin list nominal.
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const empty = try fixture.add(.empty_tag_union);
+    // The list is added next, then the tag union, so the tag union's id is one
+    // past the list's; the list's element names that future tag-union id.
+    const rec_id: checked.CheckedTypeId = @enumFromInt(@intFromEnum(fixture.nextId()) + 1);
+    const list_of_rec = try fixture.addUserBuiltinList(rec_id);
+    const rec = try fixture.addTagUnion(&.{.{ .name_text = "Node", .payloads = &.{list_of_rec} }}, empty);
+    try testing.expectEqual(rec_id, rec);
+
+    var store = initTargetStore();
+    defer store.deinit();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var no_backing = NoBackingResolver{};
+    var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
+    defer translator.deinit();
+
+    var reason: SkipReason = undefined;
+    const root = try translator.translateGroundRoot(fixture.cursor(), rec, &reason);
+    switch (store.get(root)) {
+        .tag_union => |span| {
+            const tag = collections.GuardedList.at(store.tagSpan(span), 0);
+            const list_id = collections.GuardedList.at(store.span(tag.payloads), 0);
+            switch (store.get(list_id)) {
+                .list => |elem| try testing.expectEqual(root, elem),
+                else => try testing.expect(false),
+            }
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "a generated opaque-evidence builtin nominal skips as engine_input_needed" {
+    var fixture = TestFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const field_ty = try fixture.addBuiltinNominal(.field, "FieldName");
+
+    var store = initTargetStore();
+    defer store.deinit();
+    store.enableInterning();
+    var target_names = names.NameStore.init(testing.allocator);
+    defer target_names.deinit();
+
+    var no_backing = NoBackingResolver{};
+    var translator = Translator.init(testing.allocator, &store, &target_names, no_backing.resolver());
+    defer translator.deinit();
+
+    var reason: SkipReason = undefined;
+    try testing.expectError(error.Skip, translator.translateGroundRoot(fixture.cursor(), field_ty, &reason));
+    try testing.expectEqual(SkipReason.engine_input_needed, reason);
 }
 
 test "declarations are referenced" {

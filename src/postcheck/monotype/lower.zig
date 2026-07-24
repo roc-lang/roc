@@ -123,6 +123,12 @@ pub fn run(
     try builder.initHostedCatalog();
     try builder.loadCandidateSpecializationShards();
 
+    // Debug-only: while the directed-translation probe runs, connect the type
+    // store's committed-seal sink to the builder so the probe compares the full
+    // sealed population (reunify.md section 9, Slice 7 Stage A). Disconnected on
+    // every non-probe lowering, so seal collection stays inert.
+    if (reunify_shadow.shouldRun()) program.types.committed_census = &builder.sealed_population;
+
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
     }
@@ -155,6 +161,10 @@ pub fn run(
     // authoritative pool, and only compares deterministic digests. Off unless
     // ROC_REUNIFY_SHADOW is set. Stage E repoints lowering onto direct_translate.
     if (reunify_shadow.shouldRun()) builder.runDirectTranslateProbe() catch {};
+
+    // Disconnect the probe sink so the returned program's type store never holds
+    // a pointer into the builder's soon-freed population set.
+    program.types.committed_census = null;
 
     return program;
 }
@@ -644,6 +654,12 @@ const Builder = struct {
     target_usize: base.target.TargetUsize,
     symbols: Common.SymbolGen = .{},
     type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    /// Debug/probe-only widened population sink (reunify.md section 9, Slice 7
+    /// Stage A): connected to the type store's `committed_census` while the
+    /// directed-translation probe runs, so it accumulates every committed final
+    /// seal id the graph produces per specialization, deduped by sealed id. Empty
+    /// and disconnected on every non-probe lowering.
+    sealed_population: std.AutoHashMap(Type.TypeId, void),
     generated_iter_types: std.AutoHashMap([32]u8, Type.TypeId),
     forced_dynamic_iter_types: std.AutoHashMap([32]u8, Type.TypeId),
     spec_store: specialize.SpecBuilder,
@@ -710,6 +726,7 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .target_usize = options.target_usize,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
+            .sealed_population = std.AutoHashMap(Type.TypeId, void).init(allocator),
             .generated_iter_types = std.AutoHashMap([32]u8, Type.TypeId).init(allocator),
             .forced_dynamic_iter_types = std.AutoHashMap([32]u8, Type.TypeId).init(allocator),
             .spec_store = spec_store,
@@ -769,6 +786,7 @@ const Builder = struct {
         self.unsolved_monos.deinit();
         self.generated_iter_types.deinit();
         self.forced_dynamic_iter_types.deinit();
+        self.sealed_population.deinit();
         self.type_cache.deinit();
         self.evidence_arena.deinit();
     }
@@ -2576,6 +2594,22 @@ const Builder = struct {
         Common.invariant("procedure template referenced a checked module that is not in the lowering input");
     }
 
+    /// Like `moduleForDigest` but returns null instead of panicking when the
+    /// module is not in the lowering input. The directed-translation probe reads
+    /// a sealed type's provenance module, which — for an imported declaration
+    /// whose defining view never reaches lowering — may not be present; the probe
+    /// records that as a skip rather than aborting the compile.
+    fn moduleForDigestOrNull(self: *Builder, module_bytes: [32]u8) ?ModuleView {
+        if (moduleBytesEqual(module_bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
+        for (self.modules.imports) |imported| {
+            if (moduleBytesEqual(module_bytes, imported.key.bytes)) return moduleView(imported);
+        }
+        for (self.modules.root.relation_modules) |relation| {
+            if (moduleBytesEqual(module_bytes, relation.key.bytes)) return moduleView(relation);
+        }
+        return null;
+    }
+
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
         if (moduleBytesEqual(module_id.bytes, self.root_view.key.bytes)) return moduleView(self.root_view);
         for (self.modules.imports) |imported| {
@@ -2755,12 +2789,64 @@ const Builder = struct {
         return false;
     }
 
-    /// Directed stored-form translation probe (reunify.md Slice 7 Stage A). For
-    /// every concrete checked root lowering translated to a Monotype id, translate
-    /// it directly into a mutable snapshot of the output store and compare the
+    /// One probe population entry: a graph-produced sealed Monotype id and the
+    /// concrete checked source whose ground directed translation should reproduce
+    /// it. Keyed by sealed id in the population map, so the widened population is
+    /// deduplicated by sealed id (reunify.md section 9, Slice 7 Stage A).
+    const ProbeEntry = struct {
+        module_bytes: [32]u8,
+        type_id: u32,
+        /// True when this entry is a concrete root lowering translated
+        /// (`type_cache`): its ground translation is the authoritative logical
+        /// comparison. False for a widened sealed variant, whose ground source may
+        /// be faithful (a `type_cache` key) or a scheme template.
+        from_type_cache: bool,
+    };
+
+    /// Assemble the widened probe population: every concrete checked root lowering
+    /// translated (`type_cache`), plus every named type the graph committed into
+    /// the program per specialization (`sealed_population`, from the
+    /// GraphTypeFinals commit hook), resolved to its concrete checked provenance.
+    /// Deduplicated by sealed id; the first source wins.
+    fn collectProbePopulation(self: *Builder, out: *std.AutoHashMap(Type.TypeId, ProbeEntry)) Allocator.Error!void {
+        var cache_it = self.type_cache.iterator();
+        while (cache_it.next()) |entry| {
+            const address = entry.key_ptr.*;
+            const gop = try out.getOrPut(entry.value_ptr.*);
+            if (!gop.found_existing) gop.value_ptr.* = .{
+                .module_bytes = address.module_bytes,
+                .type_id = address.type_id,
+                .from_type_cache = true,
+            };
+        }
+
+        var sealed_it = self.sealed_population.keyIterator();
+        while (sealed_it.next()) |sealed_id_ptr| {
+            const sealed_id = sealed_id_ptr.*;
+            // Only a named type carries a checked provenance (`named_type`) a
+            // ground directed translation can read; a structural seal has no such
+            // source and is reached only as a child of a named or cached root.
+            const named = switch (self.program.types.get(sealed_id)) {
+                .named => |named| named,
+                else => continue,
+            };
+            const gop = try out.getOrPut(sealed_id);
+            if (!gop.found_existing) gop.value_ptr.* = .{
+                .module_bytes = named.named_type.module.bytes,
+                .type_id = @intFromEnum(named.named_type.ty),
+                .from_type_cache = false,
+            };
+        }
+    }
+
+    /// Directed stored-form translation probe (reunify.md Slice 7 Stage A). Over
+    /// the widened sealed population, translate each entry's concrete checked
+    /// source directly into a mutable snapshot of the output store and compare the
     /// stored digest with the graph's. A mismatch on a representation-free type is
-    /// a translation bug; a mismatch on a type carrying iterator/generated content
-    /// is expected until Stage B supplies interface outputs. State-isolated: the
+    /// a translation bug (`mismatch_logical`, which must be zero); a mismatch on a
+    /// type carrying iterator/generated content is a representation difference
+    /// (`mismatch_representation`) that, with the `engine_input_needed` skip class,
+    /// bounds what step (b)'s closure engine must supply. State-isolated: the
     /// snapshot owns its own storage and no id is allocated in the output pool.
     fn runDirectTranslateProbe(self: *Builder) Allocator.Error!void {
         var snapshot = try self.program.types.cloneMutable(self.allocator);
@@ -2773,13 +2859,37 @@ const Builder = struct {
         var translator = direct_translate.Translator.init(self.allocator, &snapshot, &self.program.names, resolver);
         defer translator.deinit();
 
-        var it = self.type_cache.iterator();
+        var population = std.AutoHashMap(Type.TypeId, ProbeEntry).init(self.allocator);
+        defer population.deinit();
+        try self.collectProbePopulation(&population);
+
+        var it = population.iterator();
         while (it.next()) |entry| {
-            const address = entry.key_ptr.*;
-            const mono_ty = entry.value_ptr.*;
-            const view = self.moduleForDigest(.{ .bytes = address.module_bytes });
+            const mono_ty = entry.key_ptr.*;
+            const source = entry.value_ptr.*;
+            census.bump("direct_probe_population");
+
+            // A widened sealed variant is comparable only when its checked source
+            // is a concrete type lowering translated (a `type_cache` key). A sealed
+            // named type whose provenance is a scheme template node instead is not
+            // ground-translatable: the instantiation binding step (b) supplies is
+            // exactly what would make it concrete, so it is counted, not compared.
+            if (!source.from_type_cache and
+                !self.type_cache.contains(.{ .module_bytes = source.module_bytes, .type_id = source.type_id }))
+            {
+                census.bump("direct_stored_skip_uninstantiated_template");
+                if (try self.monoTypeCarriesRepresentation(mono_ty)) {
+                    census.bump("direct_stored_uninstantiated_carries_representation");
+                }
+                continue;
+            }
+
+            const view = self.moduleForDigestOrNull(source.module_bytes) orelse {
+                census.bump("direct_stored_skip_binder_not_found");
+                continue;
+            };
             const cursor = directTranslateCursor(view);
-            const checked_ty: checked.CheckedTypeId = @enumFromInt(address.type_id);
+            const checked_ty: checked.CheckedTypeId = @enumFromInt(source.type_id);
 
             var reason: direct_translate.SkipReason = undefined;
             const translated = translator.translateGroundRoot(cursor, checked_ty, &reason) catch |err| switch (err) {
@@ -2787,7 +2897,12 @@ const Builder = struct {
                     switch (reason) {
                         .recursive_cycle => census.bump("direct_stored_skip_recursive"),
                         .open_row => census.bump("direct_stored_skip_open_row"),
-                        else => census.bump("direct_stored_skip_other"),
+                        .engine_input_needed => census.bump("direct_stored_skip_engine_input_needed"),
+                        .pending_or_err => census.bump("direct_stored_skip_pending_or_err"),
+                        .numeric_default_unresolved => census.bump("direct_stored_skip_numeric_default"),
+                        .malformed_builtin_arity => census.bump("direct_stored_skip_malformed_arity"),
+                        .binder_not_found => census.bump("direct_stored_skip_binder_not_found"),
+                        .missing_backing => census.bump("direct_stored_skip_missing_backing"),
                     }
                     continue;
                 },
@@ -2798,13 +2913,22 @@ const Builder = struct {
             const graph_digest = self.program.types.typeDigest(&self.program.names, mono_ty);
             if (std.mem.eql(u8, &translated_digest.bytes, &graph_digest.bytes)) {
                 census.bump("direct_stored_match");
+                continue;
+            }
+
+            census.bump("direct_stored_mismatch");
+            if (try self.monoTypeCarriesRepresentation(mono_ty)) {
+                census.bump("direct_stored_mismatch_representation");
+            } else if (source.from_type_cache) {
+                // The authoritative comparison: a concrete root's faithful ground
+                // translation differing with no representation content is a real
+                // translation bug. This counter must stay zero.
+                census.bump("direct_stored_mismatch_logical");
             } else {
-                census.bump("direct_stored_mismatch");
-                if (try self.monoTypeCarriesRepresentation(mono_ty)) {
-                    census.bump("direct_stored_mismatch_representation");
-                } else {
-                    census.bump("direct_stored_mismatch_logical");
-                }
+                // A sealed variant of a faithful (type_cache-keyed) source that
+                // differs with no representation content used a different
+                // disposition context than the ground walk — not a translation bug.
+                census.bump("direct_stored_skip_context_variant");
             }
         }
     }

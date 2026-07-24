@@ -47,7 +47,14 @@ const policy = @import("representation_policy.zig");
 /// opaque integer supplied by the test harness; Slice 5 replaces it with the
 /// real interned logical identity. `relate` requires equal tokens on both
 /// operands, so the engine never joins logically unequal representations.
-pub const LogicalToken = enum(u64) { _ };
+pub const LogicalToken = enum(u64) {
+    /// The token a caller uses for a position whose logical identity is not
+    /// derivable on its own — a backing-less iterator's stand-in backing. Every
+    /// such position shares this token, so a rule that relates two of them still
+    /// relates, while rules that keep distinct identities apart still do.
+    stand_in = 0,
+    _,
+};
 
 /// Identity of a representation slot owned by this engine.
 pub const RepresentationSlotId = enum(u32) { _ };

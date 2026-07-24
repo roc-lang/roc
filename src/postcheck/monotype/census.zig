@@ -65,21 +65,63 @@ pub const Census = struct {
     intern_hit: Counter = Counter.init(0),
     intern_miss: Counter = Counter.init(0),
     // reunify.md section 9, Slice 7 Stage A: the directed stored-form translation
-    // probe. For each concrete checked root that lowering translated to a
-    // Monotype id, the directed translation's stored digest is compared with the
+    // probe. `direct_probe_population` counts every distinct root the probe
+    // translates — the widened population is every type the graph seals into the
+    // program per specialization (the GraphTypeFinals commit path, deduped by
+    // sealed id), not only the concrete checked roots lowering translated.
+    //
+    // For each root the directed translation's stored digest is compared with the
     // graph's stored digest. `match` counts equal stored digests; `mismatch`
     // counts unequal, split by whether the graph type carries iterator/generated
-    // representation content (`mismatch_representation`, expected until Stage B
-    // supplies interface outputs) or does not (`mismatch_logical`, which must be
-    // zero — an unequal representation-free stored form is a translation bug).
-    // The skip counters record roots outside the translatable subset.
+    // representation content (`mismatch_representation`, bounded by what Stage B's
+    // engine must supply) or does not (`mismatch_logical`, which must be zero — an
+    // unequal representation-free stored form is a translation bug).
+    //
+    // `mismatch_representation` plus `skip_engine_input_needed` together bound the
+    // representation content step (b)'s closure engine must supply: the first is a
+    // type translated with derivable content that still differs by graph-minted
+    // representation; the second is a position whose content the checked data
+    // cannot dictate at all, skipped instead of emitting wrong output.
+    //
+    // The remaining skip counters record roots outside the translatable subset,
+    // one per direct_translate.SkipReason. `skip_recursive` should stay near zero
+    // now that recursive groups are built through the store's recursive-group
+    // builder; a nonzero count is a recursion the builder could not close.
+    direct_probe_population: Counter = Counter.init(0),
     direct_stored_match: Counter = Counter.init(0),
     direct_stored_mismatch: Counter = Counter.init(0),
     direct_stored_mismatch_representation: Counter = Counter.init(0),
     direct_stored_mismatch_logical: Counter = Counter.init(0),
     direct_stored_skip_recursive: Counter = Counter.init(0),
     direct_stored_skip_open_row: Counter = Counter.init(0),
-    direct_stored_skip_other: Counter = Counter.init(0),
+    direct_stored_skip_engine_input_needed: Counter = Counter.init(0),
+    direct_stored_skip_pending_or_err: Counter = Counter.init(0),
+    direct_stored_skip_numeric_default: Counter = Counter.init(0),
+    direct_stored_skip_malformed_arity: Counter = Counter.init(0),
+    direct_stored_skip_binder_not_found: Counter = Counter.init(0),
+    direct_stored_skip_missing_backing: Counter = Counter.init(0),
+    // A widened-population entry the graph sealed from an instantiated scheme:
+    // its `named_type` provenance is the scheme template node (carrying rigid
+    // binders), not a concrete checked instance, so a ground directed translation
+    // cannot reproduce it — the dense scheme binding is exactly what step (b)'s
+    // directed instantiation supplies. Counted rather than compared, so a
+    // template's defaulted ground shape never registers as a logical mismatch.
+    direct_stored_skip_uninstantiated_template: Counter = Counter.init(0),
+    // The subset of the uninstantiated-template skips whose sealed graph type
+    // carries iterator/generated representation content. This is the step (b)
+    // representation bound inside the population the ground probe cannot compare:
+    // once directed instantiation supplies their dense scheme binding, the
+    // section 10 closure engine must supply exactly this representation content.
+    direct_stored_uninstantiated_carries_representation: Counter = Counter.init(0),
+    // A widened-population sealed variant whose checked source IS a concrete
+    // type_cache key (so its ground translation is faithful, proven by that key's
+    // own authoritative comparison) but which the graph sealed to a distinct id
+    // that differs logically: the seal used a different residual-disposition
+    // context than the module-body-owner ground walk. It is not a translation bug
+    // — the ground translation is faithful to its own context — so it is counted
+    // here, keeping `mismatch_logical` reserved for the authoritative type_cache
+    // comparison, which must stay zero.
+    direct_stored_skip_context_variant: Counter = Counter.init(0),
     // reunify.md section 10, Slice 7 Stage B: the representation closure engine
     // driven from the graph as an inert shadow. Wherever the graph applies a
     // representation decision, the same relation is mirrored into engine slots,
