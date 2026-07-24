@@ -34475,21 +34475,6 @@ const BodyContext = struct {
         });
     }
 
-    fn invalidValueParseResult(
-        self: *BodyContext,
-        encoding_expr: DraftExprId,
-        state_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const ret_info = self.tryInfo(ret_ty);
-        return try self.tryErr(
-            ret_ty,
-            try self.invalidValueError(encoding_expr, state_expr, encoding_ty, state_ty, ret_info.err_ty),
-        );
-    }
-
     fn invalidValueError(
         self: *BodyContext,
         encoding_expr: DraftExprId,
