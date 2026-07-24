@@ -185,6 +185,48 @@ expect {
 	result == Ok({ name: "ada" })
 }
 
+## An unknown field is skipped, and the skip consumes one of the declared
+## entries rather than reading past the record.
+expect {
+	result : Try({ name : Str }, [Bad, MissingRequiredField(Str)])
+	result = parse("R 2 zzz junk name ada trailing")
+
+	result == Ok({ name: "ada" })
+}
+
+expect {
+	result : Try({ name : Str }, [Bad, MissingRequiredField(Str)])
+	result = parse("R 2 name first name second")
+
+	result == Ok({ name: "second" })
+}
+
+## A counted record whose declared count runs out before a required field
+## reports the field rather than reading past the count.
+expect {
+	result : Try({ name : Str, age : U64 }, [Bad, MissingRequiredField(Str)])
+	result = parse("R 1 name ada age 36")
+
+	result == Err(MissingRequiredField("age"))
+}
+
+expect {
+	result : Try({ name : Try(Str, [Missing]) }, [Bad, MissingRequiredField(Str)])
+	result = parse("R 0")
+
+	result == Ok({ name: Err(Missing) })
+}
+
+expect {
+	result : Try(Dict(Str, List(U64)), [Bad, MissingRequiredField(Str)])
+	result = parse("D 2 a L 2 1 2 b L 0")
+
+	match result {
+		Ok(d) => Dict.get(d, "a") == Ok([1, 2]) and Dict.get(d, "b") == Ok([])
+		Err(_) => False
+	}
+}
+
 expect {
 	result : Try(Dict(Str, U64), [Bad, MissingRequiredField(Str)])
 	result = parse("D 2 a 1 b 2")
