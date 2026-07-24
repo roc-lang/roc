@@ -9,7 +9,6 @@
 //! This module is used by both `roc build` and `roc bundle` commands.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const parse = @import("parse");
 const base = @import("base");
 const reporting = @import("reporting");
@@ -18,20 +17,6 @@ pub const targets_validator = @import("targets_validator.zig");
 
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
-
-const is_windows = builtin.target.os.tag == .windows;
-
-var stderr_file_writer: std.Io.File.Writer = .{
-    .io = std.Io.Threaded.global_single_threaded.io(),
-    .interface = std.Io.File.Writer.initInterface(&.{}),
-    .file = if (is_windows) undefined else std.Io.File.stderr(),
-    .mode = .streaming,
-};
-
-fn stderrWriter() *std.Io.Writer {
-    if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
-    return &stderr_file_writer.interface;
-}
 
 /// Re-export ValidationResult for callers that need to create reports
 pub const ValidationResult = targets_validator.ValidationResult;
@@ -68,10 +53,12 @@ pub fn validatePlatformHeader(
     allocator: std.mem.Allocator,
     std_io: std.Io,
     platform_source_path: []const u8,
+    stderr: *std.Io.Writer,
+    report_config: reporting.ReportingConfig,
 ) ValidationError!PlatformValidation {
     // Read platform source
     var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_source_path, allocator, .unlimited) catch {
-        try renderFileReadError(allocator, platform_source_path);
+        try renderFileReadError(allocator, platform_source_path, stderr, report_config);
         return error.FileReadError;
     };
     source = base.source_utils.normalizeLineEndingsRealloc(allocator, source) catch {
@@ -86,7 +73,7 @@ pub fn validatePlatformHeader(
     };
 
     const ast = parse.file(allocator, &env) catch {
-        try renderParseError(allocator, platform_source_path);
+        try renderParseError(allocator, platform_source_path, stderr, report_config);
         return error.ParseError;
     };
     defer ast.deinit();
@@ -95,7 +82,7 @@ pub fn validatePlatformHeader(
     const config = TargetsConfig.fromAST(allocator, ast) catch {
         return error.ParseError;
     } orelse {
-        try renderMissingTargetsError(allocator, platform_source_path);
+        try renderMissingTargetsError(allocator, platform_source_path, stderr, report_config);
         return error.MissingTargetsSection;
     };
 
@@ -106,7 +93,12 @@ pub fn validatePlatformHeader(
 }
 
 /// Render a file read error report to stderr.
-fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
+fn renderFileReadError(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    stderr: *std.Io.Writer,
+    report_config: reporting.ReportingConfig,
+) std.mem.Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "File Read Error", "Failed to read platform source file.", .fatal);
     defer report.deinit();
 
@@ -119,14 +111,19 @@ fn renderFileReadError(allocator: std.mem.Allocator, path: []const u8) std.mem.A
 
     reporting.renderReportToTerminal(
         &report,
-        stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        stderr,
+        reporting.ColorUtils.getPaletteForConfig(report_config),
+        report_config,
     ) catch {};
 }
 
 /// Render a parse error report to stderr.
-fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
+fn renderParseError(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    stderr: *std.Io.Writer,
+    report_config: reporting.ReportingConfig,
+) std.mem.Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "Parse Error", "Failed to parse platform header.", .fatal);
     defer report.deinit();
 
@@ -139,14 +136,19 @@ fn renderParseError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allo
 
     reporting.renderReportToTerminal(
         &report,
-        stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        stderr,
+        reporting.ColorUtils.getPaletteForConfig(report_config),
+        report_config,
     ) catch {};
 }
 
 /// Render a missing targets section error report to stderr.
-fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std.mem.Allocator.Error!void {
+fn renderMissingTargetsError(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    stderr: *std.Io.Writer,
+    report_config: reporting.ReportingConfig,
+) std.mem.Allocator.Error!void {
     const headline = try std.fmt.allocPrint(allocator, "Platform at {s} does not have a 'targets:' section.", .{path});
     defer allocator.free(headline);
     var report = try reporting.Report.init(allocator, "Missing Targets Section", headline, .fatal);
@@ -166,9 +168,9 @@ fn renderMissingTargetsError(allocator: std.mem.Allocator, path: []const u8) std
 
     reporting.renderReportToTerminal(
         &report,
-        stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        stderr,
+        reporting.ColorUtils.getPaletteForConfig(report_config),
+        report_config,
     ) catch {};
 }
 
@@ -206,6 +208,7 @@ pub fn renderValidationError(
     allocator: std.mem.Allocator,
     result: ValidationResult,
     stderr: anytype,
+    report_config: reporting.ReportingConfig,
 ) bool {
     switch (result) {
         .valid => return false,
@@ -220,8 +223,8 @@ pub fn renderValidationError(
             reporting.renderReportToTerminal(
                 &report,
                 stderr,
-                .ANSI,
-                reporting.ReportingConfig.initColorTerminal(),
+                reporting.ColorUtils.getPaletteForConfig(report_config),
+                report_config,
             ) catch {};
             return true;
         },
