@@ -30476,57 +30476,11 @@ const BodyContext = struct {
         if (payload_exprs.len != payload_tys.len) Common.invariant("tag union encode payload arity mismatch");
 
         const tag_name_expr = try self.stringExpr(self.builder.program.names.tagLabelText(tag.name), try self.builder.primitiveType(.str));
-        if (payload_tys.len == 0) {
-            return try self.lowerEncodeFormatMethod(
-                "encode_str",
-                &.{ tag_name_expr, state_expr },
-                &.{ try self.builder.primitiveType(.str), state_ty },
-                encoding_ty,
-                ret_ty,
-            );
-        }
-
         const u64_ty = try self.builder.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_record", .record, encoding_ty, state_ty, ret_ty);
+        const method = try self.resolveEncodeContainerMethod("encode_tag", .tag, encoding_ty, state_ty, ret_ty);
         const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
-        const field_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
-        const payload_state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const payload_body = blk: {
-            var capture_tys = std.ArrayList(Type.TypeId).empty;
-            defer capture_tys.deinit(self.allocator);
-            try capture_tys.appendSlice(self.allocator, payload_tys);
-            try capture_tys.append(self.allocator, encoding_ty);
-            const demand_scope = try self.enterCallableBodyDemandScope(&.{state_ty}, capture_tys.items);
-            defer demand_scope.leave();
-            break :blk if (payload_tys.len == 1)
-                try self.lowerEncodeShapeToState(
-                    payload_tys[0],
-                    payload_exprs[0],
-                    encoding_expr,
-                    encoding_ty,
-                    try self.localExpr(payload_state_local, state_ty),
-                    state_ty,
-                    ret_ty,
-                    precomputed_plan,
-                )
-            else
-                try self.lowerEncodePayloadArrayToState(
-                    payload_exprs,
-                    payload_tys,
-                    encoding_expr,
-                    encoding_ty,
-                    try self.localExpr(payload_state_local, state_ty),
-                    state_ty,
-                    ret_ty,
-                    precomputed_plan,
-                );
-        };
-        const payload_writer = try self.lowerGeneratedEncoderCallbackLambda(
-            try self.encodeValueThunkType(state_ty, ret_ty),
-            &.{.{ .local = payload_state_local, .ty = state_ty }},
-            payload_body,
-        );
-        const field_body = blk: {
+        const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
+        const body = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
             try capture_tys.appendSlice(self.allocator, payload_tys);
@@ -30536,30 +30490,77 @@ const BodyContext = struct {
                 capture_tys.items,
             );
             defer demand_scope.leave();
-            break :blk try self.addExpr(.{
-                .ty = method.container_result_ty,
-                .data = .{ .call_value = .{
-                    .callee = try self.localExpr(field_writer_local, method.writer_ty),
-                    .args = try self.addExprSpan(&[_]DraftExprId{
-                        try self.localExpr(body_state_local, method.container_state_ty),
-                        tag_name_expr,
-                        payload_writer,
-                    }),
-                } },
-            });
+            break :blk try self.lowerEncodeTagPayloadsFromState(
+                payload_exprs,
+                payload_tys,
+                encoding_expr,
+                encoding_ty,
+                try self.localExpr(body_state_local, method.container_state_ty),
+                method,
+                try self.localExpr(element_writer_local, method.writer_ty),
+                0,
+                precomputed_plan,
+            );
         };
-        const fields_lambda = try self.lowerGeneratedEncoderCallbackLambda(
+        const payloads_lambda = try self.lowerGeneratedEncoderCallbackLambda(
             method.body_ty,
             &.{
                 .{ .local = body_state_local, .ty = method.container_state_ty },
-                .{ .local = field_writer_local, .ty = method.writer_ty },
+                .{ .local = element_writer_local, .ty = method.writer_ty },
             },
-            field_body,
+            body,
         );
         return try self.lowerEncodeContainerMethodCall(
             method,
-            &.{ state_expr, try self.intLiteralExpr(1, u64_ty), fields_lambda },
+            &.{ state_expr, tag_name_expr, try self.intLiteralExpr(@intCast(payload_tys.len), u64_ty), payloads_lambda },
         );
+    }
+
+    fn lowerEncodeTagPayloadsFromState(
+        self: *BodyContext,
+        payload_exprs: []const DraftExprId,
+        payload_tys: []const Type.TypeId,
+        encoding_expr: DraftExprId,
+        encoding_ty: Type.TypeId,
+        state_expr: DraftExprId,
+        method: EncodeContainerMethod,
+        element_writer_expr: DraftExprId,
+        item_index: usize,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
+    ) Allocator.Error!DraftExprId {
+        if (item_index == payload_tys.len) {
+            return try self.tryOk(method.container_result_ty, state_expr);
+        }
+
+        const item_writer = try self.lowerEncodeValueThunk(
+            payload_tys[item_index],
+            payload_exprs[item_index],
+            encoding_expr,
+            encoding_ty,
+            method.state_ty,
+            method.result_ty,
+            precomputed_plan,
+        );
+        const item_try = try self.addExpr(.{
+            .ty = method.container_result_ty,
+            .data = .{ .call_value = .{
+                .callee = element_writer_expr,
+                .args = try self.addExprSpan(&[_]DraftExprId{ state_expr, item_writer }),
+            } },
+        });
+        const item_done_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
+        const rest = try self.lowerEncodeTagPayloadsFromState(
+            payload_exprs,
+            payload_tys,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(item_done_local, method.container_state_ty),
+            method,
+            element_writer_expr,
+            item_index + 1,
+            precomputed_plan,
+        );
+        return try self.sequenceEncodeTry(item_try, method.container_result_ty, item_done_local, rest, method.container_result_ty);
     }
 
     fn lowerEncodePayloadArrayToState(
