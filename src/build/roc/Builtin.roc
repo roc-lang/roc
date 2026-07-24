@@ -3694,6 +3694,36 @@ Builtin :: [].{
 			}
 		}
 
+		## Inserts an element at the given index, shifting later elements toward the end.
+		## An index equal to the length appends the element; a greater index is out of bounds.
+		## ```roc
+		## expect [1.I64, 2, 3].insert(1, 9) == Ok([1, 9, 2, 3])
+		##
+		## expect [1.I64, 2, 3].insert(5, 9) == Err(OutOfBounds)
+		## ```
+		insert : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		insert = |list, index, item| {
+			len = List.len(list)
+			if index > len {
+				Err(OutOfBounds)
+			} else {
+				# The two loops append exactly `index` then `len - index` elements plus
+				# the inserted one, so every unchecked append stays within `len + 1`.
+				var $result = List.with_capacity(len + 1)
+				var $i = 0
+				while $i < index {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				$result = list_append_unsafe($result, item)
+				while $i < len {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				Ok($result)
+			}
+		}
+
 		## Returns the reversed list.
 		## ```roc
 		## expect [1, 2, 3].rev() == [3, 2, 1]
