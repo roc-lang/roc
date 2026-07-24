@@ -19,6 +19,7 @@ const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const census = @import("census.zig");
 const representation_policy = @import("../representation_policy.zig");
+const representation_mirror = @import("representation_mirror.zig");
 
 /// Debug-only: the census records extension nodes minted by the import path
 /// so a later row merge that distributes a remainder into one can be counted.
@@ -292,6 +293,12 @@ pub const InstGraph = struct {
     backing_chain_scratch: std.ArrayList(NodeId) = .empty,
     /// Debug-only census provenance: extension nodes the import path minted.
     import_ext_nodes: ImportExtNodeSet = if (track_import_ext) undefined else {},
+    /// Debug-only, env-gated shadow of the representation closure engine
+    /// (reunify.md section 10, Slice 7 Stage B). Null unless the shadow is
+    /// compiled in and `ROC_REUNIFY_SHADOW` is set. It mirrors this graph's
+    /// representation decisions into engine slots and Debug-asserts the sealed
+    /// outcome; it never selects lowering behavior.
+    mirror: ?*representation_mirror.RepresentationMirror = null,
 
     pub fn create(
         allocator: Allocator,
@@ -319,11 +326,22 @@ pub const InstGraph = struct {
             .row_seen_scratch = std.AutoHashMap(NodeId, void).init(allocator),
             .import_ext_nodes = if (track_import_ext) std.AutoHashMap(NodeId, void).init(allocator) else {},
         };
+        graph.mirror = representation_mirror.RepresentationMirror.maybeCreate(graph);
         return graph;
+    }
+
+    /// The union-find root of a node, for the representation mirror to key its
+    /// slots by equivalence class. Read-only.
+    pub fn rootOf(self: *InstGraph, id: NodeId) NodeId {
+        return self.find(id);
     }
 
     pub fn destroy(self: *InstGraph) void {
         const allocator = self.allocator;
+        if (self.mirror) |mirror| {
+            mirror.sealAndCompare();
+            mirror.destroy();
+        }
         if (track_import_ext) self.import_ext_nodes.deinit();
         self.backing_chain_scratch.deinit(allocator);
         self.row_seen_scratch.deinit();
@@ -779,15 +797,24 @@ pub const InstGraph = struct {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
                             try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg });
                         }
-                        if (!sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields) and
+                        const relate_backings = !sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields) and
                             !eitherBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .iter) and
-                            !eitherBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .stream))
-                        {
+                            !eitherBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .stream);
+                        if (relate_backings) {
                             if (left_named.backing) |left_backing| {
                                 if (right_named.backing) |right_backing| {
+                                    // Two equal-identity nominals whose backings the
+                                    // graph relates: the section 10.3 sanctioned
+                                    // nominal-backing edge, mirrored into the engine.
+                                    if (self.mirror) |mirror| mirror.nominalBackingRelated(left, right);
                                     try pending.append(self.allocator, .{ .left = left_backing.node, .right = right_backing.node });
                                 }
                             }
+                        } else if (sameBuiltinOwner(left_named.builtin_owner, right_named.builtin_owner, .fields)) {
+                            // Same-identity generated evidence owners: the graph
+                            // keeps one backing rather than relating them, the
+                            // section 10.3 generated-evidence selection.
+                            if (self.mirror) |mirror| mirror.evidenceSelection(left, right);
                         }
                         try self.union_(left, right);
                         return;
@@ -845,6 +872,7 @@ pub const InstGraph = struct {
             .minted_join => census.bump("iter_minted_join"),
             .ordinary => unreachable,
         }
+        if (self.mirror) |mirror| mirror.mirrorIteratorJoin(left, right, join);
         if (left_named.args.len == 0 or right_named.args.len == 0) {
             Common.invariant("iterator representation join reached Monotype instantiation without a public item argument");
         }
@@ -908,6 +936,11 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         census.bump("nominal_backing_root_join");
+        // reunify.md section 10.5, Slice 7 Stage B: this generic
+        // try-the-backing-on-head-mismatch path is dying bookkeeping the flip
+        // deletes, not a section 10.3 edge, so it is counted when it fires
+        // rather than mirrored into the representation closure engine.
+        census.bump("nominal_generic_mismatch_path_fired");
         const named = switch (named_content) {
             .named => |named| named,
             else => unreachable,

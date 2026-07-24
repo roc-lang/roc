@@ -80,6 +80,47 @@ pub const Census = struct {
     direct_stored_skip_recursive: Counter = Counter.init(0),
     direct_stored_skip_open_row: Counter = Counter.init(0),
     direct_stored_skip_other: Counter = Counter.init(0),
+    // reunify.md section 10, Slice 7 Stage B: the representation closure engine
+    // driven from the graph as an inert shadow. Wherever the graph applies a
+    // representation decision, the same relation is mirrored into engine slots,
+    // sealed at the graph's seal point, and the engine's sealed representation
+    // descriptor (tier/kind/depth/owner) is compared against the graph-sealed
+    // node's representation content. `match` counts equal descriptors; `mismatch`
+    // counts unequal — an engine rule gap the flip must not carry. The per-rule
+    // counters split both by the section 10.3 rule that placed the slot in its
+    // class. Every mismatch is measured, never a panic.
+    representation_mirror_match: Counter = Counter.init(0),
+    representation_mirror_mismatch: Counter = Counter.init(0),
+    representation_mirror_match_public_minted: Counter = Counter.init(0),
+    representation_mirror_mismatch_public_minted: Counter = Counter.init(0),
+    representation_mirror_match_forced_dynamic: Counter = Counter.init(0),
+    representation_mirror_mismatch_forced_dynamic: Counter = Counter.init(0),
+    representation_mirror_match_minted_join: Counter = Counter.init(0),
+    representation_mirror_mismatch_minted_join: Counter = Counter.init(0),
+    representation_mirror_match_evidence: Counter = Counter.init(0),
+    representation_mirror_mismatch_evidence: Counter = Counter.init(0),
+    // A mirrored `relate` refused its operands as logically unequal. Because the
+    // graph only relates logically-equal nodes at these sites, a rejection is a
+    // mirror-side token or slot-shape imprecision, recorded rather than asserted.
+    representation_mirror_relate_rejected: Counter = Counter.init(0),
+    // The sanctioned nominal-backing relation (two equal-identity nominals whose
+    // backings the graph relates) mirrored into the engine as a component
+    // equality of the two nominal wrappers. Counts the applied relations.
+    representation_mirror_nominal_backing_related: Counter = Counter.init(0),
+    // The generic try-the-backing-on-head-mismatch path, reunify.md section
+    // 10.5: dying bookkeeping the flip deletes, not a section 10.3 edge. It is
+    // counted when it fires rather than mirrored into the engine.
+    nominal_generic_mismatch_path_fired: Counter = Counter.init(0),
+    // reunify.md section 11.1, Slice 7 Stage B: the interface reservation trial.
+    // For each specialization the graph lowers, argument and result
+    // representation slots are reserved in the mirror before body lowering;
+    // `gained_info` counts positions whose representation tier moved up during
+    // body discovery, and `gained_info_nonrecursive` restricts that to
+    // specializations that made no recursive self-request (the section 11
+    // openness measurement on live data, at slot granularity).
+    interface_slots_reserved: Counter = Counter.init(0),
+    interface_slots_gained_info: Counter = Counter.init(0),
+    gained_info_nonrecursive: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the

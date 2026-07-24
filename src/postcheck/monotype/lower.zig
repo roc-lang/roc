@@ -1615,6 +1615,11 @@ const Builder = struct {
         // later seal follow to the solved root. Builder-global types stay
         // snapshots; they serve many specializations.
         const root_node = try body_ctx.instNode(template.checked_fn_root);
+        // reunify.md section 11.1, Slice 7 Stage B: reserve argument/result
+        // representation slots before body discovery so the shadow can measure
+        // which reserved positions gain representation information as the body
+        // lowers. Debug-only, off unless ROC_REUNIFY_SHADOW.
+        if (graph.mirror) |mirror| mirror.reserveInterface(root_node);
         const body_uses_generated_evidence =
             !self.unsolved_monos.contains(lower_fn_ty) and try body_ctx.functionHasGeneratedOpaqueEvidence(lower_fn_ty);
         if (!self.unsolved_monos.contains(lower_fn_ty) and !body_uses_generated_evidence) {
@@ -1626,6 +1631,7 @@ const Builder = struct {
         const lowered = try body_ctx.lowerTemplateBody(template_ref, template, body_fn_ty);
         const draft_end = draft.end(self);
         try self.drainSpecRequests(graph);
+        if (graph.mirror) |mirror| mirror.measureInterfaceGain();
         if (requester) |requester_graph| {
             const live_requester_fn_node = requester_fn_node orelse
                 Common.invariant("deferred Monotype specialization lost its requester function type node");
@@ -3483,6 +3489,10 @@ const Builder = struct {
                     false;
                 if (is_recursive) {
                     census.bump("deferred_request_recursive");
+                    // The specialization re-requested itself, so its interface
+                    // gains are recursive openness, not the non-recursive
+                    // openness the section 11 measurement isolates.
+                    if (graph.mirror) |mirror| mirror.markInterfaceRecursive();
                 } else {
                     census.bump("deferred_request_nonrecursive");
                 }

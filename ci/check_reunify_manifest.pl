@@ -42,6 +42,7 @@ my $RCLO  = 'src/postcheck/representation_closure.zig';
 my $RSLOG = 'src/postcheck/reunify_shadow/logical_identity.zig';
 my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
 my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
+my $RMIRR = 'src/postcheck/monotype/representation_mirror.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -50,8 +51,11 @@ my @categories = (
         name    => 'instantiation-graph-creation',
         exempt  => [],
         patterns => [
+            # $RMIRR gained one InstGraph.create in Slice 7 Stage B: the
+            # representation-mirror unit test fixture builds a real graph to
+            # exercise the shadow; it deletes with the shadow at the flip.
             { label => 'InstGraph.create(', re => qr/InstGraph\.create\(/,
-              counts => { $SOLVE => 13, $LOWER => 14 } },
+              counts => { $SOLVE => 13, $LOWER => 14, $RMIRR => 1 } },
             { label => 'InstVariable.row(', re => qr/InstVariable\.row\(/,
               counts => { $SOLVE => 14, $LOWER => 1 } },
         ],
@@ -61,8 +65,11 @@ my @categories = (
         # Lambda Solved's unifier is the permanent callable-flow carve-out.
         exempt  => ['src/postcheck/lambda_solved/'],
         patterns => [
+            # $RMIRR's two `.unify(` calls are in the Stage B mirror tests, which
+            # drive the graph's join path so the shadow reflects it; they delete
+            # with the shadow at the flip.
             { label => '.unify(', re => qr/\.unify\(/,
-              counts => { $SOLVE => 14, $LOWER => 53 } },
+              counts => { $SOLVE => 14, $LOWER => 53, $RMIRR => 2 } },
             { label => 'unifyRoots', re => qr/\bunifyRoots\b/,
               counts => { $SOLVE => 2 } },
             { label => 'unifyConcrete', re => qr/\bunifyConcrete\b/,
@@ -117,8 +124,11 @@ my @categories = (
               counts => { $LOWER => 2 } },
             { label => 'pinDeferredTemplateRequestToCheckedRoot', re => qr/\bpinDeferredTemplateRequestToCheckedRoot\b/,
               counts => { $LOWER => 3 } },
+            # $RMIRR references unsolved_monos four times in its test fixture
+            # (field, init, the create argument, and deinit); it is a required
+            # InstGraph.create input and deletes with the shadow at the flip.
             { label => 'unsolved_monos', re => qr/\bunsolved_monos\b/,
-              counts => { $SOLVE => 42, $LOWER => 33 } },
+              counts => { $SOLVE => 42, $LOWER => 33, $RMIRR => 4 } },
         ],
     },
     {
@@ -250,14 +260,21 @@ my @categories = (
               counts => { $RPOL => 4, $RCLO => 2, $LS => 1 } },
             { label => 'evidenceOwnerUsesScoreSelection', re => qr/\bevidenceOwnerUsesScoreSelection\b/,
               counts => { $RPOL => 7, $LS => 1 } },
+            # $RMIRR (Slice 7 Stage B): the graph-driven representation-closure
+            # shadow cites `applyIteratorJoin` (the graph site it mirrors) in a
+            # doc comment; it deletes at the flip.
             { label => 'applyIteratorJoin', re => qr/\bapplyIteratorJoin\b/,
-              counts => { $SOLVE => 2 } },
+              counts => { $SOLVE => 2, $RMIRR => 1 } },
             # $RSHAD gained one `relate(` in Slice 6: the FinalSpecId sealing census
             # (reunify.md 11.1/11.2) seals each spec record's declared representation
             # inputs by relating same-logical positions through the section 10.3
             # closure engine, so the shadow drives real `relate` workload.
+            # $RMIRR gained one `relate(` in Slice 7 Stage B: the graph-driven
+            # shadow relates the two mirrored slots through the section 10.3
+            # closure engine at each decision site it mirrors, so the engine runs
+            # real workload on the live corpus. It deletes with the shadow.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 17, $RSHAD => 1 } },
+              counts => { $RCLO => 17, $RSHAD => 1, $RMIRR => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],
