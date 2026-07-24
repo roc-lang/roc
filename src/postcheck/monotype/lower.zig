@@ -15666,9 +15666,37 @@ const BodyContext = struct {
         if (info.item_fields.len != expected_count) return null;
         for (0..GuardedList.borrowLen(info.item_fields)) |index| {
             const field = GuardedList.at(info.item_fields, index);
-            if (!self.sameType(field.ty, field_handle_ty)) return null;
+            if (!self.sameFieldHandleType(field.ty, field_handle_ty)) return null;
         }
         return info.item_fields;
+    }
+
+    /// Whether two field-handle types name the same instantiation. The stored
+    /// metadata's items carry the compiler-generated backing while a consumer
+    /// specialized through the checked interface sees the checked-public
+    /// backing of the same nominal; both back onto the identical declared
+    /// record, so the pairing is one runtime type.
+    fn sameFieldHandleType(self: *BodyContext, left_ty: Type.TypeId, right_ty: Type.TypeId) bool {
+        if (self.sameType(left_ty, right_ty)) return true;
+        const left = switch (self.builder.program.types.get(left_ty)) {
+            .named => |named| named,
+            else => return false,
+        };
+        const right = switch (self.builder.program.types.get(right_ty)) {
+            .named => |named| named,
+            else => return false,
+        };
+        if (!sameTypeDef(left.def, right.def)) return false;
+        const left_args = self.builder.program.types.span(left.args);
+        const right_args = self.builder.program.types.span(right.args);
+        if (GuardedList.borrowLen(left_args) != GuardedList.borrowLen(right_args)) return false;
+        for (0..GuardedList.borrowLen(left_args)) |index| {
+            if (!self.sameType(GuardedList.at(left_args, index), GuardedList.at(right_args, index))) return false;
+        }
+        const left_backing = left.backing orelse return false;
+        const right_backing = right.backing orelse return false;
+        return self.sameType(left_backing.ty, right_backing.ty) and
+            (left_backing.authority == .generated_private) != (right_backing.authority == .generated_private);
     }
 
     fn generatedFieldNamesBackingValueFieldNames(
@@ -25946,7 +25974,16 @@ const BodyContext = struct {
                     Common.invariant("record graph constructor lost its pre-lowered field child");
                 const child_node = try self.exprTypeCell(pre).toGraphNode(self.graph);
                 if (!self.graph.sameClass(field.ty, child_node)) {
-                    if (!try self.graph.containsGeneratedPrivate(child_node)) {
+                    // Either side may carry the generated-private
+                    // representation: a producer-authored child adopted by a
+                    // checked-public construction, or a construction whose
+                    // field slot was selected private by generated codec
+                    // machinery while the user's opaque handle value stays
+                    // checked-public (e.g. a FieldName passed through
+                    // user-authored parse_record_field).
+                    if (!try self.graph.containsGeneratedPrivate(child_node) and
+                        !try self.graph.containsGeneratedPrivate(field.ty))
+                    {
                         Common.invariant("record graph constructor child differed without generated-private evidence");
                     }
                     requires_distinct_witness = true;
@@ -25969,7 +26006,7 @@ const BodyContext = struct {
                 .fields = fields,
                 .ext = try self.graph.newNode(.empty_record),
             } });
-            try self.graph.relateOpaqueInterface(record_node, node);
+            try relateRequestComponent(self.graph, record_node, node);
             break :blk node;
         } else record_node;
         const record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
