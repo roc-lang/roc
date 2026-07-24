@@ -64,6 +64,22 @@ pub const Census = struct {
     // id after an exact-equality bucket match; `intern_miss` adds a fresh id.
     intern_hit: Counter = Counter.init(0),
     intern_miss: Counter = Counter.init(0),
+    // reunify.md section 9, Slice 7 Stage A: the directed stored-form translation
+    // probe. For each concrete checked root that lowering translated to a
+    // Monotype id, the directed translation's stored digest is compared with the
+    // graph's stored digest. `match` counts equal stored digests; `mismatch`
+    // counts unequal, split by whether the graph type carries iterator/generated
+    // representation content (`mismatch_representation`, expected until Stage B
+    // supplies interface outputs) or does not (`mismatch_logical`, which must be
+    // zero — an unequal representation-free stored form is a translation bug).
+    // The skip counters record roots outside the translatable subset.
+    direct_stored_match: Counter = Counter.init(0),
+    direct_stored_mismatch: Counter = Counter.init(0),
+    direct_stored_mismatch_representation: Counter = Counter.init(0),
+    direct_stored_mismatch_logical: Counter = Counter.init(0),
+    direct_stored_skip_recursive: Counter = Counter.init(0),
+    direct_stored_skip_open_row: Counter = Counter.init(0),
+    direct_stored_skip_other: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the

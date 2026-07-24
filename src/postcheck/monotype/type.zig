@@ -309,6 +309,39 @@ pub const Store = struct {
         return self.frozen;
     }
 
+    /// A field-wise copy of this store that is mutable (unfrozen) and
+    /// non-interning, for a reader that must build a few types without touching
+    /// the authoritative pool: the copy owns its own storage, its ids match this
+    /// store's verbatim, and further `intern*` calls plain-add fresh ids into the
+    /// copy. Interning is dropped and the dedup exclusion set is empty because a
+    /// verbatim copy has no live-node provenance to preserve.
+    pub fn cloneMutable(self: *const Store, allocator: std.mem.Allocator) std.mem.Allocator.Error!Store {
+        const source_view = self.view();
+        return .{
+            .allocator = allocator,
+            .types = @TypeOf(self.types).fromArrayList(try cloneStoreSlice(Content, allocator, source_view.types)),
+            .type_digests = @TypeOf(self.type_digests).fromArrayList(try cloneStoreSlice(?names.TypeDigest, allocator, source_view.type_digests)),
+            .specialization_digests = @TypeOf(self.specialization_digests).fromArrayList(try cloneStoreSlice(?names.TypeDigest, allocator, self.specializationDigestsView())),
+            .type_digest_generations = @TypeOf(self.type_digest_generations).fromArrayList(try cloneStoreSlice(u64, allocator, self.type_digest_generations.unsafeRawItemsForView())),
+            .specialization_digest_generations = @TypeOf(self.specialization_digest_generations).fromArrayList(try cloneStoreSlice(u64, allocator, self.specialization_digest_generations.unsafeRawItemsForView())),
+            .digest_cache_generation = self.digest_cache_generation,
+            .spans = @TypeOf(self.spans).fromArrayList(try cloneStoreSlice(TypeId, allocator, source_view.spans)),
+            .fields = @TypeOf(self.fields).fromArrayList(try cloneStoreSlice(Field, allocator, source_view.fields)),
+            .tags = @TypeOf(self.tags).fromArrayList(try cloneStoreSlice(Tag, allocator, source_view.tags)),
+            .declared_fields = @TypeOf(self.declared_fields).fromArrayList(try cloneStoreSlice(DeclaredField, allocator, source_view.declared_fields)),
+            .frozen = false,
+            .intern_buckets = null,
+            .dedup_excluded = std.AutoHashMap(TypeId, void).init(allocator),
+        };
+    }
+
+    fn cloneStoreSlice(comptime T: type, allocator: std.mem.Allocator, source: []const T) std.mem.Allocator.Error!std.ArrayList(T) {
+        var cloned: std.ArrayList(T) = .empty;
+        errdefer cloned.deinit(allocator);
+        try cloned.appendSlice(allocator, source);
+        return cloned;
+    }
+
     pub fn addSpan(self: *Store, values: []const TypeId) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();

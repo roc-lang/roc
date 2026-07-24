@@ -41,6 +41,7 @@ my $RPOL  = 'src/postcheck/representation_policy.zig';
 my $RCLO  = 'src/postcheck/representation_closure.zig';
 my $RSLOG = 'src/postcheck/reunify_shadow/logical_identity.zig';
 my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
+my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -293,6 +294,25 @@ my @categories = (
               counts => { $RSLOG => 5, $RSHAD => 1 } },
             { label => 'runReunifyShadow', re => qr/\brunReunifyShadow\b/,
               counts => { $LOWER => 2 } },
+        ],
+    },
+    {
+        # The reunify.md Slice 7 flip staging, Stage A: the directed stored-form
+        # translation relocated into a production Monotype module as inert code,
+        # plus the Debug equality probe that exercises it. Like the shadow, this
+        # surface grows as the later stages wire it in; its pins move up in the
+        # same change that grows it. Stage E repoints the production lowering seam
+        # onto `translateGroundRoot`/`instantiateStoredScheme` and deletes the
+        # graph, at which point these entry points stop being inert.
+        name    => 'direct-translation',
+        exempt  => [],
+        patterns => [
+            { label => 'translateGroundRoot', re => qr/\btranslateGroundRoot\b/,
+              counts => { $DTRAN => 15, $LOWER => 1 } },
+            { label => 'instantiateStoredScheme', re => qr/\binstantiateStoredScheme\b/,
+              counts => { $DTRAN => 4 } },
+            { label => 'runDirectTranslateProbe', re => qr/\brunDirectTranslateProbe\b/,
+              counts => { $DTRAN => 1, $LOWER => 2 } },
         ],
     },
 );

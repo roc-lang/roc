@@ -14,6 +14,7 @@ const specialize = @import("specialize.zig");
 const solve = @import("solve.zig");
 const serialize = @import("serialize.zig");
 const census = @import("census.zig");
+const direct_translate = @import("direct_translate.zig");
 const reunify_shadow = @import("../reunify_shadow/shadow.zig");
 
 const InstGraph = solve.InstGraph;
@@ -147,6 +148,13 @@ pub fn run(
     // strictly after the sealed program above, reads only immutable output, and
     // is off unless ROC_REUNIFY_SHADOW is set.
     if (reunify_shadow.shouldRun()) builder.runReunifyShadow() catch {};
+
+    // Debug-only, state-isolated directed stored-form translation probe
+    // (reunify.md Slice 7 Stage A): runs after the sealed program above, emits
+    // into a mutable snapshot of the output store so no id is allocated in the
+    // authoritative pool, and only compares deterministic digests. Off unless
+    // ROC_REUNIFY_SHADOW is set. Stage E repoints lowering onto direct_translate.
+    if (reunify_shadow.shouldRun()) builder.runDirectTranslateProbe() catch {};
 
     return program;
 }
@@ -2612,6 +2620,176 @@ const Builder = struct {
             .scheme_sources = &scheme_sources,
             .program_specs = self.program.specsView(),
         });
+    }
+
+    /// Translate the module cursor a directed translation reads a module by from
+    /// a Builder module view.
+    fn directTranslateCursor(view: ModuleView) direct_translate.ModuleCursor {
+        return .{
+            .view = view.types,
+            .source_names = view.names,
+            .module_bytes = view.key.bytes,
+        };
+    }
+
+    fn directTranslateBuiltinOwner(
+        context: *anyopaque,
+        cursor: direct_translate.ModuleCursor,
+        nominal: checked.CheckedNominalType,
+    ) ?static_dispatch.BuiltinOwner {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        const view = self.moduleForDigest(.{ .bytes = cursor.module_bytes });
+        return self.builtinOwnerForNominal(view, nominal);
+    }
+
+    fn directTranslateNominalBacking(
+        context: *anyopaque,
+        cursor: direct_translate.ModuleCursor,
+        nominal: checked.CheckedNominalType,
+    ) ?direct_translate.Resolver.NominalBacking {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        const view = self.moduleForDigest(.{ .bytes = cursor.module_bytes });
+        const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
+        return .{
+            .cursor = directTranslateCursor(lookup.view),
+            .formal_args = lookup.declaration.formalArgs(lookup.view.types),
+            .root = lookup.declaration.backing,
+        };
+    }
+
+    fn directTranslateDeclaredOrder(
+        context: *anyopaque,
+        cursor: direct_translate.ModuleCursor,
+        nominal: checked.CheckedNominalType,
+        out: *std.ArrayList(direct_translate.Resolver.DeclaredField),
+    ) Allocator.Error!?direct_translate.ModuleCursor {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        const view = self.moduleForDigest(.{ .bytes = cursor.module_bytes });
+        const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
+        const fields = lookup.declaration.declaredRecordFields(lookup.view.types);
+        if (fields.len == 0) return null;
+        const padding_types = lookup.padding_field_tys;
+        var padding_cursor: usize = 0;
+        for (fields) |field| {
+            switch (field) {
+                .named => |label| try out.append(self.allocator, .{ .named = label }),
+                .padding => {
+                    if (padding_cursor >= padding_types.len) {
+                        Common.invariant("nominal declaration had more unnamed fields than recorded padding types");
+                    }
+                    try out.append(self.allocator, .{ .padding = padding_types[padding_cursor] });
+                    padding_cursor += 1;
+                },
+            }
+        }
+        return directTranslateCursor(lookup.view);
+    }
+
+    const direct_translate_vtable = direct_translate.Resolver.VTable{
+        .builtin_owner = directTranslateBuiltinOwner,
+        .nominal_backing = directTranslateNominalBacking,
+        .declared_order = directTranslateDeclaredOrder,
+    };
+
+    /// Whether a sealed Monotype type carries iterator or generated
+    /// representation content anywhere, so a directed-translation mismatch on it
+    /// is classified as a representation difference rather than a logical one.
+    fn monoTypeCarriesRepresentation(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+        const store = &self.program.types;
+        while (stack.pop()) |ty| {
+            const gop = try visited.getOrPut(ty);
+            if (gop.found_existing) continue;
+            switch (store.get(ty)) {
+                .primitive, .zst, .erased => {},
+                .list, .box => |elem| try stack.append(self.allocator, elem),
+                .tuple => |span| {
+                    const items = store.span(span);
+                    for (0..GuardedList.borrowLen(items)) |i| try stack.append(self.allocator, GuardedList.at(items, i));
+                },
+                .record => |span| {
+                    const field_span = store.fieldSpan(span);
+                    for (0..GuardedList.borrowLen(field_span)) |i| try stack.append(self.allocator, GuardedList.at(field_span, i).ty);
+                },
+                .tag_union => |span| {
+                    const tag_span = store.tagSpan(span);
+                    for (0..GuardedList.borrowLen(tag_span)) |i| {
+                        const payloads = store.span(GuardedList.at(tag_span, i).payloads);
+                        for (0..GuardedList.borrowLen(payloads)) |j| try stack.append(self.allocator, GuardedList.at(payloads, j));
+                    }
+                },
+                .func => |fn_ty| {
+                    const arg_span = store.span(fn_ty.args);
+                    for (0..GuardedList.borrowLen(arg_span)) |i| try stack.append(self.allocator, GuardedList.at(arg_span, i));
+                    try stack.append(self.allocator, fn_ty.ret);
+                },
+                .named => |named| {
+                    if (named.def.iterator_representation != .none or named.def.generated != null) return true;
+                    const arg_span = store.span(named.args);
+                    for (0..GuardedList.borrowLen(arg_span)) |i| try stack.append(self.allocator, GuardedList.at(arg_span, i));
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return false;
+    }
+
+    /// Directed stored-form translation probe (reunify.md Slice 7 Stage A). For
+    /// every concrete checked root lowering translated to a Monotype id, translate
+    /// it directly into a mutable snapshot of the output store and compare the
+    /// stored digest with the graph's. A mismatch on a representation-free type is
+    /// a translation bug; a mismatch on a type carrying iterator/generated content
+    /// is expected until Stage B supplies interface outputs. State-isolated: the
+    /// snapshot owns its own storage and no id is allocated in the output pool.
+    fn runDirectTranslateProbe(self: *Builder) Allocator.Error!void {
+        var snapshot = try self.program.types.cloneMutable(self.allocator);
+        defer snapshot.deinit();
+
+        const resolver = direct_translate.Resolver{
+            .context = self,
+            .vtable = &direct_translate_vtable,
+        };
+        var translator = direct_translate.Translator.init(self.allocator, &snapshot, &self.program.names, resolver);
+        defer translator.deinit();
+
+        var it = self.type_cache.iterator();
+        while (it.next()) |entry| {
+            const address = entry.key_ptr.*;
+            const mono_ty = entry.value_ptr.*;
+            const view = self.moduleForDigest(.{ .bytes = address.module_bytes });
+            const cursor = directTranslateCursor(view);
+            const checked_ty: checked.CheckedTypeId = @enumFromInt(address.type_id);
+
+            var reason: direct_translate.SkipReason = undefined;
+            const translated = translator.translateGroundRoot(cursor, checked_ty, &reason) catch |err| switch (err) {
+                error.Skip => {
+                    switch (reason) {
+                        .recursive_cycle => census.bump("direct_stored_skip_recursive"),
+                        .open_row => census.bump("direct_stored_skip_open_row"),
+                        else => census.bump("direct_stored_skip_other"),
+                    }
+                    continue;
+                },
+                else => |other| return other,
+            };
+
+            const translated_digest = snapshot.typeDigest(&self.program.names, translated);
+            const graph_digest = self.program.types.typeDigest(&self.program.names, mono_ty);
+            if (std.mem.eql(u8, &translated_digest.bytes, &graph_digest.bytes)) {
+                census.bump("direct_stored_match");
+            } else {
+                census.bump("direct_stored_mismatch");
+                if (try self.monoTypeCarriesRepresentation(mono_ty)) {
+                    census.bump("direct_stored_mismatch_representation");
+                } else {
+                    census.bump("direct_stored_mismatch_logical");
+                }
+            }
+        }
     }
 
     const NominalDeclLookup = struct {
