@@ -222,12 +222,19 @@ destructuring = || {
 	tup = ("Roc", 1.0)
 	(str, num) = tup
 
-	rec : { x: Dec, y: Dec }
+	rec : { x : Dec, y : Dec }
 	rec = { x: 1.0, y: tup.1 } # tuple access with `.index`
 	{ x, y } = rec
 
 	(str, num, x, y)
 }
+
+NominalTypeRecord := { x : U64 }
+
+# `Type.{ fields }` also works as a pattern, destructuring a nominal type's
+# backing record directly.
+destructure_nominal_type : NominalTypeRecord -> U64
+destructure_nominal_type = |NominalTypeRecord.{ x }| x
 
 # TODO not sure if still planned for implementation
 # record_update = {
@@ -399,6 +406,8 @@ main! = |_args| {
 	print!(type_var(["a", "b"]))
 
 	print!(destructuring())
+
+	print!(destructure_nominal_type(NominalTypeRecord.{ x: 42 }))
 
 	# print!(record_update)
 
