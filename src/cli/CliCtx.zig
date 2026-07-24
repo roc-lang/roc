@@ -209,6 +209,8 @@ pub const CliCtx = struct {
     command: Command,
     /// Exit code based on problem severity
     exit_code: u8,
+    /// Explicit CLI override. This is folded into `color_policy` on first use.
+    no_color: bool,
     /// Lazily loaded once because color environment variables are process-wide.
     color_policy: ?ColorPolicy,
 
@@ -224,6 +226,7 @@ pub const CliCtx = struct {
             .problems = std.ArrayList(CliProblem).empty,
             .command = command,
             .exit_code = 0,
+            .no_color = false,
             .color_policy = null,
         };
     }
@@ -237,6 +240,12 @@ pub const CliCtx = struct {
     /// Create a CoreCtx from this CLI context's allocators and I/O.
     pub fn coreCtx(self: *const Self) CoreCtx {
         return CoreCtx.default(self.gpa, self.arena, self.io.std_io);
+    }
+
+    /// Set the parser-owned CLI override before the color policy is consumed.
+    pub fn setNoColor(self: *Self, no_color: bool) void {
+        std.debug.assert(self.color_policy == null);
+        self.no_color = no_color;
     }
 
     /// Build the terminal-layout defaults before applying color policy.
@@ -262,7 +271,7 @@ pub const CliCtx = struct {
 
         const core_ctx = self.coreCtx();
         const policy = ColorPolicy.resolve(.{
-            .no_color = core_ctx.envVarIsNonEmpty("NO_COLOR"),
+            .no_color = self.no_color or core_ctx.envVarIsNonEmpty("NO_COLOR"),
             .force_color = core_ctx.envVarIsNonEmpty("FORCE_COLOR"),
             .dumb_terminal = core_ctx.envVarEquals("TERM", "dumb"),
             .high_contrast = core_ctx.envVarEquals("ROC_HIGH_CONTRAST", "1"),
@@ -395,7 +404,7 @@ pub const CliCtx = struct {
         for (self.problems.items) |problem| {
             var report = try problem.toReport(self.gpa);
             defer report.deinit();
-            try reporting.renderReportToTerminal(&report, writer, ColorPalette.ANSI, config);
+            try reporting.renderReportToTerminal(&report, writer, reporting.ColorUtils.getPaletteForConfig(config), config);
         }
     }
 
@@ -443,7 +452,7 @@ pub fn renderProblem(ctx: *CliCtx, problem: CliProblem) Allocator.Error!void {
     defer report.deinit();
 
     const config = ctx.reportConfig(.stderr);
-    reporting.renderReportToTerminal(&report, ctx.io.stderr(), ColorPalette.ANSI, config) catch {};
+    reporting.renderReportToTerminal(&report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config) catch {};
 }
 
 // Tests
@@ -466,6 +475,20 @@ test "CliCtx accumulates problems" {
     try std.testing.expect(ctx.hasErrors());
     try std.testing.expectEqual(@as(usize, 1), ctx.problemCount());
     try std.testing.expectEqual(@as(u8, 1), ctx.exitCode());
+}
+
+test "CliCtx no_color selects plain reporting" {
+    const allocator = std.testing.allocator;
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(allocator, allocator, &io, .build);
+    ctx.setNoColor(true);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(ColorMode.never, ctx.colorPolicy().mode);
+    const config = ctx.reportConfig(.stderr);
+    try std.testing.expect(!config.shouldUseColors());
+    try std.testing.expectEqual(ColorPalette.NO_COLOR, reporting.ColorUtils.getPaletteForConfig(config));
 }
 
 test "CliCtx counts errors vs warnings correctly" {

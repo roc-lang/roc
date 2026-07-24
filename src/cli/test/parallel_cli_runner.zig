@@ -5267,6 +5267,7 @@ fn parityCompareVerbs(
     timeout_ms: u64,
     fixture: []const u8,
     expected_exits: [4]u32,
+    expect_no_ansi: bool,
 ) ?TestResult {
     const build_out = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "parity-build-out" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate build output path: {}", .{err});
@@ -5277,10 +5278,10 @@ fn parityCompareVerbs(
         name: []const u8,
         args: []const []const u8,
     }{
-        .{ .name = "check", .args = &.{ "check", "--no-cache" } },
-        .{ .name = "build", .args = &.{ "build", "--no-cache", build_out_arg } },
-        .{ .name = "run", .args = &.{"--no-cache"} },
-        .{ .name = "test", .args = &.{ "test", "--no-cache" } },
+        .{ .name = "check", .args = &.{ "--no-color", "check", "--no-cache" } },
+        .{ .name = "build", .args = &.{ "--no-color", "build", "--no-cache", build_out_arg } },
+        .{ .name = "run", .args = &.{ "--no-color", "--no-cache" } },
+        .{ .name = "test", .args = &.{ "--no-color", "test", "--no-cache" } },
     };
 
     var normalized: [verbs.len][]u8 = undefined;
@@ -5294,6 +5295,9 @@ fn parityCompareVerbs(
             .failure => |failure| return failure,
             .result => |result| result,
         };
+        if (expect_no_ansi) {
+            if (expectNoAnsiInPreSummary(allocator, timer, verb.name, result)) |failure| return failure;
+        }
         normalized[i] = parityNormalizedReports(allocator, result.stderr) catch |err|
             return customInfraFailure(allocator, timer, "parity normalization failed: {}", .{err});
     }
@@ -5313,11 +5317,11 @@ fn parityCompareVerbs(
 
 fn customPipelineParityDiagnostics(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // Warnings retain the shared exit-2 policy after every verb completes.
-    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/warn_app/main.roc", .{ 2, 2, 2, 2 })) |failure| return failure;
+    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/warn_app/main.roc", .{ 2, 2, 2, 2 }, true)) |failure| return failure;
     // A build completes and emits its executable despite the diagnostic; check
     // reports failure, run reaches the checked error, and test reports failure
     // only after executing all independent roots.
-    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/error_app/main.roc", .{ 1, 0, 1, 1 })) |failure| return failure;
+    if (parityCompareVerbs(io, allocator, env, timer, timeout_ms, "test/cli/pipeline_parity/error_app/main.roc", .{ 1, 0, 1, 1 }, false)) |failure| return failure;
     return null;
 }
 
