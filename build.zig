@@ -160,6 +160,7 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
 /// Returns the optimal target query for release builds on the current host.
 /// - Linux: Uses musl for fully static binaries
 /// - x86_64: Uses x86_64_v3 for modern CPU features (AVX2, BMI2, etc.)
+/// - aarch64: Uses the baseline CPU so the binary runs on every aarch64 device
 fn getReleaseTargetQuery() std.Target.Query {
     var query: std.Target.Query = .{};
 
@@ -168,9 +169,18 @@ fn getReleaseTargetQuery() std.Target.Query {
         query.abi = .musl;
     }
 
-    // Use x86_64_v3 CPU model for x86_64 (enables AVX2, BMI2, etc.)
-    if (builtin.target.cpu.arch == .x86_64) {
-        query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+    // An otherwise-empty query means "native CPU", which bakes the build
+    // machine's CPU features into the released binary. Pin the CPU model
+    // explicitly so releases stay portable.
+    switch (builtin.target.cpu.arch) {
+        // Use x86_64_v3 CPU model for x86_64 (enables AVX2, BMI2, etc.)
+        .x86_64 => query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 },
+        // Baseline aarch64 is armv8.0-a, which every aarch64 device supports.
+        // Building natively on an armv9 CI runner emitted SVE (plus LSE and
+        // RCPC) instructions, which crashed with SIGILL on older phones and
+        // Raspberry Pis. On macOS, baseline is apple_m1, i.e. all Apple Silicon.
+        .aarch64 => query.cpu_model = .baseline,
+        else => {},
     }
 
     return query;
