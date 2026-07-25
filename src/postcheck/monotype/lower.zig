@@ -20735,7 +20735,7 @@ const BodyContext = struct {
             // report. A closed row without it is checker-authored proof this
             // payload is converter-fed and never parsed from source text, so
             // the impossible parse lowers to the failure mapping instead of
-            // generating helpers over unparseable internals.
+            // generating helpers over unparsable internals.
             var required_visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
             defer required_visited.deinit();
             if (try self.parserShapeNeedsRequiredFieldError(payload_ty, &required_visited) and
