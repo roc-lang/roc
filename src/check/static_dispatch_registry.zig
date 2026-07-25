@@ -23,6 +23,7 @@ const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Var = types.Var;
+pub const NumericDefaultPhase = types.literal_defaulting.NumericDefaultPhase;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const CheckedExprId = checked_ids.CheckedExprId;
 const CheckedStatementId = checked_ids.CheckedStatementId;
@@ -1047,6 +1048,10 @@ pub const EvidenceParamRecord = struct {
     /// Checker-recorded derived implementation permitted when the concrete
     /// dispatcher has no registered method target.
     structural: ?StructuralKind = null,
+    /// A pathless literal/defaultable dispatcher that checking explicitly left
+    /// for monomorphic specialization. Compiler-generated edges materialize
+    /// this default instead of projecting a callable path that does not exist.
+    pathless_default_phase: ?NumericDefaultPhase = null,
     path: artifact_serialize.Span = .{},
 };
 

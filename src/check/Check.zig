@@ -18953,7 +18953,10 @@ fn dispatchTargetMethodVar(
     const record_scheme_root = cycle_method_expr_var orelse method_type_var;
     var target_requires_record = cycle_method_expr_var != null or self.localProcedureMethodBinding(method_lookup);
     if (!target_requires_record and method_lookup.is_this_module) {
-        target_requires_record = try self.schemeHasEvidenceParams(method_type_var);
+        // Same-module targets can own body-introduced evidence params (for
+        // example pathless literal conversions) that are not visible from the
+        // surface method type alone.
+        target_requires_record = true;
     }
     if (target_requires_record and
         self.cir.scheme_uses.items.items.len == records_before)

@@ -54,7 +54,10 @@ pub const CaptureField = struct {
     binder: ?check.CheckedModule.PatternBinderId,
     capture_id: ?check.CheckedModule.CaptureId = null,
     checked_capture_id: ?check.CheckedModule.CaptureId = null,
+    /// Type the function body observes when it reads this capture.
     ty: TypeId,
+    /// Type stored in the capture record field.
+    storage_ty: TypeId,
 };
 
 /// Tag-union variant type entry.
@@ -311,6 +314,7 @@ pub const Store = struct {
                     const field = GuardedList.at(field_slice, index);
                     writeU32(hasher, @intFromEnum(field.symbol));
                     self.writeTypeDigest(name_store, hasher, field.ty);
+                    self.writeTypeDigest(name_store, hasher, field.storage_ty);
                 }
             },
             .tuple => |items| {
@@ -471,7 +475,7 @@ test "lambda mono empty spans use shared empty descriptor" {
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
     const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
-    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit }});
+    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit, .storage_ty = unit }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(3), .checked_name = @enumFromInt(3), .payloads = nonempty_span }});
     const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .source = @enumFromInt(4), .target = @enumFromInt(40), .capture_ty = unit }});
     try std.testing.expect(nonempty_span.len == 1);

@@ -1205,6 +1205,7 @@ fn testSpecIdentityWithModule(
             .proc_base = 0,
             .template = 1,
         } },
+        .method_scope = .{},
         .source_fn_ty_digest = source_digest,
         .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),
         .request_fn_ty_digest = request_digest,

@@ -19,7 +19,7 @@ Format := [Default].{
 			Continue({ rest : State }),
 			Done({ rest : State }),
 		],
-		[MissingRequired],
+		[MissingRequired, MissingRequiredField(Str)],
 	)
 	parse_record_field = |_, _, state|
 		match state {
@@ -27,7 +27,7 @@ Format := [Default].{
 			Done => Ok(Done({ rest: state }))
 		}
 
-	skip_record_field : Format, State -> Try(State, [MissingRequired])
+	skip_record_field : Format, State -> Try(State, [MissingRequired, MissingRequiredField(Str)])
 	skip_record_field = |_, _| Ok(Done)
 
 	missing_record_field : Format, Str, State -> [MissingRequired]
@@ -36,9 +36,9 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parse : State -> Try(a, [MissingRequired])
+parse : State -> Try(a, [MissingRequired, MissingRequiredField(Str)])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired, MissingRequiredField(Str)])),
 	]
 parse = |input| {
 	Shape : a
@@ -59,7 +59,7 @@ expect {
 		count_utf8_bytes = |token| Str.count_utf8_bytes(token.raw)
 	}
 
-	result : Try({ token : Token }, [MissingRequired])
+	result : Try({ token : Token }, [MissingRequired, MissingRequiredField(Str)])
 	result = parse(State.Present("value"))
 
 	match result {

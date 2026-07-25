@@ -148,6 +148,7 @@ const CaptureBinding = struct {
     record: Ast.ExprId,
     symbol: Common.Symbol,
     ty: Type.TypeId,
+    storage_ty: Type.TypeId,
 };
 
 const CaptureAbi = SpecializationCaptureAbi;
@@ -609,6 +610,7 @@ const Lowerer = struct {
                 .record = capture_expr,
                 .symbol = capture.symbol,
                 .ty = field.ty,
+                .storage_ty = field.storage_ty,
             });
         }
     }
@@ -1315,12 +1317,14 @@ const Lowerer = struct {
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
+            const ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = try self.lowerType(capture.ty),
+                .ty = ty,
+                .storage_ty = ty,
             };
         }
         const ty = try self.program.types.add(.{ .capture_record = try self.program.types.addCaptureFields(fields) });

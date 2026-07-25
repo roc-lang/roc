@@ -328,6 +328,9 @@ pub const Interpreter = struct {
     rc_plans: std.AutoHashMapUnmanaged(u64, layout_mod.RcHelperPlan) = .{},
     struct_field_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcFieldPlan) = .{},
     tag_variant_plans: std.AutoHashMapUnmanaged(u64, ?layout_mod.RcHelperKey) = .{},
+    /// Debug-only validation state for `box_alloc_zeroed` cells while their
+    /// payload is intentionally zero-filled during recursive value construction.
+    inflight_zeroed_box_payloads: std.AutoHashMapUnmanaged(usize, void) = .{},
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
@@ -593,6 +596,7 @@ pub const Interpreter = struct {
         self.tag_variant_plans.deinit(self.allocator);
         self.struct_field_plans.deinit(self.allocator);
         self.rc_plans.deinit(self.allocator);
+        self.inflight_zeroed_box_payloads.deinit(self.allocator);
         self.allocator.free(self.rc_presence);
         deinitFramePlans(self.allocator, self.frame_plans);
     }
@@ -990,6 +994,7 @@ pub const Interpreter = struct {
         self.failed_stmt_region = base.Region.zero();
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
+        if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
@@ -1057,6 +1062,7 @@ pub const Interpreter = struct {
         stmt_id: ?CFStmtId,
         local_id: LocalId,
         value: Value,
+        allow_zeroed_box_payload_holes: bool,
     ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
         const normalized_value = try self.normalizeFloatNanValue(value, layout_idx);
@@ -1064,7 +1070,7 @@ pub const Interpreter = struct {
         if (builtin.mode == .Debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
             defer visited.deinit(self.evalAllocator());
-            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, normalized_value, layout_idx, &visited);
+            self.debugAssertValueMatchesLayout(frame.proc_id, stmt_id, local_id, normalized_value, layout_idx, &visited, allow_zeroed_box_payload_holes);
         }
 
         frame.setLocal(local_id, normalized_value);
@@ -1137,9 +1143,10 @@ pub const Interpreter = struct {
         value: Value,
         layout_idx: layout_mod.Idx,
         visited: *std.ArrayList(DebugVisitedValue),
+        allow_zeroed_box_payload_holes: bool,
     ) void {
         var path_buf: [96]DebugValuePathStep = undefined;
-        self.debugAssertValueMatchesLayoutAt(proc_id, stmt_id, local_id, value, layout_idx, visited, &path_buf, 0);
+        self.debugAssertValueMatchesLayoutAt(proc_id, stmt_id, local_id, value, layout_idx, visited, &path_buf, 0, allow_zeroed_box_payload_holes);
     }
 
     fn debugAssertValueMatchesLayoutAt(
@@ -1152,6 +1159,7 @@ pub const Interpreter = struct {
         visited: *std.ArrayList(DebugVisitedValue),
         path_buf: []DebugValuePathStep,
         path_len: usize,
+        allow_zeroed_box_payload_holes: bool,
     ) void {
         if (builtin.mode != .Debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
@@ -1189,6 +1197,7 @@ pub const Interpreter = struct {
                     // legal in-flight hole (zero-filled cells await their child
                     // value); everywhere else it is a real bug.
                     if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    if (allow_zeroed_box_payload_holes and path_len > 0) return;
                     self.debugValueShapePanicAt(
                         proc_id,
                         stmt_id,
@@ -1209,6 +1218,9 @@ pub const Interpreter = struct {
                 visited.append(self.evalAllocator(), key) catch {
                     self.invariantFailed("LIR/interpreter invariant violated: out of memory while validating value shape", .{});
                 };
+                const allow_nested_zeroed_box_payload_holes =
+                    allow_zeroed_box_payload_holes or
+                    self.inflight_zeroed_box_payloads.contains(@intFromPtr(data_ptr));
                 var next_len = path_len;
                 if (next_len < path_buf.len) {
                     path_buf[next_len] = .{ .box_payload = layout_val.getIdx() };
@@ -1223,6 +1235,7 @@ pub const Interpreter = struct {
                     visited,
                     path_buf,
                     next_len,
+                    allow_nested_zeroed_box_payload_holes,
                 );
             },
             .erased_callable => {
@@ -1282,6 +1295,7 @@ pub const Interpreter = struct {
                         visited,
                         path_buf,
                         next_len,
+                        allow_zeroed_box_payload_holes,
                     );
                 }
             },
@@ -1323,6 +1337,7 @@ pub const Interpreter = struct {
                         visited,
                         path_buf,
                         next_len,
+                        allow_zeroed_box_payload_holes,
                     );
                 }
             },
@@ -1370,6 +1385,7 @@ pub const Interpreter = struct {
                     visited,
                     path_buf,
                     next_len,
+                    allow_zeroed_box_payload_holes,
                 );
             },
             .closure => {
@@ -1394,22 +1410,7 @@ pub const Interpreter = struct {
         path: []const DebugValuePathStep,
         comptime reason: []const u8,
     ) noreturn {
-        if (comptime builtin.target.os.tag != .freestanding) {
-            debugPrint("LIR/interpreter value path:", .{});
-            for (path) |step| {
-                switch (step) {
-                    .box_payload => |payload_layout| debugPrint(" .box(layout={d})", .{@intFromEnum(payload_layout)}),
-                    .list_elem => |list| debugPrint(" [{d}:layout={d}]", .{ list.index, @intFromEnum(list.elem_layout) }),
-                    .struct_field => |field| debugPrint(" .field(sorted={d}, semantic={d}, layout={d})", .{ field.sorted_index, field.semantic_index, @intFromEnum(field.field_layout) }),
-                    .tag_payload => |tag| debugPrint(" .tag_payload(index={d}, layout={d})", .{ tag.tag_index, @intFromEnum(tag.payload_layout) }),
-                }
-            }
-            debugPrint("\n", .{});
-            var visited_layouts = std.ArrayList(u32).empty;
-            defer visited_layouts.deinit(self.evalAllocator());
-            debugPrint("LIR/interpreter local layout tree:\n", .{});
-            self.debugPrintLayoutShapeLines(self.store.getLocal(local_id).layout_idx, 0, &visited_layouts);
-        }
+        _ = path;
         self.debugValueShapePanic(proc_id, stmt_id, local_id, layout_idx, reason);
     }
 
@@ -1425,36 +1426,6 @@ pub const Interpreter = struct {
             @trap();
         } else {
             if (stmt_id) |id| {
-                const center = @as(usize, @intFromEnum(id));
-                const stmt_count = self.store.cfStmtCount();
-                const start = center -| 20;
-                const end = @min(stmt_count, center + 21);
-                debugPrint("LIR/interpreter stmt window around failing stmt {d}:\n", .{@intFromEnum(id)});
-                for (start..end) |i| {
-                    const window_id: CFStmtId = @enumFromInt(@as(u32, @intCast(i)));
-                    debugPrint("  stmt {d}: {any}\n", .{ i, self.store.getCFStmt(window_id) });
-                }
-
-                switch (self.store.getCFStmt(id)) {
-                    .assign_call => |assign| {
-                        const callee_proc = self.store.getProcSpec(assign.proc);
-                        debugPrint(
-                            "LIR/interpreter failing assign_call callee proc {d}: name={d} body={any} ret_layout={d} hosted={any}\n",
-                            .{
-                                @intFromEnum(assign.proc),
-                                callee_proc.name.raw(),
-                                callee_proc.body,
-                                @intFromEnum(callee_proc.ret_layout),
-                                callee_proc.hosted,
-                            },
-                        );
-                        if (callee_proc.body) |body| {
-                            self.debugPrintStmtChain(body, 20);
-                        }
-                    },
-                    else => {},
-                }
-
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
                     .{
@@ -1648,53 +1619,6 @@ pub const Interpreter = struct {
         }
     }
 
-    fn debugPrintLayoutShapeLines(
-        self: *LirInterpreter,
-        layout_idx: layout_mod.Idx,
-        indent: usize,
-        visited: *std.ArrayList(u32),
-    ) void {
-        for (visited.items) |existing| {
-            if (existing == @intFromEnum(layout_idx)) {
-                debugPrint("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
-                return;
-            }
-        }
-
-        visited.append(self.evalAllocator(), @intFromEnum(layout_idx)) catch return;
-        defer _ = visited.pop();
-
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .list_of_zst, .erased_callable => {},
-            .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
-            .struct_ => {
-                const info = self.layout_store.getStructInfo(layout_val);
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    debugPrint("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
-                    self.debugPrintLayoutShapeLines(field.layout, indent + 2, visited);
-                }
-            },
-            .tag_union => {
-                const info = self.layout_store.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |i| {
-                    const variant = info.variants.get(@intCast(i));
-                    debugPrint("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
-                    self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
-                }
-            },
-        }
-    }
-
-    fn debugIndent(indent: usize) []const u8 {
-        const spaces = "                                ";
-        return spaces[0..@min(indent * 2, spaces.len)];
-    }
-
     fn evalProcSpec(
         self: *LirInterpreter,
         proc_id: LirProcSpecId,
@@ -1817,6 +1741,7 @@ pub const Interpreter = struct {
                 null,
                 param,
                 try self.materializeLocalValue(coerced, param_layout),
+                false,
             );
         }
         const body = self.requireProcBody(proc_id, proc_spec);
@@ -1833,7 +1758,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false);
                 }
                 const coerced_result = try self.coerceExplicitRefValueToLayout(
                     raw_result,
@@ -1843,7 +1768,7 @@ pub const Interpreter = struct {
                 if (builtin.mode == .Debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
-                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited);
+                    self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false);
                 }
                 break :blk try self.materializeLocalValue(coerced_result, proc_spec.ret_layout);
             },
@@ -1900,11 +1825,11 @@ pub const Interpreter = struct {
                 .assign_ref => |assign| {
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
-                    try self.setLocalChecked(frame, current, assign.target, value);
+                    try self.setLocalChecked(frame, current, assign.target, value, false);
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx), false);
                     current = assign.next;
                 },
                 .init_uninitialized => |uninit| {
@@ -1933,6 +1858,7 @@ pub const Interpreter = struct {
                             self.store.getProcSpec(assign.proc).ret_layout,
                             self.store.getLocal(assign.target).layout_idx,
                         ),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -1960,6 +1886,7 @@ pub const Interpreter = struct {
                             result.layout,
                             self.store.getLocal(assign.target).layout_idx,
                         ),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -1969,6 +1896,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign.target).layout_idx),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -1976,7 +1904,7 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalLowLevel(.{
+                    const value = try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
@@ -1984,15 +1912,16 @@ pub const Interpreter = struct {
                         .callable_proc = null,
                         .unique_args = assign.unique_args,
                         .interchangeable = assign.interchangeable,
-                    }));
+                    });
+                    try self.setLocalChecked(frame, current, assign.target, value, assign.op == .box_alloc_zeroed);
                     current = assign.next;
                 },
                 .assign_list => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx), false);
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx));
+                    try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx), false);
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
@@ -2002,7 +1931,7 @@ pub const Interpreter = struct {
                         assign.discriminant,
                         assign.payload,
                         self.store.getLocal(assign.target).layout_idx,
-                    ));
+                    ), false);
                     current = assign.next;
                 },
                 .store_struct => |assign| {
@@ -2035,6 +1964,7 @@ pub const Interpreter = struct {
                         current,
                         assign.target,
                         try self.materializeLocalValue(normalized, target_layout),
+                        false,
                     );
                     current = assign.next;
                 },
@@ -3872,6 +3802,7 @@ pub const Interpreter = struct {
                         stmt_id,
                         local,
                         try self.makeStrCaptureValue(source_rs, source_bytes, result.capture_start, result.capture_end),
+                        false,
                     );
                 },
             }
@@ -7988,6 +7919,9 @@ pub const Interpreter = struct {
         if (box_info.elem_size > 0) {
             @memset(data_ptr[0..box_info.elem_size], 0);
         }
+        if (builtin.mode == .Debug) {
+            try self.inflight_zeroed_box_payloads.put(self.allocator, @intFromPtr(data_ptr), {});
+        }
         const boxed = try self.alloc(ret_layout);
         self.writeBoxedDataPointer(boxed, data_ptr);
         return boxed;
@@ -8006,6 +7940,9 @@ pub const Interpreter = struct {
             }
             const dest: [*]u8 = @ptrFromInt(raw_ptr);
             @memcpy(dest[0..size], value.ptr[0..size]);
+            if (builtin.mode == .Debug) {
+                _ = self.inflight_zeroed_box_payloads.remove(raw_ptr);
+            }
         }
         return Value.zst;
     }

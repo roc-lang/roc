@@ -183,6 +183,7 @@ const Solver = struct {
             });
         }
 
+        try self.markForcedDynamicIteratorCallables();
         try self.closeUnfilledCallableSlots();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
@@ -961,6 +962,21 @@ const Solver = struct {
         return context.solved_ret;
     }
 
+    fn markForcedDynamicIteratorCallables(self: *Solver) Allocator.Error!void {
+        self.program.types.compressAllRoots();
+        const count = self.program.types.vars.items.len;
+        for (0..count) |index| {
+            const ty: Type.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
+            if (self.program.types.rootCompressed(ty) != ty) continue;
+            switch (self.program.types.get(ty)) {
+                .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                    try self.markErasedCallablesReachedByType(ty);
+                },
+                else => {},
+            }
+        }
+    }
+
     fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
         if (a == b) return true;
         return try self.lifted.types.typeEql(self.allocator, self.lifted.names, a, b);
@@ -1004,7 +1020,14 @@ const Solver = struct {
 
         switch (self.program.types.get(root)) {
             .link => Common.invariant("Lambda Solved root returned a link"),
-            .unbound, .forall, .primitive, .zst, .erased => {},
+            .unbound, .forall, .primitive, .zst => {},
+            .erased => |erased| {
+                for (self.program.types.memberSpan(erased.members)) |member| {
+                    for (self.program.types.captureSpan(member.captures)) |capture| {
+                        try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
+                    }
+                }
+            },
             .func => |func| {
                 const erased = try self.program.types.add(.{ .erased = .{
                     .source_fn_ty = try self.solvedTypeDigest(root),
@@ -1637,9 +1660,10 @@ const Solver = struct {
         }
 
         try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
+        const dynamic = if (left_dynamic) left else right;
         const other = if (left_dynamic) right else left;
         switch (other.def.iterator_representation) {
-            .none => {},
+            .none => try self.relateForcedDynamicPublicEvidence(dynamic, other),
             .minted => try self.unifyGeneratedIteratorBackings(left, right),
             .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
         }
@@ -1649,6 +1673,19 @@ const Solver = struct {
             self.program.types.set(left_ty, .{ .link = right_ty });
         }
         return true;
+    }
+
+    fn relateForcedDynamicPublicEvidence(self: *Solver, dynamic: anytype, public: anytype) Allocator.Error!void {
+        const public_backing = public.backing orelse return;
+        const dynamic_backing = dynamic.backing orelse
+            Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
+        if (public_backing.use != dynamic_backing.use) {
+            Common.invariant("forced-dynamic iterator relation found different backing uses");
+        }
+        if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
+            Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
+        }
+        try self.relateGeneratedPrivateEvidence(public_backing.ty, dynamic_backing.ty);
     }
 
     fn unifyGeneratedIteratorJoin(

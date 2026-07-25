@@ -4176,6 +4176,11 @@ const Cloner = struct {
     /// argument values for later parameter decomposition instead of cloning
     /// the argument expressions directly.
     let_case_builds: std.ArrayList(*LetCaseBuild),
+    /// Fresh output locals bound by the recursive let statement whose value is
+    /// currently cloning. A callable worker created while filling such a value
+    /// must capture the recursive slot itself, not a field projected from it,
+    /// so construction does not read the still-zeroed recursive payload.
+    active_recursive_value_locals: std.AutoHashMap(Ast.LocalId, void),
     /// Bindings created while producing a structured value, not yet emitted.
     /// Each holds a fresh local the value's leaves reference. They are
     /// emitted — oldest outermost, preserving evaluation order — at the
@@ -4258,6 +4263,7 @@ const Cloner = struct {
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
+            .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
             .pending = .empty,
             .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
             .effect_marks = 0,
@@ -4290,6 +4296,7 @@ const Cloner = struct {
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
+            .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
             .pending = .empty,
             .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
             .effect_marks = 0,
@@ -4325,6 +4332,7 @@ const Cloner = struct {
         self.loop_result_tuple_subsets.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
+        self.active_recursive_value_locals.deinit();
         self.subst.deinit();
     }
 
@@ -5034,7 +5042,8 @@ const Cloner = struct {
                     .static_data = candidate.static_data,
                     .runtime = runtime,
                 } };
-            },            .tag => |tag| {
+            },
+            .tag => |tag| {
                 assertStructuralConstructionType(self.pass.program, expr.ty);
                 const payload_exprs = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(tag.payloads));
                 defer self.pass.allocator.free(payload_exprs);
@@ -8411,8 +8420,14 @@ const Cloner = struct {
         args_span: Ast.Span(Ast.ExprId),
     ) Common.LowerError!Value {
         var callable_call_size: usize = 0;
-        for (callable.captures) |capture| callable_call_size += self.knownConstructorSize(capture.value);
-        callable_call_size += self.argsKnownConstructorSize(args_span);
+        for (callable.captures) |capture| callable_call_size +|= self.knownConstructorSize(capture.value);
+        callable_call_size +|= self.argsKnownConstructorSize(args_span);
+        if (callable_call_size == known_constructor_size_cap) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
         for (self.inline_stack.items) |active| {
             if (active.fn_id != callable.fn_id) continue;
             if (callable_call_size == 0 or callable_call_size >= active.known_size) {
@@ -8500,7 +8515,10 @@ const Cloner = struct {
         captures_span: Ast.Span(Ast.CaptureOperand),
         original_expr: Ast.ExprId,
     ) Common.LowerError!Value {
-        const direct_call_size = self.argsKnownConstructorSize(args_span) + self.captureOperandsKnownConstructorSize(captures_span);
+        const direct_call_size = self.argsKnownConstructorSize(args_span) +| self.captureOperandsKnownConstructorSize(captures_span);
+        if (direct_call_size == known_constructor_size_cap) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         for (self.inline_stack.items) |active| {
             if (active.fn_id != callee) continue;
             if (direct_call_size == 0 or direct_call_size >= active.known_size) {
@@ -8897,6 +8915,98 @@ const Cloner = struct {
         }
     }
 
+    fn markActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) Allocator.Error!void {
+        const pat = self.pass.program.getPat(pat_id);
+        switch (pat.data) {
+            .bind => |local| try self.active_recursive_value_locals.put(local, {}),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => {},
+            .as => |as| {
+                try self.markActiveRecursiveValuePat(as.pattern);
+                try self.active_recursive_value_locals.put(as.local, {});
+            },
+            .record => |fields| {
+                const record_fields = self.pass.program.recordDestructSpan(fields);
+                for (0..record_fields.len) |index| {
+                    try self.markActiveRecursiveValuePat(GuardedList.at(record_fields, index).pattern);
+                }
+            },
+            .tuple => |items| {
+                const children = self.pass.program.patSpan(items);
+                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .tag => |tag| {
+                const children = self.pass.program.patSpan(tag.payloads);
+                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .nominal => |backing| try self.markActiveRecursiveValuePat(backing),
+            .list => |list| {
+                const children = self.pass.program.patSpan(list.patterns);
+                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| try self.markActiveRecursiveValuePat(rest_pattern);
+                }
+            },
+            .str_pattern => |str| {
+                const steps = self.pass.program.strPatternStepSpan(str.steps);
+                for (0..steps.len) |index| {
+                    if (GuardedList.at(steps, index).capture) |capture| try self.markActiveRecursiveValuePat(capture);
+                }
+            },
+        }
+    }
+
+    fn unmarkActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) void {
+        const pat = self.pass.program.getPat(pat_id);
+        switch (pat.data) {
+            .bind => |local| _ = self.active_recursive_value_locals.remove(local),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => {},
+            .as => |as| {
+                self.unmarkActiveRecursiveValuePat(as.pattern);
+                _ = self.active_recursive_value_locals.remove(as.local);
+            },
+            .record => |fields| {
+                const record_fields = self.pass.program.recordDestructSpan(fields);
+                for (0..record_fields.len) |index| {
+                    self.unmarkActiveRecursiveValuePat(GuardedList.at(record_fields, index).pattern);
+                }
+            },
+            .tuple => |items| {
+                const children = self.pass.program.patSpan(items);
+                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .tag => |tag| {
+                const children = self.pass.program.patSpan(tag.payloads);
+                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .nominal => |backing| self.unmarkActiveRecursiveValuePat(backing),
+            .list => |list| {
+                const children = self.pass.program.patSpan(list.patterns);
+                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| self.unmarkActiveRecursiveValuePat(rest_pattern);
+                }
+            },
+            .str_pattern => |str| {
+                const steps = self.pass.program.strPatternStepSpan(str.steps);
+                for (0..steps.len) |index| {
+                    if (GuardedList.at(steps, index).capture) |capture| self.unmarkActiveRecursiveValuePat(capture);
+                }
+            },
+        }
+    }
+
     const BinderCloneMode = enum {
         /// The surrounding clone has already replaced every use of this
         /// binding with a known value. The emitted pattern still needs its own
@@ -9004,10 +9114,14 @@ const Cloner = struct {
                 break :blk .{ .uninitialized = try self.clonePat(pat, .bind_runtime) };
             },
             .let_ => |let_| blk: {
+                if (let_.recursive) try self.markActiveRecursiveValuePat(let_.pat);
+                defer if (let_.recursive) self.unmarkActiveRecursiveValuePat(let_.pat);
                 const recursive_pat = if (let_.recursive)
                     try self.clonePat(let_.pat, .bind_runtime)
                 else
                     null;
+                if (recursive_pat) |pat| try self.markActiveRecursiveValuePat(pat);
+                defer if (recursive_pat) |pat| self.unmarkActiveRecursiveValuePat(pat);
                 const value = try self.cloneExprValue(let_.value);
                 const value_expr = try self.materialize(value);
                 if (try self.bindPatToReusableValue(let_.pat, value) == .match) {
@@ -9248,6 +9362,50 @@ const Cloner = struct {
         return try self.materializeCallableWithCaptures(callable.ty, callable.fn_id, fn_.captures, callable.captures);
     }
 
+    fn activeRecursiveProjectionRoot(self: *Cloner, value: Value) ?Ast.ExprId {
+        const expr_id = switch (value) {
+            .expr => |expr| expr,
+            else => return null,
+        };
+        switch (self.pass.program.getExpr(expr_id).data) {
+            .field_access,
+            .tuple_access,
+            => {},
+            else => return null,
+        }
+        return self.activeRecursiveProjectionBase(expr_id);
+    }
+
+    fn activeRecursiveProjectionBase(self: *Cloner, expr_id: Ast.ExprId) ?Ast.ExprId {
+        return switch (self.pass.program.getExpr(expr_id).data) {
+            .local => |local| if (self.active_recursive_value_locals.contains(local)) expr_id else null,
+            .field_access => |field| self.activeRecursiveProjectionBase(field.receiver),
+            .tuple_access => |access| self.activeRecursiveProjectionBase(access.tuple),
+            else => null,
+        };
+    }
+
+    fn cloneProjectionReplacingRoot(
+        self: *Cloner,
+        source: Ast.ExprId,
+        root: Ast.ExprId,
+        replacement: Ast.ExprId,
+    ) Common.LowerError!Ast.ExprId {
+        if (source == root) return replacement;
+        const expr = self.pass.program.getExpr(source);
+        return switch (expr.data) {
+            .field_access => |field| try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
+                .receiver = try self.cloneProjectionReplacingRoot(field.receiver, root, replacement),
+                .field = field.field,
+            } } }),
+            .tuple_access => |access| try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
+                .tuple = try self.cloneProjectionReplacingRoot(access.tuple, root, replacement),
+                .elem_index = access.elem_index,
+            } } }),
+            else => Common.invariant("recursive projection replacement reached a non-projection before its root"),
+        };
+    }
+
     fn materializeCallableWorker(self: *Cloner, callable: CallableValue) Common.LowerError!Ast.ExprId {
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
         const source_fn = self.pass.program.getFn(source_fn_id);
@@ -9279,11 +9437,19 @@ const Cloner = struct {
         // of the rewritten operand that this worker body consumes.
         const worker_captures = try self.pass.allocator.alloc(Ast.TypedLocal, source_captures.len);
         defer self.pass.allocator.free(worker_captures);
+        const worker_capture_values = try self.pass.allocator.alloc(CaptureValue, source_captures.len);
+        defer self.pass.allocator.free(worker_capture_values);
+        const worker_body_values = try self.pass.allocator.alloc(Value, source_captures.len);
+        defer self.pass.allocator.free(worker_body_values);
         for (source_captures, 0..) |source_capture, index| {
             const id = self.pass.program.captureIdOfLocal(source_capture.local);
             const capture_value = callableCaptureValueForId(callable.captures, id) orelse
                 Common.invariant("rewritten callable had no value for a source capture slot");
-            const capture_ty = valueType(self.pass.program, capture_value);
+            const projection_root = self.activeRecursiveProjectionRoot(capture_value);
+            const capture_ty = if (projection_root) |root|
+                self.pass.program.getExpr(root).ty
+            else
+                valueType(self.pass.program, capture_value);
             const source_local = self.pass.program.getLocal(source_capture.local);
             const local = try self.pass.program.addLocalWithCaptureIdentity(
                 self.pass.symbols.fresh(),
@@ -9293,6 +9459,21 @@ const Cloner = struct {
                 source_local.checked_capture_id,
             );
             worker_captures[index] = .{ .local = local, .ty = capture_ty };
+            const local_expr = try self.addExpr(.{
+                .ty = capture_ty,
+                .data = .{ .local = local },
+            });
+            if (projection_root) |root| {
+                const source_expr = switch (capture_value) {
+                    .expr => |expr| expr,
+                    else => unreachable,
+                };
+                worker_capture_values[index] = .{ .id = id, .value = .{ .expr = root } };
+                worker_body_values[index] = .{ .expr = try self.cloneProjectionReplacingRoot(source_expr, root, local_expr) };
+            } else {
+                worker_capture_values[index] = .{ .id = id, .value = capture_value };
+                worker_body_values[index] = .{ .expr = local_expr };
+            }
         }
         const captures_span = try self.pass.program.addTypedLocalSpan(worker_captures);
 
@@ -9326,12 +9507,7 @@ const Cloner = struct {
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
 
-        for (source_captures, worker_captures) |source_capture, worker_capture| {
-            const local_expr = try self.addExpr(.{
-                .ty = worker_capture.ty,
-                .data = .{ .local = worker_capture.local },
-            });
-            const capture_value: Value = .{ .expr = local_expr };
+        for (source_captures, worker_body_values) |source_capture, capture_value| {
             try self.subst.put(self.pass.program, source_capture.local, capture_value);
             // Different Monotype specializations of one lexical capture can
             // leave distinct local ids with the same binder and monomorphic
@@ -9371,7 +9547,7 @@ const Cloner = struct {
             callable.ty,
             worker_fn_id,
             captures_span,
-            callable.captures,
+            worker_capture_values,
         );
     }
 

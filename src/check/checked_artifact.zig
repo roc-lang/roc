@@ -13933,10 +13933,21 @@ const EvidencePass = struct {
             try self.evidence_params_pool.append(self.allocator, .{
                 .method = try self.names.internMethodIdent(idents, param.constraint.fn_name),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
+                .pathless_default_phase = if (param.path.len == 0) self.pathlessDefaultPhaseForParam(param) else null,
                 .path = .{ .start = path_start, .len = @intCast(param.path.len) },
             });
         }
         return .{ .start = pool_start, .len = @intCast(params.len) };
+    }
+
+    fn pathlessDefaultPhaseForParam(self: *EvidencePass, param: EvidenceParam) ?NumericDefaultPhase {
+        const resolved = self.types.resolveVar(param.dispatcher_var);
+        const constraints = switch (resolved.desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            else => return null,
+        };
+        return numericDefaultPhaseForConstraints(self.module, constraints);
     }
 
     /// The canonical `(depth, index)` of `dispatcher_root`'s `method`
@@ -14382,7 +14393,7 @@ const EvidencePass = struct {
         if (params.len == 0) return .none;
         for (params) |param| {
             const path = paths[param.path.start .. param.path.start + param.path.len];
-            if (path.len == 0) return .requires_record;
+            if (path.len == 0 and param.pathless_default_phase == null) return .requires_record;
         }
         return .from_callable;
     }
@@ -14392,9 +14403,10 @@ const EvidencePass = struct {
         return procedureEvidenceSchemaForTemplate(target_view.table, &target_view.template);
     }
 
-    /// Build the evidence node for `target`. The target's producer-recorded
-    /// schema, not record presence, decides whether nested evidence is derived
-    /// from its exact callable relation or consumed from a checked record.
+    /// Build the evidence node for `target`. A checker-recorded dispatch-target
+    /// record is the exact evidence selected at the discharge edge; compiler-
+    /// generated edges that have no record derive evidence from the target
+    /// schema and concrete callable relation.
     fn evidenceNodeForTarget(
         self: *EvidencePass,
         target: static_dispatch.MethodTarget,
@@ -14412,20 +14424,6 @@ const EvidencePass = struct {
             .procedure => self.procedureEvidenceSchema(target),
             else => null,
         };
-        if (procedure_schema == .from_callable) {
-            const fn_var = constraint_fn_var orelse
-                checkedArtifactInvariant("callable-derived procedure evidence had no checked callable relation", .{});
-            const callable = self.checked_types.rootForSourceVar(self.module, fn_var) orelse
-                checkedArtifactInvariant("callable-derived dispatch target was missing from checked type output", .{});
-            const node_id: static_dispatch.EvidenceNodeId = @enumFromInt(@as(u32, @intCast(self.evidence_nodes.items.len)));
-            try self.evidence_nodes.append(self.allocator, .{
-                .target = target,
-                .instantiation = .{ .callable = callable },
-                .nested = .from_callable,
-            });
-            return node_id;
-        }
-
         if (record_idx) |idx| {
             if (self.node_by_record.get(idx)) |memoized| return memoized;
             if ((try self.record_in_progress.getOrPut(idx)).found_existing) {
@@ -14449,6 +14447,20 @@ const EvidencePass = struct {
                 .nested = .{ .resolved = nested },
             });
             try self.node_by_record.put(idx, node_id);
+            return node_id;
+        }
+
+        if (procedure_schema == .from_callable) {
+            const fn_var = constraint_fn_var orelse
+                checkedArtifactInvariant("callable-derived procedure evidence had no checked callable relation", .{});
+            const callable = self.checked_types.rootForSourceVar(self.module, fn_var) orelse
+                checkedArtifactInvariant("callable-derived dispatch target was missing from checked type output", .{});
+            const node_id: static_dispatch.EvidenceNodeId = @enumFromInt(@as(u32, @intCast(self.evidence_nodes.items.len)));
+            try self.evidence_nodes.append(self.allocator, .{
+                .target = target,
+                .instantiation = .{ .callable = callable },
+                .nested = .from_callable,
+            });
             return node_id;
         }
 
@@ -14737,6 +14749,17 @@ test "procedure evidence schema positively classifies callable paths and pathles
     try std.testing.expectEqual(
         EvidencePass.ProcedureEvidenceSchema.requires_record,
         EvidencePass.procedureEvidenceSchemaFromSlices(pathless_table.evidenceParams(&template), pathless_table.evidence_param_paths),
+    );
+
+    var defaulted_pathless_params = pathless_params;
+    defaulted_pathless_params[1].pathless_default_phase = .mono_specialization;
+    const defaulted_pathless_table = CheckedProcedureTemplateTable{
+        .evidence_params_pool = defaulted_pathless_params[0..],
+        .evidence_param_paths = path_steps[0..],
+    };
+    try std.testing.expectEqual(
+        EvidencePass.ProcedureEvidenceSchema.from_callable,
+        EvidencePass.procedureEvidenceSchemaFromSlices(defaulted_pathless_table.evidenceParams(&template), defaulted_pathless_table.evidence_param_paths),
     );
 
     template.evidence_params = .{};
@@ -29706,8 +29729,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xBC, 0xC1, 0x50, 0x8F, 0xA9, 0x19, 0x88, 0xE2, 0x59, 0xFD, 0x5E, 0x57, 0x40, 0xD8, 0x26, 0x0C,
-        0x9D, 0x5F, 0x1F, 0x3C, 0xC2, 0x8B, 0x0E, 0x09, 0x1B, 0xBB, 0x3B, 0x8F, 0xF1, 0x13, 0xA8, 0xC4,
+        0x38, 0xA6, 0xEF, 0x75, 0x2E, 0x0A, 0x07, 0xEC, 0x1B, 0x48, 0xC6, 0x67, 0xE6, 0x86, 0xB6, 0xAA,
+        0x78, 0x94, 0x22, 0x70, 0x57, 0xA5, 0x19, 0xAB, 0x13, 0x12, 0xB6, 0xBD, 0xFA, 0xDD, 0x10, 0x8D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

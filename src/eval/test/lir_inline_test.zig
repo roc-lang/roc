@@ -3450,15 +3450,15 @@ test "iter alloc static: runtime-count map wrapping terminates at dynamic bounda
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
     defer ordinary.deinit(allocator);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "box_box_count") > 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "packed_erased_fn_count") > 0);
 
     var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
     defer optimized.deinit(allocator);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "box_box_count") > 0);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 1);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "packed_erased_fn_count") > 0);
 }
 
 test "iter alloc static: recursive map wrapping terminates at dynamic boundary" {
@@ -5872,6 +5872,24 @@ test "issue 10301 for-loop over effect-produced list scalarizes" {
     // direct indexed loop, and no per-element step proc remains reachable.
     try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
     try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
+}
+
+test "iter alloc static: runtime list for-loop has no boxed iterator state" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : List(U8) -> U64
+        \\main = |bytes| {
+        \\    var $sum = 0.U64
+        \\    for byte in bytes {
+        \\        $sum = $sum + byte.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer lowered.deinit(allocator);
+
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &lowered.lowered);
 }
 
 test "issue 10301 fold over effect-produced list scalarizes" {

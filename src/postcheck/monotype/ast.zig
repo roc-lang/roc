@@ -2037,6 +2037,7 @@ test "monotype program view exposes read-only side arrays" {
     _ = try program.addSpec(.{
         .identity = .{
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
+            .method_scope = .{},
             .source_fn_ty_digest = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .request_fn_ty_digest = .{},

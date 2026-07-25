@@ -326,6 +326,7 @@ const CaptureBinding = struct {
     record_ty: Type.TypeId,
     symbol: Common.Symbol,
     ty: Type.TypeId,
+    storage_ty: Type.TypeId,
 };
 
 const TypedLiftedLocal = struct {
@@ -358,6 +359,9 @@ const Lowerer = struct {
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     capture_types: CaptureTypeMap,
     captures: std.AutoHashMap(Lifted.LocalId, CaptureBinding),
+    recursive_value_locals: std.AutoHashMap(Lifted.LocalId, void),
+    recursive_value_capture_ids: std.AutoHashMap(check.CheckedModule.CaptureId, void),
+    recursive_slot_types: std.AutoHashMap(Type.TypeId, Type.TypeId),
     own_captures: std.ArrayList(SolvedType.Capture),
     own_capture_spans: []?CaptureSpanId,
     roots: std.ArrayList(RootEntry),
@@ -422,6 +426,12 @@ const Lowerer = struct {
         errdefer allocator.free(own_capture_spans);
         @memset(own_capture_spans, null);
 
+        var recursive_value_locals = std.AutoHashMap(Lifted.LocalId, void).init(allocator);
+        errdefer recursive_value_locals.deinit();
+        var recursive_value_capture_ids = std.AutoHashMap(check.CheckedModule.CaptureId, void).init(allocator);
+        errdefer recursive_value_capture_ids.deinit();
+        try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
+
         return .{
             .allocator = allocator,
             .solved = solved,
@@ -447,6 +457,9 @@ const Lowerer = struct {
             .source_symbols = std.AutoHashMap(Common.Symbol, Lifted.FnId).init(allocator),
             .capture_types = CaptureTypeMap.initContext(allocator, .{}),
             .captures = std.AutoHashMap(Lifted.LocalId, CaptureBinding).init(allocator),
+            .recursive_value_locals = recursive_value_locals,
+            .recursive_value_capture_ids = recursive_value_capture_ids,
+            .recursive_slot_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(allocator),
             .own_captures = .empty,
             .own_capture_spans = own_capture_spans,
             .roots = .empty,
@@ -491,6 +504,9 @@ const Lowerer = struct {
         self.roots.deinit(self.allocator);
         self.allocator.free(self.own_capture_spans);
         self.own_captures.deinit(self.allocator);
+        self.recursive_slot_types.deinit();
+        self.recursive_value_capture_ids.deinit();
+        self.recursive_value_locals.deinit();
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
@@ -531,6 +547,9 @@ const Lowerer = struct {
         self.roots.deinit(self.allocator);
         self.allocator.free(self.own_capture_spans);
         self.own_captures.deinit(self.allocator);
+        self.recursive_slot_types.deinit();
+        self.recursive_value_capture_ids.deinit();
+        self.recursive_value_locals.deinit();
         self.captures.deinit();
         self.capture_types.deinit();
         self.source_symbols.deinit();
@@ -547,6 +566,9 @@ const Lowerer = struct {
         self.local_map = &.{};
         self.own_capture_spans = &.{};
         self.own_captures = .empty;
+        self.recursive_slot_types = std.AutoHashMap(Type.TypeId, Type.TypeId).init(self.allocator);
+        self.recursive_value_capture_ids = std.AutoHashMap(check.CheckedModule.CaptureId, void).init(self.allocator);
+        self.recursive_value_locals = std.AutoHashMap(Lifted.LocalId, void).init(self.allocator);
         self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
         self.local_types = std.AutoHashMap(LIR.LocalId, Type.TypeId).init(self.allocator);
         self.static_initializer_queue = .empty;
@@ -600,6 +622,36 @@ const Lowerer = struct {
             if (result.found_existing) Common.invariant("two lifted functions had the same symbol");
             result.value_ptr.* = fn_id;
         }
+    }
+
+    fn collectRecursiveValueLocals(
+        lifted: *const Lifted.Program,
+        locals: *std.AutoHashMap(Lifted.LocalId, void),
+        capture_ids: *std.AutoHashMap(check.CheckedModule.CaptureId, void),
+    ) std.mem.Allocator.Error!void {
+        for (lifted.stmtsView()) |stmt| {
+            switch (stmt) {
+                .let_ => |let_| if (let_.recursive) {
+                    try Lowerer.collectRecursiveValueLocal(lifted, let_.pat, locals, capture_ids);
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn collectRecursiveValueLocal(
+        lifted: *const Lifted.Program,
+        pat_id: Lifted.PatId,
+        locals: *std.AutoHashMap(Lifted.LocalId, void),
+        capture_ids: *std.AutoHashMap(check.CheckedModule.CaptureId, void),
+    ) std.mem.Allocator.Error!void {
+        const recursive_pat = lifted.getPat(pat_id);
+        const local = switch (recursive_pat.data) {
+            .bind => |local| local,
+            else => Common.invariant("recursive Monotype let statement must bind one local directly"),
+        };
+        try locals.put(local, {});
+        if (lifted.getLocal(local).capture_id) |capture_id| try capture_ids.put(capture_id, {});
     }
 
     fn lowerReachableFns(self: *Lowerer) Common.LowerError!void {
@@ -980,6 +1032,7 @@ const Lowerer = struct {
                 .record_ty = capture_ty,
                 .symbol = capture.symbol,
                 .ty = field.ty,
+                .storage_ty = field.storage_ty,
             });
         }
     }
@@ -1053,7 +1106,7 @@ const Lowerer = struct {
         const assign = try self.assignTypedRefRead(
             target,
             capture.ty,
-            capture.ty,
+            capture.storage_ty,
             self.localFieldLayout(record_local, field_index),
             .{ .field = .{ .source = record_local, .field_idx = field_index } },
             next,
@@ -1104,6 +1157,20 @@ const Lowerer = struct {
         return ty;
     }
 
+    fn captureFieldStorageType(self: *Lowerer, capture: SolvedType.Capture, ty: Type.TypeId) Common.LowerError!Type.TypeId {
+        if (!self.captureUsesRecursiveSlotStorage(capture)) return ty;
+        if (try self.solvedTypeAlreadyHasRecursiveSlotStorage(capture.ty)) return ty;
+        return try self.boxedRecursiveSlotTypeOfType(ty);
+    }
+
+    fn captureUsesRecursiveSlotStorage(self: *Lowerer, capture: SolvedType.Capture) bool {
+        if (self.recursive_value_locals.contains(capture.local)) return true;
+        if (capture.capture_id) |capture_id| {
+            if (self.recursive_value_capture_ids.contains(capture_id)) return true;
+        }
+        return false;
+    }
+
     fn captureRecordType(
         self: *Lowerer,
         captures: CaptureSpanId,
@@ -1116,12 +1183,14 @@ const Lowerer = struct {
         const fields = try self.allocator.alloc(Type.CaptureField, capture_items.len);
         defer self.allocator.free(fields);
         for (capture_items, 0..) |capture, i| {
+            const ty = try self.lowerType(capture.ty);
             fields[i] = .{
                 .symbol = capture.symbol,
                 .binder = capture.binder,
                 .capture_id = capture.capture_id,
                 .checked_capture_id = capture.checked_capture_id,
-                .ty = try self.lowerType(capture.ty),
+                .ty = ty,
+                .storage_ty = try self.captureFieldStorageType(capture, ty),
             };
         }
         const ty = try self.types.add(.{ .capture_record = try self.types.addCaptureFields(fields) });
@@ -2683,8 +2752,6 @@ const Lowerer = struct {
             Common.invariant("function reference capture operand count differed from lifted function captures");
         }
 
-        const expr_locals = try self.allocator.alloc(LIR.LocalId, captures.len);
-        defer self.allocator.free(expr_locals);
         const field_locals = try self.allocator.alloc(LIR.LocalId, captures.len);
         defer self.allocator.free(field_locals);
 
@@ -2700,17 +2767,13 @@ const Lowerer = struct {
             }
             const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
             if (operand.id != capture_id) Common.invariant("capture operand CaptureId did not match its member capture slot");
-            expr_locals[i] = try self.addTemp(field.ty);
             if (target_is_zst) {
-                field_locals[i] = expr_locals[i];
+                field_locals[i] = try self.addTemp(field.storage_ty);
                 continue;
             }
             const field_layout = self.localFieldLayout(target, @intCast(i));
-            const expr_layout = self.result.store.getLocal(expr_locals[i]).layout_idx;
-            field_locals[i] = if (expr_layout == field_layout)
-                expr_locals[i]
-            else
-                try self.addLocalForLayout(field_layout);
+            field_locals[i] = try self.addLocalForLayout(field_layout);
+            try self.local_types.put(field_locals[i], field.storage_ty);
         }
 
         var current = if (target_is_zst)
@@ -2724,15 +2787,8 @@ const Lowerer = struct {
         var i = captures.len;
         while (i > 0) {
             i -= 1;
-            if (field_locals[i] != expr_locals[i]) {
-                current = try self.assignBoxBoundary(
-                    field_locals[i],
-                    expr_locals[i],
-                    self.result.store.getLocal(expr_locals[i]).layout_idx,
-                    current,
-                );
-            }
-            current = try self.lowerExprInto(expr_locals[i], GuardedList.at(capture_operands, i).value, current);
+            const field = GuardedList.at(fields, i);
+            current = try self.lowerExprIntoAtType(field_locals[i], GuardedList.at(capture_operands, i).value, field.storage_ty, current);
         }
         return current;
     }
@@ -3028,7 +3084,18 @@ const Lowerer = struct {
             return try self.assignZst(target, next);
         }
 
-        Common.invariant("LIR lowering expected layouts to match or differ by an explicit Box edge");
+        if (@import("builtin").mode == .Debug) {
+            std.debug.panic(
+                "postcheck invariant violated: LIR lowering expected layouts to match or differ by an explicit Box edge, target={d} ({s}) source={d} ({s})",
+                .{
+                    @intFromEnum(target_layout),
+                    @tagName(target_content.tag),
+                    @intFromEnum(source_layout),
+                    @tagName(source_content.tag),
+                },
+            );
+        }
+        unreachable;
     }
 
     fn assignStructBoundary(
@@ -3359,6 +3426,66 @@ const Lowerer = struct {
         return try self.lowerExprInto(value_local, let_.value, bind);
     }
 
+    fn lowerRecursiveLetStmt(self: *Lowerer, let_: anytype, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        const pattern = self.solved.lifted.getPat(let_.pat);
+        const local = switch (pattern.data) {
+            .bind => |local| local,
+            else => Common.invariant("recursive Monotype let statement must bind one local directly"),
+        };
+        const bind_ty = try self.lowerPatTy(let_.pat);
+        const binding = try self.bindRecursiveLocalForTyped(local, bind_ty);
+        const target = binding.slot;
+        const target_layout = self.result.store.getLocal(target).layout_idx;
+        const target_content = self.result.layouts.getLayout(target_layout);
+        const payload_layout = switch (target_content.tag) {
+            .box => target_content.getIdx(),
+            else => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
+        };
+
+        const value = try self.addTemp(bind_ty);
+        const value_layout = self.result.store.getLocal(value).layout_idx;
+        const payload = if (value_layout == payload_layout)
+            value
+        else
+            try self.addLocalForLayout(payload_layout);
+        const ptr = try self.addLocalForLayout(.opaque_ptr);
+        const unit = try self.addLocalForLayout(.zst);
+
+        var after_store = next;
+        if (binding.forward_local) |forward_local| {
+            after_store = try self.assignTypedBoundary(
+                forward_local,
+                self.typeOfLocalOr(forward_local, bind_ty),
+                target,
+                bind_ty,
+                after_store,
+            );
+        }
+
+        const ptr_store_args = [_]LIR.LocalId{ ptr, payload };
+        const ptr_store_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = unit,
+            .op = .ptr_store,
+            .rc_effect = LIR.LowLevel.ptr_store.rcEffect(),
+            .args = try self.result.store.addLocalSpan(&ptr_store_args),
+            .next = after_store,
+        } });
+        var current = ptr_store_stmt;
+        if (payload != value) {
+            current = try self.assignBoxBoundary(payload, value, value_layout, current);
+        }
+        current = try self.lowerExprIntoAtType(value, let_.value, bind_ty, current);
+        const ptr_cast_stmt = try self.assignUnaryLowLevel(ptr, .ptr_cast, target, current);
+        const alloc_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+            .target = target,
+            .op = .box_alloc_zeroed,
+            .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
+            .args = LIR.LocalSpan.empty(),
+            .next = ptr_cast_stmt,
+        } });
+        return alloc_stmt;
+    }
+
     fn lowerFnRefInto(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -3461,25 +3588,27 @@ const Lowerer = struct {
         }
         const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
         const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
-        const on_drop: LIR.ErasedCallableOnDrop = if (capture_layout) |layout_idx| blk: {
-            const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = layout_idx };
-            break :blk if (self.result.layouts.rcHelperPlan(helper_key) == .noop)
-                .none
-            else
-                .{ .rc_helper = helper_key };
-        } else .none;
 
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
             .proc = try self.markReachableFn(fn_id),
             .capture = capture,
             .capture_layout = capture_layout,
-            .on_drop = on_drop,
+            .on_drop = self.erasedCallableOnDrop(capture_layout),
             .next = next,
         } });
         if (capture_ty) |ty| return try self.lowerCaptureRecordFromCaptureExprsInto(capture.?, captures, capture_operands, ty, assign);
         if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
         return assign;
+    }
+
+    fn erasedCallableOnDrop(self: *Lowerer, capture_layout: ?layout.Idx) LIR.ErasedCallableOnDrop {
+        const layout_idx = capture_layout orelse return .none;
+        const helper_key = layout.RcHelper{ .op = .decref, .layout_idx = layout_idx };
+        return if (self.result.layouts.rcHelperPlan(helper_key) == .noop)
+            .none
+        else
+            .{ .rc_helper = helper_key };
     }
 
     fn lowerDirectProcCallInto(
@@ -4331,6 +4460,7 @@ const Lowerer = struct {
         return switch (self.solved.lifted.getStmt(stmt_id)) {
             .uninitialized => |pat_id| try self.initUninitializedPattern(pat_id, next),
             .let_ => |let_| blk: {
+                if (let_.recursive) break :blk try self.lowerRecursiveLetStmt(let_, next);
                 const value = try self.addTemp(try self.lowerExprTy(let_.value));
                 const bind = try self.bindPatternOrCrash(let_.pat, value, next, let_.comptime_site);
                 break :blk try self.lowerExprInto(value, let_.value, bind);
@@ -6626,6 +6756,61 @@ const Lowerer = struct {
         return lir_local;
     }
 
+    const RecursiveLocalBinding = struct {
+        slot: LIR.LocalId,
+        forward_local: ?LIR.LocalId = null,
+    };
+
+    fn rememberRecursiveSlotLocalForType(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId, slot: LIR.LocalId) Common.LowerError!void {
+        try self.typed_local_map.put(.{ .local = local, .ty = ty }, slot);
+
+        const slot_ty = try self.recursiveSlotTypeOfType(ty);
+        try self.typed_local_map.put(.{ .local = local, .ty = slot_ty }, slot);
+
+        const runtime_ty = self.runtimeBackingType(ty);
+        if (runtime_ty != ty) {
+            const runtime_slot_ty = try self.recursiveSlotTypeOfType(runtime_ty);
+            try self.typed_local_map.put(.{ .local = local, .ty = runtime_slot_ty }, slot);
+        }
+    }
+
+    fn bindRecursiveLocalForTyped(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Common.LowerError!RecursiveLocalBinding {
+        const slot_layout = try self.recursiveSlotLayoutOfType(ty);
+        const typed = TypedLiftedLocal{ .local = local, .ty = ty };
+        if (self.typed_local_map.get(typed)) |existing| {
+            const existing_layout = self.result.store.getLocal(existing).layout_idx;
+            if (!self.layoutsMatch(existing_layout, slot_layout)) {
+                Common.invariant("recursive Monotype local was already bound with a different layout");
+            }
+            try self.rememberRecursiveSlotLocalForType(local, ty, existing);
+            try self.noteLocal(existing);
+            return .{ .slot = existing };
+        }
+
+        const index = @intFromEnum(local);
+        if (self.local_map[index]) |existing| {
+            const existing_layout = self.result.store.getLocal(existing).layout_idx;
+            if (self.layoutsMatch(existing_layout, slot_layout)) {
+                try self.rememberRecursiveSlotLocalForType(local, ty, existing);
+                try self.noteLocal(existing);
+                return .{ .slot = existing };
+            }
+
+            const lir_local = try self.addLocalForLayout(slot_layout);
+            try self.local_types.put(lir_local, ty);
+            try self.result.store.setLocalName(lir_local, self.solved.lifted.localName(local));
+            try self.rememberRecursiveSlotLocalForType(local, ty, lir_local);
+            return .{ .slot = lir_local, .forward_local = existing };
+        }
+
+        const lir_local = try self.addLocalForLayout(slot_layout);
+        try self.local_types.put(lir_local, ty);
+        try self.result.store.setLocalName(lir_local, self.solved.lifted.localName(local));
+        self.local_map[index] = lir_local;
+        try self.rememberRecursiveSlotLocalForType(local, ty, lir_local);
+        return .{ .slot = lir_local };
+    }
+
     fn bindLocalFromTyped(
         self: *Lowerer,
         local: Lifted.LocalId,
@@ -6669,6 +6854,9 @@ const Lowerer = struct {
 
         const target_content = self.types.get(target_ty);
         const source_content = self.types.get(source_ty);
+        if (target_content == .erased_fn and source_content == .callable) {
+            return try self.assignCallableToErasedBoundary(target, target_content.erased_fn, source, source_content.callable, next);
+        }
         if (target_content == .callable and source_content == .callable) {
             return try self.assignCallableBoundary(target, target_content.callable, source, source_content.callable, next);
         }
@@ -6808,6 +6996,124 @@ const Lowerer = struct {
         } });
     }
 
+    fn assignCallableToErasedBoundary(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_erased: anytype,
+        source: LIR.LocalId,
+        source_span: Type.Span,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const source_variants = self.types.fnVariantSpan(source_span);
+        const target_variants = self.types.fnVariantSpan(target_erased.members);
+        if (source_variants.len == 0) {
+            Common.invariant("callable-to-erased boundary saw an empty source callable set");
+        }
+
+        if (self.isZstLocal(source)) {
+            if (source_variants.len != 1) {
+                Common.invariant("zero-sized callable-to-erased boundary saw multiple source variants");
+            }
+            const source_variant = GuardedList.at(source_variants, 0);
+            const target_index = Lowerer.callableVariantIndexBySource(target_variants, source_variant.source);
+            const target_variant = GuardedList.at(target_variants, target_index);
+            return try self.assignCallableVariantToErasedBoundary(
+                target,
+                target_variant,
+                source,
+                source_variant,
+                0,
+                next,
+            );
+        }
+
+        const branches = try self.allocator.alloc(LIR.CFSwitchBranch, source_variants.len);
+        defer self.allocator.free(branches);
+        for (0..source_variants.len) |source_index| {
+            const source_variant = GuardedList.at(source_variants, source_index);
+            const target_index = Lowerer.callableVariantIndexBySource(target_variants, source_variant.source);
+            const target_variant = GuardedList.at(target_variants, target_index);
+            branches[source_index] = .{
+                .value = @intCast(source_index),
+                .body = try self.assignCallableVariantToErasedBoundary(
+                    target,
+                    target_variant,
+                    source,
+                    source_variant,
+                    @intCast(source_index),
+                    next,
+                ),
+            };
+        }
+
+        const disc = try self.addLocalForLayout(.u16);
+        const impossible = try self.result.store.addCFStmt(.{ .runtime_error = {} });
+        const switch_stmt = try self.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = disc,
+            .branches = try self.result.store.addCFSwitchBranches(branches),
+            .default_branch = impossible,
+            .default_is_cold = true,
+            .continuation = null,
+        } });
+        return try self.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = disc,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = switch_stmt,
+        } });
+    }
+
+    fn assignCallableVariantToErasedBoundary(
+        self: *Lowerer,
+        target: LIR.LocalId,
+        target_variant: Type.FnVariant,
+        source: LIR.LocalId,
+        source_variant: Type.FnVariant,
+        source_index: u16,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        if (target_variant.capture_ty == null and source_variant.capture_ty == null) {
+            return try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+                .target = target,
+                .proc = try self.markReachableFn(target_variant.target),
+                .capture = null,
+                .capture_layout = null,
+                .on_drop = .none,
+                .next = next,
+            } });
+        }
+        const target_capture_ty = target_variant.capture_ty orelse
+            Common.invariant("callable-to-erased boundary target variant dropped a capture payload");
+        const source_capture_ty = source_variant.capture_ty orelse
+            Common.invariant("callable-to-erased boundary source variant lacked a capture payload");
+
+        const capture = try self.addTemp(target_capture_ty);
+        const capture_layout = self.result.store.getLocal(capture).layout_idx;
+        const pack = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+            .target = target,
+            .proc = try self.markReachableFn(target_variant.target),
+            .capture = capture,
+            .capture_layout = capture_layout,
+            .on_drop = self.erasedCallableOnDrop(capture_layout),
+            .next = next,
+        } });
+        if (self.isZstLocal(source)) return try self.assignZst(capture, pack);
+
+        const source_payload_layout = self.localTagPayloadLayout(source, source_index, null);
+        const source_payload = try self.addLocalForLayout(source_payload_layout);
+        var current = try self.assignTypedValueIntoStorage(capture, target_capture_ty, source_payload, source_capture_ty, pack);
+        current = try self.assignRefRead(
+            source_payload,
+            source_payload_layout,
+            .{ .tag_payload_struct = .{
+                .source = source,
+                .variant_index = source_index,
+                .tag_discriminant = source_index,
+            } },
+            current,
+        );
+        return current;
+    }
+
     fn assignCallableVariantBoundary(
         self: *Lowerer,
         target: LIR.LocalId,
@@ -6887,10 +7193,10 @@ const Lowerer = struct {
             current = try self.assignStructFieldBoundary(
                 target_locals,
                 @intCast(i),
-                target_field.ty,
+                target_field.storage_ty,
                 source,
                 @intCast(source_index),
-                source_field.ty,
+                source_field.storage_ty,
                 current,
             );
         }
@@ -7287,6 +7593,83 @@ const Lowerer = struct {
         try self.type_layouts.put(ty, layout_idx);
     }
 
+    fn solvedTypeAlreadyHasRecursiveSlotStorage(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
+        var visited = std.AutoHashMap(SolvedType.TypeVarId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.solvedTypeAlreadyHasRecursiveSlotStorageInner(ty, &visited);
+    }
+
+    fn solvedTypeAlreadyHasRecursiveSlotStorageInner(
+        self: *Lowerer,
+        ty: SolvedType.TypeVarId,
+        visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
+    ) Common.LowerError!bool {
+        const root = self.solved.types.root(ty);
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.solved.types.get(root)) {
+            .box => true,
+            .named => |named| if (named.backing) |backing| blk: {
+                if (named.kind == .@"opaque" and
+                    backing.authority != .generated_private and
+                    self.solved.types.rootContent(backing.ty) == .record and
+                    try self.solvedTypeContainsCallable(backing.ty))
+                {
+                    break :blk true;
+                }
+                break :blk try self.solvedTypeAlreadyHasRecursiveSlotStorageInner(backing.ty, visited);
+            } else false,
+            else => false,
+        };
+    }
+
+    fn typeAlreadyHasRecursiveSlotStorage(self: *Lowerer, ty: Type.TypeId) Common.LowerError!bool {
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.typeAlreadyHasRecursiveSlotStorageInner(ty, &visited);
+    }
+
+    fn typeAlreadyHasRecursiveSlotStorageInner(
+        self: *Lowerer,
+        ty: Type.TypeId,
+        visited: *std.AutoHashMap(Type.TypeId, void),
+    ) Common.LowerError!bool {
+        if (visited.contains(ty)) return false;
+        try visited.put(ty, {});
+
+        return switch (self.types.get(ty)) {
+            .box => true,
+            .named => |named| if (named.backing) |backing| blk: {
+                if (named.kind == .@"opaque" and
+                    backing.authority != .generated_private and
+                    self.types.get(backing.ty) == .record and
+                    try self.typeContainsCallable(backing.ty))
+                {
+                    break :blk true;
+                }
+                break :blk try self.typeAlreadyHasRecursiveSlotStorageInner(backing.ty, visited);
+            } else false,
+            else => false,
+        };
+    }
+
+    fn recursiveSlotLayoutOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!layout.Idx {
+        return try self.layoutOfType(try self.recursiveSlotTypeOfType(ty));
+    }
+
+    fn recursiveSlotTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!Type.TypeId {
+        if (try self.typeAlreadyHasRecursiveSlotStorage(ty)) return ty;
+        return try self.boxedRecursiveSlotTypeOfType(ty);
+    }
+
+    fn boxedRecursiveSlotTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!Type.TypeId {
+        if (self.recursive_slot_types.get(ty)) |existing| return existing;
+        const slot_ty = try self.types.add(.{ .box = ty });
+        try self.recursive_slot_types.put(ty, slot_ty);
+        return slot_ty;
+    }
+
     const EquivalentNamedLayout = struct {
         ty: Type.TypeId,
         layout_idx: layout.Idx,
@@ -7502,6 +7885,64 @@ const Lowerer = struct {
         var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
         return try self.typeContainsCallableInner(ty, &visited);
+    }
+
+    fn solvedTypeContainsCallable(self: *Lowerer, ty: SolvedType.TypeVarId) Common.LowerError!bool {
+        var visited = std.AutoHashMap(SolvedType.TypeVarId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.solvedTypeContainsCallableInner(ty, &visited);
+    }
+
+    fn solvedTypeContainsCallableInner(
+        self: *Lowerer,
+        ty: SolvedType.TypeVarId,
+        visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
+    ) Common.LowerError!bool {
+        const root = self.solved.types.root(ty);
+        if (visited.contains(root)) return false;
+        try visited.put(root, {});
+
+        return switch (self.solved.types.get(root)) {
+            .func, .lambda_set, .erased => true,
+            .link, .unbound, .forall => Common.invariant("callable scan saw unresolved Lambda Solved type"),
+            .primitive, .zst => false,
+            .list => |elem| try self.solvedTypeContainsCallableInner(elem, visited),
+            .box => |elem| try self.solvedTypeContainsCallableInner(elem, visited),
+            .tuple => |items| try self.solvedTypeSpanContainsCallable(items, visited),
+            .record => |fields| blk: {
+                const field_span = self.solved.types.fieldSpan(fields);
+                for (0..field_span.len) |index| {
+                    const field = GuardedList.at(field_span, index);
+                    if (try self.solvedTypeContainsCallableInner(field.ty, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .tag_union => |tags| blk: {
+                const tag_span = self.solved.types.tagSpan(tags);
+                for (0..tag_span.len) |index| {
+                    const tag = GuardedList.at(tag_span, index);
+                    if (try self.solvedTypeSpanContainsCallable(tag.payloads, visited)) break :blk true;
+                }
+                break :blk false;
+            },
+            .named => |named| if (named.backing) |backing|
+                try self.solvedTypeContainsCallableInner(backing.ty, visited)
+            else
+                false,
+        };
+    }
+
+    fn solvedTypeSpanContainsCallable(
+        self: *Lowerer,
+        span: SolvedType.Span,
+        visited: *std.AutoHashMap(SolvedType.TypeVarId, void),
+    ) Common.LowerError!bool {
+        const values = self.solved.types.span(span);
+        for (0..values.len) |index| {
+            const ty = GuardedList.at(values, index);
+            if (try self.solvedTypeContainsCallableInner(ty, visited)) return true;
+        }
+        return false;
     }
 
     fn typeContainsCallableInner(
@@ -7801,7 +8242,7 @@ const Lowerer = struct {
             defer self.lowerer.allocator.free(fields);
             for (0..items.len) |i| {
                 const item = GuardedList.at(items, i);
-                fields[i] = .{ .index = @intCast(i), .child = try self.inputForType(item.ty) };
+                fields[i] = .{ .index = @intCast(i), .child = try self.inputForType(item.storage_ty) };
             }
             return try self.graph.appendFields(self.lowerer.allocator, fields);
         }

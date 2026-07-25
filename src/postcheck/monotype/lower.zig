@@ -43,6 +43,11 @@ const DispatchInstantiationPhase = enum {
     expression_lowering,
 };
 
+const DraftRequestEvidenceMode = enum {
+    resolved,
+    synthesized,
+};
+
 /// Internal control surface for Monotype specialization cache integration.
 pub const SpecializationCacheControl = struct {
     /// Load valid specialization cache shards before fresh lowering starts.
@@ -357,9 +362,25 @@ fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_
 }
 
 fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!void {
+    const left_root_private = isGeneratedPrivateRootNode(graph, left_node);
+    const right_root_private = isGeneratedPrivateRootNode(graph, right_node);
+    if (left_root_private and right_root_private) {
+        try graph.unify(left_node, right_node);
+        return;
+    }
+    if (right_root_private) {
+        try graph.relateOpaqueInterface(left_node, right_node);
+        return;
+    }
+    if (left_root_private) {
+        try graph.relateOpaqueInterface(right_node, left_node);
+        return;
+    }
+
     const left_private = try graph.containsGeneratedPrivate(left_node);
     const right_private = try graph.containsGeneratedPrivate(right_node);
     if (left_private and right_private) {
+        if (try relateMatchingRequestContainers(graph, left_node, right_node)) return;
         try graph.unify(left_node, right_node);
     } else if (right_private) {
         try graph.relateOpaqueInterface(left_node, right_node);
@@ -368,6 +389,69 @@ fn relateRequestComponent(graph: *InstGraph, left_node: NodeId, right_node: Node
     } else {
         try graph.unify(left_node, right_node);
     }
+}
+
+fn relateMatchingRequestContainers(graph: *InstGraph, left_node: NodeId, right_node: NodeId) Allocator.Error!bool {
+    if (graph.sameClass(left_node, right_node)) return true;
+    const left_content = graph.content(left_node);
+    const right_content = graph.content(right_node);
+    switch (left_content) {
+        .list => |left_elem| switch (right_content) {
+            .list => |right_elem| {
+                try relateRequestComponent(graph, left_elem, right_elem);
+                try graph.joinRelatedRequestContainer(left_node, right_node);
+                return true;
+            },
+            else => {},
+        },
+        .box => |left_elem| switch (right_content) {
+            .box => |right_elem| {
+                try relateRequestComponent(graph, left_elem, right_elem);
+                try graph.joinRelatedRequestContainer(left_node, right_node);
+                return true;
+            },
+            else => {},
+        },
+        .tuple => |left_items| switch (right_content) {
+            .tuple => |right_items| {
+                if (left_items.len != right_items.len) {
+                    Common.invariant("request component relation received tuples of different arity");
+                }
+                for (left_items, right_items) |left_item, right_item| {
+                    try relateRequestComponent(graph, left_item, right_item);
+                }
+                try graph.joinRelatedRequestContainer(left_node, right_node);
+                return true;
+            },
+            else => {},
+        },
+        .func => |left_fn| switch (right_content) {
+            .func => |right_fn| {
+                if (left_fn.args.len != right_fn.args.len) {
+                    Common.invariant("request component relation received functions of different arity");
+                }
+                for (left_fn.args, right_fn.args) |left_arg, right_arg| {
+                    try relateRequestComponent(graph, left_arg, right_arg);
+                }
+                try relateRequestComponent(graph, left_fn.ret, right_fn.ret);
+                try graph.joinRelatedRequestContainer(left_node, right_node);
+                return true;
+            },
+            else => {},
+        },
+        else => {},
+    }
+    return false;
+}
+
+fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) bool {
+    return switch (graph.content(node)) {
+        .named => |named| if (named.backing) |backing|
+            backing.authority == .generated_private
+        else
+            false,
+        else => false,
+    };
 }
 
 /// Choose producer-authored generated-private evidence for a live draft result
@@ -388,7 +472,7 @@ fn selectRequestRepresentation(graph: *InstGraph, declared_node: NodeId, produce
             try graph.selectGeneratedPrivateRepresentation(public_node, private_node);
         }
     } else {
-        try graph.unify(declared_node, produced_node);
+        try relateRequestComponent(graph, declared_node, produced_node);
     }
 }
 
@@ -1828,6 +1912,7 @@ const Builder = struct {
             source_ty_view.types.rootKey(source_fn_ty),
             request_node,
             evidence,
+            .resolved,
             .independent_roots,
         );
         const draft_fn_id = switch (slot) {
@@ -2204,6 +2289,7 @@ const Builder = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
         partial_evidence: []const SpecEvidence,
+        evidence_mode: DraftRequestEvidenceMode,
         signature_relation: Ast.SignatureRelation,
     ) Allocator.Error!DraftFnSlot {
         self.count("template_requests");
@@ -2285,10 +2371,24 @@ const Builder = struct {
                                 source_ctx.draft.current_owner,
                                 spec.fn_id,
                             );
+                            // Synthesized component calls can share ubiquitous
+                            // result cells such as Bool across unrelated
+                            // component types; require an argument-class
+                            // anchor before treating a partial match as
+                            // recursion.
+                            const partial_recursive_allowed = active_recursive_edge and switch (evidence_mode) {
+                                .resolved => true,
+                                .synthesized => try draftRequestOverlapsInitialArgumentClass(
+                                    source_ctx.graph,
+                                    spec.initial_request_arg_classes,
+                                    request_fn_node,
+                                ),
+                            };
                             if (!draftOpenCandidateQualifies(
                                 spec.state,
                                 exact_interface,
                                 active_recursive_edge,
+                                partial_recursive_allowed,
                             )) continue;
                             if (!selection.add(raw_spec, exact_interface)) {
                                 Common.invariant("draft template request matched more than one partial active recursive specialization");
@@ -3944,15 +4044,7 @@ const Builder = struct {
                         const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                         if (spec.request_fn_ty != null) continue;
                         if (!evidenceChainEql(spec.evidence, requested_evidence)) continue;
-                        if (spec.capture_entry_guards.len != capture_entry_guards.len) continue;
-                        var captures_match = true;
-                        for (spec.capture_entry_guards, capture_entry_guards) |stored, requested| {
-                            if (!source_ctx.graph.sameClass(stored, requested)) {
-                                captures_match = false;
-                                break;
-                            }
-                        }
-                        if (!captures_match) continue;
+                        if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         const exact_interface = source_ctx.graph.sameFunctionInterface(spec.request_fn_node, request_fn_node);
                         const active_recursive_edge = source_ctx.draft.ownerDescendsFromDraftFn(
@@ -3963,12 +4055,38 @@ const Builder = struct {
                             spec.state,
                             exact_interface,
                             active_recursive_edge,
+                            true,
                         )) continue;
                         if (!selection.add(raw_spec, exact_interface)) {
                             Common.invariant("draft nested request matched more than one partial active recursive specialization");
                         }
                     }
                 }
+            }
+        }
+        if (selection.selected() == null) {
+            var capture_anchor: ?u32 = null;
+            for (source_ctx.draft.nested_specs.items, 0..) |*spec, raw_spec_usize| {
+                if (!try draftNestedCaptureAnchoredRecursiveCandidate(
+                    source_ctx.graph,
+                    spec,
+                    family,
+                    request_fn_node,
+                    capture_entry_guards,
+                    requested_evidence,
+                )) continue;
+                const raw_spec: u32 = @intCast(raw_spec_usize);
+                if (capture_anchor) |anchor_raw| {
+                    const anchor = &source_ctx.draft.nested_specs.items[anchor_raw];
+                    const candidate_request = try source_ctx.graph.functionNodes(spec.request_fn_node);
+                    try source_ctx.graph.markRecursiveValueSlot(candidate_request.ret);
+                    try source_ctx.graph.unify(anchor.request_fn_node, spec.request_fn_node);
+                } else {
+                    capture_anchor = raw_spec;
+                }
+            }
+            if (capture_anchor) |raw_spec| {
+                if (!selection.add(raw_spec, false)) unreachable;
             }
         }
         if (selection.selected()) |raw_spec| {
@@ -3979,6 +4097,17 @@ const Builder = struct {
             const spec = &source_ctx.draft.nested_specs.items[raw_spec];
             const active_recursive_edge = spec.state == .lowering and
                 source_ctx.draft.ownerDescendsFromDraftFn(source_ctx.draft.current_owner, spec.fn_id);
+            if (try draftNestedCaptureAnchoredRecursiveCandidate(
+                source_ctx.graph,
+                spec,
+                family,
+                request_fn_node,
+                capture_entry_guards,
+                requested_evidence,
+            )) {
+                const request = try source_ctx.graph.functionNodes(request_fn_node);
+                try source_ctx.graph.markRecursiveValueSlot(request.ret);
+            }
             if (active_recursive_edge) {
                 try source_ctx.graph.unifyRecursiveFunctionInterface(
                     spec.request_fn_node,
@@ -4336,7 +4465,7 @@ const Builder = struct {
         const restored = switch (boundary.provenance) {
             .declared => try ctx.restoreConstUseAtNode(
                 boundary.const_use,
-                boundary.witness_node,
+                boundary.request_node,
                 boundary.use_evidence,
             ),
             .hoisted => |entry| blk: {
@@ -8033,8 +8162,60 @@ fn draftOpenCandidateQualifies(
     state: DraftSpecState,
     exact_interface: bool,
     active_recursive_edge: bool,
+    partial_recursive_allowed: bool,
 ) bool {
-    return exact_interface or (state == .lowering and active_recursive_edge);
+    return exact_interface or (state == .lowering and active_recursive_edge and partial_recursive_allowed);
+}
+
+fn draftRequestOverlapsInitialArgumentClass(
+    graph: *InstGraph,
+    initial_arg_classes: []const ArgumentClassSnapshot,
+    request_fn_node: NodeId,
+) Allocator.Error!bool {
+    const request = try graph.functionNodes(request_fn_node);
+    if (initial_arg_classes.len != request.args.len) {
+        Common.invariant("draft recursive request changed function argument arity");
+    }
+    for (initial_arg_classes, request.args) |initial_class, request_arg| {
+        for (initial_class.members) |member| {
+            if (graph.sameClass(member, request_arg)) return true;
+        }
+    }
+    return false;
+}
+
+fn draftCaptureEntryGuardsMatch(
+    graph: *InstGraph,
+    stored_guards: []const NodeId,
+    requested_guards: []const NodeId,
+) bool {
+    if (stored_guards.len != requested_guards.len) return false;
+    for (stored_guards, requested_guards) |stored, requested| {
+        if (!graph.sameClass(stored, requested)) return false;
+    }
+    return true;
+}
+
+fn draftNestedCaptureAnchoredRecursiveCandidate(
+    graph: *InstGraph,
+    spec: *const DraftNestedSpec,
+    family: DraftNestedFamilyAddress,
+    request_fn_node: NodeId,
+    capture_entry_guards: []const NodeId,
+    requested_evidence: EvidenceChain,
+) Allocator.Error!bool {
+    if (spec.state != .lowering) return false;
+    if (spec.request_fn_ty != null) return false;
+    if (capture_entry_guards.len == 0) return false;
+    if (!std.meta.eql(DraftNestedFamilyAddress.init(spec.nested, spec.method_scope, spec.source_fn_key), family)) return false;
+    if (!evidenceChainEql(spec.evidence, requested_evidence)) return false;
+    if (!draftCaptureEntryGuardsMatch(graph, spec.capture_entry_guards, capture_entry_guards)) return false;
+
+    const request = try graph.functionNodes(request_fn_node);
+    if (request.args.len != 0) return false;
+    const spec_request = try graph.functionNodes(spec.request_fn_node);
+    if (spec_request.args.len != 0) return false;
+    return true;
 }
 
 fn registerTemplateSpecLookup(
@@ -10083,6 +10264,21 @@ const ActiveReturnTarget = struct {
     cell: DraftTypeCell,
 };
 
+const ActiveConstBinding = struct {
+    const_ref: checked.ConstRef,
+    binder: checked.PatternBinderId,
+    local: DraftLocalId,
+    used: bool = false,
+};
+
+const ActiveConstBindingScope = struct {
+    active: ActiveConstBinding = undefined,
+    previous_active: ?*ActiveConstBinding = null,
+    binder: checked.PatternBinderId = undefined,
+    previous_local: ?DraftLocalId = null,
+    entered: bool = false,
+};
+
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -10182,6 +10378,11 @@ const BodyContext = struct {
     /// the root id travels through template requests into other modules'
     /// body contexts, where the same integer names an unrelated root.
     current_entry_root: ?EntryRoot = null,
+    /// Generated local for the top-level constant root currently being
+    /// restored. Recursive references to that exact ConstRef consume this
+    /// local so the restored value becomes an explicit recursive binding
+    /// instead of an unbounded chain of deferred const expansions.
+    active_const_binding: ?*ActiveConstBinding = null,
     /// Evidence for the current callable's dispatch requirements (innermost
     /// vector plus lexical parents for nested local functions). Body contexts
     /// created for the same specialization (dispatch call contexts, nested
@@ -11262,10 +11463,19 @@ const BodyContext = struct {
     }
 
     fn bindLocalName(self: *BodyContext, local: DraftLocalId, binder: checked.PatternBinderId) Allocator.Error!void {
-        const entry = self.view.bodies.patternBinder(binder);
-        const pattern = self.view.bodies.pattern(entry.pattern);
+        return try self.bindLocalNameFromView(self.view, local, binder);
+    }
+
+    fn bindLocalNameFromView(
+        self: *BodyContext,
+        source_view: ModuleView,
+        local: DraftLocalId,
+        binder: checked.PatternBinderId,
+    ) Allocator.Error!void {
+        const entry = source_view.bodies.patternBinder(binder);
+        const pattern = source_view.bodies.pattern(entry.pattern);
         if (pattern.data != .assign) return;
-        const source = self.view.module_env.common.source;
+        const source = source_view.module_env.common.source;
         const start = pattern.source_region.start.offset;
         const end = pattern.source_region.end.offset;
         if (start >= end or end > source.len) return;
@@ -11897,6 +12107,7 @@ const BodyContext = struct {
         child.frozen_codec_calls = self.frozen_codec_calls;
         child.source_region_override = self.source_region_override;
         child.current_entry_root = self.current_entry_root;
+        child.active_const_binding = self.active_const_binding;
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
@@ -12750,6 +12961,82 @@ const BodyContext = struct {
 
     fn lowerTypeNode(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!NodeId {
         return try self.instNode(checked_ty);
+    }
+
+    fn checkedTypeContainsError(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        return try self.checkedTypeContainsErrorInner(checked_ty, &visited);
+    }
+
+    fn checkedTypeContainsErrorInner(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        if (visited.contains(checked_ty)) return false;
+        try visited.put(checked_ty, {});
+
+        return switch (checkedPayload(self.view, checked_ty)) {
+            .pending => Common.invariant("pending checked type reached Monotype error scan"),
+            .err => true,
+            .flex, .rigid, .empty_record, .empty_tag_union => false,
+            .alias => |alias| blk: {
+                if (try self.checkedTypeContainsErrorInner(alias.backing, visited)) break :blk true;
+                break :blk try self.checkedTypeSpanContainsError(alias.args, visited);
+            },
+            .record_unbound => |fields| try self.checkedRecordFieldsContainError(fields, visited),
+            .record => |record| blk: {
+                if (try self.checkedRecordFieldsContainError(record.fields, visited)) break :blk true;
+                break :blk try self.checkedTypeContainsErrorInner(record.ext, visited);
+            },
+            .tuple => |items| try self.checkedTypeSpanContainsError(items, visited),
+            .nominal => |nominal| blk: {
+                if (try self.checkedTypeSpanContainsError(nominal.args, visited)) break :blk true;
+                break :blk try self.checkedTypeSpanContainsError(nominal.padding_field_types, visited);
+            },
+            .function => |function| blk: {
+                if (try self.checkedTypeSpanContainsError(function.args, visited)) break :blk true;
+                break :blk try self.checkedTypeContainsErrorInner(function.ret, visited);
+            },
+            .tag_union => |tag_union| blk: {
+                if (try self.checkedTagsContainError(tag_union.tags, visited)) break :blk true;
+                break :blk try self.checkedTypeContainsErrorInner(tag_union.ext, visited);
+            },
+        };
+    }
+
+    fn checkedTypeSpanContainsError(
+        self: *BodyContext,
+        checked_tys: []const checked.CheckedTypeId,
+        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (checked_tys) |ty| {
+            if (try self.checkedTypeContainsErrorInner(ty, visited)) return true;
+        }
+        return false;
+    }
+
+    fn checkedRecordFieldsContainError(
+        self: *BodyContext,
+        fields: []const checked.CheckedRecordField,
+        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (fields) |field| {
+            if (try self.checkedTypeContainsErrorInner(field.ty, visited)) return true;
+        }
+        return false;
+    }
+
+    fn checkedTagsContainError(
+        self: *BodyContext,
+        tags: []const checked.CheckedTag,
+        visited: *std.AutoHashMap(checked.CheckedTypeId, void),
+    ) Allocator.Error!bool {
+        for (tags) |tag| {
+            if (try self.checkedTypeSpanContainsError(tag.argsSlice(self.view.types), visited)) return true;
+        }
+        return false;
     }
 
     fn activeNodeFromType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!NodeId {
@@ -13946,7 +14233,7 @@ const BodyContext = struct {
             },
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(entry.checked_type, ty);
-                break :blk try self.lowerConstEvalTemplateUse(self.view, eval, ty, source_region, .{ .module = self.view.key, .root = entry.root });
+                break :blk try self.lowerConstEvalTemplateUse(self.view, eval, entry.const_ref, ty, source_region, .{ .module = self.view.key, .root = entry.root });
             },
             .reserved => Common.invariant("reserved hoisted const template reached Monotype"),
         };
@@ -13985,6 +14272,7 @@ const BodyContext = struct {
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     self.view,
                     eval,
+                    entry.const_ref,
                     request_node,
                     source_region,
                     .{ .module = self.view.key, .root = entry.root },
@@ -20779,6 +21067,27 @@ const BodyContext = struct {
         } });
     }
 
+    fn wrapRecursiveConstLocalAtTypeCell(
+        self: *BodyContext,
+        local: DraftLocalId,
+        cell: DraftTypeCell,
+        value: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const value_node = try self.exprTypeCell(value).toGraphNode(self.graph);
+        const local_node = try cell.toGraphNode(self.graph);
+        try relateRequestComponent(self.graph, local_node, value_node);
+        const local_expr = try self.addExprWithTypeCell(cell, .{ .local = local });
+        const stmt = try self.addStmt(.{ .let_ = .{
+            .pat = try self.addPatWithTypeCell(cell, .{ .bind = local }),
+            .value = value,
+            .recursive = true,
+        } });
+        return try self.addExprWithTypeCell(cell, .{ .block = .{
+            .statements = try self.addStmtSpan(&.{stmt}),
+            .final_expr = local_expr,
+        } });
+    }
+
     fn wrapWildcardLet(
         self: *BodyContext,
         ty: Type.TypeId,
@@ -21944,6 +22253,7 @@ const BodyContext = struct {
             source_fn_key,
             request_fn_node,
             requested_evidence,
+            .resolved,
             if (proc.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
         );
     }
@@ -22205,8 +22515,109 @@ const BodyContext = struct {
         };
     }
 
+    fn currentConstLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?DraftLocalId {
+        const active = self.active_const_binding orelse return null;
+        const raw = @intFromEnum(ref_id);
+        if (raw >= self.view.resolved_refs.records.len) {
+            Common.invariant("checked lookup resolved value id was outside resolved value table");
+        }
+        const record = self.view.resolved_refs.records[raw];
+        const const_use = switch (record.ref) {
+            .top_level_const => |value| value,
+            .imported_const => |value| value,
+            .platform_required_const => |required| required.const_use,
+            else => return null,
+        };
+        if (!constRefEql(active.const_ref, const_use.const_ref)) return null;
+        active.used = true;
+        return active.local;
+    }
+
+    fn topLevelConstBinderForRef(
+        self: *BodyContext,
+        store_view: ModuleView,
+        const_ref: checked.ConstRef,
+    ) ?checked.PatternBinderId {
+        _ = self;
+        const owner = switch (const_ref.owner) {
+            .top_level_binding => |owner| owner,
+            .hoisted_expr => return null,
+        };
+        if (!moduleBytesEqual(checked.constModuleId(const_ref).bytes, store_view.key.bytes)) {
+            Common.invariant("top-level const template referenced a different checked module");
+        }
+        const root_id = store_view.compile_time_roots.lookupIdByPattern(owner.pattern) orelse
+            Common.invariant("top-level const template had no compile-time root");
+        const root = store_view.compile_time_roots.root(root_id);
+        if (root.kind != .constant) {
+            Common.invariant("top-level const template did not reference a constant root");
+        }
+        if (root.module_idx != owner.module_idx) {
+            Common.invariant("top-level const template root had a mismatched module index");
+        }
+        const pattern = root.pattern orelse
+            Common.invariant("top-level const template root had no checked pattern");
+        if (pattern != owner.pattern) {
+            Common.invariant("top-level const template root had a mismatched checked pattern");
+        }
+        return switch (store_view.bodies.pattern(pattern).data) {
+            .assign => |binder| binder,
+            else => Common.invariant("top-level const root pattern was not a binder"),
+        };
+    }
+
+    fn inheritActiveConstBinding(self: *BodyContext, parent: *BodyContext) Allocator.Error!void {
+        self.active_const_binding = parent.active_const_binding;
+        const active = self.active_const_binding orelse return;
+        if (!moduleBytesEqual(checked.constModuleId(active.const_ref).bytes, self.view.key.bytes)) return;
+        try self.binders.put(active.binder, active.local);
+    }
+
+    fn enterActiveConstBindingAtCell(
+        self: *BodyContext,
+        store_view: ModuleView,
+        const_ref: checked.ConstRef,
+        cell: DraftTypeCell,
+        scope: *ActiveConstBindingScope,
+    ) Allocator.Error!bool {
+        const binder = self.topLevelConstBinderForRef(store_view, const_ref) orelse return false;
+        const local = try self.addLocalWithBinderCell(
+            self.builder.symbols.fresh(),
+            cell,
+            null,
+        );
+        try self.bindLocalNameFromView(store_view, local, binder);
+        scope.* = .{
+            .active = .{
+                .const_ref = const_ref,
+                .binder = binder,
+                .local = local,
+            },
+            .previous_active = self.active_const_binding,
+            .binder = binder,
+            .previous_local = self.binders.get(binder),
+            .entered = true,
+        };
+        try self.binders.put(binder, local);
+        self.active_const_binding = &scope.active;
+        return true;
+    }
+
+    fn leaveActiveConstBinding(self: *BodyContext, scope: *const ActiveConstBindingScope) void {
+        if (!scope.entered) return;
+        if (scope.previous_local) |previous| {
+            self.binders.put(scope.binder, previous) catch |err| switch (err) {
+                error.OutOfMemory => Common.invariant("restoring a previously inserted const binder cannot reallocate"),
+            };
+        } else {
+            _ = self.binders.remove(scope.binder);
+        }
+        self.active_const_binding = scope.previous_active;
+    }
+
     fn currentLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?DraftLocalId {
-        return if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| binding.local else null;
+        if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| return binding.local;
+        return self.currentConstLocalForResolvedValue(ref_id);
     }
 
     fn currentTypedLocalBindingForResolvedValue(
@@ -22301,11 +22712,30 @@ const BodyContext = struct {
             if (use_ty != local_ty) try self.setLocalType(local_id, use_ty);
             return try self.addExpr(.{ .ty = use_ty, .data = .{ .local = local_id } });
         }
+        if (self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
+            const local_cell = self.localTypeCell(local_id);
+            const local_node = try local_cell.toGraphNode(self.graph);
+            try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
+            try relateRequestComponent(self.graph, local_node, try self.activeNodeFromType(ty));
+            return try self.addExprWithTypeCell(local_cell, .{ .local = local_id });
+        }
 
         switch (record.ref) {
-            .top_level_const => |const_use| return try self.restoreConstUseAtType(const_use, ty, try self.evidenceForUseSite(record.expr)),
-            .imported_const => |const_use| return try self.restoreConstUseAtType(const_use, ty, try self.evidenceForUseSite(record.expr)),
-            .platform_required_const => |required| return try self.restoreConstUseAtType(required.const_use, ty, try self.evidenceForUseSite(record.expr)),
+            .top_level_const => |const_use| return try self.restoreConstUseAtType(
+                const_use,
+                ty,
+                try self.evidenceForUseSite(record.expr),
+            ),
+            .imported_const => |const_use| return try self.restoreConstUseAtType(
+                const_use,
+                ty,
+                try self.evidenceForUseSite(record.expr),
+            ),
+            .platform_required_const => |required| return try self.restoreConstUseAtType(
+                required.const_use,
+                ty,
+                try self.evidenceForUseSite(record.expr),
+            ),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -22389,6 +22819,17 @@ const BodyContext = struct {
             return try self.addExprWithTypeCell(
                 local_cell,
                 .{ .local = binding.local },
+            );
+        }
+        if (self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
+            const checked_ty = self.view.bodies.expr(checked_expr).ty;
+            const local_cell = self.localTypeCell(local_id);
+            const local_node = try local_cell.toGraphNode(self.graph);
+            try self.constrainCheckedInterfaceToCell(checked_ty, local_cell);
+            try relateRequestComponent(self.graph, local_node, expected_node);
+            return try self.addExprWithTypeCell(
+                local_cell,
+                .{ .local = local_id },
             );
         }
         switch (record.ref) {
@@ -22694,7 +23135,15 @@ const BodyContext = struct {
                 if (!self.sameType(ty, stored_ty)) {
                     Common.invariant("stored const representation differed from its expected Monotype type");
                 }
-                break :blk try self.restoredStaticDataCandidateNode(
+                var active_const_scope: ActiveConstBindingScope = .{};
+                const has_active_const_binding = try self.enterActiveConstBindingAtCell(
+                    store_view,
+                    const_use.const_ref,
+                    try self.draftTypeCell(stored_ty),
+                    &active_const_scope,
+                );
+                defer self.leaveActiveConstBinding(&active_const_scope);
+                const restored = try self.restoredStaticDataCandidateNode(
                     store_view,
                     self.view,
                     stored.node,
@@ -22703,11 +23152,19 @@ const BodyContext = struct {
                     requested_ty,
                     .disallow,
                 );
+                if (has_active_const_binding and active_const_scope.active.used) {
+                    break :blk try self.wrapRecursiveConstLocalAtTypeCell(
+                        active_const_scope.active.local,
+                        try self.draftTypeCell(stored_ty),
+                        restored,
+                    );
+                }
+                break :blk restored;
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(requested_ty, ty);
-                break :blk try self.lowerConstEvalTemplateUse(store_view, eval, ty, null, null);
+                break :blk try self.lowerConstEvalTemplateUse(store_view, eval, const_use.const_ref, ty, null, null);
             },
         };
     }
@@ -22733,8 +23190,17 @@ const BodyContext = struct {
             .stored_const => |stored| blk: {
                 const stored_ty = try self.storedConstRootMonoType(store_view, stored, requested_ty);
                 const stored_node = try self.graph.importMono(stored_ty);
+                const interface_node = try self.instNode(requested_ty);
                 try relateRequestComponent(self.graph, request_node, stored_node);
-                break :blk try self.restoredStaticDataCandidateNodeAtNode(
+                var active_const_scope: ActiveConstBindingScope = .{};
+                const has_active_const_binding = try self.enterActiveConstBindingAtCell(
+                    store_view,
+                    const_use.const_ref,
+                    DraftTypeCell.fromGraphNode(interface_node),
+                    &active_const_scope,
+                );
+                defer self.leaveActiveConstBinding(&active_const_scope);
+                const restored = try self.restoredStaticDataCandidateNodeAtNode(
                     store_view,
                     self.view,
                     stored.node,
@@ -22743,6 +23209,14 @@ const BodyContext = struct {
                     requested_ty,
                     .disallow,
                 );
+                if (has_active_const_binding and active_const_scope.active.used) {
+                    break :blk try self.wrapRecursiveConstLocalAtTypeCell(
+                        active_const_scope.active.local,
+                        DraftTypeCell.fromGraphNode(interface_node),
+                        restored,
+                    );
+                }
+                break :blk restored;
             },
             .reserved => Common.invariant("reserved checked const template reached Monotype"),
             .eval_template => |eval| blk: {
@@ -22750,6 +23224,7 @@ const BodyContext = struct {
                 break :blk try self.lowerConstEvalTemplateUseAtNode(
                     store_view,
                     eval,
+                    const_use.const_ref,
                     request_node,
                     null,
                     null,
@@ -22813,6 +23288,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         eval: checked.ConstEvalTemplate,
+        const_ref: checked.ConstRef,
         ty: Type.TypeId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
@@ -22820,6 +23296,7 @@ const BodyContext = struct {
         return try self.lowerConstEvalTemplateUseAtNode(
             store_view,
             eval,
+            const_ref,
             try self.activeNodeFromType(ty),
             source_region_override,
             current_entry_root,
@@ -22830,6 +23307,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         eval: checked.ConstEvalTemplate,
+        const_ref: checked.ConstRef,
         request_node: NodeId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
@@ -22862,6 +23340,48 @@ const BodyContext = struct {
             .root = body.root,
         };
 
+        var active_const_binding: ActiveConstBinding = undefined;
+        var has_active_const_binding = false;
+        switch (const_ref.owner) {
+            .top_level_binding => |owner| {
+                if (!moduleBytesEqual(checked.constModuleId(const_ref).bytes, store_view.key.bytes)) {
+                    Common.invariant("top-level const eval template referenced a different checked module");
+                }
+                const root = store_view.compile_time_roots.root(body.root);
+                if (root.kind != .constant) {
+                    Common.invariant("top-level const eval template did not reference a constant root");
+                }
+                if (root.module_idx != owner.module_idx) {
+                    Common.invariant("top-level const eval template root had a mismatched module index");
+                }
+                const pattern = root.pattern orelse
+                    Common.invariant("top-level const eval template root had no checked pattern");
+                if (pattern != owner.pattern) {
+                    Common.invariant("top-level const eval template root had a mismatched checked pattern");
+                }
+                const binder = switch (store_view.bodies.pattern(pattern).data) {
+                    .assign => |binder| binder,
+                    else => Common.invariant("top-level const root pattern was not a binder"),
+                };
+                const cell = DraftTypeCell.fromGraphNode(request_node);
+                const local = try body_ctx.addFreshLocalWithBinderCell(
+                    self.builder.symbols.fresh(),
+                    cell,
+                    binder,
+                );
+                try body_ctx.bindLocalName(local, binder);
+                try body_ctx.binders.put(binder, local);
+                active_const_binding = .{
+                    .const_ref = const_ref,
+                    .binder = binder,
+                    .local = local,
+                };
+                body_ctx.active_const_binding = &active_const_binding;
+                has_active_const_binding = true;
+            },
+            .hoisted_expr => {},
+        }
+
         // A checked source key is stable while the request remains a live
         // graph node. Nested specializations additionally key their concrete
         // request through the draft graph, so no provisional TypeId digest is
@@ -22877,10 +23397,18 @@ const BodyContext = struct {
         );
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
-        return try body_ctx.lowerComptimeRootExprAtCell(
+        const restored = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
             DraftTypeCell.fromGraphNode(request_node),
         );
+        if (has_active_const_binding and active_const_binding.used) {
+            return try body_ctx.wrapRecursiveConstLocalAtTypeCell(
+                active_const_binding.local,
+                DraftTypeCell.fromGraphNode(request_node),
+                restored,
+            );
+        }
+        return restored;
     }
 
     fn restoreConstNode(
@@ -23674,6 +24202,7 @@ const BodyContext = struct {
                 );
                 fn_ctx.evidence = retained_evidence;
                 defer fn_ctx.deinit();
+                try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
@@ -23697,6 +24226,7 @@ const BodyContext = struct {
                 fn_value.source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
+                .resolved,
                 .independent_roots,
             )),
         };
@@ -23723,6 +24253,7 @@ const BodyContext = struct {
         );
         fn_ctx.evidence = retained_evidence;
         defer fn_ctx.deinit();
+        try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         fn_ctx.current_fn_key = switch (fn_def) {
             .nested => |nested| nested.context_fn_key,
@@ -23910,6 +24441,7 @@ const BodyContext = struct {
                 var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
                 fn_ctx.evidence = retained_evidence;
                 defer fn_ctx.deinit();
+                try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
@@ -23933,6 +24465,7 @@ const BodyContext = struct {
                 template.source_fn_key,
                 request_fn_node,
                 retained_evidence.vector,
+                .resolved,
                 .independent_roots,
             )),
         };
@@ -23951,6 +24484,7 @@ const BodyContext = struct {
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, ownerTemplateForConstFnDef(fn_value.fn_def), self.graph, self.draft);
         fn_ctx.evidence = retained_evidence;
         defer fn_ctx.deinit();
+        try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         fn_ctx.current_fn_key = switch (template.fn_def) {
             .nested => |nested| nested.context_fn_key,
@@ -24086,6 +24620,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
         const expr = fn_view.bodies.expr(runtime.expr);
@@ -24192,6 +24727,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
         var source_captures = try self.builder.bindConstSourceCaptures(
@@ -24354,6 +24890,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
         const expr = fn_view.bodies.expr(runtime.expr);
@@ -24477,6 +25014,7 @@ const BodyContext = struct {
 
         var fn_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, fn_view, self.method_scope, runtime.owner, self.graph, self.draft);
         defer fn_ctx.deinit();
+        try fn_ctx.inheritActiveConstBinding(self);
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
         var source_captures = try self.builder.bindConstSourceCaptures(
@@ -24675,6 +25213,13 @@ const BodyContext = struct {
             const local_node = try local_cell.toGraphNode(self.graph);
             try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binding.binder), local_cell);
+            try relateRequestComponent(self.graph, local_node, expected_node);
+            return;
+        }
+        if (self.currentConstLocalForResolvedValue(ref_id)) |local_id| {
+            const local_cell = self.localTypeCell(local_id);
+            const local_node = try local_cell.toGraphNode(self.graph);
+            try self.constrainCheckedInterfaceToCell(expr.ty, local_cell);
             try relateRequestComponent(self.graph, local_node, expected_node);
             return;
         }
@@ -25393,7 +25938,8 @@ const BodyContext = struct {
                 if (try self.restoredHoistedExprAtNode(checked_expr, expected_node)) |restored| {
                     break :blk restored;
                 }
-                switch (self.view.bodies.expr(checked_expr).data) {
+                const expr = self.view.bodies.expr(checked_expr);
+                switch (expr.data) {
                     .lookup_local => |lookup| break :blk try self.lowerLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
                     .lookup_external => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
                     .lookup_required => |resolved| break :blk try self.lowerLookupExprAtNode(checked_expr, resolved, expected_node),
@@ -25437,12 +25983,23 @@ const BodyContext = struct {
                     .runtime_error => break :blk try self.runtimeCrashExprAtCell(cell, "runtime error"),
                     else => {},
                 }
+                switch (expr.data) {
+                    .tuple_access => |access| {
+                        if (try self.checkedTypeContainsError(expr.ty)) {
+                            break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
+                        }
+                        if (try self.checkedTypeContainsError(self.view.bodies.expr(access.tuple).ty)) {
+                            break :blk try self.runtimeCrashExprAtCell(cell, "runtime error");
+                        }
+                    },
+                    else => {},
+                }
                 try relateRequestComponent(
                     self.graph,
                     expected_node,
                     try self.lowerExprTypeNode(checked_expr),
                 );
-                switch (self.view.bodies.expr(checked_expr).data) {
+                switch (expr.data) {
                     .tuple_access => |access| {
                         const tuple_node = try self.lowerExprTypeNode(access.tuple);
                         const item_nodes = try self.graph.tupleItemNodes(tuple_node);
@@ -26223,6 +26780,9 @@ const BodyContext = struct {
         for (captures) |capture| {
             const binder = checkedCaptureBinder(self.view, capture.pattern);
             const local = self.binders.get(binder) orelse continue;
+            if (self.active_const_binding) |active| {
+                if (active.binder == binder) active.used = true;
+            }
             const cell = self.localTypeCell(local);
             try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
             const value = try self.addExprWithTypeCell(
@@ -26289,6 +26849,9 @@ const BodyContext = struct {
                 for (closure.captures) |capture| {
                     const binder = checkedCaptureBinder(self.view, capture.pattern);
                     const local = self.binders.get(binder) orelse continue;
+                    if (self.active_const_binding) |active| {
+                        if (active.binder == binder) active.used = true;
+                    }
                     const cell = self.localTypeCell(local);
                     try self.constrainCheckedInterfaceToCell(checkedBinderType(self.view, binder), cell);
                     try capture_nodes.append(self.allocator, try cell.toGraphNode(self.graph));
@@ -27789,6 +28352,27 @@ const BodyContext = struct {
         return private_node;
     }
 
+    fn generatedIteratorPlanRequestNode(
+        self: *BodyContext,
+        lookup: MethodLookup,
+        public_target_node: NodeId,
+        request_node: NodeId,
+        operands: []const static_dispatch.IteratorDispatchOperand,
+    ) Allocator.Error!?NodeId {
+        const procedure = self.iteratorProcedureForMethodTarget(lookup.target) orelse return null;
+        const checked_args = try self.checkedExprIteratorDispatchOperands(operands) orelse return null;
+        defer self.allocator.free(checked_args);
+        const private_node = (try self.generatedIteratorFunctionNode(
+            procedure,
+            public_target_node,
+            request_node,
+            checked_args,
+        )) orelse return null;
+        try self.graph.registerRequestSourceInterface(private_node, public_target_node);
+        try relateFunctionRequestInterface(self.graph, public_target_node, private_node);
+        return private_node;
+    }
+
     fn checkedExprDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.StaticDispatchOperand,
@@ -27802,6 +28386,24 @@ const BodyContext = struct {
                 .generated_numeral,
                 .generated_quote,
                 => {
+                    self.allocator.free(checked_args);
+                    return null;
+                },
+            };
+        }
+        return checked_args;
+    }
+
+    fn checkedExprIteratorDispatchOperands(
+        self: *BodyContext,
+        operands: []const static_dispatch.IteratorDispatchOperand,
+    ) Allocator.Error!?[]checked.CheckedExprId {
+        const checked_args = try self.allocator.alloc(checked.CheckedExprId, operands.len);
+        errdefer self.allocator.free(checked_args);
+        for (operands, checked_args) |operand, *checked_arg| {
+            checked_arg.* = switch (operand) {
+                .checked_expr => |expr| expr,
+                .loop_iterator_state => {
                     self.allocator.free(checked_args);
                     return null;
                 },
@@ -28007,15 +28609,42 @@ const BodyContext = struct {
         const out = try arena.alloc(SpecEvidence, params.len);
         for (params, 0..) |param, i| {
             const path = view.templates.evidenceParamPath(param);
-            if (path.len == 0) {
-                Common.invariant("compiler-generated method edge did not contain a dispatcher path");
-            }
-            const component_ty = try self.walkEvidencePath(view, callable_mono_ty, path) orelse {
-                Common.invariant("compiler-generated method dispatcher path did not match its callable type");
-            };
+            const component_ty = if (path.len == 0)
+                try self.defaultedEvidenceParamType(param)
+            else
+                try self.walkEvidencePath(view, callable_mono_ty, path) orelse {
+                    Common.invariant("compiler-generated method dispatcher path did not match its callable type");
+                };
             out[i] = try self.synthesizeComponentEvidence(view, param.method, param.structural, component_ty);
         }
         return out;
+    }
+
+    fn defaultedEvidenceParamType(
+        self: *BodyContext,
+        param: static_dispatch.EvidenceParamRecord,
+    ) Allocator.Error!Type.TypeId {
+        const primitive = defaultedEvidenceParamPrimitive(param);
+        return try self.builder.program.types.add(.{ .primitive = primitive });
+    }
+
+    fn defaultedEvidenceParamNode(
+        self: *BodyContext,
+        param: static_dispatch.EvidenceParamRecord,
+    ) Allocator.Error!NodeId {
+        const primitive = defaultedEvidenceParamPrimitive(param);
+        return try self.graph.newNode(.{ .primitive = primitive });
+    }
+
+    fn defaultedEvidenceParamPrimitive(param: static_dispatch.EvidenceParamRecord) Type.Primitive {
+        const phase = param.pathless_default_phase orelse
+            Common.invariant("compiler-generated method edge did not contain a dispatcher path");
+        const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+            Common.invariant("checking-finalized pathless evidence param reached Monotype synthesis");
+        return switch (target) {
+            .dec => .dec,
+            .str => .str,
+        };
     }
 
     /// Project checker-authored dispatcher paths over the exact checked root
@@ -28032,12 +28661,12 @@ const BodyContext = struct {
         errdefer self.allocator.free(out);
         for (params, 0..) |param, i| {
             const path = view.templates.evidenceParamPath(param);
-            if (path.len == 0) {
-                Common.invariant("compiler-generated method edge did not contain a dispatcher path");
-            }
-            out[i] = try self.walkEvidencePathNode(view, target_root_node, path) orelse {
-                Common.invariant("compiler-generated method dispatcher path did not match its checked target graph type");
-            };
+            out[i] = if (path.len == 0)
+                try self.defaultedEvidenceParamNode(param)
+            else
+                try self.walkEvidencePathNode(view, target_root_node, path) orelse {
+                    Common.invariant("compiler-generated method dispatcher path did not match its checked target graph type");
+                };
         }
         return out;
     }
@@ -28590,6 +29219,10 @@ const BodyContext = struct {
                     source_fn_key,
                     request_fn_node,
                     evidence,
+                    switch (evidence_vector) {
+                        .resolved => .resolved,
+                        .synthesize => .synthesized,
+                    },
                     if (procedure.iterator_procedure == .iter_from_step) .exact_graph else .independent_roots,
                 );
                 break :blk slot;
@@ -28649,15 +29282,16 @@ const BodyContext = struct {
             fn_nodes.args,
             pre_lowered,
         );
+        const contextual_lookup = try self.withLocalProcContext(lookup);
         return .{ .call_proc = .{
             .callee = draftProcCalleeForSlot(try self.methodTargetCalleeAtNode(
-                lookup,
+                contextual_lookup,
                 callable_node,
                 try self.evidenceForDispatchTarget(plan),
             )),
             .args = args,
-            .iterator_procedure = self.iteratorProcedureForMethodTarget(lookup.target),
-            .captures = try self.methodTargetCaptureSpan(lookup),
+            .iterator_procedure = self.iteratorProcedureForMethodTarget(contextual_lookup.target),
+            .captures = try self.methodTargetCaptureSpan(contextual_lookup),
         } };
     }
 
@@ -36412,9 +37046,17 @@ const BodyContext = struct {
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
 
-        const callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
+        var callable_node = try call_ctx.instantiateIteratorPlanCallNodeFromCaller(plan.callable_ty, self, plan_args, loop_iterator, expected_ret_ty);
         const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
         try relateFunctionRequestInterface(self.graph, target_node, callable_node);
+        if (try self.generatedIteratorPlanRequestNode(
+            lookup,
+            target_node,
+            callable_node,
+            plan_args,
+        )) |private_node| {
+            callable_node = private_node;
+        }
         const plan_fn = try self.graph.functionNodes(callable_node);
         if (expected_ret_ty) |expected| {
             if (!self.graph.sameClass(plan_fn.ret, try expected.toGraphNode(self.graph))) {
@@ -36538,7 +37180,7 @@ const BodyContext = struct {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
                     const public_node = try caller.instNode(arg_ty);
-                    try self.graph.unify(formal_node, public_node);
+                    try relateRequestComponent(self.graph, formal_node, public_node);
                     if (try caller.callArgumentEvidenceNode(checked_arg, null)) |evidence_node| {
                         request_arg.* = try checkedMonoRequestNode(
                             self.graph,
@@ -36877,7 +37519,7 @@ const BodyContext = struct {
         defer self.allocator.free(values);
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            values[i] = try self.addExprWithTypeCell(carry.ty, .{ .local = current });
+            values[i] = try self.loopCarryCurrentExpr(carry, current, .recursive_feedback);
         }
         return try self.continueWith(result_cell, values);
     }
@@ -36893,7 +37535,7 @@ const BodyContext = struct {
         values[0] = rest_expr;
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            values[i + 1] = try self.addExprWithTypeCell(carry.ty, .{ .local = current });
+            values[i + 1] = try self.loopCarryCurrentExpr(carry, current, .recursive_feedback);
         }
         return try self.continueWith(result_cell, values);
     }
@@ -36902,16 +37544,38 @@ const BodyContext = struct {
         if (carries.len == 0) Common.invariant("empty loop state requested");
         if (carries.len == 1) {
             const current = self.binders.get(carries[0].binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            return try self.addExprWithTypeCell(carries[0].ty, .{ .local = current });
+            return try self.loopCarryCurrentExpr(carries[0], current, .exit_state);
         }
 
         const items = try self.allocator.alloc(DraftExprId, carries.len);
         defer self.allocator.free(items);
         for (carries, 0..) |carry, i| {
             const current = self.binders.get(carry.binder) orelse Common.invariant("loop-carried mutable binder was absent");
-            items[i] = try self.addExprWithTypeCell(carry.ty, .{ .local = current });
+            items[i] = try self.loopCarryCurrentExpr(carry, current, .exit_state);
         }
         return try self.addExprWithTypeCell(result_cell, .{ .tuple = try self.addExprSpan(items) });
+    }
+
+    const LoopCarryFeedback = enum {
+        recursive_feedback,
+        exit_state,
+    };
+
+    fn loopCarryCurrentExpr(
+        self: *BodyContext,
+        carry: LoopCarry,
+        current: DraftLocalId,
+        feedback: LoopCarryFeedback,
+    ) Allocator.Error!DraftExprId {
+        const carry_node = try carry.ty.toGraphNode(self.graph);
+        const current_node = try self.localTypeCell(current).toGraphNode(self.graph);
+        if (!self.graph.sameClass(carry_node, current_node)) {
+            if (feedback == .recursive_feedback) {
+                try self.graph.markRecursiveValueSlot(carry_node);
+            }
+            try selectRequestRepresentation(self.graph, carry_node, current_node);
+        }
+        return try self.addExprWithTypeCell(carry.ty, .{ .local = current });
     }
 
     fn loopStateTypeCell(self: *BodyContext, unit_ty: Type.TypeId, carries: []const LoopCarry) Allocator.Error!DraftTypeCell {
@@ -38541,14 +39205,14 @@ test "open draft recursive provenance joins fresh interface cells only while low
 
     const shared_ret = try graph.newNode(.{ .primitive = .bool });
     const active_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
-    const recursive_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const recursive_ret = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const active_fn = try graph.newNode(.{ .func = .{
         .args = try graph.arena().dupe(NodeId, &.{active_arg}),
         .ret = shared_ret,
     } });
     const recursive_fn = try graph.newNode(.{ .func = .{
-        .args = try graph.arena().dupe(NodeId, &.{recursive_arg}),
-        .ret = shared_ret,
+        .args = try graph.arena().dupe(NodeId, &.{active_arg}),
+        .ret = recursive_ret,
     } });
     const shared_frame = RuntimeDemandGuardFrameAddress{
         .module = [_]u8{1} ** 32,
@@ -38576,11 +39240,14 @@ test "open draft recursive provenance joins fresh interface cells only while low
     try std.testing.expectEqual(@as(usize, 2), frames.len);
 
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, recursive_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false));
-    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true));
+    const initial_arg_classes = try graph.snapshotFunctionArgumentClasses(active_fn);
+    try std.testing.expect(try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, recursive_fn));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, false, false));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowering, false, true, false));
+    try std.testing.expect(draftOpenCandidateQualifies(.lowering, false, true, true));
     try graph.unify(active_fn, recursive_fn);
     try std.testing.expect(graph.sameFunctionInterface(active_fn, recursive_fn));
-    try std.testing.expect(graph.sameClass(active_arg, recursive_arg));
+    try std.testing.expect(graph.sameClass(shared_ret, recursive_ret));
 
     const independent_arg = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const independent_fn = try graph.newNode(.{ .func = .{
@@ -38588,13 +39255,14 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = shared_ret,
     } });
     try std.testing.expect(!graph.sameFunctionInterface(active_fn, independent_fn));
-    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true));
+    try std.testing.expect(!try draftRequestOverlapsInitialArgumentClass(graph, initial_arg_classes, independent_fn));
+    try std.testing.expect(!draftOpenCandidateQualifies(.lowered, false, true, true));
     try std.testing.expect(!graph.sameClass(active_arg, independent_arg));
 
     // An exact request reuses a completed specialization regardless of the
     // requesting guard context; reuses under a different context are recorded
     // and re-verified against the specialization's demands at seal.
-    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false));
+    try std.testing.expect(draftOpenCandidateQualifies(.lowered, true, false, false));
 }
 
 test "open draft selection converges exact interfaces and rejects partial ambiguity" {
@@ -39738,6 +40406,27 @@ fn moduleBytesEqual(a: [32]u8, b: [32]u8) bool {
     return std.mem.eql(u8, a[0..], b[0..]);
 }
 
+fn constRefEql(a: checked.ConstRef, b: checked.ConstRef) bool {
+    return moduleBytesEqual(a.artifact.bytes, b.artifact.bytes) and
+        constOwnerEql(a.owner, b.owner) and
+        a.template == b.template and
+        std.mem.eql(u8, a.source_scheme.bytes[0..], b.source_scheme.bytes[0..]);
+}
+
+fn constOwnerEql(a: checked.ConstOwner, b: checked.ConstOwner) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .top_level_binding => |left| blk: {
+            const right = b.top_level_binding;
+            break :blk left.module_idx == right.module_idx and left.pattern == right.pattern;
+        },
+        .hoisted_expr => |left| blk: {
+            const right = b.hoisted_expr;
+            break :blk left.module_idx == right.module_idx and left.expr == right.expr;
+        },
+    };
+}
+
 fn verifyMonotypeTypeStore(program: *const Ast.Program) void {
     if (program.types.verify(&program.names)) |err| switch (err) {
         .type_digest_count_mismatch => Common.invariant("Monotype type digest section length differed from type node count"),
@@ -39943,6 +40632,127 @@ test "hosted Try adapter narrows requested private representations by declared l
         @as(?Type.TypeId, null),
         try builder.hostedTryAdapterSourceType(capability, impostor_declared_fn, impostor_requested_fn),
     );
+}
+
+test "request component relation follows root authority before nested private evidence" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xE1} ** 32));
+    const type_name = try name_store.internTypeName("OuterEvidence");
+    const inner_type_name = try name_store.internTypeName("InnerEvidence");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(8) };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(9) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
+    const private_arg = try graph.newNode(.{ .named = .{
+        .named_type = inner_named_type,
+        .def = inner_def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const public = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().dupe(NodeId, &.{private_arg}),
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+    } });
+    const private = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().dupe(NodeId, &.{private_arg}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+
+    try relateRequestComponent(graph, public, private);
+
+    try std.testing.expect(!graph.sameClass(public, private));
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private).named.backing.?.authority);
+}
+
+test "request component relation descends through matching private-bearing containers" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xE2} ** 32));
+    const type_name = try name_store.internTypeName("ElementEvidence");
+    const inner_type_name = try name_store.internTypeName("InnerEvidence");
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(10) };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(11) };
+    const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
+    const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
+    const shared_private_arg = try graph.newNode(.{ .named = .{
+        .named_type = inner_named_type,
+        .def = inner_def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().alloc(NodeId, 0),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const public_elem = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only },
+    } });
+    const private_elem = try graph.newNode(.{ .named = .{
+        .named_type = named_type,
+        .def = def,
+        .kind = .@"opaque",
+        .builtin_owner = .fields,
+        .args = try graph.arena().dupe(NodeId, &.{shared_private_arg}),
+        .backing = .{
+            .node = try graph.newNode(.empty_record),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } });
+    const public_list = try graph.newNode(.{ .list = public_elem });
+    const private_list = try graph.newNode(.{ .list = private_elem });
+
+    try relateRequestComponent(graph, public_list, private_list);
+
+    try std.testing.expect(graph.sameClass(public_list, private_list));
+    try std.testing.expect(!graph.sameClass(public_elem, private_elem));
+    try std.testing.expectEqual(Type.BackingAuthority.checked_public, graph.content(public_elem).named.backing.?.authority);
+    try std.testing.expectEqual(Type.BackingAuthority.generated_private, graph.content(private_elem).named.backing.?.authority);
 }
 
 test "monotype lower declarations are referenced" {
