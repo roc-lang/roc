@@ -61,7 +61,8 @@ pub const Constants = struct {
     /// 35: Platform requirement roots carry producer-authored dispatch evidence.
     /// 36: Checked iterator procedure identity includes Str.iter_utf8.
     /// 37: Nested procedure sites declare their producer-authored evidence source.
-    pub const CACHE_VERSION = 38;
+    /// 38: Platform provides entries include their exact platform-local definition.
+    pub const CACHE_VERSION = 39;
 };
 
 /// Configuration for the Roc cache system.

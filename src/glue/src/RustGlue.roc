@@ -916,6 +916,8 @@ generate_rust_file_header =
 	\\#![allow(dead_code)]
 	\\#![allow(improper_ctypes)]
 	\\#![allow(improper_ctypes_definitions)]
+	\\// `no_roc_std_helpers` is supplied by host build tooling and cannot be registered from source.
+	\\#![allow(unexpected_cfgs)]
 	\\
 	\\
 

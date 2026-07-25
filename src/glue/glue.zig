@@ -31,6 +31,7 @@ const parse = @import("parse");
 const compile = @import("compile");
 const check = @import("check");
 const can = @import("can");
+const reporting = @import("reporting");
 const roc_target = @import("roc_target");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -64,6 +65,7 @@ pub const GlueArgs = struct {
     glue_spec: []const u8,
     output_dir: []const u8,
     platform_path: []const u8,
+    report_config: reporting.ReportingConfig,
     opt: GlueOpt = .dev,
     no_cache: bool = false,
     /// Prebuilt plugin dylib from a `roc install`ed glue spec. When set, it
@@ -158,10 +160,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
 
     build_env.build(platform_abs_path) catch {
-        _ = try build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr, args.report_config);
         return error.CompilationFailed;
     };
-    _ = try build_env.renderDiagnostics(stderr);
+    _ = try build_env.renderDiagnostics(stderr, args.report_config);
 
     const modules = build_env.getModulesInSerializationOrder(gpa) catch {
         return error.ModuleRetrieval;
@@ -264,7 +266,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
         }
 
         for (artifact.provides_requires.provides) |provides_entry| {
-            const def_idx = provides_entry.def orelse continue;
+            const def_idx = provides_entry.def;
             const top_level = artifact.top_level_values.lookupByDef(def_idx) orelse
                 glueInvariant("provided entry has no top-level value", .{});
             const scheme = artifact.checked_types.schemeForKey(top_level.source_scheme) orelse
@@ -284,7 +286,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     };
 
     // 5. Compile glue spec through checked artifacts and lower to LIR.
-    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, args.glue_spec, args.no_cache, args.report_config, std_io);
     defer spec.deinit(gpa);
     const lowered = &spec.lowered;
     const root_artifact = spec.root_artifact;
@@ -394,7 +396,14 @@ const CompiledGlueSpec = struct {
 
 /// Compile a glue spec (an app on the compiler-owned glue platform) and
 /// lower it to LIR, ready for plugin-dylib codegen or interpretation.
-fn compileGlueSpec(gpa: Allocator, stderr: *std.Io.Writer, glue_spec: []const u8, no_cache: bool, std_io: std.Io) GlueError!CompiledGlueSpec {
+fn compileGlueSpec(
+    gpa: Allocator,
+    stderr: *std.Io.Writer,
+    glue_spec: []const u8,
+    no_cache: bool,
+    report_config: reporting.ReportingConfig,
+    std_io: std.Io,
+) GlueError!CompiledGlueSpec {
     std.Io.Dir.cwd().access(std_io, glue_spec, .{}) catch {
         return error.GlueSpecNotFound;
     };
@@ -420,10 +429,10 @@ fn compileGlueSpec(gpa: Allocator, stderr: *std.Io.Writer, glue_spec: []const u8
     };
 
     build_env.build(glue_spec_abs) catch {
-        _ = try build_env.renderDiagnostics(stderr);
+        _ = try build_env.renderDiagnostics(stderr, report_config);
         return error.CompilationFailed;
     };
-    _ = try build_env.renderDiagnostics(stderr);
+    _ = try build_env.renderDiagnostics(stderr, report_config);
     if (!build_env.executable_artifacts_finalized) {
         return error.CompilationFailed;
     }
@@ -499,9 +508,10 @@ pub fn buildGlueSpecDylibFile(
     glue_spec: []const u8,
     output_path: []const u8,
     opt: GlueOpt,
+    report_config: reporting.ReportingConfig,
     std_io: std.Io,
 ) GlueError!void {
-    buildGlueSpecDylibFileInner(gpa, stderr, glue_spec, output_path, opt, std_io) catch |err| {
+    buildGlueSpecDylibFileInner(gpa, stderr, glue_spec, output_path, opt, report_config, std_io) catch |err| {
         (switch (err) {
             error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{glue_spec}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
@@ -520,11 +530,12 @@ fn buildGlueSpecDylibFileInner(
     glue_spec: []const u8,
     output_path: []const u8,
     opt: GlueOpt,
+    report_config: reporting.ReportingConfig,
     std_io: std.Io,
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GlueDylibUnavailable;
 
-    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, std_io);
+    var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, std_io);
     defer spec.deinit(gpa);
 
     const stamp = gluePluginStamp(spec.root_artifact.key);

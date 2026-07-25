@@ -62,13 +62,35 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
-    // Liveness-table bit layout: [0, localCount) raw locals with
-    // read-before-rebind semantics, then one bit per multi-member borrow
-    // group (any member reads it; definitions end the previous resource and
-    // explicit source reads transfer liveness to the new resource), then one
-    // bit per borrowed call-result local (value-use semantics: RC statements
-    // are not uses, string-match captures kill on the match edge).
+    // Liveness-table bit layout: one dense raw bit per local whose layout
+    // contains refcounted data and per explicit ownership-unit/borrow-group
+    // representative selected for such a local by the solved ownership graph,
+    // then one bit per multi-member borrow group (any member reads it;
+    // definitions end the previous resource and explicit source reads transfer
+    // liveness to the new resource), then one bit per borrowed call-result
+    // local (value-use semantics: RC statements are not uses, string-match
+    // captures kill on the match edge). Unrelated scalar locals are not ARC
+    // resources and therefore do not widen every row.
     const no_liveness_bit = std.math.maxInt(u32);
+    var raw_liveness_bit_index = try store.allocator.alloc(u32, store.localCount());
+    defer store.allocator.free(raw_liveness_bit_index);
+    @memset(raw_liveness_bit_index, no_liveness_bit);
+    var raw_liveness_needed = try store.allocator.alloc(bool, store.localCount());
+    defer store.allocator.free(raw_liveness_needed);
+    @memset(raw_liveness_needed, false);
+    for (local_contains_refcounted, 0..) |contains_refcounted, local_index| {
+        if (!contains_refcounted) continue;
+        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
+        raw_liveness_needed[local_index] = true;
+        raw_liveness_needed[@intFromEnum(solution.leaderOf(local))] = true;
+        raw_liveness_needed[@intFromEnum(solution.unitLocalOf(local))] = true;
+    }
+    var raw_liveness_bit_count: usize = 0;
+    for (raw_liveness_needed, 0..) |needed, local_index| {
+        if (!needed) continue;
+        raw_liveness_bit_index[local_index] = @intCast(raw_liveness_bit_count);
+        raw_liveness_bit_count += 1;
+    }
     var group_bit_index = try store.allocator.alloc(u32, store.localCount());
     defer store.allocator.free(group_bit_index);
     @memset(group_bit_index, no_liveness_bit);
@@ -98,11 +120,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         value_use_bit_index[@intFromEnum(target)] = @intCast(value_use_locals.items.len);
         try value_use_locals.append(store.allocator, target);
     }
+    inserter.raw_liveness_bit_index = raw_liveness_bit_index;
+    inserter.raw_liveness_bit_count = raw_liveness_bit_count;
     inserter.group_bit_index = group_bit_index;
     inserter.group_leaders = group_leaders.items;
     inserter.value_use_bit_index = value_use_bit_index;
     inserter.value_use_locals = value_use_locals.items;
-    inserter.liveness_bit_len = store.localCount() + group_leaders.items.len + value_use_locals.items.len;
+    inserter.liveness_bit_len = raw_liveness_bit_count + group_leaders.items.len + value_use_locals.items.len;
 
     var read_cache_arena = std.heap.ArenaAllocator.init(store.allocator);
     defer read_cache_arena.deinit();
@@ -543,20 +567,25 @@ const Inserter = struct {
     reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, std.bit_set.DynamicBitSetUnmanaged) = undefined,
     read_cache_arena: *std.heap.ArenaAllocator = undefined,
     read_cache_allocator: Allocator = undefined,
+    /// Raw liveness-bit index per local. Locals whose committed layout
+    /// contains refcounted data and their explicit solved ownership-unit /
+    /// borrow-group representatives receive bits; all others hold maxInt.
+    raw_liveness_bit_index: []const u32 = &.{},
+    raw_liveness_bit_count: usize = 0,
     /// Group-bit index per local: leaders of multi-member borrow groups map
-    /// to a dense index (others hold maxInt). Group bits live at
-    /// `localCount() + index` in the liveness table.
+    /// to a dense index (others hold maxInt). Group bits live after the raw
+    /// resource-local bits in the liveness table.
     group_bit_index: []const u32 = &.{},
     /// Leader local per dense group-bit index.
     group_leaders: []const LIR.LocalId = &.{},
     /// Value-use bit index per local: borrowed call-result locals map to a
-    /// dense index (others hold maxInt). Value-use bits live at
-    /// `localCount() + group_leaders.len + index` in the liveness table.
+    /// dense index (others hold maxInt). Value-use bits live after the raw
+    /// resource-local and group bits in the liveness table.
     value_use_bit_index: []const u32 = &.{},
     /// Local per dense value-use bit index.
     value_use_locals: []const LIR.LocalId = &.{},
-    /// Total liveness-table bit width: raw locals, then group bits, then
-    /// value-use bits.
+    /// Total liveness-table bit width: raw resource locals, then group bits,
+    /// then value-use bits.
     liveness_bit_len: usize = 0,
     /// Live mapping from an OwnedSet address used as a loop keep-set to its
     /// explicit cache identity. IDs are never reused within one proc emission,
@@ -2259,7 +2288,8 @@ const Inserter = struct {
                 arcInvariant("ARC multi-member borrow group missing its liveness group bit");
             return reads.isSet(bit);
         }
-        return reads.isSet(@intFromEnum(local));
+        const bit = self.rawLivenessBitOf(local) orelse return false;
+        return reads.isSet(bit);
     }
 
     /// Seeds a join's body keep from above: every refcounted unit whose
@@ -3810,8 +3840,16 @@ const Inserter = struct {
         try self.ensureReadBeforeRebindNode(graph, work, successor);
     }
 
-    fn noteReadBeforeRebindLocal(reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-        reads.set(@intFromEnum(local));
+    /// Raw liveness-bit position for a refcounted resource local or one of
+    /// its explicit solved ownership-unit / borrow-group representatives.
+    fn rawLivenessBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
+        const index = self.raw_liveness_bit_index[@intFromEnum(local)];
+        if (index == std.math.maxInt(u32)) return null;
+        return index;
+    }
+
+    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
+        if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
     }
 
     /// Group-bit position of a local's multi-member borrow group, if any.
@@ -3819,14 +3857,14 @@ const Inserter = struct {
         const leader = self.solution.leaderOf(local);
         const index = self.group_bit_index[@intFromEnum(leader)];
         if (index == std.math.maxInt(u32)) return null;
-        return self.store.localCount() + index;
+        return self.raw_liveness_bit_count + index;
     }
 
     /// Value-use bit position of a borrowed call-result local, if any.
     fn valueUseBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
         const index = self.value_use_bit_index[@intFromEnum(local)];
         if (index == std.math.maxInt(u32)) return null;
-        return self.store.localCount() + self.group_leaders.len + index;
+        return self.raw_liveness_bit_count + self.group_leaders.len + index;
     }
 
     /// Records a value use: the raw read-before-rebind bit, the local's
@@ -3834,7 +3872,7 @@ const Inserter = struct {
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
     fn noteLivenessUseLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
-        reads.set(@intFromEnum(local));
+        if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
         if (self.groupBitOf(local)) |bit| reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| reads.set(bit);
     }
@@ -4017,11 +4055,11 @@ const Inserter = struct {
                     self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, expect_err_stmt.message);
                 },
                 .incref => |rc| {
-                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref => |rc| {
-                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref_if_initialized => |rc| {
@@ -4030,7 +4068,7 @@ const Inserter = struct {
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .free => |rc| {
-                    noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
+                    self.noteReadBeforeRebindLocal(&graph.nodes.items[node_index].reads, rc.value);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .switch_stmt => |switch_stmt| {
@@ -4187,7 +4225,7 @@ const Inserter = struct {
                 }
             }
             if (node.def) |local| {
-                scratch.unset(@intFromEnum(local));
+                if (self.rawLivenessBitOf(local)) |bit| scratch.unset(bit);
                 if (self.groupBitOf(local)) |bit| scratch.unset(bit);
                 if (self.valueUseBitOf(local)) |bit| scratch.unset(bit);
             }

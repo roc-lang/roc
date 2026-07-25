@@ -868,6 +868,9 @@ pub const ProvidesEntry = struct {
     ident: Ident.Idx,
     /// The FFI symbol string (e.g., "main")
     ffi_symbol: StringLiteral.Idx,
+    /// The platform-local definition selected by this declaration, or null
+    /// when canonicalization diagnosed an invalid target.
+    local_def: ?CIR.Def.Idx,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -1516,6 +1519,42 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("You can fix this by either defining ");
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" in this module, or by removing it from the list of exposed values.");
+
+            break :blk report;
+        },
+        .provided_value_is_required => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+            const is_effectful = std.mem.endsWith(u8, ident_name, "!");
+            const stem = if (is_effectful) ident_name[0 .. ident_name.len - 1] else ident_name;
+            const example = try std.fmt.allocPrint(
+                allocator,
+                "{s}_for_host{s} = {s}",
+                .{ stem, if (is_effectful) "!" else "", ident_name },
+            );
+            defer allocator.free(example);
+
+            var report = try Report.init(allocator, "Required Value in Provides", "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(" is supplied by the app through the platform's ");
+            try report.headline.addInlineCode("requires");
+            try report.headline.addReflowingText(" section, so ");
+            try report.headline.addInlineCode("provides");
+            try report.headline.addReflowingText(" cannot expose it to the host directly.");
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.addSourceContext(region_info, owned_filename, self.getSourceAll(), self.getLineStartsAll());
+
+            try report.document.addReflowingText("Define a platform-local entrypoint which forwards to ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(", then reference that entrypoint from ");
+            try report.document.addInlineCode("provides");
+            try report.document.addReflowingText(". For example:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_example = try report.addOwnedString(example);
+            try report.document.addInlineCode(owned_example);
 
             break :blk report;
         },

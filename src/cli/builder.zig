@@ -50,6 +50,7 @@ pub const CompileConfig = struct {
     output_path: []const u8,
     optimization: OptimizationLevel,
     target: target.RocTarget,
+    report_config: reporting.ReportingConfig,
     cpu: []const u8 = "",
     features: []const u8 = "",
     debug: bool = false, // Enable debug info generation in output
@@ -346,7 +347,7 @@ pub fn initializeLLVM() void {
 /// Compile LLVM bitcode file to object file
 pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileConfig) (Allocator.Error || error{LLVMNotAvailable})!bool {
     if (comptime !llvm_available) {
-        try renderLLVMNotAvailableError(gpa);
+        try renderLLVMNotAvailableError(gpa, config.report_config);
         return error.LLVMNotAvailable;
     }
 
@@ -360,7 +361,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     // Verify input file exists
     std.Io.Dir.cwd().access(std_io, config.input_path, .{}) catch |err| {
-        try renderFileNotAccessibleError(gpa, config.input_path, err);
+        try renderFileNotAccessibleError(gpa, config.input_path, err, config.report_config);
         return false;
     };
 
@@ -378,7 +379,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
-        try renderLLVMError(gpa, "Bitcode Load Error", "Failed to load bitcode file.", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Load Error", "Failed to load bitcode file.", std.mem.span(error_message), config.report_config);
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -389,7 +390,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Parsing bitcode into LLVM module...", .{});
     var module: ?*anyopaque = null;
     if (externs.LLVMParseBitcode(mem_buf, &module, &error_message) != 0) {
-        try renderLLVMError(gpa, "Bitcode Parse Error", "Failed to parse bitcode.", std.mem.span(error_message));
+        try renderLLVMError(gpa, "Bitcode Parse Error", "Failed to parse bitcode.", std.mem.span(error_message), config.report_config);
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -567,7 +568,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Getting LLVM target for triple: {s}", .{target_triple});
     var llvm_target: ?*anyopaque = null;
     if (externs.LLVMGetTargetFromTriple(target_triple_z.ptr, &llvm_target, &error_message) != 0) {
-        try renderTargetError(gpa, target_triple, std.mem.span(error_message));
+        try renderTargetError(gpa, target_triple, std.mem.span(error_message), config.report_config);
         externs.LLVMDisposeMessage(error_message);
         return false;
     }
@@ -595,7 +596,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         false, // emulated_tls
     );
     if (target_machine == null) {
-        try renderTargetMachineError(gpa, target_triple, config.cpu, config.features);
+        try renderTargetMachineError(gpa, target_triple, config.cpu, config.features, config.report_config);
         return false;
     }
     defer externs.LLVMDisposeTargetMachine(target_machine);
@@ -639,7 +640,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     );
 
     if (emit_result) {
-        try renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message));
+        try renderEmitError(gpa, config.output_path, std.mem.span(emit_error_message), config.report_config);
         externs.LLVMDisposeMessage(emit_error_message);
         return false;
     }
@@ -662,7 +663,7 @@ pub fn isLLVMAvailable() bool {
 
 // --- Error Reporting Helpers ---
 
-fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
+fn renderLLVMNotAvailableError(allocator: Allocator, config: reporting.ReportingConfig) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "LLVM Not Available", "LLVM is not available at compile time.", .fatal);
     defer report.deinit();
 
@@ -675,12 +676,17 @@ fn renderLLVMNotAvailableError(allocator: Allocator) Allocator.Error!void {
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std.Io.Dir.AccessError) Allocator.Error!void {
+fn renderFileNotAccessibleError(
+    allocator: Allocator,
+    path: []const u8,
+    err: std.Io.Dir.AccessError,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "File Not Accessible", "Input bitcode file does not exist or is not accessible.", .fatal);
     defer report.deinit();
 
@@ -696,12 +702,18 @@ fn renderFileNotAccessibleError(allocator: Allocator, path: []const u8, err: std
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8, llvm_message: []const u8) Allocator.Error!void {
+fn renderLLVMError(
+    allocator: Allocator,
+    title: []const u8,
+    message: []const u8,
+    llvm_message: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, title, message, .fatal);
     defer report.deinit();
 
@@ -713,12 +725,17 @@ fn renderLLVMError(allocator: Allocator, title: []const u8, message: []const u8,
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []const u8) Allocator.Error!void {
+fn renderTargetError(
+    allocator: Allocator,
+    triple: []const u8,
+    llvm_message: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "Invalid Target", "Failed to get LLVM target for triple.", .fatal);
     defer report.deinit();
 
@@ -734,12 +751,18 @@ fn renderTargetError(allocator: Allocator, triple: []const u8, llvm_message: []c
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []const u8, features: []const u8) Allocator.Error!void {
+fn renderTargetMachineError(
+    allocator: Allocator,
+    triple: []const u8,
+    cpu: []const u8,
+    features: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "Target Machine Error", "Failed to create LLVM target machine with configuration.", .fatal);
     defer report.deinit();
 
@@ -768,12 +791,17 @@ fn renderTargetMachineError(allocator: Allocator, triple: []const u8, cpu: []con
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }
 
-fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: []const u8) Allocator.Error!void {
+fn renderEmitError(
+    allocator: Allocator,
+    output_path: []const u8,
+    llvm_message: []const u8,
+    config: reporting.ReportingConfig,
+) Allocator.Error!void {
     var report = try reporting.Report.init(allocator, "Object File Emit Error", "Failed to emit object file.", .fatal);
     defer report.deinit();
 
@@ -789,7 +817,7 @@ fn renderEmitError(allocator: Allocator, output_path: []const u8, llvm_message: 
     reporting.renderReportToTerminal(
         &report,
         stderrWriter(),
-        .ANSI,
-        reporting.ReportingConfig.initColorTerminal(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
     ) catch {};
 }

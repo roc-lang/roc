@@ -566,6 +566,12 @@ const Pass = struct {
     /// an already-rewritten worker.
     callable_sources: std.AutoHashMap(Ast.FnId, Ast.FnId),
     next_join_point: u32,
+
+    const AnalysisMark = struct {
+        program: Ast.Program.SpecConstrAnalysisMark,
+        next_symbol: u32,
+        next_join_point: u32,
+    };
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
@@ -671,6 +677,37 @@ const Pass = struct {
         const id: Ast.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;
         return id;
+    }
+
+    fn markAnalysis(self: *Pass) AnalysisMark {
+        return .{
+            .program = self.program.markSpecConstrAnalysis(),
+            .next_symbol = self.symbols.next,
+            .next_join_point = self.next_join_point,
+        };
+    }
+
+    fn rewindAnalysis(self: *Pass, mark: AnalysisMark) void {
+        self.program.rewindSpecConstrAnalysis(mark.program);
+        self.restoreAnalysisIds(mark);
+    }
+
+    fn restoreAnalysisIds(self: *Pass, mark: AnalysisMark) void {
+        var next_symbol = mark.next_symbol;
+        for (mark.program.fns..self.program.fnCount()) |index| {
+            const fn_ = self.program.getFnAt(index);
+            if (fn_.body != .hosted or fn_.args.len != 0) {
+                Common.invariant("SpecConstr analysis emitted a non-reservation function");
+            }
+            next_symbol = @max(next_symbol, @intFromEnum(fn_.symbol) + 1);
+        }
+        self.symbols.next = next_symbol;
+        self.next_join_point = mark.next_join_point;
+    }
+
+    fn finishAnalysis(self: *Pass, mark: AnalysisMark) void {
+        self.program.finishSpecConstrAnalysis(mark.program);
+        self.restoreAnalysisIds(mark);
     }
 
     fn deinit(self: *Pass) void {
@@ -865,6 +902,9 @@ const Pass = struct {
     /// argument is known when it is first named by a `let`. Walk with the
     /// cloner's substitution environment so those calls still reserve workers.
     fn collectValueAwareCallPatterns(self: *Pass, original_fn_count: usize) Common.LowerError!void {
+        const analysis_mark = self.markAnalysis();
+        defer self.finishAnalysis(analysis_mark);
+
         var index: usize = 0;
         while (index < original_fn_count) : (index += 1) {
             const fn_ = self.program.getFnAt(index);
@@ -879,6 +919,7 @@ const Pass = struct {
             cloner.allow_nonrecursive_value_patterns = self.shape_demand_fns[index];
             defer cloner.deinit();
             try cloner.collectCallPatternsInExpr(fn_id, body);
+            self.rewindAnalysis(analysis_mark);
         }
     }
 
@@ -1460,22 +1501,40 @@ const Pass = struct {
     /// their strict runtime construction behind.
     fn rewriteValueAwareCalls(self: *Pass) Common.LowerError!void {
         const fn_count = self.program.fnCount();
-        for (0..fn_count) |index| {
-            const fn_ = self.program.getFnAt(index);
-            const body = switch (fn_.body) {
-                .roc => |body| body,
-                .hosted => continue,
-            };
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
-            var cloner = Cloner.initForRewrite(self);
-            cloner.value_aware_detect_only = true;
-            cloner.emit_callable_workers = false;
-            cloner.allow_nonrecursive_value_patterns = index < self.shape_demand_fns.len and self.shape_demand_fns[index];
-            defer cloner.deinit();
-            try cloner.rewriteCallsWithValuesInExpr(body);
-            if (cloner.value_aware_rewrite_changed) {
-                try self.cloneFnBodyInPlace(fn_id, body);
+        const RewriteRequest = struct {
+            fn_id: Ast.FnId,
+            body: Ast.ExprId,
+        };
+        var requests = std.ArrayList(RewriteRequest).empty;
+        defer requests.deinit(self.allocator);
+
+        {
+            const analysis_mark = self.markAnalysis();
+            defer self.finishAnalysis(analysis_mark);
+
+            for (0..fn_count) |index| {
+                const fn_ = self.program.getFnAt(index);
+                const body = switch (fn_.body) {
+                    .roc => |body| body,
+                    .hosted => continue,
+                };
+                const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+                const changed = changed: {
+                    var cloner = Cloner.initForRewrite(self);
+                    defer cloner.deinit();
+                    cloner.value_aware_detect_only = true;
+                    cloner.emit_callable_workers = false;
+                    cloner.allow_nonrecursive_value_patterns = index < self.shape_demand_fns.len and self.shape_demand_fns[index];
+                    try cloner.rewriteCallsWithValuesInExpr(body);
+                    break :changed cloner.value_aware_rewrite_changed;
+                };
+                if (changed) try requests.append(self.allocator, .{ .fn_id = fn_id, .body = body });
+                self.rewindAnalysis(analysis_mark);
             }
+        }
+
+        for (requests.items) |request| {
+            try self.cloneFnBodyInPlace(request.fn_id, request.body);
         }
     }
 
@@ -11414,6 +11473,50 @@ test "call-pattern scans direct call and function reference capture operands" {
     try std.testing.expect(exprContainsReturn(&program, call_proc));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, call_proc));
     try std.testing.expect(localUseBeforeEffect(&program, local, call_proc));
+}
+
+test "issue 10313 value-aware analysis does not append lifted IR" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const arg_local = try program.addLocal(@enumFromInt(1), unit_ty);
+    const bound_local = try program.addLocal(@enumFromInt(2), unit_ty);
+    const arg_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = arg_local } });
+    const bind_pat = try program.addPat(.{ .ty = unit_ty, .data = .{ .bind = bound_local } });
+    const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .let_ = .{
+        .bind = bind_pat,
+        .value = arg_ref,
+        .rest = unit_expr,
+    } } });
+    _ = try program.addFn(.{
+        .symbol = @enumFromInt(3),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg_local, .ty = unit_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    const before_collect = program.markSpecConstrAnalysis();
+    const symbol_before_collect = pass.symbols.next;
+    const join_before_collect = pass.next_join_point;
+    try pass.collectValueAwareCallPatterns(1);
+    try std.testing.expectEqualDeep(before_collect, program.markSpecConstrAnalysis());
+    try std.testing.expectEqual(symbol_before_collect, pass.symbols.next);
+    try std.testing.expectEqual(join_before_collect, pass.next_join_point);
+
+    const before_rewrite = program.markSpecConstrAnalysis();
+    const symbol_before_rewrite = pass.symbols.next;
+    const join_before_rewrite = pass.next_join_point;
+    try pass.rewriteValueAwareCalls();
+    try std.testing.expectEqualDeep(before_rewrite, program.markSpecConstrAnalysis());
+    try std.testing.expectEqual(symbol_before_rewrite, pass.symbols.next);
+    try std.testing.expectEqual(join_before_rewrite, pass.next_join_point);
 }
 
 test "issue 10168 SpecConstr clones every capture when nested cloning grows the capture store" {

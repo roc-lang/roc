@@ -252,3 +252,21 @@ test "Flex lambda param plus concrete I64 rhs stays polymorphic" {
     // constraint instead of collapsing to `I64 -> I64`.
     try test_env.assertDefType("f", "a -> a where [a.plus : a, I64 -> a]");
 }
+
+test "Discarded unpinned arithmetic specialization validates the default method type" {
+    const source =
+        \\run = || {
+        \\    my_u64 = 7.U64
+        \\    f = |x| x + my_u64
+        \\    _ = (f, |x| Str.inspect(x))
+        \\    {}
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The bare use defaults f's arithmetic receiver to Dec. Dec.plus cannot
+    // discharge the resulting Dec, U64 -> Dec constraint, so checking owns
+    // the diagnostic instead of publishing incompatible dispatch evidence.
+    try test_env.assertOneTypeError("Type Mismatch");
+}

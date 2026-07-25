@@ -7244,14 +7244,6 @@ fn checkInstantiatedStaticDispatchConstraints(
             // never retain a slice across that operation.
             const dispatcher = self.instantiation_dispatchers.items[dispatcher_idx];
             if (dispatcher.constraints.len() == 0) continue;
-            var has_where_constraint = false;
-            for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
-                if (constraint.origin == .where_clause) {
-                    has_where_constraint = true;
-                    break;
-                }
-            }
-            if (!has_where_constraint) continue;
 
             // The ambiguity judgment has already decided which generalized
             // instantiations are unpinnable. Only those receivers will be
@@ -8084,8 +8076,7 @@ fn checkProvidesEntryHostBoundaryRows(
     self: *Self,
     provides_entry: ModuleEnv.ProvidesEntry,
 ) std.mem.Allocator.Error!void {
-    const def_node_idx = self.cir.getExposedValueNodeIndexById(provides_entry.ident) orelse return;
-    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(def_node_idx)));
+    const def_idx = provides_entry.local_def orelse return;
     const def = self.cir.store.getDef(def_idx);
     const def_var = ModuleEnv.varFrom(def_idx);
 

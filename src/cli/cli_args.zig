@@ -41,6 +41,12 @@ pub const CliArgs = union(enum) {
     }
 };
 
+/// Parsed command plus CLI-wide output settings.
+pub const ParsedArgs = struct {
+    command: CliArgs,
+    no_color: bool,
+};
+
 /// Errors that can occur due to bad input while parsing the arguments
 pub const ArgProblem = union(enum) {
     missing_flag_value: struct {
@@ -272,7 +278,6 @@ pub const ExperimentalLspArgs = struct {
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
     opt: OptLevel = default_dev_opt,
-    no_color: bool = false,
 };
 
 /// Arguments for `roc glue`
@@ -286,6 +291,38 @@ pub const GlueArgs = struct {
 
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
+    return (try parseWithGlobalOptions(alloc, std_io, args)).command;
+}
+
+/// Parse CLI-wide options before dispatching to a command parser.
+///
+/// `--no-color` is consumed before command parsing so every command shares one
+/// explicit output setting. Arguments after `--` belong to the executed Roc
+/// application and remain untouched.
+pub fn parseWithGlobalOptions(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!ParsedArgs {
+    var command_args = try alloc.alloc([]const u8, args.len);
+    defer alloc.free(command_args);
+
+    var no_color = false;
+    var after_separator = false;
+    var command_arg_count: usize = 0;
+    for (args) |arg| {
+        if (mem.eql(u8, arg, "--")) after_separator = true;
+        if (!after_separator and mem.eql(u8, arg, "--no-color")) {
+            no_color = true;
+            continue;
+        }
+        command_args[command_arg_count] = arg;
+        command_arg_count += 1;
+    }
+
+    return .{
+        .command = try parseCommand(alloc, std_io, command_args[0..command_arg_count]),
+        .no_color = no_color,
+    };
+}
+
+fn parseCommand(alloc: mem.Allocator, std_io: std.Io, args: []const []const u8) ParseError!CliArgs {
     if (args.len == 0) return try parseRun(alloc, args, .default);
 
     // `roc run` accepts everything the default run accepts, plus installed
@@ -344,6 +381,7 @@ const main_help =
     \\      --opt=<opt>                    Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
     \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
     \\      --no-cache                     Disable compilation and executable caches (useful for compiler and platform developers)
+    \\      --no-color                     Do not use ANSI escape codes in CLI output
     \\  -j, --jobs=<N>                     Max worker threads for parallel compilation (default: auto-detect CPU count)
     \\
 ;
@@ -865,7 +903,6 @@ fn parseTest(args: []const []const u8) CliArgs {
 
 fn parseRepl(args: []const []const u8) CliArgs {
     var opt: OptLevel = default_dev_opt;
-    var no_color: bool = false;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -876,12 +913,9 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\      --opt=<opt>  Execution mode: dev (default, fast compilation), interpreter, size (LLVM) or speed (LLVM)
-            \\      --no-color   Do not use ANSI color codes in REPL diagnostics
             \\  -h, --help       Print help
             \\
             };
-        } else if (mem.eql(u8, arg, "--no-color")) {
-            no_color = true;
         } else if (mem.startsWith(u8, arg, "--opt")) {
             if (getFlagValue(arg)) |value| {
                 if (OptLevel.from_str(value)) |level| {
@@ -896,7 +930,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs{ .repl = .{ .opt = opt, .no_color = no_color } };
+    return CliArgs{ .repl = .{ .opt = opt } };
 }
 
 fn parseGlue(args: []const []const u8) CliArgs {
@@ -1954,11 +1988,21 @@ test "roc repl" {
         try testing.expectEqual(.help, std.meta.activeTag(result));
     }
     {
-        const result = try parse(gpa, testing.io, &[_][]const u8{ "repl", "--no-color" });
-        defer result.deinit(gpa);
-        try testing.expectEqual(.repl, std.meta.activeTag(result));
-        try testing.expect(result.repl.no_color);
+        const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "repl", "--no-color" });
+        defer parsed.command.deinit(gpa);
+        try testing.expectEqual(.repl, std.meta.activeTag(parsed.command));
+        try testing.expect(parsed.no_color);
     }
+}
+
+test "global no-color is not forwarded to the app" {
+    const gpa = testing.allocator;
+
+    const parsed = try parseWithGlobalOptions(gpa, testing.io, &[_][]const u8{ "--no-color", "app.roc", "--", "--no-color" });
+    defer parsed.command.deinit(gpa);
+
+    try testing.expect(parsed.no_color);
+    try testing.expectEqualSlices([]const u8, &.{"--no-color"}, parsed.command.run.app_args);
 }
 
 test "roc glue" {
