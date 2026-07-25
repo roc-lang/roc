@@ -14128,7 +14128,7 @@ const EvidencePass = struct {
             .flex => |flex| return self.resolveVarObligation(resolved.var_, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {
-                if (self.methodOwnerForSourceContent(resolved.var_)) |owner| {
+                if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                     if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
                         return try self.resolutionForMethodTarget(target, structural_kind, constraint_fn_var);
                     }
@@ -14249,7 +14249,7 @@ const EvidencePass = struct {
     /// The method owner of a settled source var, walking alias content
     /// transparently (the source-var analog of monotype lowering's
     /// dispatch-head read of published type identity).
-    fn methodOwnerForSourceContent(self: *EvidencePass, var_: Var) ?static_dispatch.MethodOwner {
+    fn methodOwnerForSourceContent(self: *EvidencePass, var_: Var) Allocator.Error!?static_dispatch.MethodOwner {
         var current = var_;
         var remaining: u64 = self.types.len();
         while (true) {
@@ -14267,8 +14267,8 @@ const EvidencePass = struct {
                         if (categorizeBuiltinNominal(self.module, self.import_views, nominal)) |builtin_nominal| {
                             if (builtin_nominal == .try_) {
                                 const idents = self.module.identStoreConst();
-                                const module_identity_id = self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module)) catch return null;
-                                const type_name = self.names.internTypeIdent(idents, nominal.ident.ident_idx) catch return null;
+                                const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
+                                const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                                 return .{ .nominal = .{
                                     .module = module_identity_id,
                                     .type_name = type_name,
@@ -14278,8 +14278,8 @@ const EvidencePass = struct {
                             return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin_nominal) };
                         }
                         const idents = self.module.identStoreConst();
-                        const module_identity_id = self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module)) catch return null;
-                        const type_name = self.names.internTypeIdent(idents, nominal.ident.ident_idx) catch return null;
+                        const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
+                        const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                         return .{ .nominal = .{
                             .module = module_identity_id,
                             .type_name = type_name,
