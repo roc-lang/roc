@@ -13350,8 +13350,8 @@ fn sealCheckedProcedureTemplateRefs(
     templates.dispatch_ref_scopes = try allocator.dupe(DispatchScopeRef, dispatch_ref_scope_pool.items);
     templates.dispatch_relation_kinds = try dispatch_relation_kind_pool.toOwnedSlice(allocator);
     templates.dispatch_scopes = try allocator.dupe(DispatchRefScope, collector.scopes.items);
-    publishLocalProcedureDispatchScopes(resolved_value_refs, templates.dispatch_scopes);
-    publishLocalMethodDispatchScopes(method_registry, templates.dispatch_scopes);
+    publishLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
+    publishLocalMethodDispatchScopes(method_registry, &collector.scope_by_checked_expr);
     template_iterator_refs.* = .{
         .spans = iterator_spans,
         .pool = try iterator_ref_pool.toOwnedSlice(allocator),
@@ -13373,7 +13373,7 @@ fn sealCheckedProcedureTemplateRefs(
 /// scope table rather than by evidence count.
 fn publishLocalProcedureDispatchScopes(
     resolved_value_refs: *ResolvedValueRefTable,
-    scopes: []const DispatchRefScope,
+    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (resolved_value_refs.records) |*record| {
         const local = switch (record.ref) {
@@ -13381,13 +13381,13 @@ fn publishLocalProcedureDispatchScopes(
             else => continue,
         };
 
-        local.dispatch_scope = localProcedureDispatchScope(scopes, local.expr);
+        local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
 }
 
 fn publishLocalMethodDispatchScopes(
     method_registry: *static_dispatch.MethodRegistry,
-    scopes: []const DispatchRefScope,
+    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (method_registry.entries) |*entry| {
         const local = switch (entry.target.kind) {
@@ -13395,23 +13395,8 @@ fn publishLocalMethodDispatchScopes(
             else => continue,
         };
 
-        local.dispatch_scope = localProcedureDispatchScope(scopes, local.expr);
+        local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
-}
-
-fn localProcedureDispatchScope(
-    scopes: []const DispatchRefScope,
-    expr: CheckedExprId,
-) ?DispatchScopeId {
-    var owned_scope: ?DispatchScopeId = null;
-    for (scopes, 0..) |scope, raw_scope| {
-        if (scope.checked_expr != expr) continue;
-        if (owned_scope != null) {
-            checkedArtifactInvariant("checked local procedure owns more than one dispatch scope", .{});
-        }
-        owned_scope = @enumFromInt(@as(u32, @intCast(raw_scope)));
-    }
-    return owned_scope;
 }
 
 /// Resolve every static-dispatch plan and instantiation-site obligation to an
@@ -28329,8 +28314,10 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
         .scheme_var = @enumFromInt(50),
         .checked_expr = @enumFromInt(30),
     }};
+    var scope_by_checked_expr = try nestedProcScopeMap(std.testing.allocator, &scopes);
+    defer scope_by_checked_expr.deinit();
 
-    publishLocalProcedureDispatchScopes(&refs, &scopes);
+    publishLocalProcedureDispatchScopes(&refs, &scope_by_checked_expr);
 
     try std.testing.expectEqual(
         @as(?DispatchScopeId, testIndexId(DispatchScopeId, 0)),
