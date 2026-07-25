@@ -1488,10 +1488,6 @@ const Builder = struct {
         return self.program.names.internTypeName(view.names.typeNameText(id));
     }
 
-    fn methodName(self: *Builder, view: ModuleView, id: names.MethodNameId) Allocator.Error!names.MethodNameId {
-        return self.program.names.internMethodName(view.names.methodNameText(id));
-    }
-
     fn moduleIdentity(self: *Builder, view: ModuleView, id: names.ModuleIdentityId) Allocator.Error!names.ModuleIdentityId {
         return self.program.names.internModuleIdentity(view.names.moduleIdentityBytes(id));
     }
@@ -10952,13 +10948,6 @@ const BodyContext = struct {
             ids[0]
         else
             try self.addImpossibilityProof(.{ .all = try self.addImpossibilityProofSpan(ids) });
-    }
-
-    fn nodesImpossibilityProof(
-        self: *BodyContext,
-        nodes: []const NodeId,
-    ) Allocator.Error!RuntimeImpossibilityProofId {
-        return (try self.maybeNodesImpossibilityProof(nodes)) orelse try self.neverImpossibilityProof();
     }
 
     fn maybeNodesImpossibilityProof(
@@ -29295,34 +29284,6 @@ const BodyContext = struct {
         } };
     }
 
-    fn lowerStructuralEquality(
-        self: *BodyContext,
-        plan: static_dispatch.StaticDispatchCallPlan,
-        callable_mono_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        arg_ctx: *BodyContext,
-        pre_lowered: []const PreLoweredOperand,
-    ) Allocator.Error!DraftExprId {
-        return switch (plan.result_mode) {
-            .equality => |eq| if (eq.structural_allowed) blk: {
-                const operands = try self.lowerStructuralBinaryOperands("equality", plan, callable_mono_ty, arg_ctx, pre_lowered);
-                var result = try self.lowerEqualityExpr(operands.derived_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
-                if (eq.negated) {
-                    result = try self.lowLevelExpr(.bool_not, &.{result}, ret_ty);
-                }
-                break :blk result;
-            } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
-            .hash => |hash| if (hash.structural_allowed) blk: {
-                const operands = try self.lowerStructuralBinaryOperands("hash", plan, callable_mono_ty, arg_ctx, pre_lowered);
-                break :blk try self.lowerHashExpr(operands.derived_ty, operands.first, operands.second, ret_ty);
-            } else Common.invariant("structural hash dispatch plan did not permit structural hashing"),
-            .value => Common.invariant("value dispatch plan reached structural equality lowering"),
-            .parser_for => Common.invariant("parser_for dispatch plan reached structural equality lowering"),
-            .encoder_for => Common.invariant("encoder_for dispatch plan reached structural equality lowering"),
-            .map, .map_effectful => Common.invariant("map dispatch plan reached structural equality lowering"),
-        };
-    }
-
     fn lowerStructuralEqualityAtNode(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
@@ -31232,57 +31193,6 @@ const BodyContext = struct {
             precomputed_plan,
         );
         return try self.sequenceEncodeTry(item_try, method.container_result_ty, item_done_local, rest, method.container_result_ty);
-    }
-
-    fn lowerEncodePayloadArrayToState(
-        self: *BodyContext,
-        payload_exprs: []const DraftExprId,
-        payload_tys: []const Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_expr: DraftExprId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
-    ) Allocator.Error!DraftExprId {
-        const u64_ty = try self.builder.primitiveType(.u64);
-        const method = try self.resolveEncodeContainerMethod("encode_tuple", .tuple, encoding_ty, state_ty, ret_ty);
-        const body_state_local = try self.addLocal(self.builder.symbols.fresh(), method.container_state_ty);
-        const element_writer_local = try self.addLocal(self.builder.symbols.fresh(), method.writer_ty);
-        const body = blk: {
-            var capture_tys = std.ArrayList(Type.TypeId).empty;
-            defer capture_tys.deinit(self.allocator);
-            try capture_tys.appendSlice(self.allocator, payload_tys);
-            if (payload_tys.len != 0) try capture_tys.append(self.allocator, encoding_ty);
-            const demand_scope = try self.enterCallableBodyDemandScope(
-                &.{ method.container_state_ty, method.writer_ty },
-                capture_tys.items,
-            );
-            defer demand_scope.leave();
-            break :blk try self.lowerEncodePayloadArrayItemsFromState(
-                payload_exprs,
-                payload_tys,
-                encoding_expr,
-                encoding_ty,
-                try self.localExpr(body_state_local, method.container_state_ty),
-                method,
-                try self.localExpr(element_writer_local, method.writer_ty),
-                0,
-                precomputed_plan,
-            );
-        };
-        const body_lambda = try self.lowerGeneratedEncoderCallbackLambda(
-            method.body_ty,
-            &.{
-                .{ .local = body_state_local, .ty = method.container_state_ty },
-                .{ .local = element_writer_local, .ty = method.writer_ty },
-            },
-            body,
-        );
-        return try self.lowerEncodeContainerMethodCall(
-            method,
-            &.{ state_expr, try self.intLiteralExpr(@intCast(payload_tys.len), u64_ty), body_lambda },
-        );
     }
 
     fn lowerEncodePayloadArrayItemsFromState(
