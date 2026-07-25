@@ -10204,6 +10204,7 @@ fn collectExpectBindingPatterns(
             .e_tuple_access => |access| try stack.append(allocator, access.tuple),
             .e_dbg => |dbg| try stack.append(allocator, dbg.expr),
             .e_expect_err => |expect_err| try stack.append(allocator, expect_err.expr),
+            .e_reraise_err => |reraise| try stack.append(allocator, reraise.expr),
             .e_expect => |expect_expr| try stack.append(allocator, expect_expr.body),
             .e_return => |ret| try stack.append(allocator, ret.expr),
             .e_for => |for_expr| {

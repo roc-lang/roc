@@ -539,6 +539,8 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "dbg " });
         },
         .e_expect_err => try self.write("<expect_err>"),
+        // Invisible in source: the desugared `?` re-raise re-emits as its operand.
+        .e_reraise_err => |reraise| try frames.append(allocator, .{ .expr = reraise.expr }),
         .e_expect => |expect| {
             try frames.append(allocator, .{ .expr = expect.body });
             try frames.append(allocator, .{ .write = "expect " });

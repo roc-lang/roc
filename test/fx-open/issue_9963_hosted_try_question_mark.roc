@@ -4,10 +4,10 @@ app [main!] { pf: platform "./platform/main.roc" }
 #
 # FallibleHost.str_ok! is a hosted function returning Try(Str, [HostErr(Str)])
 # whose host implementation always returns Ok("ok"). Unwrapping it with `?`
-# inside Ok(...) widens the hosted function's closed error row at the use site
-# (here with Exit(I32) from main!'s error union); the compiler must bridge that
-# widened request with an adapter instead of specializing the host ABI at the
-# widened layout, which misread Ok("ok") as Err(HostErr("ok")).
+# inside Ok(...) re-raises the hosted function's closed error row at the use
+# site (design.md "Try Question Error Re-raise"); the hosted callee itself
+# must stay specialized at its declared ABI row — a spec at the widened
+# layout misread Ok("ok") as Err(HostErr("ok")).
 
 import pf.Fallible
 import pf.Stdout

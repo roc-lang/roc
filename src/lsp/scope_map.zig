@@ -343,6 +343,9 @@ pub const ScopeMap = struct {
             .e_expect_err => |expect_err| {
                 try self.traverseExpr(module_env, expect_err.expr, scope_end, depth + 1);
             },
+            .e_reraise_err => |reraise| {
+                try self.traverseExpr(module_env, reraise.expr, scope_end, depth + 1);
+            },
             .e_expect => |expect_expr| {
                 try self.traverseExpr(module_env, expect_expr.body, scope_end, depth + 1);
             },

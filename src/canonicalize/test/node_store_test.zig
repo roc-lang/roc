@@ -493,6 +493,11 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_reraise_err = .{
+            .expr = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_empty_record = .{},
     });
     try expressions.append(gpa, CIR.Expr{

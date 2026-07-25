@@ -120,7 +120,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 282)
+								(e-dispatch-call (method "first") (constraint-fn-var 284)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "strings"))))
@@ -145,10 +145,11 @@ NO CHANGE
 												(builtin)
 												(e-tag (name "Err")
 													(args
-														(e-tag (name "NoFirstError")
-															(args
-																(e-lookup-local
-																	(p-assign (ident "#err")))))))))))))))
+														(e-reraise-err
+															(e-tag (name "NoFirstError")
+																(args
+																	(e-lookup-local
+																		(p-assign (ident "#err"))))))))))))))))
 				(e-tag (name "Ok")
 					(args
 						(e-lookup-local
@@ -171,7 +172,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 338)
+								(e-dispatch-call (method "first") (constraint-fn-var 340)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "strings"))))
@@ -196,16 +197,17 @@ NO CHANGE
 												(builtin)
 												(e-tag (name "Err")
 													(args
-														(e-call (constraint-fn-var 373)
-															(e-lambda
-																(args
-																	(p-assign (ident "e")))
-																(e-tag (name "NoFirstError")
+														(e-reraise-err
+															(e-call (constraint-fn-var 375)
+																(e-lambda
 																	(args
-																		(e-lookup-local
-																			(p-assign (ident "e"))))))
-															(e-lookup-local
-																(p-assign (ident "#err"))))))))))))))
+																		(p-assign (ident "e")))
+																	(e-tag (name "NoFirstError")
+																		(args
+																			(e-lookup-local
+																				(p-assign (ident "e"))))))
+																(e-lookup-local
+																	(p-assign (ident "#err")))))))))))))))
 				(e-tag (name "Ok")
 					(args
 						(e-lookup-local

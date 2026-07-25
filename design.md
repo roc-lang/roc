@@ -2392,6 +2392,53 @@ Backends receive only ordinary LIR and explicit ARC statements. They must not
 know whether a value originated as a public iterator, a minted iterator,
 forced-dynamic callable state, or a scalarized loop.
 
+## Try Question Error Re-raise
+
+`?` unwraps a `Try` condition: `Ok(v)` continues with `v`, and `Err(e)`
+re-raises the error into the enclosing function's return row. Re-raising is
+a reconstruction, not a pass-through: the desugared `Err` branch
+(`addTryReturnErr`, both the suffix form and the `lhs ? handler` binop)
+wraps the outgoing error payload in a dedicated re-raise node
+(`e_reraise_err`) before returning `Try.Err(...)` — the compiler-generated
+identity form of matching each error tag and re-constructing it.
+
+Checking types the node by row widening at that reconstruction point. After
+the operand is checked, the node's type is a fresh tag union with the same
+tags as the operand's resolved row and a fresh flexible extension, so a
+callee's closed error row composes with any enclosing return row that
+includes its tags (issue #9798's program is accepted). The operand's own
+row — and therefore the callee's instantiated type — is never mutated and
+no solved-graph redirect is involved; the widening is ordinary unification
+against freshly constructed content. When the operand's type is not a tag
+union resolved to a closed extension at the time the node is checked
+(flexible, rigid-open, non-tag-union payload such as `Try(_, Str)`, a
+nominal error type, or a poisoned var), the node's var unifies directly
+with the operand's and `?` behaves as a plain pass-through. Widening is
+shallow: occurrences of the row inside tag payloads keep the operand's
+type.
+
+Monotype lowering compiles the node with `lowerReraiseErr`: a match that
+destructures each tag of the operand's monotype row and re-constructs it
+at the node's row (the identity when the two monotypes are equal). Both
+rows are concrete monotypes at that point, so no stage before lowering ever
+enumerates the tags. Hosted functions need no special case: a hosted callee
+is specialized only at its declared ABI row (see Host Symbol ABI), and the
+re-raise node performs the widening at the use site. This mechanism
+subsumed and replaced the hosted-try-question-widening redirect
+(`RedirectRule.hosted_try_question_widening`) and its generated hosted
+adapters, which are deleted.
+
+Both sides are pinned by tests: accepted — the issue #9798 test in
+src/check/test/type_checking_integration.zig (a non-hosted `?` on a closed
+error row inside an open annotated return row typechecks), and
+test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
+inside an open-row platform function builds and the host's Ok is observed
+as Ok); rejected — test/fx-open/hosted_try_question_not_included.roc (a
+hosted `?` whose enclosing annotation omits the hosted error is a type
+error) and its non-hosted twin in type_checking_integration.zig (a `?`
+whose callee row carries a tag the enclosing annotated row cannot absorb is
+a type error).
+
 ## Solver-Mutating Rewrites
 
 Pure unification is the authority on what typechecks. Any code that mutates
@@ -2417,41 +2464,6 @@ under — an unreasoned redirect does not compile, and adding a caller means
 adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
-
-### Hosted Try Question Widening
-
-`?` unwraps a `Try` condition and re-raises its error row into the enclosing
-function's return row. When the callee's error row is closed and the
-enclosing annotated return's row is open (a rigid extension), ordinary
-unification rejects the pair, and that mismatch is a type error by design: a
-closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected).
-
-The one declared exception is a direct call of a hosted function. A hosted
-function's boundary type is an ABI contract keyed by its declared closed row
-(see Host Symbol ABI), so the hosted callee cannot adopt the caller's wider
-row, and requiring callers to re-tag hosted errors by hand would make hosted
-functions unusable with `?`. When the `?` condition is a direct call of a
-hosted function — the call's function expression resolves statically to an
-`e_hosted_lambda` def; dispatch calls and value-carried functions never
-qualify — and every visible error in the callee's row is included in the
-expected row (same tag names, mutually usable payloads), the checker widens
-the condition at the use site: the condition's root is redirected to a fresh
-`Try` at the expected row (`widenTryConditionForExpectedReturn`, cited as
-`RedirectRule.hosted_try_question_widening`), leaving the hosted callee's own
-declared type untouched. Monotype lowering gives a widened hosted
-specialization request a generated Roc adapter at the requested type that
-calls the declared-type boundary and re-tags the error into the wider row,
-so the extern boundary itself is always emitted at the declared row.
-
-Both sides are pinned by tests: accepted —
-test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
-inside an open-row platform function builds and the host's Ok is observed as
-Ok); rejected — test/fx-open/hosted_try_question_not_included.roc (a direct
-hosted `?` whose enclosing annotation omits the hosted error is a type
-error), and the issue #9798 regression test in
-src/check/test/type_checking_integration.zig (a non-hosted `?` into an open
-annotated row is a type error even when the visible errors are included).
 
 ### Derived Parser Required-Field Error Composition
 
@@ -2510,8 +2522,6 @@ site to any family below must classify it here.
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
 
-- `widenTryConditionForExpectedReturn` — policy: Hosted Try Question
-  Widening (above).
 - `resolveForClauseAliasOccurrences` — policy: for-clause alias identity
   (see Platform/App Relation): copied occurrences of a platform
   requirement's for-clause alias resolve to the app's own type declaration,
@@ -2568,9 +2578,7 @@ at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
 method-acceptance rule of static dispatch, with accepted/missing-method/
 signature-mismatch branches each pinned by tests;
 `numeralCandidateStructurallyRefuted` implements no rule of its own and is
-witness-asserted against the probe it pre-filters in safety builds;
-`probeCanUseAs`/`tryErrorRowNeedsUseSiteWidening` are the gating probes for
-Hosted Try Question Widening.
+witness-asserted against the probe it pre-filters in safety builds.
 
 ## Shared Post-Check Model
 

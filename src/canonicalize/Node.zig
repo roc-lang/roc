@@ -108,6 +108,7 @@ pub const Tag = enum {
     expr_dbg,
     expr_crash,
     expr_expect_err,
+    expr_reraise_err,
     expr_block,
     expr_ellipsis,
     expr_anno_only,
@@ -356,6 +357,7 @@ pub const Payload = extern union {
     expr_crash: ExprCrash,
     expr_dbg: ExprDbg,
     expr_expect_err: ExprExpectErr,
+    expr_reraise_err: ExprReraiseErr,
     expr_anno_only: ExprAnnoOnly,
     expr_derived_method: ExprDerivedMethod,
     expr_return: ExprReturn,
@@ -812,6 +814,12 @@ pub const Payload = extern union {
         expr: u32,
         snippet: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    /// expr_reraise_err: re-raised error payload of a desugared `?`
+    pub const ExprReraiseErr = extern struct {
+        expr: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_anno_only: annotation-only expression

@@ -3515,6 +3515,7 @@ pub const BuildEnv = struct {
                 try collectDbgRegionsInExpr(allocator, env, regions, dbg.expr);
             },
             .e_expect_err => |expect_err| try collectDbgRegionsInExpr(allocator, env, regions, expect_err.expr),
+            .e_reraise_err => |reraise| try collectDbgRegionsInExpr(allocator, env, regions, reraise.expr),
             .e_expect => {},
             .e_return => |ret| try collectDbgRegionsInExpr(allocator, env, regions, ret.expr),
             .e_for => |for_expr| {

@@ -124,7 +124,7 @@ g = |x| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 288)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 289)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -159,7 +159,7 @@ g = |x| {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 330)
+										(e-call (constraint-fn-var 331)
 											(e-lookup-local
 												(p-assign (ident "f")))
 											(e-lookup-local
@@ -184,8 +184,9 @@ g = |x| {
 														(builtin)
 														(e-tag (name "Err")
 															(args
-																(e-lookup-local
-																	(p-assign (ident "#err")))))))))))))
+																(e-reraise-err
+																	(e-lookup-local
+																		(p-assign (ident "#err"))))))))))))))
 						(rhs
 							(e-lookup-local
 								(p-assign (ident "x"))))))

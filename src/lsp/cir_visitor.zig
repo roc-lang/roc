@@ -298,6 +298,9 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_expect_err => |expect_err| {
                     self.walkExpr(store, expect_err.expr);
                 },
+                .e_reraise_err => |reraise| {
+                    self.walkExpr(store, reraise.expr);
+                },
                 .e_expect => |exp| {
                     self.walkExpr(store, exp.body);
                 },

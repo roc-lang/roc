@@ -7868,8 +7868,14 @@ fn addTryReturnErr(
     payload_expr: Expr.Idx,
     region: Region,
 ) std.mem.Allocator.Error!Expr.Idx {
+    // Re-raise rather than pass through: reconstruct the outgoing error at a
+    // fresh open row so a callee's closed error row composes with the
+    // enclosing return row (design.md "Try Question Error Re-raise").
+    const reraise_expr = try self.env.addExpr(CIR.Expr{ .e_reraise_err = .{
+        .expr = payload_expr,
+    } }, region);
     const err_tag_args_start = self.env.store.scratchExprTop();
-    try self.env.store.addScratchExpr(payload_expr);
+    try self.env.store.addScratchExpr(reraise_expr);
     const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
     const err_tag_expr_idx = try self.addTryTagExpr(target, self.env.idents.err, err_tag_args_span, region);
 
@@ -8459,6 +8465,7 @@ const DefiniteInitAnalyzer = struct {
             .e_crash => false,
             .e_dbg => |dbg| try self.analyzeExpr(dbg.expr, state, breaks),
             .e_expect_err => |expect_err| try self.analyzeExpr(expect_err.expr, state, breaks),
+            .e_reraise_err => |reraise| try self.analyzeExpr(reraise.expr, state, breaks),
             .e_expect => |expect| try self.analyzeExpr(expect.body, state, breaks),
             .e_return => |ret| blk: {
                 _ = try self.analyzeExpr(ret.expr, state, breaks);
@@ -9618,6 +9625,7 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
                     .e_expect_err => |expect_err| {
                         try pending.append(stack_allocator, .{ .expr = .{ .idx = expect_err.expr, .loop_depth = expr_frame.loop_depth } });
                     },
+                    .e_reraise_err => |reraise| try pending.append(stack_allocator, .{ .expr = .{ .idx = reraise.expr, .loop_depth = expr_frame.loop_depth } }),
                     .e_return => |ret| {
                         if (self.enclosing_lambda == null or ret.lambda == self.enclosing_lambda.?) {
                             facts.has_exit = true;
