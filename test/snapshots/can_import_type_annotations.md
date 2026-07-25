@@ -47,21 +47,21 @@ combineTrys = |result1, result2|
 DUPLICATE DEFINITION - can_import_type_annotations.md:2:1:2:17
 UNDECLARED TYPE - can_import_type_annotations.md:5:18:5:25
 UNDECLARED TYPE - can_import_type_annotations.md:5:29:5:37
-NAME NOT IN SCOPE - can_import_type_annotations.md:6:24:6:44
+DOES NOT EXIST - can_import_type_annotations.md:6:29:6:44
 UNUSED VARIABLE - can_import_type_annotations.md:6:19:6:22
 MOD NOT FOUND - can_import_type_annotations.md:8:24:8:30
-NAME NOT IN SCOPE - can_import_type_annotations.md:9:21:9:31
+DOES NOT EXIST - can_import_type_annotations.md:9:26:9:31
 MOD NOT FOUND - can_import_type_annotations.md:11:17:11:25
 MOD NOT FOUND - can_import_type_annotations.md:11:37:11:46
 MOD NOT FOUND - can_import_type_annotations.md:11:52:11:58
-NAME NOT IN SCOPE - can_import_type_annotations.md:13:14:13:25
-NAME NOT IN SCOPE - can_import_type_annotations.md:15:24:15:36
+DOES NOT EXIST - can_import_type_annotations.md:13:19:13:25
+DOES NOT EXIST - can_import_type_annotations.md:15:29:15:36
 MOD NOT FOUND - can_import_type_annotations.md:20:14:20:21
-NAME NOT IN SCOPE - can_import_type_annotations.md:21:10:21:28
+DOES NOT EXIST - can_import_type_annotations.md:21:15:21:28
 MOD NOT FOUND - can_import_type_annotations.md:24:29:24:36
 MOD NOT FOUND - can_import_type_annotations.md:24:53:24:59
 MOD NOT FOUND - can_import_type_annotations.md:24:72:24:78
-NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
+DOES NOT EXIST - can_import_type_annotations.md:25:52:25:61
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -99,15 +99,16 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `defaultResponse` in this scope. ─────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `defaultResponse` was not found in `Http`. ───────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  processRequest = |req| Http.defaultResponse                               │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
- └─────────────────────────────────────── can_import_type_annotations.md:6:24 ┘
+ │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                               │
+ └─────────────────────────────────────── can_import_type_annotations.md:6:29 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `defaultResponse` is spelled correctly and that `Http` exposes
+    it.
 
 
 ┌─────────────────┐
@@ -132,15 +133,15 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parse` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `parse` was not found in `Json`. ─────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  parseJson = |input| Json.parse(input)                                     │
- │                      ‾‾‾‾‾‾‾‾‾‾                                            │
- └─────────────────────────────────────── can_import_type_annotations.md:9:21 ┘
+ │                           ‾‾‾‾‾                                            │
+ └─────────────────────────────────────── can_import_type_annotations.md:9:26 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `parse` is spelled correctly and that `Json` exposes it.
 
 
 ┌──────────────────┐
@@ -173,26 +174,26 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `decode` in this scope. ──────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `decode` was not found in `Json`. ────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  result = Json.decode(request.body)                                        │
- │           ‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └────────────────────────────────────── can_import_type_annotations.md:13:14 ┘
+ │                ‾‾‾‾‾‾                                                      │
+ └────────────────────────────────────── can_import_type_annotations.md:13:19 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `decode` is spelled correctly and that `Json` exposes it.
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `success` in this scope. ─────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `success` was not found in `Http`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Ok(data) => Ok(Http.success(data))                                        │
- │                 ‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────────── can_import_type_annotations.md:15:24 ┘
+ │                      ‾‾‾‾‾‾‾                                               │
+ └────────────────────────────────────── can_import_type_annotations.md:15:29 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `success` is spelled correctly and that `Http` exposes it.
 
 
 ┌──────────────────┐
@@ -205,15 +206,15 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `defaultConfig` in this scope. ───────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `defaultConfig` was not found in `Json`. ─────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  config = Json.defaultConfig                                               │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
- └────────────────────────────────────── can_import_type_annotations.md:21:10 ┘
+ │                ‾‾‾‾‾‾‾‾‾‾‾‾‾                                               │
+ └────────────────────────────────────── can_import_type_annotations.md:21:15 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `defaultConfig` is spelled correctly and that `Json` exposes it.
 
 
 ┌──────────────────┐
@@ -246,15 +247,15 @@ NAME NOT IN SCOPE - can_import_type_annotations.md:25:40:25:61
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `parseWith` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `parseWith` was not found in `Json`. ─────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
- │  … input| Json.Parser.parseWith(parserConfig, input)                       │
- │           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                            │
- └────────────────────────────────────── can_import_type_annotations.md:25:40 ┘
+ │  ….Parser.parseWith(parserConfig, input)                                   │
+ │           ‾‾‾‾‾‾‾‾‾                                                        │
+ └────────────────────────────────────── can_import_type_annotations.md:25:52 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `parseWith` is spelled correctly and that `Json` exposes it.
 
 # TOKENS
 ~~~zig
@@ -486,7 +487,7 @@ combineTrys = |result1, result2|
 		(e-lambda
 			(args
 				(p-assign (ident "req")))
-			(e-runtime-error (tag "ident_not_in_scope")))
+			(e-runtime-error (tag "qualified_ident_does_not_exist")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-malformed)
@@ -515,7 +516,7 @@ combineTrys = |result1, result2|
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "config"))
-		(e-runtime-error (tag "ident_not_in_scope"))
+		(e-runtime-error (tag "qualified_ident_does_not_exist"))
 		(annotation
 			(ty-malformed)))
 	(d-let

@@ -264,6 +264,11 @@ used_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 globally_resolvable_patterns: std.AutoHashMapUnmanaged(Pattern.Idx, void),
 /// Map of explicit imported module identifiers to their type information for import validation.
 explicit_module_envs: ?*const std.AutoHashMap(Ident.Idx, AutoImportedType),
+/// Package shorthand from this file's header to use when an error report
+/// suggests an import (the app header's platform shorthand, or the first
+/// package entry for package/platform headers). Null when the header declares
+/// no packages.
+header_suggested_package: ?Ident.Idx = null,
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType) = .{},
 /// Map from module identifier to Import.Idx for tracking unique imports.
@@ -489,6 +494,13 @@ pub const CanonicalizedExpr = struct {
             return null;
         }
     }
+};
+
+const QualifiedValueNotFound = struct {
+    qualified_ident: Ident.Idx,
+    module_name: Ident.Idx,
+    value_name: Ident.Idx,
+    value_region: Region,
 };
 
 const ModuleFoundStatus = enum {
@@ -4064,10 +4076,12 @@ pub fn canonicalizeFile(
         },
         .package => |h| {
             self.env.module_kind = .package;
+            self.header_suggested_package = self.firstHeaderPackageShorthand(h.packages);
             try self.createExposedScope(h.exposes);
         },
         .platform => |h| {
             self.env.module_kind = .platform;
+            self.header_suggested_package = self.firstHeaderPackageShorthand(h.packages);
             try self.createExposedScope(h.exposes);
             // Also add the 'provides' items (what platform provides to the host, e.g., main_for_host!)
             // These need to be in the exposed scope so they become exports
@@ -4085,6 +4099,8 @@ pub fn canonicalizeFile(
         },
         .app => |h| {
             self.env.module_kind = .app;
+            self.header_suggested_package = self.headerPackageShorthand(h.platform_idx) orelse
+                self.firstHeaderPackageShorthand(h.packages);
             // App modules may have platform requirements that should constrain numeric literals
             // before defaulting to Dec, so defer numeric defaults until after platform checking
             // App headers have 'provides' instead of 'exposes'
@@ -7173,7 +7189,7 @@ fn canonicalizeIdentExpr(
             }
         }
 
-        return try self.canonicalizeUnqualifiedIdentExpr(ident, region);
+        return try self.canonicalizeUnqualifiedIdentExpr(ident, region, null);
     } else {
         const feature = try self.env.insertString("report an error when unable to resolve identifier");
         return try self.canonicalizedMalformedExpr(Diagnostic{ .not_implemented = .{
@@ -7181,6 +7197,21 @@ fn canonicalizeIdentExpr(
             .region = region,
         } });
     }
+}
+
+/// Resolve a header package entry's shorthand name (e.g. `pf` in
+/// `pf: platform "..."`), for use in suggested-import error reports.
+fn headerPackageShorthand(self: *const Self, field_idx: AST.RecordField.Idx) ?Ident.Idx {
+    const field = self.parse_ir.store.getRecordField(field_idx);
+    return self.parse_ir.tokens.resolveIdentifier(field.name);
+}
+
+/// Resolve the first package shorthand in a header `packages` collection, if any.
+fn firstHeaderPackageShorthand(self: *const Self, packages: AST.Collection.Idx) ?Ident.Idx {
+    const coll = self.parse_ir.store.getCollection(packages);
+    const items = self.parse_ir.store.recordFieldSlice(.{ .span = coll.span });
+    if (items.len == 0) return null;
+    return self.headerPackageShorthand(items[0]);
 }
 
 fn canonicalizeQualifiedIdentExpr(
@@ -7266,13 +7297,41 @@ fn canonicalizeQualifiedIdentExpr(
             }
         }
 
+        // The leading qualifier resolved to nothing at all: not an imported
+        // module, not an available module env, and not a type in scope. The
+        // most likely cause is a missing `import`, so report that directly
+        // along with a suggested import statement.
+        const suggested_import = if (self.header_suggested_package) |package|
+            try self.insertQualifiedIdent(self.env.getIdent(package), self.env.getIdent(module_alias))
+        else
+            module_alias;
+
         return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = qualified_ident,
+            .context = .{ .missing_module_or_type = .{
+                .name = module_alias,
+                .suggested_import = suggested_import,
+            } },
             .region = region,
         } });
     };
 
-    return try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens);
+    if (try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens)) |expr| {
+        return expr;
+    }
+
+    const raw_value_region = self.parse_ir.tokens.resolve(e.token);
+    const value_region = if (raw_value_region.end.offset > raw_value_region.start.offset)
+        Region{ .start = .{ .offset = raw_value_region.start.offset + 1 }, .end = raw_value_region.end }
+    else
+        raw_value_region;
+
+    return try self.canonicalizeUnqualifiedIdentExpr(ident, region, .{
+        .qualified_ident = qualified_ident,
+        .module_name = module_alias,
+        .value_name = ident,
+        .value_region = value_region,
+    });
 }
 
 fn canonicalizeTypeDispatchOwner(
@@ -7518,6 +7577,7 @@ fn canonicalizeUnqualifiedIdentExpr(
     self: *Self,
     ident: Ident.Idx,
     region: Region,
+    qualified_value_not_found: ?QualifiedValueNotFound,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     switch (self.scopeLookup(.ident, ident)) {
         .found => |found_pattern_idx| {
@@ -7559,6 +7619,10 @@ fn canonicalizeUnqualifiedIdentExpr(
                 if (self.hasAvailableModuleEnv(exposed_info.module_name)) {
                     return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
                         .ident = ident,
+                        .context = .{ .missing_exposed_value = .{
+                            .module_name = exposed_info.module_name,
+                            .value_name = ident,
+                        } },
                         .region = region,
                     } });
                 }
@@ -7614,10 +7678,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                         .region = region,
                     } });
                 }
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
-                    .ident = ident,
-                    .region = region,
-                } });
+                return try self.canonicalizedIdentNotFoundExpr(ident, region, qualified_value_not_found);
             };
 
             const active_decl_scope = active_decl_entry.binding;
@@ -7642,10 +7703,7 @@ fn canonicalizeUnqualifiedIdentExpr(
                 .module => 0,
                 .associated => active_decl_scope.canonical_scope,
                 .block => {
-                    return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
-                        .ident = ident,
-                        .region = region,
-                    } });
+                    return try self.canonicalizedIdentNotFoundExpr(ident, region, qualified_value_not_found);
                 },
             };
             std.debug.assert(owner_scope_idx < self.scopes.items.len);
@@ -7674,6 +7732,29 @@ fn canonicalizeUnqualifiedIdentExpr(
             return try self.canonicalizedLocalLookup(ref_pattern_idx, region);
         },
     }
+}
+
+fn canonicalizedIdentNotFoundExpr(
+    self: *Self,
+    ident: Ident.Idx,
+    region: Region,
+    qualified_value_not_found: ?QualifiedValueNotFound,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    if (qualified_value_not_found) |qualified| {
+        return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+            .ident = qualified.qualified_ident,
+            .context = .{ .missing_exposed_value = .{
+                .module_name = qualified.module_name,
+                .value_name = qualified.value_name,
+            } },
+            .region = qualified.value_region,
+        } });
+    }
+
+    return try self.canonicalizedMalformedExpr(Diagnostic{ .ident_not_in_scope = .{
+        .ident = ident,
+        .region = region,
+    } });
 }
 
 fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget {

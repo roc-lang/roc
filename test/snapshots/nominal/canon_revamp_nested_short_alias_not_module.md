@@ -33,6 +33,13 @@ DOES NOT EXIST - canon_revamp_nested_short_alias_not_mod.md:13:7:13:17
  │        ‾‾‾‾‾‾‾‾‾‾                                                          │
  └──────────────────────── canon_revamp_nested_short_alias_not_mod.md:13:7 ┘
 
+    The name `Nested` is not an imported mod or a type in scope.
+
+
+    If `Nested` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Nested
 
 # TOKENS
 ~~~zig

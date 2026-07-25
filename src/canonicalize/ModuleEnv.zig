@@ -1477,8 +1477,34 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Does Not Exist", "", .runtime_error);
             const owned_ident = try report.addOwnedString(ident_name);
-            try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" does not exist.");
+
+            switch (data.context) {
+                .missing_module_or_type => {
+                    try report.headline.addUnqualifiedSymbol(owned_ident);
+                    try report.headline.addReflowingText(" does not exist.");
+                },
+                .missing_exposed_value => |context| {
+                    const module_name = try report.addOwnedString(self.getIdent(context.module_name));
+                    const value_name = try report.addOwnedString(self.getIdent(context.value_name));
+                    try report.headline.addUnqualifiedSymbol(value_name);
+                    try report.headline.addReflowingText(" was not found in ");
+                    try report.headline.addUnqualifiedSymbol(module_name);
+                    try report.headline.addReflowingText(".");
+                },
+            }
+
+            switch (data.context) {
+                .missing_module_or_type => |context| {
+                    const alias_name = try report.addOwnedString(self.getIdent(context.name));
+                    try report.document.addReflowingText("The name ");
+                    try report.document.addInlineCode(alias_name);
+                    try report.document.addReflowingText(" is not an imported module or a type in scope.");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                },
+                .missing_exposed_value => {},
+            }
+
             const owned_filename = try report.addOwnedString(filename);
             try report.document.addSourceRegion(
                 region_info,
@@ -1487,6 +1513,33 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            switch (data.context) {
+                .missing_module_or_type => |context| {
+                    const alias_name = try report.addOwnedString(self.getIdent(context.name));
+                    try report.document.addLineBreak();
+                    try report.document.addReflowingText("If ");
+                    try report.document.addInlineCode(alias_name);
+                    try report.document.addReflowingText(" is a module, you may need to import it at the top of the file. For example:");
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+
+                    const import_text = try std.fmt.allocPrint(allocator, "import {s}", .{self.getIdent(context.suggested_import)});
+                    defer allocator.free(import_text);
+                    const owned_import = try report.addOwnedString(import_text);
+                    try report.document.addCodeBlock(owned_import);
+                },
+                .missing_exposed_value => |context| {
+                    const module_name = try report.addOwnedString(self.getIdent(context.module_name));
+                    const value_name = try report.addOwnedString(self.getIdent(context.value_name));
+                    try report.document.addLineBreak();
+                    try report.document.addReflowingText("Check that ");
+                    try report.document.addInlineCode(value_name);
+                    try report.document.addReflowingText(" is spelled correctly and that ");
+                    try report.document.addInlineCode(module_name);
+                    try report.document.addReflowingText(" exposes it.");
+                },
+            }
 
             break :blk report;
         },

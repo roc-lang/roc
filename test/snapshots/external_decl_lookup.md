@@ -18,8 +18,8 @@ main! = |_| {
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - external_decl_lookup.md:4:1:4:17
-NAME NOT IN SCOPE - external_decl_lookup.md:8:14:8:23
-NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
+DOES NOT EXIST - external_decl_lookup.md:8:19:8:23
+DOES NOT EXIST - external_decl_lookup.md:9:12:9:17
 # PROBLEMS
 
 ┌──────────────────────┐
@@ -37,26 +37,26 @@ NAME NOT IN SCOPE - external_decl_lookup.md:9:5:9:17
       └────────────────────────────────────────── external_decl_lookup.md:1:1 ┘
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `utf8` in this scope. ────────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `utf8` was not found in `Json`. ──────────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  result = Json.utf8("Hello from external mod!")                            │
- │           ‾‾‾‾‾‾‾‾‾                                                        │
- └────────────────────────────────────────────── external_decl_lookup.md:8:14 ┘
+ │                ‾‾‾‾                                                        │
+ └────────────────────────────────────────────── external_decl_lookup.md:8:19 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `utf8` is spelled correctly and that `Json` exposes it.
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!(result)                                                      │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └─────────────────────────────────────────────── external_decl_lookup.md:9:5 ┘
+ │         ‾‾‾‾‾                                                              │
+ └────────────────────────────────────────────── external_decl_lookup.md:9:12 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig

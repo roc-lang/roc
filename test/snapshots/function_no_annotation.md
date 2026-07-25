@@ -21,18 +21,18 @@ process! = |x| print_number!(multiply(x, 2))
 main! = process!(42)
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - function_no_annotation.md:9:21:9:33
+DOES NOT EXIST - function_no_annotation.md:9:28:9:33
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  print_number! = |n| Stdout.line!(n)                                       │
- │                      ‾‾‾‾‾‾‾‾‾‾‾‾                                          │
- └──────────────────────────────────────────── function_no_annotation.md:9:21 ┘
+ │                             ‾‾‾‾‾                                          │
+ └──────────────────────────────────────────── function_no_annotation.md:9:28 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 # TOKENS
 ~~~zig

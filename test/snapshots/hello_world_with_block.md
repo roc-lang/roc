@@ -19,19 +19,19 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - hello_world_with_block.md:11:2:11:14
+DOES NOT EXIST - hello_world_with_block.md:11:9:11:14
 UNUSED VARIABLE - hello_world_with_block.md:9:2:9:7
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `line!` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `line!` was not found in `Stdout`. ───────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  Stdout.line!("Hello, world!")                                             │
- │  ‾‾‾‾‾‾‾‾‾‾‾‾                                                              │
- └──────────────────────────────────────────── hello_world_with_block.md:11:2 ┘
+ │         ‾‾‾‾‾                                                              │
+ └──────────────────────────────────────────── hello_world_with_block.md:11:9 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `line!` is spelled correctly and that `Stdout` exposes it.
 
 
 ┌─────────────────┐

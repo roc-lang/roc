@@ -10,18 +10,18 @@ import nonexistent.Mod
 main = Mod.something
 ~~~
 # EXPECTED
-NAME NOT IN SCOPE - can_import_mod_not_found.md:3:8:3:21
+DOES NOT EXIST - can_import_mod_not_found.md:3:12:3:21
 # PROBLEMS
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `something` in this scope. ───────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `something` was not found in `Mod`. ──────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  main = Mod.something                                                      │
- │         ‾‾‾‾‾‾‾‾‾‾‾‾‾                                                      │
- └──────────────────────────────────────── can_import_mod_not_found.md:3:8 ┘
+ │             ‾‾‾‾‾‾‾‾‾                                                      │
+ └─────────────────────────────────────── can_import_mod_not_found.md:3:12 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `something` is spelled correctly and that `Mod` exposes it.
 
 # TOKENS
 ~~~zig
@@ -48,7 +48,7 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "ident_not_in_scope")))
+		(e-runtime-error (tag "qualified_ident_does_not_exist")))
 	(s-import (mod "nonexistent.Mod")
 		(exposes)))
 ~~~

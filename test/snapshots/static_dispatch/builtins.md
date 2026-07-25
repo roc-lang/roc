@@ -19,6 +19,13 @@ DOES NOT EXIST - builtins.md:1:13:1:21
  │              ‾‾‾‾‾‾‾‾                                                      │
  └────────────────────────────────────────────────────────── builtins.md:1:13 ┘
 
+    The name `True` is not an imported mod or a type in scope.
+
+
+    If `True` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import True
 
 # TOKENS
 ~~~zig

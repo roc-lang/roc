@@ -85,8 +85,12 @@ pub const Diagnostic = union(enum) {
     erroneous_value_expr: struct {
         region: Region,
     },
+    /// A qualified identifier failed to resolve. The context distinguishes a
+    /// missing module/type (e.g. `Stdin.line!` without `import pf.Stdin`) from
+    /// a missing value on a module that is already in scope.
     qualified_ident_does_not_exist: struct {
-        ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
+        ident: Ident.Idx,
+        context: QualifiedIdentDoesNotExistContext,
         region: Region,
     },
     invalid_top_level_statement: struct {
@@ -1955,4 +1959,16 @@ pub const Diagnostic = union(enum) {
 
         return report;
     }
+};
+
+/// An error for an unknown qualified ident
+pub const QualifiedIdentDoesNotExistContext = union(enum) {
+    missing_module_or_type: struct {
+        name: Ident.Idx,
+        suggested_import: Ident.Idx,
+    },
+    missing_exposed_value: struct {
+        module_name: Ident.Idx,
+        value_name: Ident.Idx,
+    },
 };

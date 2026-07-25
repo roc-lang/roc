@@ -34,7 +34,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 MOD NOT IMPORTED - can_import_nested_mods.md:6:15:6:30
 DOES NOT EXIST - can_import_nested_mods.md:7:26:7:41
 MOD NOT FOUND - can_import_nested_mods.md:10:36:10:42
-NAME NOT IN SCOPE - can_import_nested_mods.md:11:29:11:43
+DOES NOT EXIST - can_import_nested_mods.md:11:38:11:43
 MOD NOT IMPORTED - can_import_nested_mods.md:14:15:14:37
 MOD NOT IMPORTED - can_import_nested_mods.md:14:55:14:74
 DOES NOT EXIST - can_import_nested_mods.md:16:5:16:37
@@ -43,7 +43,7 @@ DOES NOT EXIST - can_import_nested_mods.md:20:37:20:58
 MOD NOT FOUND - can_import_nested_mods.md:23:24:23:36
 MOD NOT FOUND - can_import_nested_mods.md:23:52:23:58
 MOD NOT FOUND - can_import_nested_mods.md:23:68:23:74
-NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
+DOES NOT EXIST - can_import_nested_mods.md:24:33:24:41
 # PROBLEMS
 
 ┌─────────────────────┐
@@ -64,6 +64,13 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │                           ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
  └───────────────────────────────────────── can_import_nested_mods.md:7:26 ┘
 
+    The name `Config` is not an imported mod or a type in scope.
+
+
+    If `Config` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Config
 
 
 ┌──────────────────┐
@@ -76,15 +83,15 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `login` in this scope. ───────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `login` was not found in `HttpAuth`. ─────────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  authenticate = |user, pass| HttpAuth.login(user, pass)                    │
- │                              ‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                │
- └──────────────────────────────────────── can_import_nested_mods.md:11:29 ┘
+ │                                       ‾‾‾‾‾                                │
+ └──────────────────────────────────────── can_import_nested_mods.md:11:38 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `login` is spelled correctly and that `HttpAuth` exposes it.
 
 
 ┌─────────────────────┐
@@ -115,6 +122,13 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │  ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                          │
  └───────────────────────────────────────── can_import_nested_mods.md:16:5 ┘
 
+    The name `Config` is not an imported mod or a type in scope.
+
+
+    If `Config` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Config
 
 
 ┌───────────────────┐
@@ -136,6 +150,13 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
  │                                      ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                 │
  └──────────────────────────────────────── can_import_nested_mods.md:20:37 ┘
 
+    The name `Config` is not an imported mod or a type in scope.
+
+
+    If `Config` is a mod, you may need to import it at the top of the file.
+    For example:
+
+        import Config
 
 
 ┌──────────────────┐
@@ -168,15 +189,15 @@ NAME NOT IN SCOPE - can_import_nested_mods.md:24:24:24:41
 
 
 
-┌───────────────────┐
-│ NAME NOT IN SCOPE ├─ Nothing is named `validate` in this scope. ────────────┐
-└┬──────────────────┘                                                         │
+┌────────────────┐
+│ DOES NOT EXIST ├─ `validate` was not found in `HttpAuth`. ──────────────────┐
+└┬───────────────┘                                                            │
  │                                                                            │
  │  validateAuth = |creds| HttpAuth.validate(creds)                           │
- │                         ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾                                  │
- └──────────────────────────────────────── can_import_nested_mods.md:24:24 ┘
+ │                                  ‾‾‾‾‾‾‾‾                                  │
+ └──────────────────────────────────────── can_import_nested_mods.md:24:33 ┘
 
-    Is it misspelled, or is there an import missing?
+    Check that `validate` is spelled correctly and that `HttpAuth` exposes it.
 
 # TOKENS
 ~~~zig

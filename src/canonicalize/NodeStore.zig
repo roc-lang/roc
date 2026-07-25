@@ -26,6 +26,7 @@ regions: Region.List,
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan), // Checked literal dispatch metadata owned by literal nodes
 interpolation_data: collections.SafeList(InterpolationData), // Canonical and checked data owned by interpolation expressions
+qualified_ident_diagnostic_data: collections.SafeList(QualifiedIdentDiagnosticData), // Explicit context for unresolved qualified identifiers
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
 method_call_data: collections.SafeList(MethodCallData), // Typed storage for method args plus method-token source region
@@ -88,6 +89,14 @@ pub const InterpolationData = extern struct {
     constraint_fn_var_plus_one: u32,
     step_fn_var_plus_one: u32,
     dispatcher_var_plus_one: u32,
+};
+
+/// Context-specific identifiers for a `qualified_ident_does_not_exist` diagnostic.
+/// For a missing module/type these store its name and suggested import; for a
+/// missing exposed value they store the module and value names.
+pub const QualifiedIdentDiagnosticData = extern struct {
+    primary_ident: u32,
+    secondary_ident: u32,
 };
 
 /// Method-call side data.
@@ -327,6 +336,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
     errdefer literal_dispatch_plans.deinit(gpa);
     var interpolation_data = try collections.SafeList(InterpolationData).initCapacity(gpa, capacity / 16);
     errdefer interpolation_data.deinit(gpa);
+    var qualified_ident_diagnostic_data = try collections.SafeList(QualifiedIdentDiagnosticData).initCapacity(gpa, capacity / 32);
+    errdefer qualified_ident_diagnostic_data.deinit(gpa);
     var span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4);
     errdefer span2_data.deinit(gpa);
     var span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4);
@@ -369,6 +380,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .int128_values = int128_values,
         .literal_dispatch_plans = literal_dispatch_plans,
         .interpolation_data = interpolation_data,
+        .qualified_ident_diagnostic_data = qualified_ident_diagnostic_data,
         .span2_data = span2_data,
         .span_with_node_data = span_with_node_data,
         .method_call_data = method_call_data,
@@ -398,6 +410,7 @@ pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
         .int128_values = try self.int128_values.clone(gpa),
         .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
         .interpolation_data = try self.interpolation_data.clone(gpa),
+        .qualified_ident_diagnostic_data = try self.qualified_ident_diagnostic_data.clone(gpa),
         .span2_data = try self.span2_data.clone(gpa),
         .span_with_node_data = try self.span_with_node_data.clone(gpa),
         .method_call_data = try self.method_call_data.clone(gpa),
@@ -427,6 +440,7 @@ pub fn deinit(store: *NodeStore) void {
     store.int128_values.deinit(store.gpa);
     store.literal_dispatch_plans.deinit(store.gpa);
     store.interpolation_data.deinit(store.gpa);
+    store.qualified_ident_diagnostic_data.deinit(store.gpa);
     store.span2_data.deinit(store.gpa);
     store.span_with_node_data.deinit(store.gpa);
     store.method_call_data.deinit(store.gpa);
@@ -456,6 +470,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.int128_values.relocate(offset);
     store.literal_dispatch_plans.relocate(offset);
     store.interpolation_data.relocate(offset);
+    store.qualified_ident_diagnostic_data.relocate(offset);
     store.span2_data.relocate(offset);
     store.span_with_node_data.relocate(offset);
     store.method_call_data.relocate(offset);
@@ -4517,7 +4532,23 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
+            const context_data_idx: u32 = @intCast(store.qualified_ident_diagnostic_data.len());
+            const context_data: QualifiedIdentDiagnosticData = switch (r.context) {
+                .missing_module_or_type => |context| .{
+                    .primary_ident = @bitCast(context.name),
+                    .secondary_ident = @bitCast(context.suggested_import),
+                },
+                .missing_exposed_value => |context| .{
+                    .primary_ident = @bitCast(context.module_name),
+                    .secondary_ident = @bitCast(context.value_name),
+                },
+            };
+            _ = try store.qualified_ident_diagnostic_data.append(store.gpa, context_data);
+            node.setPayload(.{ .diag_qualified_ident_does_not_exist = .{
+                .ident = @bitCast(r.ident),
+                .context = @intFromEnum(std.meta.activeTag(r.context)),
+                .context_data_idx = context_data_idx,
+            } });
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
@@ -4968,10 +4999,26 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
+        .diag_qualified_ident_does_not_exist => {
+            const p = payload.diag_qualified_ident_does_not_exist;
+            const context_data = store.qualified_ident_diagnostic_data.items.items[p.context_data_idx];
+            const ContextTag = std.meta.Tag(Diagnostic.QualifiedIdentDoesNotExistContext);
+            const context: Diagnostic.QualifiedIdentDoesNotExistContext = switch (@as(ContextTag, @enumFromInt(p.context))) {
+                .missing_module_or_type => .{ .missing_module_or_type = .{
+                    .name = @bitCast(context_data.primary_ident),
+                    .suggested_import = @bitCast(context_data.secondary_ident),
+                } },
+                .missing_exposed_value => .{ .missing_exposed_value = .{
+                    .module_name = @bitCast(context_data.primary_ident),
+                    .value_name = @bitCast(context_data.secondary_ident),
+                } },
+            };
+            return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
+                .ident = @bitCast(p.ident),
+                .context = context,
+                .region = store.getRegionAt(node_idx),
+            } };
+        },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
             .stmt = @enumFromInt(payload.diag_single_value.value),
             .region = store.getRegionAt(node_idx),
@@ -5444,6 +5491,7 @@ pub const Serialized = extern struct {
     int128_values: collections.SafeList(i128).Serialized, // Must be first data field for 16-byte alignment
     literal_dispatch_plans: collections.SafeList(LiteralDispatchPlan).Serialized,
     interpolation_data: collections.SafeList(InterpolationData).Serialized,
+    qualified_ident_diagnostic_data: collections.SafeList(QualifiedIdentDiagnosticData).Serialized,
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
@@ -5475,6 +5523,7 @@ pub const Serialized = extern struct {
         try self.int128_values.serialize(&store.int128_values, allocator, writer);
         try self.literal_dispatch_plans.serialize(&store.literal_dispatch_plans, allocator, writer);
         try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
+        try self.qualified_ident_diagnostic_data.serialize(&store.qualified_ident_diagnostic_data, allocator, writer);
         // Serialize nodes
         try self.nodes.serialize(&store.nodes, allocator, writer);
         // Serialize regions
@@ -5525,6 +5574,7 @@ pub const Serialized = extern struct {
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
+            .qualified_ident_diagnostic_data = self.qualified_ident_diagnostic_data.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
@@ -5556,6 +5606,7 @@ pub const Serialized = extern struct {
             .int128_values = self.int128_values.deserializeInto(base_addr),
             .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
             .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
+            .qualified_ident_diagnostic_data = self.qualified_ident_diagnostic_data.deserializeInto(base_addr),
             .span2_data = self.span2_data.deserializeInto(base_addr),
             .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
             .method_call_data = self.method_call_data.deserializeInto(base_addr),
