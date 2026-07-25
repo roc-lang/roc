@@ -112,7 +112,7 @@ get_greeting = |{}| {
 												(e-match
 													(match
 														(cond
-															(e-call (constraint-fn-var 308)
+															(e-call (constraint-fn-var 309)
 																(e-lookup-external
 																	(builtin))
 																(e-list
@@ -139,8 +139,9 @@ get_greeting = |{}| {
 																			(builtin)
 																			(e-tag (name "Err")
 																				(args
-																					(e-lookup-local
-																						(p-assign (ident "#err")))))))))))))))))
+																					(e-reraise-err
+																						(e-lookup-local
+																							(p-assign (ident "#err"))))))))))))))))))
 							(branch
 								(patterns
 									(pattern (degenerate false)

@@ -1007,6 +1007,7 @@ const HoistSelectionTransaction = struct {
             .e_hosted_lambda,
             .e_dbg,
             .e_expect_err,
+            .e_reraise_err,
             .e_expect,
             .e_for,
             .e_return,
@@ -2510,6 +2511,7 @@ fn markHoistInvalidatedExprChildren(
         .e_tuple_access => |access| try self.markHoistInvalidatedExpr(access.tuple, work),
         .e_dbg => |dbg| try self.markHoistInvalidatedExpr(dbg.expr, work),
         .e_expect_err => |expect_err| try self.markHoistInvalidatedExpr(expect_err.expr, work),
+        .e_reraise_err => |reraise| try self.markHoistInvalidatedExpr(reraise.expr, work),
         .e_expect => |expect| try self.markHoistInvalidatedExpr(expect.body, work),
         .e_return => |ret| {
             try self.markHoistInvalidatedExpr(ret.expr, work);
@@ -2693,6 +2695,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
             .e_tuple_access,
             .e_dbg,
             .e_expect_err,
+            .e_reraise_err,
             .e_expect,
             .e_for,
             .e_return,
@@ -3032,6 +3035,7 @@ fn exprCanBeHoistedRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_tuple_access,
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_for,
         .e_return,
@@ -3076,6 +3080,7 @@ fn exprCanCoverHoistedChildren(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_hosted_lambda,
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_for,
         .e_return,
@@ -3134,6 +3139,7 @@ fn exprCanBeHoistedBindingRoot(self: *Self, expr: CIR.Expr.Idx) bool {
         .e_hosted_lambda,
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_return,
         .e_break,
@@ -5749,6 +5755,7 @@ fn hoistedRootDependenciesAreKeptInternal(
         .e_hosted_lambda,
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_for,
         .e_return,
@@ -5921,6 +5928,7 @@ fn hoistedExprAllowsStoredConst(
         .e_tuple_access => |access| self.hoistedExprAllowsStoredConst(module, access.tuple, context),
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_break,
         => false,
@@ -5996,6 +6004,7 @@ fn hoistedCallableDefForExpr(
         .e_tuple_access,
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_for,
         .e_hosted_lambda,
@@ -10998,11 +11007,6 @@ const Expected = struct {
     }
 };
 
-const TryArgs = struct {
-    ok: Var,
-    err: Var,
-};
-
 // pattern //
 
 /// The "polarity" of a tag union or record
@@ -13437,6 +13441,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             _ = try self.checkExpr(expect_err.expr, env, child_expected);
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
+        .e_reraise_err => |reraise| {
+            does_fx = try self.checkExpr(reraise.expr, env, child_expected);
+            try self.unifyReraiseErr(expr_var, ModuleEnv.varFrom(reraise.expr), env, expr_region);
+        },
         .e_dbg => |dbg| {
             self.markCurrentHoistObservableEffect();
             // dbg evaluates its inner expression but returns {} (like expect)
@@ -15005,193 +15013,75 @@ fn functionTypeFromVar(self: *Self, fn_var: Var) ?Func {
     }
 }
 
-fn tryArgsFromVar(self: *Self, try_var: Var) ?TryArgs {
-    var current = try_var;
-    var guard = types_mod.debug.IterationGuard.init("tryArgsFromVar");
+// try question error re-raise //
+
+/// Try Question Error Re-raise (design.md): the desugared `?` Err branch
+/// re-constructs the outgoing error payload, so this node's type is a fresh
+/// tag union with the operand's tags and a fresh flexible extension whenever
+/// the operand's type resolved to a closed tag-union row. Any other operand
+/// type (flexible, rigid-open, non-tag-union, nominal, or poisoned) shares
+/// the operand's var: the node is a plain pass-through.
+fn unifyReraiseErr(self: *Self, expr_var: Var, operand_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!void {
+    const scratch_tags_top = self.scratch_tags.top();
+    defer self.scratch_tags.clearFrom(scratch_tags_top);
+
+    if (!try self.gatherClosedTagRow(operand_var)) {
+        _ = try self.unify(expr_var, operand_var, env);
+        return;
+    }
+
+    const tags_slice = self.scratch_tags.sliceFromStart(scratch_tags_top);
+    if (tags_slice.len == 0) {
+        // `?` on a `Try` whose error row is empty: the Err branch is
+        // unreachable and the re-raise imposes nothing on the return row.
+        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+        return;
+    }
+
+    std.mem.sort(types_mod.Tag, tags_slice, self, struct {
+        fn less(checker: *const Self, a: types_mod.Tag, b: types_mod.Tag) bool {
+            return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
+        }
+    }.less);
+    const tags_range = try self.types.appendTags(tags_slice);
+    const ext_var = try self.fresh(env, region);
+    try self.unifyWith(
+        expr_var,
+        .{ .structure = types_mod.FlatType{ .tag_union = .{
+            .tags = tags_range,
+            .ext = ext_var,
+        } } },
+        env,
+    );
+}
+
+/// Append the tags of `row_var`'s resolved tag-union chain to `scratch_tags`
+/// (sharing each tag's payload vars — the re-raise widening is shallow),
+/// returning true only when the chain terminates in the closed empty row.
+fn gatherClosedTagRow(self: *Self, row_var: Var) std.mem.Allocator.Error!bool {
+    var current = row_var;
+    var guard = types_mod.debug.IterationGuard.init("gatherClosedTagRow");
     while (true) {
         guard.tick();
         const resolved = self.types.resolveVar(current);
         switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .nominal_type => |nominal| {
-                    if (!self.nominalIsBuiltinTryType(nominal)) return null;
-                    const args = self.types.sliceNominalArgs(nominal);
-                    if (args.len != 2) return null;
-                    return .{ .ok = args[0], .err = args[1] };
-                },
-                else => return null,
-            },
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
-            else => return null,
-        }
-    }
-}
-
-/// Whether a `?` condition is a direct call of a hosted function — the only
-/// shape the hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening") applies to. The callee is statically resolved from the call's
-/// function expression (the local or external lookup canonicalization
-/// produced); dispatch calls and value-carried functions are never direct
-/// hosted calls, so `?` on them gets no widening.
-fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
-    const call = switch (self.cir.store.getExpr(cond_idx)) {
-        .e_call => |call| call,
-        else => return false,
-    };
-    const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
-    const def = callable_def.module.store.getDef(callable_def.def);
-    return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
-}
-
-/// The hosted-try-question-widening rule (design.md "Hosted Try Question
-/// Widening"): `?` on a direct call of a hosted function widens the condition
-/// to a fresh `Try` at the enclosing annotated return's error row when every
-/// visible error in the callee's row is included in it. The redirect targets
-/// the fresh `Try`, so the hosted callee's declared closed row — the host
-/// ABI's shape — is what checking outputs for the callee itself. For every
-/// other callee, a closed error row meeting an open annotated row stays a
-/// type error (issue #9798's program is rejected by design); the caller gates
-/// on `tryConditionIsDirectHostedCall`.
-fn widenTryConditionForExpectedReturn(
-    self: *Self,
-    cond_var: Var,
-    expected_return: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!void {
-    const actual_try = self.tryArgsFromVar(cond_var) orelse return;
-    const expected_try = self.tryArgsFromVar(expected_return) orelse return;
-
-    if (!try self.tryErrorRowNeedsUseSiteWidening(actual_try.err, expected_try.err)) {
-        return;
-    }
-
-    // Ordinary tag-union unification rejects closed-vs-open rigid rows; this
-    // use-site rewrite runs only after proving the callee's visible errors are
-    // included in the expected row.
-    const widened_try_var = try self.freshFromContent(
-        try self.mkTryContent(actual_try.ok, expected_try.err),
-        env,
-        region,
-    );
-    const cond_root = self.types.resolveVar(cond_var).var_;
-    if (cond_root != widened_try_var) {
-        try self.types.dangerousSetVarRedirect(.hosted_try_question_widening, cond_root, widened_try_var);
-    }
-}
-
-fn tryErrorRowNeedsUseSiteWidening(self: *Self, actual_err: Var, expected_err: Var) std.mem.Allocator.Error!bool {
-    if (try self.probeCanUseAs(expected_err, actual_err)) {
-        return false;
-    }
-
-    var visited_actual = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_actual.deinit();
-    return try self.actualTagRowIsIncludedInExpected(actual_err, expected_err, &visited_actual);
-}
-
-fn probeCanUseAs(self: *Self, expected_var: Var, actual_var: Var) std.mem.Allocator.Error!bool {
-    var probe = try self.beginProbe();
-    defer probe.rollback();
-    return try self.probeUnifyWithoutRecordingProblems(expected_var, actual_var);
-}
-
-fn actualTagRowIsIncludedInExpected(
-    self: *Self,
-    actual_var: Var,
-    expected_var: Var,
-    visited_actual: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    const actual_resolved = self.types.resolveVar(actual_var);
-    if (visited_actual.contains(actual_resolved.var_)) return true;
-    try visited_actual.put(actual_resolved.var_, {});
-
-    switch (actual_resolved.desc.content) {
-        .alias => |alias| return try self.actualTagRowIsIncludedInExpected(
-            self.types.getAliasBackingVar(alias),
-            expected_var,
-            visited_actual,
-        ),
-        .structure => |flat| switch (flat) {
-            .empty_tag_union => return true,
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    const actual_tag = types_mod.Tag{ .name = name, .args = args };
-                    if (!try self.expectedTagRowContainsTag(expected_var, actual_tag)) {
-                        return false;
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    const names = tags.items(.name);
+                    const args = tags.items(.args);
+                    for (names, args) |name, tag_args| {
+                        try self.scratch_tags.append(.{ .name = name, .args = tag_args });
                     }
-                }
-                return try self.actualTagRowIsIncludedInExpected(tag_union.ext, expected_var, visited_actual);
+                    current = tag_union.ext;
+                },
+                .empty_tag_union => return true,
+                else => return false,
             },
             else => return false,
-        },
-        .err => return true,
-        .flex, .rigid => return false,
-    }
-}
-
-fn expectedTagRowContainsTag(
-    self: *Self,
-    expected_var: Var,
-    actual_tag: types_mod.Tag,
-) std.mem.Allocator.Error!bool {
-    var visited_expected = std.AutoHashMap(Var, void).init(self.gpa);
-    defer visited_expected.deinit();
-
-    const expected_tag = try self.findVisibleTagInRow(expected_var, actual_tag.name, &visited_expected) orelse return false;
-    return try self.tagsCanUseSamePayloads(expected_tag, actual_tag);
-}
-
-fn findVisibleTagInRow(
-    self: *Self,
-    row_var: Var,
-    tag_name: Ident.Idx,
-    visited: *std.AutoHashMap(Var, void),
-) std.mem.Allocator.Error!?types_mod.Tag {
-    const row_resolved = self.types.resolveVar(row_var);
-    if (visited.contains(row_resolved.var_)) return null;
-    try visited.put(row_resolved.var_, {});
-
-    switch (row_resolved.desc.content) {
-        .alias => |alias| return try self.findVisibleTagInRow(
-            self.types.getAliasBackingVar(alias),
-            tag_name,
-            visited,
-        ),
-        .structure => |flat| switch (flat) {
-            .tag_union => |tag_union| {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                const names = tags.items(.name);
-                const args_ranges = tags.items(.args);
-                for (names, args_ranges) |name, args| {
-                    if (name.eql(tag_name)) {
-                        return types_mod.Tag{ .name = name, .args = args };
-                    }
-                }
-                return try self.findVisibleTagInRow(tag_union.ext, tag_name, visited);
-            },
-            .empty_tag_union => return null,
-            else => return null,
-        },
-        .err, .flex, .rigid => return null,
-    }
-}
-
-fn tagsCanUseSamePayloads(self: *Self, expected_tag: types_mod.Tag, actual_tag: types_mod.Tag) std.mem.Allocator.Error!bool {
-    if (expected_tag.args.len() != actual_tag.args.len()) return false;
-
-    var expected_args = self.types.iterVars(expected_tag.args);
-    var actual_args = self.types.iterVars(actual_tag.args);
-    while (expected_args.next()) |expected_arg| {
-        const actual_arg = actual_args.next().?;
-        if (!try self.probeCanUseAs(expected_arg, actual_arg)) {
-            return false;
         }
     }
-    return true;
 }
 
 // if-else //
@@ -15415,10 +15305,6 @@ fn checkMatchExpr(
         if (!try_result.isOk()) {
             has_invalid_try = true;
             had_type_error = true;
-        } else if (expected.returnResult()) |expected_return| {
-            if (self.tryConditionIsDirectHostedCall(match.cond)) {
-                try self.widenTryConditionForExpectedReturn(cond_var, expected_return, env, expr_region);
-            }
         }
     }
     if (!match.is_try_suffix and !match.skip_exhaustiveness) {

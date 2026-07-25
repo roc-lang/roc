@@ -492,6 +492,16 @@ pub const Expr = union(enum) {
         /// Source text of the `?` expression, for the failure message.
         snippet: StringLiteral.Idx,
     },
+    /// The re-raised error payload of a desugared `?` (see design.md "Try
+    /// Question Error Re-raise"). Semantically the identity re-construction of
+    /// the operand error value: checking gives this node a fresh open copy of
+    /// the operand's closed tag-union row, so the callee's error row composes
+    /// with the enclosing return row, and monotype lowering re-tags the value
+    /// at the widened row. When the operand's type is not a closed tag union,
+    /// the node shares the operand's type and is a plain pass-through.
+    e_reraise_err: struct {
+        expr: Expr.Idx,
+    },
     /// An expect expression that performs a runtime assertion.
     /// This expression evaluates to empty record {} but can fail at runtime.
     /// Used for both top-level tests and inline assertions.
@@ -1588,6 +1598,17 @@ pub const Expr = union(enum) {
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 try tree.pushStringPair("snippet", ir.getString(e.snippet));
+                const attrs = tree.beginNode();
+
+                try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_reraise_err => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-reraise-err");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
 
                 try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);

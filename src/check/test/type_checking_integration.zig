@@ -4400,17 +4400,126 @@ test "check type - try operator on method call should apply to whole expression 
     try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
-test "check type - try does not widen closed error row into open return error row" {
-    // Verifies intended behavior for https://github.com/roc-lang/roc/issues/9798:
-    // `?` does not widen a callee's closed error tag union into the enclosing
-    // annotation's open error row, so this program is a type error. The sole
-    // exception is a direct call of a hosted function (design.md "Hosted Try
-    // Question Widening"); `inner` is not hosted, so no widening applies.
+test "check type - try re-raises closed error row into open return error row (#9798)" {
+    // Accepted side of design.md "Try Question Error Re-raise": `?` re-raises
+    // the callee's closed error row at a fresh open row, so it composes with
+    // the enclosing annotation's open error row. (Issue #9798's program,
+    // previously rejected by design.)
     const source =
         \\inner : {} -> Try({}, [InnerErr])
         \\inner = |{}| Err(InnerErr)
         \\
         \\outer : {} -> Try({}, [InnerErr, ..])
+        \\outer = |{}| {
+        \\    inner({})?
+        \\    Ok({})
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [InnerErr, ..])");
+}
+
+test "check type - try re-raises closed error row into wider closed return error row" {
+    // Accepted side of design.md "Try Question Error Re-raise": the callee's
+    // closed row composes with a *closed* enclosing row that includes its
+    // tags, because the re-raised row is open until the annotation closes it.
+    const source =
+        \\f : I64 -> Try(I64, [Negative])
+        \\f = |x| if x >= 0 Ok(2 * x) else Err(Negative)
+        \\
+        \\g : I64 -> Try(I64, [Negative, TooBig])
+        \\g = |x| {
+        \\    y = f(x)?
+        \\    if y > 100 Err(TooBig) else Ok(y)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64 -> Try(I64, [Negative, TooBig])");
+}
+
+test "check type - try re-raises a stored binding condition" {
+    // `?` on a binding rather than a direct call: the re-raise node lives in
+    // the desugar, so a stored closed-row Try widens the same way. The
+    // binding's own type is untouched (no redirect is involved).
+    const source =
+        \\inner : {} -> Try({}, [InnerErr])
+        \\inner = |{}| Err(InnerErr)
+        \\
+        \\outer : {} -> Try({}, [InnerErr, TooBig])
+        \\outer = |{}| {
+        \\    stored = inner({})
+        \\    stored?
+        \\    Ok({})
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [InnerErr, TooBig])");
+}
+
+test "check type - try re-raises a generic callee's closed error row" {
+    // The callee is generic in its ok type with a ground closed error row.
+    // The widening happens at the use site on the instantiated row, so the
+    // callee still specializes at its declared type.
+    const source =
+        \\first : List(a) -> Try(a, [WasEmpty])
+        \\first = |xs| match xs {
+        \\    [x, ..] => Ok(x)
+        \\    [] => Err(WasEmpty)
+        \\}
+        \\
+        \\outer : List(I64) -> Try(I64, [WasEmpty, Other])
+        \\outer = |xs| {
+        \\    y = first(xs)?
+        \\    Ok(y)
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(I64) -> Try(I64, [Other, WasEmpty])");
+}
+
+test "check type - question binop re-raises the handler's closed error row" {
+    // `lhs ? handler` maps the error through the handler and re-raises the
+    // mapped error, so a handler returning a closed row composes with a
+    // wider enclosing row.
+    const source =
+        \\wrap : I64 -> [Wrapped(I64)]
+        \\wrap = |n| Wrapped(n)
+        \\
+        \\inner : {} -> Try({}, [InnerErr])
+        \\inner = |{}| Err(InnerErr)
+        \\
+        \\outer : {} -> Try({}, [Wrapped(I64), Other])
+        \\outer = |{}| {
+        \\    inner({}) ? |_| wrap(0)
+        \\    Ok({})
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{} -> Try({}, [Other, Wrapped(I64)])");
+}
+
+test "check type - try re-raise widening is shallow" {
+    // The re-raised row opens at the top level only: a closed tag-union
+    // *payload* keeps its exact type, so an enclosing annotation demanding a
+    // wider payload row is still a type error (design.md "Try Question Error
+    // Re-raise": widening is shallow).
+    const source =
+        \\inner : {} -> Try({}, [Bad([Inner])])
+        \\inner = |{}| Err(Bad(Inner))
+        \\
+        \\outer : {} -> Try({}, [Bad([Inner, Extra]), Other])
+        \\outer = |{}| {
+        \\    inner({})?
+        \\    Ok({})
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - try re-raise still rejects a tag the return row cannot absorb" {
+    // Rejected side of design.md "Try Question Error Re-raise": the re-raised
+    // row is open, but the enclosing annotated row omits the callee's tag and
+    // is closed, so unification still rejects the program.
+    const source =
+        \\inner : {} -> Try({}, [InnerErr])
+        \\inner = |{}| Err(InnerErr)
+        \\
+        \\outer : {} -> Try({}, [OtherErr])
         \\outer = |{}| {
         \\    inner({})?
         \\    Ok({})

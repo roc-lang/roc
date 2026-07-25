@@ -481,7 +481,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 86;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 56;
+pub const MODULEENV_EXPR_NODE_COUNT = 57;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 20;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -1332,6 +1332,12 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_expect_err = .{
                 .expr = @enumFromInt(p.expr),
                 .snippet = @enumFromInt(p.snippet),
+            } };
+        },
+        .expr_reraise_err => {
+            const p = payload.expr_reraise_err;
+            return CIR.Expr{ .e_reraise_err = .{
+                .expr = @enumFromInt(p.expr),
             } };
         },
         .expr_unary_minus => {
@@ -2860,6 +2866,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_expect_err = .{
                 .expr = @intFromEnum(e.expr),
                 .snippet = @intFromEnum(e.snippet),
+            } });
+        },
+        .e_reraise_err => |e| {
+            node.tag = .expr_reraise_err;
+            node.setPayload(.{ .expr_reraise_err = .{
+                .expr = @intFromEnum(e.expr),
             } });
         },
         .e_ellipsis => {

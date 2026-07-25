@@ -132,7 +132,7 @@ expect {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_lt") (constraint-fn-var 281)
+							(e-dispatch-call (method "is_lt") (constraint-fn-var 282)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "x"))))
@@ -168,7 +168,7 @@ expect {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 314)
+										(e-call (constraint-fn-var 315)
 											(e-lookup-local
 												(p-assign (ident "f")))
 											(e-lookup-local
@@ -193,11 +193,12 @@ expect {
 														(builtin)
 														(e-tag (name "Err")
 															(args
-																(e-lookup-local
-																	(p-assign (ident "#err")))))))))))))
+																(e-reraise-err
+																	(e-lookup-local
+																		(p-assign (ident "#err"))))))))))))))
 						(e-tag (name "Ok")
 							(args
-								(e-dispatch-call (method "times") (constraint-fn-var 349)
+								(e-dispatch-call (method "times") (constraint-fn-var 351)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "value"))))
@@ -205,7 +206,7 @@ expect {
 										(e-num (value "2")))))))))
 			(e-method-eq (negated "false")
 				(lhs
-					(e-call (constraint-fn-var 380)
+					(e-call (constraint-fn-var 386)
 						(e-lookup-local
 							(p-assign (ident "double")))
 						(e-num (value "3"))))

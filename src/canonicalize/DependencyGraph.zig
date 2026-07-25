@@ -639,6 +639,7 @@ const DemandAnalyzer = struct {
             .e_nominal_external => |nominal| try walk.push(self.allocator, .{ .visit = nominal.backing_expr }),
             .e_dbg => |dbg| try walk.push(self.allocator, .{ .visit = dbg.expr }),
             .e_expect_err => |expect_err| try walk.push(self.allocator, .{ .visit = expect_err.expr }),
+            .e_reraise_err => |reraise| try walk.push(self.allocator, .{ .visit = reraise.expr }),
             .e_expect => |expect| try walk.push(self.allocator, .{ .visit = expect.body }),
             .e_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
             .e_break => {},
@@ -1057,6 +1058,7 @@ fn collectNameReferences(
             },
             .e_dbg => |dbg| try scratch_stack.append(allocator, dbg.expr),
             .e_expect_err => |expect_err| try scratch_stack.append(allocator, expect_err.expr),
+            .e_reraise_err => |reraise| try scratch_stack.append(allocator, reraise.expr),
             .e_expect => |expect| try scratch_stack.append(allocator, expect.body),
             // NOTE: `ret.lambda` is a back-reference to the enclosing lambda,
             // not a child; walking it would loop.

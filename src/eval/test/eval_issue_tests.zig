@@ -715,4 +715,67 @@ pub const tests = [_]TestCase{
         .source = "(U8.plus_wrap(U8.highest, 1), U8.minus_wrap(0, 1), U8.times_wrap(128, 2))",
         .expected = .{ .inspect_str = "(0, 255, 0)" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/9798
+        // design.md "Try Question Error Re-raise": `?` re-tags a closed
+        // callee error row into the enclosing wider row. [Negative] and
+        // [Negative, TooBig] have different representations, so this
+        // exercises the runtime re-tag, not just the type-level widening.
+        .name = "issue 9798: ? re-raises a closed error row into a wider closed row",
+        .source_kind = .module,
+        .source =
+        \\f : I64 -> Try(I64, [Negative])
+        \\f = |x| if x >= 0 Ok(2 * x) else Err(Negative)
+        \\
+        \\g : I64 -> Try(I64, [Negative, TooBig])
+        \\g = |x| {
+        \\    y = f(x)?
+        \\    if y > 100 Err(TooBig) else Ok(y)
+        \\}
+        \\
+        \\main = (g(-1), g(200), g(3))
+        ,
+        .expected = .{ .inspect_str = "(Err(Negative), Err(TooBig), Ok(6))" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9798
+        // A generic callee with a ground closed error row: the callee
+        // specializes at its declared type and the re-tag happens at the use
+        // site on the instantiated row.
+        .name = "issue 9798: ? re-raise on a generic callee's closed error row",
+        .source_kind = .module,
+        .source =
+        \\first : List(a) -> Try(a, [WasEmpty])
+        \\first = |xs| match xs {
+        \\    [x, ..] => Ok(x)
+        \\    [] => Err(WasEmpty)
+        \\}
+        \\
+        \\outer : List(I64) -> Try(I64, [WasEmpty, Other])
+        \\outer = |xs| Ok(first(xs)?)
+        \\
+        \\main = (outer([]), outer([42]))
+        ,
+        .expected = .{ .inspect_str = "(Err(WasEmpty), Ok(42))" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/9798
+        // The re-raise carries tag payloads through unchanged, and composes
+        // with an open annotated return row.
+        .name = "issue 9798: ? re-raise carries payloads into an open row",
+        .source_kind = .module,
+        .source =
+        \\inner : I64 -> Try(I64, [Bad(I64, Str)])
+        \\inner = |x| if x > 0 Ok(x) else Err(Bad(x, "neg"))
+        \\
+        \\outer : I64 -> Try(I64, [Bad(I64, Str), ..])
+        \\outer = |x| {
+        \\    y = inner(x)?
+        \\    Ok(y + 1)
+        \\}
+        \\
+        \\main = (outer(-3), outer(5))
+        ,
+        .expected = .{ .inspect_str = "(Err(Bad(-3, \"neg\")), Ok(6))" },
+    },
 };

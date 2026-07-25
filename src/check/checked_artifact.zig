@@ -1885,6 +1885,7 @@ fn exprDependsOnUnboundPlatformRequirement(
         .unary_minus,
         .unary_not,
         .dbg,
+        .reraise_err,
         .expect,
         => |child| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, child, relation_blocked_exprs),
         .expect_err => |expect_err| exprDependsOnUnboundPlatformRequirement(checked_bodies, resolved_value_refs, expect_err.expr, relation_blocked_exprs),
@@ -7524,6 +7525,10 @@ pub const CheckedExprData = union(enum) {
     runtime_error,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
+    /// Re-raised error payload of a desugared `?` (design.md "Try Question
+    /// Error Re-raise"): the operand's error value re-constructed at the
+    /// node's (possibly wider) tag-union row.
+    reraise_err: CheckedExprId,
     expect_err: struct {
         expr: CheckedExprId,
         /// Source text of the `?` expression, for the failure message.
@@ -7688,6 +7693,7 @@ pub const StoredCheckedExprData = union(enum) {
     runtime_error,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
+    reraise_err: CheckedExprId,
     expect_err: struct {
         expr: CheckedExprId,
         snippet: CheckedStringLiteralId,
@@ -7898,6 +7904,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
         .crash => |l| .{ .crash = l },
         .dbg => |e| .{ .dbg = e },
+        .reraise_err => |e| .{ .reraise_err = e },
         .expect_err => |e| .{ .expect_err = .{ .expr = e.expr, .snippet = e.snippet } },
         .expect => |e| .{ .expect = e },
         .break_ => .break_,
@@ -8505,6 +8512,7 @@ const CheckedSourceNodes = struct {
             .e_tuple_access => |access| try self.markExpr(access.tuple, work),
             .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
             .e_expect_err => |expect_err| try self.markExpr(expect_err.expr, work),
+            .e_reraise_err => |reraise| try self.markExpr(reraise.expr, work),
             .e_expect => |expect| try self.markExpr(expect.body, work),
             .e_return => |ret| {
                 try self.markExpr(ret.expr, work);
@@ -9116,6 +9124,7 @@ pub const CheckedBodyStore = struct {
             .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
             .crash => |l| .{ .crash = l },
             .dbg => |e| .{ .dbg = e },
+            .reraise_err => |e| .{ .reraise_err = e },
             .expect_err => |e| .{ .expect_err = .{ .expr = e.expr, .snippet = e.snippet } },
             .expect => |e| .{ .expect = e },
             .break_ => .break_,
@@ -9836,6 +9845,7 @@ fn checkedExprDataDiverges(
         .unary_minus,
         .unary_not,
         .dbg,
+        .reraise_err,
         .expect,
         => |child| checkedExprDiverges(exprs, statements, expr_diverges, statement_diverges, child, expr_states, statement_states),
         .expect_err => true,
@@ -10255,6 +10265,7 @@ const CheckedBodyPayloadCopier = struct {
             .e_runtime_error => .runtime_error,
             .e_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
             .e_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
+            .e_reraise_err => |reraise| .{ .reraise_err = self.checkedExpr(reraise.expr) },
             .e_expect_err => |expect_err| .{ .expect_err = .{
                 .expr = self.checkedExpr(expect_err.expr),
                 .snippet = try self.string_builder.intern(expect_err.snippet),
@@ -11135,6 +11146,7 @@ fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
         .runtime_error,
         .crash,
         .dbg,
+        .reraise_err,
         .expect_err,
         .expect,
         .ellipsis,
@@ -11860,6 +11872,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
         .runtime_error,
         .crash,
         .dbg,
+        .reraise_err,
         .expect_err,
         .expect,
         .ellipsis,
@@ -12032,6 +12045,7 @@ fn categorizeValueRef(
         .e_crash,
         .e_dbg,
         .e_expect_err,
+        .e_reraise_err,
         .e_expect,
         .e_ellipsis,
         .e_anno_only,
@@ -14066,6 +14080,7 @@ const CheckedTemplateRefCollector = struct {
             },
             .tuple_access => |access| try self.collectExpr(access.tuple),
             .dbg => |child| try self.collectExpr(child),
+            .reraise_err => |child| try self.collectExpr(child),
             .expect_err => |expect_err| try self.collectExpr(expect_err.expr),
             .expect => |child| try self.collectExpr(child),
             .break_ => {},
@@ -14796,6 +14811,7 @@ const NestedProcSiteBuilder = struct {
             .unary_minus => |child| try self.scanExpr(child, owner, false),
             .unary_not => |child| try self.scanExpr(child, owner, false),
             .dbg => |child| try self.scanExpr(child, owner, false),
+            .reraise_err => |child| try self.scanExpr(child, owner, false),
             .expect_err => |expect_err| try self.scanExpr(expect_err.expr, owner, false),
             .expect => |child| try self.scanExpr(child, owner, false),
             .break_ => {},
@@ -19050,7 +19066,7 @@ fn checkedExprContainsExpr(
         .lambda => |lambda| checkedExprContainsExpr(checked_bodies, lambda.body, needle),
         .binop => |binop| checkedExprContainsExpr(checked_bodies, binop.lhs, needle) or
             checkedExprContainsExpr(checked_bodies, binop.rhs, needle),
-        .unary_minus, .unary_not, .dbg, .expect => |child| checkedExprContainsExpr(checked_bodies, child, needle),
+        .unary_minus, .unary_not, .dbg, .reraise_err, .expect => |child| checkedExprContainsExpr(checked_bodies, child, needle),
         .tuple_access => |access| checkedExprContainsExpr(checked_bodies, access.tuple, needle),
         .field_access => |field| checkedExprContainsExpr(checked_bodies, field.receiver, needle),
         .interpolation => |interpolation| blk: {
@@ -19191,7 +19207,7 @@ fn checkedExprContainsPattern(
         .closure => |closure| checkedExprContainsPattern(checked_bodies, closure.lambda, needle),
         .binop => |binop| checkedExprContainsPattern(checked_bodies, binop.lhs, needle) or
             checkedExprContainsPattern(checked_bodies, binop.rhs, needle),
-        .unary_minus, .unary_not, .dbg, .expect => |child| checkedExprContainsPattern(checked_bodies, child, needle),
+        .unary_minus, .unary_not, .dbg, .reraise_err, .expect => |child| checkedExprContainsPattern(checked_bodies, child, needle),
         .tuple_access => |access| checkedExprContainsPattern(checked_bodies, access.tuple, needle),
         .field_access => |field| checkedExprContainsPattern(checked_bodies, field.receiver, needle),
         .interpolation => |interpolation| blk: {
@@ -23248,7 +23264,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 28;
+    const serialized_layout_version: u32 = 29;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -28071,8 +28087,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xC3, 0x7D, 0x55, 0x73, 0xA3, 0x05, 0x93, 0x43, 0xE7, 0x2D, 0xCB, 0x5C, 0x75, 0xB4, 0x7B, 0x66,
-        0x12, 0xCB, 0x75, 0x3A, 0x61, 0x41, 0x37, 0xAA, 0x1A, 0x88, 0x78, 0xED, 0xB8, 0x25, 0x18, 0xE7,
+        0x08, 0xFD, 0xD0, 0x18, 0x99, 0x34, 0xC8, 0xBF, 0x45, 0x7A, 0xDE, 0x35, 0xA2, 0x1D, 0x24, 0xA5,
+        0x82, 0x0B, 0xB7, 0xBE, 0x0A, 0xAE, 0x76, 0x05, 0x65, 0xB3, 0x49, 0xEC, 0xAB, 0x40, 0x17, 0xCC,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -1477,15 +1477,16 @@ const Builder = struct {
             .hosted => {
                 // The host is compiled against the declared hosted signature,
                 // so that exact type is the only one the extern boundary may
-                // use. A use site can still widen a (closed) tag-union row in
-                // the result through ordinary unification (e.g. `?` re-wraps
-                // the hosted error into the caller's wider error union); such
-                // requests get a generated Roc adapter that calls the
-                // declared-type boundary and re-tags the result, instead of a
-                // hosted spec whose layout would not match the host ABI.
+                // use. A `?` use site that widens the hosted error row does so
+                // through the desugared re-raise node at the call site
+                // (design.md "Try Question Error Re-raise"), so the request
+                // here is always the declared ABI type.
                 const declared_source_fn_ty = template.checked_fn_root;
                 const declared_source_fn_key = view.types.rootKey(declared_source_fn_ty);
                 const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
+                if (!self.sameMonoType(declared_mono_fn_ty, lower_fn_ty)) {
+                    Common.invariant("hosted specialization request differed from the declared host ABI type");
+                }
                 const hosted_fn_template = self.fnDefForTemplate(
                     view,
                     template_ref,
@@ -1495,44 +1496,6 @@ const Builder = struct {
                 );
                 const fn_data = self.functionShape(lower_fn_ty, "hosted procedure template root type was not a function");
                 const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
-                if (self.hostedUseNeedsTryAdapter(declared_mono_fn_ty, lower_fn_ty)) {
-                    const source_def = try self.lowerTemplateWithMonoFor(
-                        template_ref,
-                        method_scope,
-                        declared_source_fn_ty,
-                        declared_source_fn_key,
-                        declared_mono_fn_ty,
-                        &.{},
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                    );
-                    const adapter_template = Ast.FnTemplate{
-                        .fn_def = .{ .checked_generated = template_ref },
-                        .source_fn_ty = source_fn_ty,
-                        .source_fn_key = source_fn_key,
-                        .mono_fn_ty = lower_fn_ty,
-                    };
-                    const body = try self.hostedTryAdapterBody(
-                        args,
-                        self.defFnId(source_def),
-                        declared_mono_fn_ty,
-                        lower_fn_ty,
-                    );
-                    self.program.setDef(reservation.def, .{
-                        .symbol = reservation.symbol,
-                        .fn_def = adapter_template,
-                        .fn_id = reservation.fn_id,
-                        .args = args,
-                        .body = .{ .roc = body },
-                        .ret = fn_data.ret,
-                    });
-                    self.program.setFnSource(reservation.fn_id, adapter_template);
-                    try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-                    return reservation.def;
-                }
                 self.program.setDef(reservation.def, .{
                     .symbol = reservation.symbol,
                     .fn_def = hosted_fn_template,
@@ -4994,204 +4957,6 @@ const Builder = struct {
         ok_tag: Type.Tag,
         err_tag: Type.Tag,
     };
-
-    /// Whether a hosted specialization request differs from the declared host
-    /// ABI only by a widened `Try` error row. Such requests get a generated
-    /// Roc adapter that calls the declared-type boundary and re-tags the
-    /// error into the wider row.
-    fn hostedUseNeedsTryAdapter(self: *Builder, declared_fn_ty: Type.TypeId, requested_fn_ty: Type.TypeId) bool {
-        if (self.sameMonoType(declared_fn_ty, requested_fn_ty)) return false;
-
-        const declared = self.functionShape(declared_fn_ty, "hosted declared type was not a function");
-        const requested = self.functionShape(requested_fn_ty, "hosted requested type was not a function");
-        if (self.sameMonoType(declared.ret, requested.ret)) return false;
-
-        const declared_try = self.tryInfoOrNull(declared.ret) orelse return false;
-        const requested_try = self.tryInfoOrNull(requested.ret) orelse return false;
-        if (!self.sameMonoType(declared_try.ok_ty, requested_try.ok_ty)) return false;
-        if (!self.errorRowIsIncludedIn(declared_try.err_ty, requested_try.err_ty)) return false;
-
-        const declared_args = self.program.types.span(declared.args);
-        const requested_args = self.program.types.span(requested.args);
-        if (declared_args.len != requested_args.len) {
-            Common.invariant("hosted function use changed arity from the declared ABI");
-        }
-        for (0..declared_args.len) |index| {
-            const declared_arg = GuardedList.at(declared_args, index);
-            const requested_arg = GuardedList.at(requested_args, index);
-            if (!self.sameMonoType(declared_arg, requested_arg)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    fn hostedTryAdapterBody(
-        self: *Builder,
-        args: Ast.Span(Ast.TypedLocal),
-        source_fn: Ast.FnId,
-        source_fn_ty: Type.TypeId,
-        target_fn_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const source = self.functionShape(source_fn_ty, "hosted source adapter type was not a function");
-        const target = self.functionShape(target_fn_ty, "hosted target adapter type was not a function");
-        const source_args = self.program.types.span(source.args);
-        const target_args = self.program.types.span(target.args);
-        const adapter_args = self.program.typedLocalSpan(args);
-        if (source_args.len != target_args.len or source_args.len != GuardedList.borrowLen(adapter_args)) {
-            Common.invariant("hosted Try adapter arity differed from its function types");
-        }
-
-        const call_args = try self.allocator.alloc(Ast.ExprId, GuardedList.borrowLen(adapter_args));
-        defer self.allocator.free(call_args);
-        for (0..GuardedList.borrowLen(adapter_args)) |index| {
-            const arg = GuardedList.at(adapter_args, index);
-            const source_arg_ty = GuardedList.at(source_args, index);
-            const target_arg_ty = GuardedList.at(target_args, index);
-            if (!self.sameMonoType(arg.ty, source_arg_ty) or !self.sameMonoType(arg.ty, target_arg_ty)) {
-                Common.invariant("hosted Try adapter argument type differed from source or target function type");
-            }
-            call_args[index] = try self.localExpr(arg.local, arg.ty);
-        }
-
-        const source_call = try self.program.addExpr(.{
-            .ty = source.ret,
-            .data = .{ .call_proc = .{
-                .callee = Ast.localProcCallee(source_fn),
-                .args = try self.program.addExprSpan(call_args),
-            } },
-        });
-        return try self.tryReturnInjectionExpr(source_call, source.ret, target.ret);
-    }
-
-    fn tryReturnInjectionExpr(
-        self: *Builder,
-        source_expr: Ast.ExprId,
-        source_try_ty: Type.TypeId,
-        target_try_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
-
-        const source_info = self.tryInfo(source_try_ty);
-        const target_info = self.tryInfo(target_try_ty);
-        if (!self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
-            Common.invariant("Try adapter changed Ok type");
-        }
-        if (!self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
-            Common.invariant("Try adapter error row was not included in target row");
-        }
-
-        const ok_local = try self.program.addLocal(self.symbols.fresh(), source_info.ok_ty);
-        const ok_payload_pat = try self.bindPat(ok_local, source_info.ok_ty);
-        const ok_pat = try self.program.addPat(.{ .ty = source_try_ty, .data = .{ .tag = .{
-            .name = source_info.ok_tag.name,
-            .payloads = try self.program.addPatSpan(&[_]Ast.PatId{ok_payload_pat}),
-        } } });
-        const ok_value = try self.localExpr(ok_local, source_info.ok_ty);
-        const ok_body = try self.tryOkExpr(target_try_ty, ok_value);
-
-        const err_local = try self.program.addLocal(self.symbols.fresh(), source_info.err_ty);
-        const err_payload_pat = try self.bindPat(err_local, source_info.err_ty);
-        const err_pat = try self.program.addPat(.{ .ty = source_try_ty, .data = .{ .tag = .{
-            .name = source_info.err_tag.name,
-            .payloads = try self.program.addPatSpan(&[_]Ast.PatId{err_payload_pat}),
-        } } });
-        const err_value = try self.localExpr(err_local, source_info.err_ty);
-        const injected_err = try self.errorRowInjectionExpr(err_value, source_info.err_ty, target_info.err_ty);
-        const err_body = try self.tryErrExpr(target_try_ty, injected_err);
-
-        const branches = [_]Ast.Branch{
-            .{ .pat = ok_pat, .body = ok_body },
-            .{ .pat = err_pat, .body = err_body },
-        };
-        return try self.program.addExpr(.{ .ty = target_try_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.program.addBranchSpan(&branches),
-        } } });
-    }
-
-    fn errorRowInjectionExpr(
-        self: *Builder,
-        source_expr: Ast.ExprId,
-        source_err_ty: Type.TypeId,
-        target_err_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
-
-        const source_tags = self.tagUnionTags(source_err_ty);
-        if (source_tags.len == 0) {
-            Common.invariant("cannot inject an empty error row into a different error row");
-        }
-
-        const branches = try self.allocator.alloc(Ast.Branch, source_tags.len);
-        defer self.allocator.free(branches);
-        for (0..source_tags.len) |index| {
-            const source_tag = GuardedList.at(source_tags, index);
-            const source_payload_tys = self.program.types.span(source_tag.payloads);
-            const target_tag = self.tagByName(target_err_ty, source_tag.name);
-            const target_payload_tys = self.program.types.span(target_tag.payloads);
-            if (source_payload_tys.len != target_payload_tys.len) {
-                Common.invariant("Try adapter error tag payload arity differed in target row");
-            }
-
-            const payload_pats = try self.allocator.alloc(Ast.PatId, source_payload_tys.len);
-            defer self.allocator.free(payload_pats);
-            const payload_exprs = try self.allocator.alloc(Ast.ExprId, source_payload_tys.len);
-            defer self.allocator.free(payload_exprs);
-            for (0..source_payload_tys.len) |payload_index| {
-                const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
-                const target_payload_ty = GuardedList.at(target_payload_tys, payload_index);
-                if (!self.sameMonoType(source_payload_ty, target_payload_ty)) {
-                    Common.invariant("Try adapter error tag payload type differed in target row");
-                }
-                const local = try self.program.addLocal(self.symbols.fresh(), source_payload_ty);
-                payload_pats[payload_index] = try self.bindPat(local, source_payload_ty);
-                payload_exprs[payload_index] = try self.localExpr(local, source_payload_ty);
-            }
-
-            const pat = try self.program.addPat(.{ .ty = source_err_ty, .data = .{ .tag = .{
-                .name = source_tag.name,
-                .payloads = try self.program.addPatSpan(payload_pats),
-            } } });
-            const body = try self.tagValueExpr(target_err_ty, target_tag, payload_exprs);
-            branches[index] = .{ .pat = pat, .body = body };
-        }
-
-        return try self.program.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.program.addBranchSpan(branches),
-        } } });
-    }
-
-    fn tryOkExpr(self: *Builder, try_ty: Type.TypeId, value_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = self.tryInfo(try_ty);
-        return try self.tagValueExpr(try_ty, info.ok_tag, &[_]Ast.ExprId{value_expr});
-    }
-
-    fn tryErrExpr(self: *Builder, try_ty: Type.TypeId, err_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = self.tryInfo(try_ty);
-        return try self.tagValueExpr(try_ty, info.err_tag, &[_]Ast.ExprId{err_expr});
-    }
-
-    fn tagValueExpr(
-        self: *Builder,
-        ty: Type.TypeId,
-        tag: Type.Tag,
-        payloads: []const Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const backing_ty = self.nominalExprBackingType(ty) orelse ty;
-        const tag_expr = try self.program.addExpr(.{
-            .ty = backing_ty,
-            .data = .{ .tag = .{
-                .name = tag.name,
-                .payloads = try self.program.addExprSpan(payloads),
-            } },
-        });
-        if (self.nominalExprBackingType(ty) != null) {
-            return try self.program.addExpr(.{ .ty = ty, .data = .{ .nominal = tag_expr } });
-        }
-        return tag_expr;
-    }
 
     fn tryInfo(self: *Builder, try_ty: Type.TypeId) BuilderTryInfo {
         return self.tryInfoOrNull(try_ty) orelse Common.invariant("expected a named Try type");
@@ -9580,6 +9345,7 @@ const BodyContext = struct {
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .dbg => |child| .{ .dbg = try self.lowerDbgMessage(child) },
+            .reraise_err => |child| return try self.lowerReraiseErr(child, ty),
             .expect_err => |expect_err| .{ .expect_err = .{
                 .msg = try self.lowerExpectErrMessage(expect_err.expr, expect_err.snippet),
                 .region = expr.source_region,
@@ -9595,6 +9361,73 @@ const BodyContext = struct {
             .run_low_level => |low_level| .{ .low_level = .{ .op = low_level.op, .args = try self.lowerExprSpan(low_level.args) } },
         };
         return try self.addExpr(.{ .ty = ty, .data = data });
+    }
+
+    /// Try Question Error Re-raise (design.md): re-construct the operand
+    /// error value at this node's (possibly wider) row. The identity when the
+    /// two monotypes are equal; otherwise a match that destructures each
+    /// source tag and re-constructs it at the target row's representation.
+    fn lowerReraiseErr(self: *BodyContext, child: checked.CheckedExprId, target_ty: Type.TypeId) Allocator.Error!DraftExprId {
+        const value = try self.lowerExpr(child);
+        const source_ty = try self.exprType(value);
+        if (self.sameType(source_ty, target_ty)) return value;
+
+        const tags = self.builder.tagUnionTags(source_ty);
+        if (tags.len == 0) {
+            // An uninhabited error row: the desugared Err branch holding this
+            // node can never be entered.
+            return try self.runtimeCrashExpr(target_ty, "uninhabited error value reached ? re-raise");
+        }
+        const stable_tags = try GuardedList.dupe(self.allocator, Type.Tag, tags);
+        defer self.allocator.free(stable_tags);
+
+        const branches = try self.allocator.alloc(DraftBranch, stable_tags.len);
+        defer self.allocator.free(branches);
+
+        for (stable_tags, 0..) |tag, i| {
+            const target_tag = self.builder.tagByName(target_ty, tag.name);
+            const source_payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(tag.payloads));
+            defer self.allocator.free(source_payload_tys);
+            const target_payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(target_tag.payloads));
+            defer self.allocator.free(target_payload_tys);
+            if (source_payload_tys.len != target_payload_tys.len) {
+                Common.invariant("? re-raise error tag payload arity differed in target row");
+            }
+
+            const payload_pats = try self.allocator.alloc(DraftPatId, source_payload_tys.len);
+            defer self.allocator.free(payload_pats);
+            const payload_exprs = try self.allocator.alloc(DraftExprId, source_payload_tys.len);
+            defer self.allocator.free(payload_exprs);
+            for (source_payload_tys, 0..) |payload_ty, payload_i| {
+                if (!self.sameType(payload_ty, target_payload_tys[payload_i])) {
+                    Common.invariant("? re-raise error tag payload type differed in target row");
+                }
+                const local = try self.addLocal(self.builder.symbols.fresh(), payload_ty);
+                payload_pats[payload_i] = try self.bindPat(local, payload_ty);
+                payload_exprs[payload_i] = try self.localExpr(local, payload_ty);
+            }
+
+            const pat = try self.addPat(.{
+                .ty = source_ty,
+                .data = .{ .tag = .{
+                    .name = tag.name,
+                    .payloads = try self.addPatSpan(payload_pats),
+                } },
+            });
+            const body = try self.addConstructorExpr(target_ty, .{ .tag = .{
+                .name = tag.name,
+                .payloads = try self.addExprSpan(payload_exprs),
+            } });
+            branches[i] = .{ .pat = pat, .body = body };
+        }
+
+        return try self.addExpr(.{
+            .ty = target_ty,
+            .data = .{ .match_ = .{
+                .scrutinee = value,
+                .branches = try self.addBranchSpan(branches),
+            } },
+        });
     }
 
     fn lowerDbgMessage(self: *BodyContext, child: checked.CheckedExprId) Allocator.Error!DraftExprId {
@@ -25886,6 +25719,7 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
+            .reraise_err,
             => |child| try self.lowerDivergentExprForEffectDataAtType(child, ty),
             .expect => |child| if (self.builder.inline_expects == .run)
                 try self.lowerDivergentExprForEffectDataAtType(child, ty)
@@ -26061,6 +25895,7 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
+            .reraise_err,
             => |child| self.checkedExprDivergesInLoweredRuntime(child),
             .expect => false,
             .expect_err => true,
@@ -26778,6 +26613,7 @@ const BodyContext = struct {
             .unary_minus,
             .unary_not,
             .dbg,
+            .reraise_err,
             => |child| try self.collectReassignedBindersInExpr(child, out),
             .expect => |child| if (self.builder.inline_expects == .run) {
                 try self.collectReassignedBindersInExpr(child, out);
