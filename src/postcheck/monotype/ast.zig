@@ -14,6 +14,7 @@ const Type = @import("type.zig");
 
 const checked = check.CheckedModule;
 const names = check.CheckedNames;
+const static_dispatch = check.StaticDispatchRegistry;
 const GuardedList = collections.GuardedList;
 
 /// Guarded growable list for mutable Monotype program storage.
@@ -125,21 +126,37 @@ pub const NestedFn = struct {
     local_proc_context_digest: ?names.TypeDigest = null,
 };
 
+/// Stable identity of the explicit dispatch evidence captured by one
+/// specialization. Equal callable/type requests with different evidence must
+/// remain distinct specializations.
+pub const EvidenceDigest = extern struct {
+    bytes: [32]u8 = [_]u8{0} ** 32,
+};
+
 /// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
     fn_def: FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
-    /// Range into the owning program's `const_evidence_chain_pool`. The chain
-    /// is explicit producer data used only if this function value is frozen
-    /// into ConstStore.
-    const_evidence_chain: check.ConstStore.ConstRange = .{},
+    evidence_digest: EvidenceDigest = .{},
+    /// Explicit dispatch selections captured when this specialization was
+    /// created, retained for compile-time function values.
+    const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame) = Span(check.ConstStore.ConstFnEvidenceFrame).empty(),
+    const_evidence_frame_head: ?u32 = null,
 };
 
 /// Monotype function-specialization metadata.
+pub const SignatureRelation = enum(u8) {
+    independent_roots,
+    exact_graph,
+};
+
+/// A specialized Monotype function and its producer-authored signature relation.
 pub const Fn = struct {
     source: FnTemplate,
+    signature_relation: SignatureRelation = .independent_roots,
 };
 
 /// Function imported from another specialization shard.
@@ -177,9 +194,8 @@ pub const CallableIdentity = union(enum(u8)) {
     generated: GeneratedId,
 };
 
-/// Full specialization identity: callable, method lookup scope, source
-/// function type, and the closed monomorphic function type the reserving call
-/// site REQUESTED.
+/// Full specialization identity: callable plus source function type and the
+/// closed monomorphic function type the reserving call site REQUESTED.
 ///
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
@@ -189,6 +205,7 @@ pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
     source_fn_ty_digest: names.TypeDigest,
+    evidence_digest: EvidenceDigest,
     request_fn_ty_digest: names.TypeDigest,
     request_fn_ty: Type.TypeId,
 };
@@ -222,6 +239,7 @@ pub const SpecRecord = struct {
 pub fn fnTemplateIdentityEql(lhs: FnTemplate, rhs: FnTemplate) bool {
     return std.meta.eql(lhs.fn_def, rhs.fn_def) and
         std.mem.eql(u8, lhs.source_fn_key.bytes[0..], rhs.source_fn_key.bytes[0..]) and
+        std.mem.eql(u8, lhs.evidence_digest.bytes[0..], rhs.evidence_digest.bytes[0..]) and
         lhs.mono_fn_ty == rhs.mono_fn_ty;
 }
 
@@ -230,9 +248,100 @@ pub fn fnTemplateDigest(template: FnTemplate, types: *const Type.Store, name_sto
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     writeFnDef(&hasher, template.fn_def);
     writeBytes(&hasher, &template.source_fn_key.bytes);
+    writeBytes(&hasher, &template.evidence_digest.bytes);
     const mono_digest = types.specializationDigest(name_store, template.mono_fn_ty);
     writeBytes(&hasher, &mono_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
+}
+
+/// Compute the stable digest used in specialization identity from the exact
+/// durable evidence nodes and lexical frames carried by a function template.
+pub fn fnEvidenceDigest(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+) EvidenceDigest {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    writeBytes(&hasher, "roc.monotype.fn_evidence.v1");
+    writeU32(&hasher, @intCast(evidence.len));
+    for (evidence) |entry| {
+        writeU8(&hasher, @intFromEnum(entry));
+        switch (entry) {
+            .target => |target| {
+                writeBytes(&hasher, &target.view.bytes);
+                writeMethodTarget(&hasher, target.method);
+                if (target.instantiation) |instantiation| {
+                    writeU8(&hasher, 1);
+                    writeBytes(&hasher, &instantiation.view.bytes);
+                    writeU32(&hasher, @intFromEnum(instantiation.callable_ty));
+                } else writeU8(&hasher, 0);
+                writeU8(&hasher, @intFromEnum(target.nested));
+                switch (target.nested) {
+                    .resolved => |nested| {
+                        writeU32(&hasher, nested.count);
+                        writeU32(&hasher, nested.subtree_len);
+                    },
+                    .from_callable => {},
+                }
+            },
+            .structural => |derivation| writeStructuralDerivation(&hasher, derivation),
+            .unreachable_value, .checked_error => {},
+        }
+    }
+    writeU32(&hasher, @intCast(frames.len));
+    for (frames) |frame| {
+        writeU8(&hasher, @intFromEnum(frame.scope_id));
+        switch (frame.scope_id) {
+            .root => {},
+            .generalized => |scope| writeU32(&hasher, scope),
+        }
+        writeOptionalU32(&hasher, frame.parent);
+        writeU32(&hasher, frame.roots_start);
+        writeU32(&hasher, frame.roots_len);
+    }
+    writeOptionalU32(&hasher, head);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+fn writeMethodTarget(hasher: *std.crypto.hash.sha2.Sha256, target: static_dispatch.MethodTarget) void {
+    writeU32(hasher, target.module_idx);
+    writeU32(hasher, @intFromEnum(target.def_idx));
+    writeU8(hasher, @intFromEnum(target.kind));
+    switch (target.kind) {
+        .procedure => |procedure| {
+            const proc_module = names.procedureValueModuleDigest(procedure.proc);
+            writeBytes(hasher, &proc_module.bytes);
+            writeU32(hasher, @intFromEnum(procedure.proc.proc_base));
+            const template_module = names.procTemplateModuleDigest(procedure.template);
+            writeBytes(hasher, &template_module.bytes);
+            writeU32(hasher, @intFromEnum(procedure.template.proc_base));
+            writeU32(hasher, @intFromEnum(procedure.template.template));
+        },
+        .local_proc => |local| {
+            writeU32(hasher, @intFromEnum(local.binder));
+            writeU32(hasher, @intFromEnum(local.expr));
+        },
+        .structural => |kind| writeU8(hasher, @intFromEnum(kind)),
+    }
+    writeU32(hasher, @intFromEnum(target.callable_ty));
+}
+
+fn writeStructuralDerivation(hasher: *std.crypto.hash.sha2.Sha256, derivation: static_dispatch.StructuralDerivation) void {
+    writeU8(hasher, @intFromEnum(derivation));
+    switch (derivation) {
+        .map, .map_effectful => |plan| {
+            writeU32(hasher, @intFromEnum(plan.tag));
+            writeU32(hasher, plan.payload_index);
+        },
+        .equality, .hash, .parser, .encoder => {},
+    }
+}
+
+fn writeOptionalU32(hasher: *std.crypto.hash.sha2.Sha256, value: ?u32) void {
+    if (value) |actual| {
+        writeU8(hasher, 1);
+        writeU32(hasher, actual);
+    } else writeU8(hasher, 0);
 }
 
 fn writeFnDef(hasher: *std.crypto.hash.sha2.Sha256, fn_def: FnDef) void {
@@ -300,6 +409,10 @@ fn writeBytes(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
     hasher.update(bytes);
 }
 
+fn writeU8(hasher: *std.crypto.hash.sha2.Sha256, value: u8) void {
+    hasher.update(&.{value});
+}
+
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
@@ -311,11 +424,15 @@ pub const Local = struct {
     symbol: Common.Symbol,
     ty: Type.TypeId,
     binder: ?checked.PatternBinderId = null,
-    /// Exact identity of this local as a closure capture, carried
-    /// immutably through every post-check IR. Non-null for a captured binding
-    /// (binder-derived) and for a compiler-synthesized
-    /// capturable local (generated).
+    /// Identity of this local as a closure capture. During construction this
+    /// may be a checked binder/generated identity; final Monotype output
+    /// replaces every non-null value with the final local's program-global
+    /// post-check identity.
     capture_id: ?checked.CaptureId = null,
+    /// Checked-stage identity used only when a compile-time result stores this
+    /// capture back into `ConstStore`. This provenance is never a runtime
+    /// capture join key.
+    checked_capture_id: ?checked.CaptureId = null,
 };
 
 /// Local id paired with its monomorphic type.
@@ -411,6 +528,10 @@ pub fn importedProcCallee(imported: ImportedFnId) ProcCallee {
 pub const CallProc = struct {
     callee: ProcCallee,
     args: Span(ExprId),
+    /// Checker-authored identity for compiler-owned iterator calls.
+    /// This remains exact even when control-flow joins choose a different
+    /// monomorphic iterator representation for the call result.
+    iterator_procedure: ?static_dispatch.IteratorProcedureId = null,
     /// Explicit operands for the callee's lifted captures, keyed by `CaptureId`
     /// and sorted to match that callee's canonically-sorted capture slots. Empty
     /// before Monotype lifting has resolved direct call targets.
@@ -561,6 +682,10 @@ pub const Return = struct {
 pub const ExprData = union(enum(u8)) {
     local: LocalId,
     unit,
+    /// No value is produced because an earlier statement in the containing
+    /// block terminates control flow. LIR lowering erases this marker after
+    /// verifying the block's preceding statement chain.
+    @"unreachable",
     int_lit: can.CIR.IntValue,
     frac_f32_lit: f32,
     frac_f64_lit: f64,
@@ -887,6 +1012,8 @@ pub const ProgramView = struct {
     specs: []const SpecRecord,
     imported_fns: []const ImportedFn,
     fns: []const Fn,
+    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     defs: []const Def,
     nested_defs: []const NestedDef,
     exprs: []const Expr,
@@ -899,8 +1026,6 @@ pub const ProgramView = struct {
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
     fn_def_captures: []const FnDefCapture,
-    const_evidence_pool: []const check.ConstStore.ConstEvidence,
-    const_evidence_chain_pool: []const check.ConstStore.ConstRange,
     capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
     str_pattern_steps: []const StrPatternStep,
@@ -927,12 +1052,26 @@ pub const ProgramView = struct {
         return self.fns[raw].source;
     }
 
+    pub fn fnSignatureRelation(self: ProgramView, id: FnId) SignatureRelation {
+        const raw = @intFromEnum(id);
+        if (raw >= self.fns.len) Common.invariant("Monotype function id referenced a missing specialization");
+        return self.fns[raw].signature_relation;
+    }
+
+    pub fn constFnEvidence(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
+        return self.const_fn_evidence[span.start..][0..span.len];
+    }
+
+    pub fn constFnEvidenceFrames(self: ProgramView, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+        return self.const_fn_evidence_frames[span.start..][0..span.len];
+    }
+
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return procDebugNameInSlice(self.proc_debug_names, symbol);
     }
 
     /// Verify that a completed program view refers only to durable type-store
-    /// ids. Active graph views are rejected by graph-scoped sealing while the
+    /// ids. Active snapshots are rejected by graph-scoped sealing while the
     /// graph maps still exist; completed views must additionally be frozen and
     /// contain only in-bounds final type ids.
     pub fn verifyCompletedTypeIds(self: ProgramView) ?CompletedTypeIdVerifyError {
@@ -1050,6 +1189,8 @@ pub const ProgramBuilder = struct {
     specs: ProgramList(SpecRecord, "specs"),
     imported_fns: ProgramList(ImportedFn, "imported_fns"),
     fns: ProgramList(Fn, "fns"),
+    const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
+    const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
     defs: ProgramList(Def, "defs"),
     nested_defs: ProgramList(NestedDef, "nested_defs"),
     exprs: ProgramList(Expr, "exprs"),
@@ -1062,13 +1203,9 @@ pub const ProgramBuilder = struct {
     stmt_ids: ProgramList(StmtId, "stmt_ids"),
     field_exprs: ProgramList(FieldExpr, "field_exprs"),
     fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
-    /// Target-independent evidence trees attached to function templates that
-    /// may cross the compile-time constant boundary.
-    const_evidence_pool: ProgramList(check.ConstStore.ConstEvidence, "const_evidence_pool"),
-    /// Evidence-vector ranges, flattened innermost-to-outermost per function.
-    const_evidence_chain_pool: ProgramList(check.ConstStore.ConstRange, "const_evidence_chain_pool"),
-    /// Backing pool for lifted `Span(CaptureOperand)` capture operand spans.
-    /// Empty in the pre-lift Monotype program (populated by closure lifting).
+    /// Backing pool for `Span(CaptureOperand)` direct-call operands. Pre-lift
+    /// Monotype stores producer-authored local-proc operands here; closure
+    /// lifting appends finalized operands for every lifted call/reference.
     capture_operands: ProgramList(CaptureOperand, "capture_operands"),
     record_destructs: ProgramList(RecordDestruct, "record_destructs"),
     str_pattern_steps: ProgramList(StrPatternStep, "str_pattern_steps"),
@@ -1111,6 +1248,8 @@ pub const ProgramBuilder = struct {
             .specs = .empty,
             .imported_fns = .empty,
             .fns = .empty,
+            .const_fn_evidence = .empty,
+            .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .nested_defs = .empty,
             .exprs = .empty,
@@ -1123,8 +1262,6 @@ pub const ProgramBuilder = struct {
             .stmt_ids = .empty,
             .field_exprs = .empty,
             .fn_def_captures = .empty,
-            .const_evidence_pool = .empty,
-            .const_evidence_chain_pool = .empty,
             .capture_operands = .empty,
             .record_destructs = .empty,
             .str_pattern_steps = .empty,
@@ -1175,8 +1312,6 @@ pub const ProgramBuilder = struct {
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
-        self.const_evidence_chain_pool.deinit(self.allocator);
-        self.const_evidence_pool.deinit(self.allocator);
         self.capture_operands.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -1190,6 +1325,8 @@ pub const ProgramBuilder = struct {
         self.nested_defs.deinit(self.allocator);
         self.defs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
+        self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_frames.deinit(self.allocator);
         self.imported_fns.deinit(self.allocator);
         self.specs.deinit(self.allocator);
         self.types.deinit();
@@ -1200,6 +1337,26 @@ pub const ProgramBuilder = struct {
         const id: FnId = @enumFromInt(@as(u32, @intCast(self.fns.len())));
         try self.fns.append(self.allocator, .{ .source = source });
         return id;
+    }
+
+    pub fn addConstFnEvidence(self: *ProgramBuilder, values: []const check.ConstStore.ConstFnEvidence) std.mem.Allocator.Error!Span(check.ConstStore.ConstFnEvidence) {
+        const start: u32 = @intCast(self.const_fn_evidence.len());
+        try self.const_fn_evidence.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn addConstFnEvidenceFrames(self: *ProgramBuilder, values: []const check.ConstStore.ConstFnEvidenceFrame) std.mem.Allocator.Error!Span(check.ConstStore.ConstFnEvidenceFrame) {
+        const start: u32 = @intCast(self.const_fn_evidence_frames.len());
+        try self.const_fn_evidence_frames.appendSlice(self.allocator, values);
+        return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    pub fn constFnEvidence(self: *const ProgramBuilder, span: Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
+        return self.const_fn_evidence.unsafeRawItemsForView()[span.start..][0..span.len];
+    }
+
+    pub fn constFnEvidenceFrames(self: *const ProgramBuilder, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
+        return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
     }
 
     pub fn fnCount(self: *const ProgramBuilder) usize {
@@ -1313,6 +1470,8 @@ pub const ProgramBuilder = struct {
             .specs = self.specs.unsafeRawItemsForView(),
             .imported_fns = self.imported_fns.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
+            .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
+            .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
             .defs = self.defs.unsafeRawItemsForView(),
             .nested_defs = self.nested_defs.unsafeRawItemsForView(),
             .exprs = self.exprs.unsafeRawItemsForView(),
@@ -1325,8 +1484,6 @@ pub const ProgramBuilder = struct {
             .stmt_ids = self.stmt_ids.unsafeRawItemsForView(),
             .field_exprs = self.field_exprs.unsafeRawItemsForView(),
             .fn_def_captures = self.fn_def_captures.unsafeRawItemsForView(),
-            .const_evidence_pool = self.const_evidence_pool.unsafeRawItemsForView(),
-            .const_evidence_chain_pool = self.const_evidence_chain_pool.unsafeRawItemsForView(),
             .capture_operands = self.capture_operands.unsafeRawItemsForView(),
             .record_destructs = self.record_destructs.unsafeRawItemsForView(),
             .str_pattern_steps = self.str_pattern_steps.unsafeRawItemsForView(),
@@ -1525,6 +1682,7 @@ pub const ProgramBuilder = struct {
         binder: ?checked.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const checked_capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null;
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -1532,7 +1690,8 @@ pub const ProgramBuilder = struct {
             .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null,
+            .capture_id = checked_capture_id,
+            .checked_capture_id = checked_capture_id,
         });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -1542,7 +1701,10 @@ pub const ProgramBuilder = struct {
     /// `capture_id` is the per-owner generated index; it is stored in the
     /// generated range of `CaptureId`.
     pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
-        self.locals.getPtrImmediate(@intFromEnum(id)).capture_id = checked.CaptureId.generatedCheck(capture_id);
+        const checked_id = checked.CaptureId.generatedCheck(capture_id);
+        const local = self.locals.getPtrImmediate(@intFromEnum(id));
+        local.capture_id = checked_id;
+        local.checked_capture_id = checked_id;
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
@@ -1723,26 +1885,6 @@ pub const ProgramBuilder = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn addConstEvidenceSpan(self: *ProgramBuilder, values: []const check.ConstStore.ConstEvidence) std.mem.Allocator.Error!check.ConstStore.ConstRange {
-        const start: u32 = @intCast(self.const_evidence_pool.len());
-        try self.const_evidence_pool.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
-    }
-
-    pub fn addConstEvidenceChain(self: *ProgramBuilder, vectors: []const check.ConstStore.ConstRange) std.mem.Allocator.Error!check.ConstStore.ConstRange {
-        const start: u32 = @intCast(self.const_evidence_chain_pool.len());
-        try self.const_evidence_chain_pool.appendSlice(self.allocator, vectors);
-        return .{ .start = start, .len = @intCast(vectors.len) };
-    }
-
-    pub fn constEvidenceSpan(self: *const ProgramBuilder, range: check.ConstStore.ConstRange) []const check.ConstStore.ConstEvidence {
-        return self.const_evidence_pool.unsafeRawItemsForView()[range.start..][0..range.len];
-    }
-
-    pub fn constEvidenceChain(self: *const ProgramBuilder, range: check.ConstStore.ConstRange) []const check.ConstStore.ConstRange {
-        return self.const_evidence_chain_pool.unsafeRawItemsForView()[range.start..][0..range.len];
-    }
-
     pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
         const start: u32 = @intCast(self.record_destructs.len());
         try self.record_destructs.appendSlice(self.allocator, values);
@@ -1814,6 +1956,25 @@ pub const ProgramBuilder = struct {
             Common.invariant("Monotype capture local had no CaptureId");
     }
 
+    /// Seal provisional identities on locals emitted outside a body
+    /// materialization. Body drafts seal their own identity equivalence classes
+    /// when committed; this final sweep handles direct generated definitions.
+    pub fn sealRemainingCaptureIdentities(self: *ProgramBuilder) std.mem.Allocator.Error!void {
+        var durable_by_checked = std.AutoHashMap(checked.CaptureId, checked.CaptureId).init(self.allocator);
+        defer durable_by_checked.deinit();
+        for (0..self.locals.len()) |index| {
+            const local = self.locals.getPtrImmediate(index);
+            const provisional = local.capture_id orelse continue;
+            if (provisional.isGeneratedLift()) continue;
+            if (index > checked.CaptureId.max_generated_index) {
+                Common.invariant("Monotype program had too many locals for durable capture identity");
+            }
+            const entry = try durable_by_checked.getOrPut(provisional);
+            if (!entry.found_existing) entry.value_ptr.* = checked.CaptureId.generatedLift(@intCast(index));
+            local.capture_id = entry.value_ptr.*;
+        }
+    }
+
     pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
         return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
@@ -1844,6 +2005,29 @@ test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "final Monotype capture identities preserve direct aliases" {
+    var program = Program.init(std.testing.allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const binder: checked.PatternBinderId = @enumFromInt(7);
+    const first = try program.addLocalWithBinder(@enumFromInt(1), unit_ty, binder);
+    const second = try program.addLocalWithBinder(@enumFromInt(2), unit_ty, binder);
+    const uncaptured = try program.addLocal(@enumFromInt(3), unit_ty);
+    const generated = try program.addLocal(@enumFromInt(4), unit_ty);
+    program.setLocalCaptureId(generated, 0);
+
+    try program.sealRemainingCaptureIdentities();
+
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@intFromEnum(first)), program.getLocal(first).capture_id.?);
+    try std.testing.expectEqual(program.getLocal(first).capture_id, program.getLocal(second).capture_id);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(first).checked_capture_id.?);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(second).checked_capture_id.?);
+    try std.testing.expectEqual(@as(?checked.CaptureId, null), program.getLocal(uncaptured).capture_id);
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@intFromEnum(generated)), program.getLocal(generated).capture_id.?);
+    try std.testing.expectEqual(checked.CaptureId.generatedCheck(0), program.getLocal(generated).checked_capture_id.?);
+}
+
 test "monotype program view exposes read-only side arrays" {
     var program = Program.init(std.testing.allocator);
     defer program.deinit();
@@ -1855,6 +2039,7 @@ test "monotype program view exposes read-only side arrays" {
             .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
             .method_scope = .{},
             .source_fn_ty_digest = .{},
+            .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .request_fn_ty_digest = .{},
             .request_fn_ty = unit_ty,
         },

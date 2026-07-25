@@ -444,6 +444,11 @@ const LoopPattern = struct {
     /// attempt's owner reads this after cloning the body, discards the clone,
     /// and retries with the demoted leaves carried as runtime scalars.
     any_demoted: bool,
+    /// When the surrounding continuation consumes only part of the loop's
+    /// compiler-generated result tuple, every break cloned for this loop uses
+    /// the same exact result-tuple item subset. This includes breaks nested in a
+    /// value-producing expression off the loop body's final control spine.
+    result_tuple_subset: ?LoopResultTupleSubset,
 };
 
 /// The result of supplying one loop slot's leaves from a back edge: the
@@ -451,6 +456,17 @@ const LoopPattern = struct {
 const SuppliedSlot = struct {
     shape: Shape,
     demoted: bool,
+};
+
+/// Exact item subset of a loop's compiler-generated state-result tuple. Monotype
+/// keeps every reassigned binder in the loop result so later source statements
+/// can observe it. Once the surrounding `let` exposes the complete tail,
+/// SpecConstr can remove result fields whose binders have no use in that tail.
+/// Back-edge state is deliberately unaffected: only exit values use this map.
+const LoopResultTupleSubset = struct {
+    source_arity: usize,
+    kept_indices: []const u32,
+    ty: Type.TypeId,
 };
 
 /// A function currently being inlined, with the number of known-constructor
@@ -504,6 +520,11 @@ const LetCaseBuild = struct {
     joins: []LetCaseJoin,
 };
 
+const CallableWorkerIdentity = struct {
+    template: names.TypeDigest,
+    capture_abi: names.TypeDigest,
+};
+
 const Pass = struct {
     allocator: Allocator,
     arena: std.heap.ArenaAllocator,
@@ -535,9 +556,11 @@ const Pass = struct {
     /// Functions that directly call themselves. Let-substitution-aware call
     /// patterns are always relevant at these recursive worker boundaries.
     self_recursive_fns: []bool,
-    /// One rewritten callable body per source lifted function. Capture values
-    /// are explicit operands and therefore do not create new body identities.
-    callable_workers: std.AutoHashMap(Ast.FnId, Ast.FnId),
+    /// One rewritten callable body per stable Monotype template identity and
+    /// exact capture ABI. Lifted FnIds are transient products of traversal
+    /// order, while the capture ABI is durable representation data: two uses
+    /// may share a body only when every CaptureId has the same exact type.
+    callable_workers: std.AutoHashMap(CallableWorkerIdentity, Ast.FnId),
     /// Reverse index from each rewritten callable body to its source function.
     /// This keeps later materialization rooted at the source instead of cloning
     /// an already-rewritten worker.
@@ -644,7 +667,7 @@ const Pass = struct {
             .whole_body_cloned = whole_body_cloned,
             .shape_demand_fns = shape_demand_fns,
             .self_recursive_fns = self_recursive_fns,
-            .callable_workers = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
+            .callable_workers = std.AutoHashMap(CallableWorkerIdentity, Ast.FnId).init(allocator),
             .callable_sources = std.AutoHashMap(Ast.FnId, Ast.FnId).init(allocator),
             .next_join_point = 0,
         };
@@ -725,6 +748,7 @@ const Pass = struct {
         try self.rewriteShapeDemandBodies(original_fn_count);
         try self.scalarizeKnownLoops(original_fn_count);
         try self.createSpecializations(original_fn_count);
+        try self.projectUnusedLoopResults();
         try Lift.recomputeCaptures(self.allocator, self.program);
         self.verifyRewrittenCaptureGain(capture_snapshot);
         try self.verifyRewrittenBodyLocals(original_fn_count);
@@ -828,6 +852,7 @@ const Pass = struct {
                 self.program.setFnAt(index, .{
                     .symbol = fn_.symbol,
                     .source = fn_.source,
+                    .signature = fn_.signature,
                     .args = fn_.args,
                     .captures = fn_.captures,
                     .body = .{ .roc = peeled },
@@ -938,6 +963,7 @@ const Pass = struct {
     fn markArgUsesInExpr(self: *Pass, fn_id: Ast.FnId, expr_id: Ast.ExprId, changed: *bool) Allocator.Error!void {
         const expr = self.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -1149,6 +1175,7 @@ const Pass = struct {
     fn collectCallPatternsInExpr(self: *Pass, owner: Ast.FnId, expr_id: Ast.ExprId) Allocator.Error!void {
         const expr = self.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -1405,6 +1432,7 @@ const Pass = struct {
         const fn_id_reserved = try self.program.addFn(.{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = .empty(),
             .captures = source_fn.captures,
             .body = .hosted,
@@ -1442,6 +1470,7 @@ const Pass = struct {
         self.program.setFn(spec_fn_id, .{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = args,
             .captures = source_fn.captures,
             .body = body,
@@ -1557,7 +1586,8 @@ const Pass = struct {
             // loop with the same whole-body clone the branch-chosen shape uses.
             if (self.peeled[index] or
                 try self.bodyHasBranchChosenIterLoop(body) or
-                try self.bodyHasLocalConstructionLoop(body))
+                try self.bodyHasLocalConstructionLoop(body) or
+                self.bodyHasProjectableLoopResult(body))
             {
                 try self.cloneFnBodyInPlace(fn_id, body);
                 continue;
@@ -1568,6 +1598,224 @@ const Pass = struct {
             try self.collectKnownLoops(body, &loops);
             for (loops.items) |loop_id| try self.cloneLoopInPlace(loop_id);
         }
+    }
+
+    /// Whether cloning only a loop would lose the enclosing tail's exact
+    /// demand for its compiler-generated state result. Such a function is
+    /// cloned as a whole so `projectedLoopLetExpr` can project unused
+    /// exit fields while leaving the complete back-edge state intact.
+    fn bodyHasProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) bool {
+        const expr = self.program.getExpr(expr_id);
+        return switch (expr.data) {
+            .let_ => |let_| blk: {
+                break :blk (self.program.getExpr(let_.value).data == .loop_ and
+                    self.tuplePatternIsPartiallyUsedInExpr(let_.bind, let_.rest)) or
+                    self.bodyHasProjectableLoopResult(let_.value) or
+                    self.bodyHasProjectableLoopResult(let_.rest);
+            },
+            .block => |block| blk: {
+                const statements = self.program.stmtSpan(block.statements);
+                for (0..statements.len) |index| {
+                    const stmt_id = GuardedList.at(statements, index);
+                    switch (self.program.getStmt(stmt_id)) {
+                        .let_ => |let_| {
+                            if (self.program.getExpr(let_.value).data == .loop_ and
+                                self.tuplePatternIsPartiallyUsedInBlockTail(
+                                    let_.pat,
+                                    statements,
+                                    index + 1,
+                                    block.final_expr,
+                                )) break :blk true;
+                            if (self.bodyHasProjectableLoopResult(let_.value)) break :blk true;
+                        },
+                        .expr, .expect, .dbg => |value| if (self.bodyHasProjectableLoopResult(value)) break :blk true,
+                        .return_ => |ret| if (self.bodyHasProjectableLoopResult(ret.value)) break :blk true,
+                        else => {},
+                    }
+                }
+                break :blk self.bodyHasProjectableLoopResult(block.final_expr);
+            },
+            .if_ => |if_| blk: {
+                const branches = self.program.ifBranchSpan(if_.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (self.bodyHasProjectableLoopResult(branch.cond) or
+                        self.bodyHasProjectableLoopResult(branch.body)) break :blk true;
+                }
+                break :blk self.bodyHasProjectableLoopResult(if_.final_else);
+            },
+            .match_ => |match| blk: {
+                if (self.bodyHasProjectableLoopResult(match.scrutinee)) break :blk true;
+                const branches = self.program.branchSpan(match.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (branch.guard) |guard| if (self.bodyHasProjectableLoopResult(guard)) break :blk true;
+                    if (self.bodyHasProjectableLoopResult(branch.body)) break :blk true;
+                }
+                break :blk false;
+            },
+            .loop_ => |loop| self.bodyHasProjectableLoopResult(loop.body),
+            .nominal, .dbg, .expect => |child| self.bodyHasProjectableLoopResult(child),
+            .comptime_branch_taken => |taken| self.bodyHasProjectableLoopResult(taken.body),
+            .join_point => |join_point| self.bodyHasProjectableLoopResult(join_point.body) or
+                self.bodyHasProjectableLoopResult(join_point.remainder),
+            else => false,
+        };
+    }
+
+    fn bodyHasAggregateProjectableLoopResult(self: *Pass, expr_id: Ast.ExprId) Common.LowerError!bool {
+        const expr = self.program.getExpr(expr_id);
+        return switch (expr.data) {
+            .let_ => |let_| (self.program.getExpr(let_.value).data == .loop_ and
+                try self.aggregateLoopBindingIsPartiallyUsedInExpr(let_.bind, let_.value, let_.rest)) or
+                try self.bodyHasAggregateProjectableLoopResult(let_.value) or
+                try self.bodyHasAggregateProjectableLoopResult(let_.rest),
+            .block => |block| blk: {
+                const statements = self.program.stmtSpan(block.statements);
+                for (0..statements.len) |index| {
+                    const stmt_id = GuardedList.at(statements, index);
+                    switch (self.program.getStmt(stmt_id)) {
+                        .let_ => |let_| {
+                            if (self.program.getExpr(let_.value).data == .loop_ and
+                                try self.aggregateLoopBindingIsPartiallyUsedInBlockTail(
+                                    let_.pat,
+                                    let_.value,
+                                    statements,
+                                    index + 1,
+                                    block.final_expr,
+                                )) break :blk true;
+                            if (try self.bodyHasAggregateProjectableLoopResult(let_.value)) break :blk true;
+                        },
+                        .expr, .expect, .dbg => |value| if (try self.bodyHasAggregateProjectableLoopResult(value)) break :blk true,
+                        .return_ => |ret| if (try self.bodyHasAggregateProjectableLoopResult(ret.value)) break :blk true,
+                        else => {},
+                    }
+                }
+                break :blk try self.bodyHasAggregateProjectableLoopResult(block.final_expr);
+            },
+            .if_ => |if_| blk: {
+                const branches = self.program.ifBranchSpan(if_.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (try self.bodyHasAggregateProjectableLoopResult(branch.cond) or
+                        try self.bodyHasAggregateProjectableLoopResult(branch.body)) break :blk true;
+                }
+                break :blk try self.bodyHasAggregateProjectableLoopResult(if_.final_else);
+            },
+            .match_ => |match| blk: {
+                if (try self.bodyHasAggregateProjectableLoopResult(match.scrutinee)) break :blk true;
+                const branches = self.program.branchSpan(match.branches);
+                for (0..branches.len) |index| {
+                    const branch = GuardedList.at(branches, index);
+                    if (branch.guard) |guard| {
+                        if (try self.bodyHasAggregateProjectableLoopResult(guard)) break :blk true;
+                    }
+                    if (try self.bodyHasAggregateProjectableLoopResult(branch.body)) break :blk true;
+                }
+                break :blk false;
+            },
+            .loop_ => |loop| try self.bodyHasAggregateProjectableLoopResult(loop.body),
+            .nominal, .dbg, .expect => |child| try self.bodyHasAggregateProjectableLoopResult(child),
+            .comptime_branch_taken => |taken| try self.bodyHasAggregateProjectableLoopResult(taken.body),
+            .join_point => |join_point| try self.bodyHasAggregateProjectableLoopResult(join_point.body) or
+                try self.bodyHasAggregateProjectableLoopResult(join_point.remainder),
+            else => false,
+        };
+    }
+
+    fn aggregateLoopBindingIsPartiallyUsedInExpr(
+        self: *Pass,
+        pat_id: Ast.PatId,
+        loop_id: Ast.ExprId,
+        rest: Ast.ExprId,
+    ) Allocator.Error!bool {
+        const local = switch (self.program.getPat(pat_id).data) {
+            .bind => |local| local,
+            else => return false,
+        };
+        const items = switch (self.program.types.get(self.program.getExpr(loop_id).ty)) {
+            .tuple => |items| self.program.types.span(items),
+            else => return false,
+        };
+        if (items.len < 2) return false;
+        const used = try self.allocator.alloc(bool, items.len);
+        defer self.allocator.free(used);
+        @memset(used, false);
+        if (!collectTupleLocalDemandInExpr(self.program, local, rest, used)) return false;
+        const used_count = std.mem.count(bool, used, &.{true});
+        return used_count != 0 and used_count != items.len;
+    }
+
+    fn aggregateLoopBindingIsPartiallyUsedInBlockTail(
+        self: *Pass,
+        pat_id: Ast.PatId,
+        loop_id: Ast.ExprId,
+        statements: Ast.ProgramSpanBorrow(Ast.StmtId, "stmt_ids"),
+        tail_start: usize,
+        final_expr: Ast.ExprId,
+    ) Allocator.Error!bool {
+        const local = switch (self.program.getPat(pat_id).data) {
+            .bind => |local| local,
+            else => return false,
+        };
+        const items = switch (self.program.types.get(self.program.getExpr(loop_id).ty)) {
+            .tuple => |items| self.program.types.span(items),
+            else => return false,
+        };
+        if (items.len < 2) return false;
+        const used = try self.allocator.alloc(bool, items.len);
+        defer self.allocator.free(used);
+        @memset(used, false);
+        for (tail_start..statements.len) |index| {
+            if (!collectTupleLocalDemandInStmt(self.program, local, GuardedList.at(statements, index), used)) return false;
+        }
+        if (!collectTupleLocalDemandInExpr(self.program, local, final_expr, used)) return false;
+        const used_count = std.mem.count(bool, used, &.{true});
+        return used_count != 0 and used_count != items.len;
+    }
+
+    fn tuplePatternIsPartiallyUsedInExpr(self: *Pass, pat_id: Ast.PatId, rest: Ast.ExprId) bool {
+        const items = switch (self.program.getPat(pat_id).data) {
+            .tuple => |items| self.program.patSpan(items),
+            else => return false,
+        };
+        if (items.len < 2) return false;
+        var used: usize = 0;
+        for (0..items.len) |index| {
+            const local = switch (self.program.getPat(GuardedList.at(items, index)).data) {
+                .bind => |local| local,
+                else => return false,
+            };
+            if (localUseCountInExpr(self.program, local, rest) != 0) used += 1;
+        }
+        return used != 0 and used != items.len;
+    }
+
+    fn tuplePatternIsPartiallyUsedInBlockTail(
+        self: *Pass,
+        pat_id: Ast.PatId,
+        statements: Ast.ProgramSpanBorrow(Ast.StmtId, "stmt_ids"),
+        tail_start: usize,
+        final_expr: Ast.ExprId,
+    ) bool {
+        const items = switch (self.program.getPat(pat_id).data) {
+            .tuple => |items| self.program.patSpan(items),
+            else => return false,
+        };
+        if (items.len < 2) return false;
+        var used: usize = 0;
+        for (0..items.len) |index| {
+            const local = switch (self.program.getPat(GuardedList.at(items, index)).data) {
+                .bind => |local| local,
+                else => return false,
+            };
+            var count = localUseCountInExpr(self.program, local, final_expr);
+            for (tail_start..statements.len) |stmt_index| {
+                count += localUseCountInStmt(self.program, local, GuardedList.at(statements, stmt_index));
+            }
+            if (count != 0) used += 1;
+        }
+        return used != 0 and used != items.len;
     }
 
     /// Whether a function body holds a `for` loop over an iterator named by an
@@ -2016,28 +2264,16 @@ const Pass = struct {
             }
             if (loop_stmt_index != null) break;
         }
-        const li = loop_stmt_index orelse {
-            return null;
-        };
+        const li = loop_stmt_index orelse return null;
 
-        const loop_parts = (try self.matchIteratorLoopParts(loop_expr_id)) orelse {
-            return null;
-        };
-        if (localUseCountInExpr(self.program, loop_parts.source_local, body) != 1) {
-            return null;
-        }
+        const loop_parts = (try self.matchIteratorLoopParts(loop_expr_id)) orelse return null;
+        if (localUseCountInExpr(self.program, loop_parts.source_local, body) != 1) return null;
         // A fold's result feeds the block's final expression directly, so the
         // transformed fold value can take its place.
         if (loop_parts.carry_count == 1) {
-            const rl = result_local orelse {
-                return null;
-            };
-            if (localExpr(self.program, block.final_expr) != rl) {
-                return null;
-            }
-            if (localUseCountInExpr(self.program, rl, body) != 1) {
-                return null;
-            }
+            const rl = result_local orelse return null;
+            if (localExpr(self.program, block.final_expr) != rl) return null;
+            if (localUseCountInExpr(self.program, rl, body) != 1) return null;
         } else if (result_local != null) {
             return null;
         }
@@ -2058,26 +2294,18 @@ const Pass = struct {
             if (bound != loop_parts.source_local) continue;
             switch (self.program.getExpr(let_.value).data) {
                 .if_, .match_ => {},
-                else => {
-                    return null;
-                },
+                else => return null,
             }
             collision_stmt_index = index;
             branch_expr_id = let_.value;
             break;
         }
-        const ci = collision_stmt_index orelse {
-            return null;
-        };
+        const ci = collision_stmt_index orelse return null;
 
-        const base_local = (try self.sharedArmBase(branch_expr_id)) orelse {
-            return null;
-        };
+        const base_local = (try self.sharedArmBase(branch_expr_id)) orelse return null;
 
         // Build the loop so its iterator slot iterates the shared base.
-        const new_loop = (try self.buildLoopOverBase(loop_expr_id, base_local, loop_parts)) orelse {
-            return null;
-        };
+        const new_loop = (try self.buildLoopOverBase(loop_expr_id, base_local, loop_parts)) orelse return null;
 
         // A fold threads the base loop's result into the tail; a search runs the
         // tail for effect only.
@@ -2095,9 +2323,7 @@ const Pass = struct {
 
         // The tail replays the branch structure, each arm's body replaced by the
         // per-element computation run over that arm's appended items.
-        const tail = (try self.buildTailDispatch(branch_expr_id, base_local, carry_start, loop_parts)) orelse {
-            return null;
-        };
+        const tail = (try self.buildTailDispatch(branch_expr_id, base_local, carry_start, loop_parts)) orelse return null;
 
         if (loop_parts.carry_count == 1) {
             const result_let = self.program.getStmt(stmts[li]).let_;
@@ -2138,14 +2364,22 @@ const Pass = struct {
         }
     }
 
-    const DirectCall = struct { fn_id: Ast.FnId, args: Ast.ProgramSpanBorrow(Ast.ExprId, "expr_ids") };
+    const DirectCall = struct {
+        fn_id: Ast.FnId,
+        args: Ast.ProgramSpanBorrow(Ast.ExprId, "expr_ids"),
+        iterator_procedure: ?check.StaticDispatchRegistry.IteratorProcedureId,
+    };
 
     fn asDirectCall(self: *Pass, expr_id: Ast.ExprId) ?DirectCall {
         const expr = self.program.getExpr(expr_id);
         if (expr.data != .call_proc) return null;
         const call = expr.data.call_proc;
         const fn_id = Ast.localDirectCallee(call) orelse return null;
-        return .{ .fn_id = fn_id, .args = self.program.exprSpan(call.args) };
+        return .{
+            .fn_id = fn_id,
+            .args = self.program.exprSpan(call.args),
+            .iterator_procedure = call.iterator_procedure,
+        };
     }
 
     /// Match the lowered desugared `for` loop shape, extracting the pieces the
@@ -2161,20 +2395,32 @@ const Pass = struct {
         const iter_param = GuardedList.at(params, 0).local;
         const carry_param = if (carry_count == 1) GuardedList.at(params, 1).local else undefined;
 
-        // The iterator slot's initial constructs the iterator from one source
-        // local — the branch-bound value.
-        const iter_call = self.asDirectCall(GuardedList.at(initials, 0)) orelse return null;
-        if (iter_call.args.len != 1) return null;
-        const source_local = localExpr(self.program, GuardedList.at(iter_call.args, 0)) orelse return null;
+        // `Iter.iter` is an identity for a producer-authored private iterator,
+        // so Monotype may lower the iterator slot's initial value directly to
+        // the branch-bound local. Public/custom iterables retain the ordinary
+        // one-argument construction call.
+        const iter_init = GuardedList.at(initials, 0);
+        const source_local = if (localExpr(self.program, iter_init)) |local|
+            local
+        else blk: {
+            const iter_call = self.asDirectCall(iter_init) orelse return null;
+            if (iter_call.args.len != 1) return null;
+            break :blk localExpr(self.program, GuardedList.at(iter_call.args, 0)) orelse return null;
+        };
 
         const match_expr = self.program.getExpr(self.stripArmBlock(loop.body));
         if (match_expr.data != .match_) return null;
         const match = match_expr.data.match_;
 
-        // The scrutinee pulls the next item from the iterator slot.
-        const next_call = self.asDirectCall(match.scrutinee) orelse return null;
-        if (next_call.args.len != 1) return null;
-        if (localExpr(self.program, GuardedList.at(next_call.args, 0)) != iter_param) return null;
+        // The scrutinee pulls the next item either through the public method
+        // specialization or directly through a generated-private iterator's
+        // producer-authored step field.
+        if (self.asDirectCall(match.scrutinee)) |next_call| {
+            if (next_call.args.len != 1) return null;
+            if (localExpr(self.program, GuardedList.at(next_call.args, 0)) != iter_param) return null;
+        } else if (!self.isExactGeneratedIteratorNextCall(match.scrutinee, iter_param)) {
+            return null;
+        }
 
         var item_pat: ?Ast.PatId = null;
         var one_body: Ast.ExprId = undefined;
@@ -2253,7 +2499,7 @@ const Pass = struct {
             self.program.getExpr(loop_expr_id).ty;
         return .{
             .source_local = source_local,
-            .iter_init = GuardedList.at(initials, 0),
+            .iter_init = iter_init,
             .carry_count = carry_count,
             .carry_param = carry_param,
             .carry_ty = carry_ty,
@@ -2262,6 +2508,44 @@ const Pass = struct {
             .one_body = one_body,
             .rest_local = rest_local,
         };
+    }
+
+    fn isExactGeneratedIteratorNextCall(
+        self: *Pass,
+        expr_id: Ast.ExprId,
+        iterator_local: Ast.LocalId,
+    ) bool {
+        const call = switch (self.program.getExpr(expr_id).data) {
+            .call_value => |call| call,
+            else => return false,
+        };
+        if (self.program.exprSpan(call.args).len != 0) return false;
+        const access = switch (self.program.getExpr(call.callee).data) {
+            .field_access => |access| access,
+            else => return false,
+        };
+        if (localExpr(self.program, access.receiver) != iterator_local) return false;
+        const iterator_ty = self.program.getLocal(iterator_local).ty;
+        const named = switch (self.program.types.get(iterator_ty)) {
+            .named => |named| named,
+            else => return false,
+        };
+        const topology = named.def.iterator_topology orelse return false;
+        if (access.field != topology.step_field) return false;
+        const backing = named.backing orelse return false;
+        if (backing.authority != .generated_private) return false;
+        const fields = switch (self.program.types.get(backing.ty)) {
+            .record => |fields| self.program.types.fieldSpan(fields),
+            else => return false,
+        };
+        const step_ty = typeFieldByName(fields, topology.step_field) orelse return false;
+        if (!sameType(self.program, self.program.getExpr(call.callee).ty, step_ty)) return false;
+        const function = switch (self.program.types.get(step_ty)) {
+            .func => |function| function,
+            else => return false,
+        };
+        return self.program.types.span(function.args).len == 0 and
+            sameType(self.program, self.program.getExpr(expr_id).ty, function.ret);
     }
 
     fn bindLocalOf(self: *Pass, pat_id: Ast.PatId) ?Ast.LocalId {
@@ -2328,8 +2612,7 @@ const Pass = struct {
             return .{ .base = local, .items = try self.allocator.alloc(Ast.ExprId, 0) };
         }
         const call = self.asDirectCall(stripped) orelse return null;
-        if (call.args.len != 2) return null;
-        if (!self.fnIsSuffixAppend(call.fn_id)) return null;
+        if (call.args.len != 2 or !self.callIsSuffixAppend(call)) return null;
         const item = GuardedList.at(call.args, 1);
         const inner = (try self.reduceArmChain(GuardedList.at(call.args, 0))) orelse return null;
         defer self.allocator.free(inner.items);
@@ -2339,20 +2622,15 @@ const Pass = struct {
         return .{ .base = inner.base, .items = items };
     }
 
-    /// Whether a two-argument function returns the internal representation
-    /// Monotype minted for `Iter.append`. The producer records the adapter kind
-    /// on the nominal; specialization consumes that evidence directly instead
-    /// of reverse-engineering a generated step function's body shape.
-    fn fnIsSuffixAppend(self: *Pass, fn_id: Ast.FnId) bool {
-        const raw = @intFromEnum(fn_id);
+    /// Whether this exact two-argument call is the checker-identified
+    /// `Iter.append` procedure. Control-flow joins may select another private
+    /// representation for its result, so the return type is not its checked
+    /// procedure identity.
+    fn callIsSuffixAppend(self: *Pass, call: DirectCall) bool {
+        if (call.iterator_procedure != .iter_append) return false;
+        const raw = @intFromEnum(call.fn_id);
         if (raw >= self.program.fnCount()) return false;
-        const fn_ = self.program.getFnAt(raw);
-        if (self.program.typedLocalSpan(fn_.args).len != 2) return false;
-        return switch (self.program.types.get(fn_.ret)) {
-            .named => |named| named.def.iterator_representation == .minted and
-                named.def.iterator_kind == .append,
-            else => false,
-        };
+        return self.program.typedLocalSpan(self.program.getFnAt(raw).args).len == 2;
     }
 
     /// Build the loop so its iterator slot iterates the shared base, keeping
@@ -2366,26 +2644,249 @@ const Pass = struct {
         const loop_expr = self.program.getExpr(loop_expr_id);
         const loop = loop_expr.data.loop_;
         const iter_call_expr = self.program.getExpr(loop_parts.iter_init);
-        const iter_call = iter_call_expr.data.call_proc;
+        const base_ty = self.program.getLocal(base_local).ty;
+
+        // A retained source-level iterator constructor is monomorphic by this
+        // stage. Reusing it with another representation is valid only when its
+        // exact argument and result types already are the base type; otherwise
+        // doing so would manufacture a call outside the specialization's ABI.
+        if (iter_call_expr.data == .call_proc) {
+            const iter_call = iter_call_expr.data.call_proc;
+            const callee = Ast.localDirectCallee(iter_call) orelse return null;
+            const callee_fn = self.program.getFn(callee);
+            const callee_args = self.program.typedLocalSpan(callee_fn.args);
+            if (callee_args.len != 1 or
+                !sameType(self.program, GuardedList.at(callee_args, 0).ty, base_ty) or
+                !sameType(self.program, callee_fn.ret, base_ty) or
+                !sameType(self.program, iter_call_expr.ty, base_ty))
+            {
+                return null;
+            }
+
+            const base_ref = try self.program.addExpr(.{ .ty = base_ty, .data = .{ .local = base_local } });
+            const new_iter_init = try self.program.addExpr(.{ .ty = base_ty, .data = .{ .call_proc = .{
+                .callee = iter_call.callee,
+                .args = try self.program.addExprSpan(&.{base_ref}),
+                .iterator_procedure = iter_call.iterator_procedure,
+                .captures = iter_call.captures,
+                .is_cold = iter_call.is_cold,
+            } } });
+
+            const initials = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(loop.initial_values));
+            defer self.allocator.free(initials);
+            initials[0] = new_iter_init;
+            return try self.program.addExpr(.{ .ty = loop_expr.ty, .data = .{ .loop_ = .{
+                .params = loop.params,
+                .initial_values = try self.program.addExprSpan(initials),
+                .body = loop.body,
+            } } });
+        }
+
+        if (localExpr(self.program, loop_parts.iter_init) == null) return null;
+        return try self.buildExactGeneratedIteratorLoopOverBase(loop_expr_id, base_local, loop_parts);
+    }
+
+    /// Construct a loop over a producer-authored private iterator representation.
+    /// The generated nominal carries the checker's exact iterator topology, so
+    /// every field/tag read and every refined `rest` binder is selected
+    /// from durable producer data rather than inferred from names or bodies.
+    fn buildExactGeneratedIteratorLoopOverBase(
+        self: *Pass,
+        loop_expr_id: Ast.ExprId,
+        base_local: Ast.LocalId,
+        loop_parts: IteratorLoopParts,
+    ) Common.LowerError!?Ast.ExprId {
+        const loop_expr = self.program.getExpr(loop_expr_id);
+        const loop = loop_expr.data.loop_;
+        const source_params = self.program.typedLocalSpan(loop.params);
+        const source_initials = self.program.exprSpan(loop.initial_values);
+        if (source_params.len == 0 or source_params.len != source_initials.len) return null;
 
         const base_ty = self.program.getLocal(base_local).ty;
-        const base_ref = try self.program.addExpr(.{ .ty = base_ty, .data = .{ .local = base_local } });
-        const new_iter_init = try self.program.addExpr(.{ .ty = iter_call_expr.ty, .data = .{ .call_proc = .{
-            .callee = iter_call.callee,
-            .args = try self.program.addExprSpan(&.{base_ref}),
-            .captures = iter_call.captures,
-            .is_cold = iter_call.is_cold,
+        const base_named = switch (self.program.types.get(base_ty)) {
+            .named => |named| named,
+            else => return null,
+        };
+        if (base_named.def.iterator_representation != .minted) return null;
+        const topology = base_named.def.iterator_topology orelse return null;
+        const backing = base_named.backing orelse return null;
+        if (backing.authority != .generated_private) return null;
+        const backing_fields = switch (self.program.types.get(backing.ty)) {
+            .record => |fields| self.program.types.fieldSpan(fields),
+            else => return null,
+        };
+        const step_fn_ty = typeFieldByName(backing_fields, topology.step_field) orelse return null;
+        const step_fn = switch (self.program.types.get(step_fn_ty)) {
+            .func => |fn_| fn_,
+            else => return null,
+        };
+        if (self.program.types.span(step_fn.args).len != 0) return null;
+        const step_ty = step_fn.ret;
+
+        const base_param = try self.program.addLocal(self.symbols.fresh(), base_ty);
+        const base_param_ref = try self.program.addExpr(.{ .ty = base_ty, .data = .{ .local = base_param } });
+        const step = try self.program.addExpr(.{ .ty = step_fn_ty, .data = .{ .field_access = .{
+            .receiver = base_param_ref,
+            .field = topology.step_field,
+        } } });
+        const next = try self.program.addExpr(.{ .ty = step_ty, .data = .{ .call_value = .{
+            .callee = step,
+            .args = Ast.Span(Ast.ExprId).empty(),
         } } });
 
-        // Keep every accumulator slot's initial value; only the iterator slot
-        // changes to iterate the shared base.
-        const initials = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(loop.initial_values));
+        const source_match_expr = self.program.getExpr(self.stripArmBlock(loop.body));
+        if (source_match_expr.data != .match_) return null;
+        const source_match = source_match_expr.data.match_;
+        const source_branches = self.program.branchSpan(source_match.branches);
+        const branches = try self.allocator.alloc(Ast.Branch, source_branches.len);
+        defer self.allocator.free(branches);
+        for (0..source_branches.len) |index| {
+            const source_branch = GuardedList.at(source_branches, index);
+            if (source_branch.guard != null) return null;
+            const source_pat = self.program.getPat(source_branch.pat);
+            const source_tag = switch (source_pat.data) {
+                .tag => |tag| tag,
+                else => return null,
+            };
+
+            var renames = std.AutoHashMap(Ast.LocalId, Ast.LocalId).init(self.allocator);
+            defer renames.deinit();
+            try renames.put(GuardedList.at(source_params, 0).local, base_param);
+
+            const exact_pat = (try self.refineIteratorStepPattern(
+                source_branch.pat,
+                source_tag.name,
+                step_ty,
+                base_ty,
+                topology,
+                &renames,
+            )) orelse return null;
+
+            const body = if (source_tag.name == topology.done_tag)
+                (try self.iteratorBaseDoneBody(source_branch.body, loop_parts)) orelse return null
+            else
+                (try self.cloneExprFresh(source_branch.body, &renames)) orelse return null;
+            branches[index] = .{ .pat = exact_pat, .guard = null, .body = body };
+        }
+
+        const body = try self.program.addExpr(.{ .ty = source_match_expr.ty, .data = .{ .match_ = .{
+            .scrutinee = next,
+            .branches = try self.program.addBranchSpan(branches),
+            .comptime_site = source_match.comptime_site,
+        } } });
+
+        const params = try self.allocator.alloc(Ast.TypedLocal, source_params.len);
+        defer self.allocator.free(params);
+        params[0] = .{ .local = base_param, .ty = base_ty };
+        for (1..source_params.len) |index| params[index] = GuardedList.at(source_params, index);
+
+        const initials = try self.allocator.alloc(Ast.ExprId, source_initials.len);
         defer self.allocator.free(initials);
-        initials[0] = new_iter_init;
+        const base_ref = try self.program.addExpr(.{ .ty = base_ty, .data = .{ .local = base_local } });
+        initials[0] = base_ref;
+        for (1..source_initials.len) |index| initials[index] = GuardedList.at(source_initials, index);
         return try self.program.addExpr(.{ .ty = loop_expr.ty, .data = .{ .loop_ = .{
-            .params = loop.params,
+            .params = try self.program.addTypedLocalSpan(params),
             .initial_values = try self.program.addExprSpan(initials),
-            .body = loop.body,
+            .body = body,
+        } } });
+    }
+
+    fn iteratorBaseDoneBody(
+        self: *Pass,
+        source_body: Ast.ExprId,
+        loop_parts: IteratorLoopParts,
+    ) Common.LowerError!?Ast.ExprId {
+        const source_break = self.program.getExpr(self.stripArmBlock(source_body));
+        const break_value = switch (source_break.data) {
+            .break_ => |value| value,
+            else => return null,
+        };
+        if (loop_parts.carry_count == 0) {
+            if (break_value != null) Common.invariant("zero-carry iterator loop broke with a value");
+            return try self.program.addExpr(.{ .ty = source_break.ty, .data = .{ .break_ = null } });
+        }
+        const source = break_value orelse Common.invariant("iterator fold broke without its carried value");
+        if (localExpr(self.program, source) != loop_parts.carry_param) {
+            Common.invariant("iterator fold break did not carry its accumulator parameter");
+        }
+        const value = try self.program.addExpr(.{ .ty = loop_parts.carry_ty, .data = .{ .local = loop_parts.carry_param } });
+        return try self.program.addExpr(.{ .ty = source_break.ty, .data = .{ .break_ = value } });
+    }
+
+    fn refineIteratorStepPattern(
+        self: *Pass,
+        source_pat_id: Ast.PatId,
+        tag_name: names.TagNameId,
+        step_ty: Type.TypeId,
+        iterator_ty: Type.TypeId,
+        topology: Type.IteratorTopology,
+        renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId),
+    ) Common.LowerError!?Ast.PatId {
+        const source_pat = self.program.getPat(source_pat_id);
+        const source_tag = switch (source_pat.data) {
+            .tag => |tag| tag,
+            else => return null,
+        };
+        if (source_tag.name != tag_name) return null;
+        const exact_tag = typeTagByName(self.program, step_ty, tag_name) orelse return null;
+        const exact_payload_tys = self.program.types.span(exact_tag.payloads);
+        const source_payloads = self.program.patSpan(source_tag.payloads);
+
+        if (tag_name == topology.done_tag) {
+            if (source_payloads.len != 0 or exact_payload_tys.len != 0) return null;
+            return try self.program.addPat(.{ .ty = step_ty, .data = .{ .tag = .{
+                .name = tag_name,
+                .payloads = Ast.Span(Ast.PatId).empty(),
+            } } });
+        }
+        if (tag_name != topology.one_tag and tag_name != topology.skip_tag) return null;
+        if (source_payloads.len != 1 or exact_payload_tys.len != 1) return null;
+
+        const source_payload = self.program.getPat(GuardedList.at(source_payloads, 0));
+        const source_fields = switch (source_payload.data) {
+            .record => |fields| self.program.recordDestructSpan(fields),
+            else => return null,
+        };
+        const payload_ty = GuardedList.at(exact_payload_tys, 0);
+        const exact_fields = switch (self.program.types.get(payload_ty)) {
+            .record => |fields| self.program.types.fieldSpan(fields),
+            else => return null,
+        };
+        const exact_rest_ty = typeFieldByName(exact_fields, topology.rest_field) orelse return null;
+        if (!sameType(self.program, exact_rest_ty, iterator_ty)) return null;
+
+        const source_rest_pat = recordPatField(self.program, source_fields, topology.rest_field) orelse return null;
+        const source_rest = switch (self.program.getPat(source_rest_pat).data) {
+            .bind => |local| local,
+            else => return null,
+        };
+        const rest_local = try self.program.addLocal(self.symbols.fresh(), iterator_ty);
+        try renames.put(source_rest, rest_local);
+        const rest_pat = try self.program.addPat(.{ .ty = iterator_ty, .data = .{ .bind = rest_local } });
+
+        var fields: [2]Ast.RecordDestruct = undefined;
+        var field_count: usize = 0;
+        if (tag_name == topology.one_tag) {
+            const item_ty = typeFieldByName(exact_fields, topology.item_field) orelse return null;
+            const source_item_pat = recordPatField(self.program, source_fields, topology.item_field) orelse return null;
+            if (!sameType(self.program, self.program.getPat(source_item_pat).ty, item_ty)) return null;
+            fields[field_count] = .{
+                .name = topology.item_field,
+                .pattern = (try self.clonePatFresh(source_item_pat, renames)) orelse return null,
+            };
+            field_count += 1;
+        }
+        fields[field_count] = .{ .name = topology.rest_field, .pattern = rest_pat };
+        field_count += 1;
+        if (source_fields.len != field_count) return null;
+
+        const payload_pat = try self.program.addPat(.{ .ty = payload_ty, .data = .{
+            .record = try self.program.addRecordDestructSpan(fields[0..field_count]),
+        } });
+        return try self.program.addPat(.{ .ty = step_ty, .data = .{ .tag = .{
+            .name = tag_name,
+            .payloads = try self.program.addPatSpan(&.{payload_pat}),
         } } });
     }
 
@@ -2675,6 +3176,7 @@ const Pass = struct {
             .call_proc => |call| .{ .call_proc = .{
                 .callee = call.callee,
                 .args = (try self.cloneExprSpanFresh(call.args, renames)) orelse return null,
+                .iterator_procedure = call.iterator_procedure,
                 .captures = (try self.cloneCaptureOperandSpanFresh(call.captures, renames)) orelse return null,
                 .is_cold = call.is_cold,
             } },
@@ -2750,9 +3252,19 @@ const Pass = struct {
                 .value = (try self.cloneExprFresh(ret.value, renames)) orelse return null,
                 .target = ret.target,
             } },
+            .continue_ => |continue_| .{ .continue_ = .{
+                .values = (try self.cloneExprSpanFresh(continue_.values, renames)) orelse return null,
+            } },
             else => return null,
         };
-        return try self.program.addExpr(.{ .ty = expr.ty, .data = data });
+        const ty = switch (expr.data) {
+            .local => |local| if (renames.get(local)) |renamed|
+                self.program.getLocal(renamed).ty
+            else
+                expr.ty,
+            else => expr.ty,
+        };
+        return try self.program.addExpr(.{ .ty = ty, .data = data });
     }
 
     fn cloneExprSpanFresh(self: *Pass, span: Ast.Span(Ast.ExprId), renames: *std.AutoHashMap(Ast.LocalId, Ast.LocalId)) Common.LowerError!?Ast.Span(Ast.ExprId) {
@@ -2881,12 +3393,48 @@ const Pass = struct {
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
             .source = fn_.source,
+            .signature = fn_.signature,
             .args = fn_.args,
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
         });
         if (fn_index < self.whole_body_cloned.len) self.whole_body_cloned[fn_index] = true;
+    }
+
+    /// Once the specialization graph is complete, clone only functions whose
+    /// loop result ABI contains fields their exact continuation cannot observe.
+    /// Calls and loop-carried state stay unchanged in this final pass; its sole
+    /// authority is the producer-visible result binding and continuation.
+    fn projectUnusedLoopResults(self: *Pass) Common.LowerError!void {
+        const fn_count = self.program.fnCount();
+        for (0..fn_count) |index| {
+            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(index)));
+            const fn_ = self.program.getFn(fn_id);
+            const body = switch (fn_.body) {
+                .roc => |body| body,
+                .hosted => continue,
+            };
+            const tuple_projectable = self.bodyHasProjectableLoopResult(body);
+            const aggregate_projectable = try self.bodyHasAggregateProjectableLoopResult(body);
+            if (!tuple_projectable and !aggregate_projectable) continue;
+
+            var cloner = Cloner.initForRewrite(self);
+            defer cloner.deinit();
+            cloner.inline_direct_calls = false;
+            cloner.rewrite_call_patterns = false;
+            cloner.emit_callable_workers = false;
+            const cloned = try cloner.cloneExpr(body);
+            self.program.setFn(fn_id, .{
+                .symbol = fn_.symbol,
+                .source = fn_.source,
+                .signature = fn_.signature,
+                .args = fn_.args,
+                .captures = fn_.captures,
+                .body = .{ .roc = cloned },
+                .ret = fn_.ret,
+            });
+        }
     }
 
     /// Collect outermost loops with an explicitly known constructor in their
@@ -2993,6 +3541,7 @@ const Pass = struct {
 
         const expr = self.program.getExprAt(index);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -3168,6 +3717,7 @@ const Pass = struct {
                 const new_call: Ast.ExprData = .{ .call_proc = .{
                     .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before rewriting") },
                     .args = try self.program.addExprSpan(rewritten_args.items),
+                    .iterator_procedure = call.iterator_procedure,
                     .captures = call.captures,
                     .is_cold = call.is_cold,
                 } };
@@ -3670,6 +4220,7 @@ const Cloner = struct {
     subst: Subst,
     inline_stack: std.ArrayList(InlineFrame),
     loop_stack: std.ArrayList(LoopPattern),
+    loop_result_tuple_subsets: std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. That rewrite re-clones each arm's body against the small
@@ -3684,6 +4235,11 @@ const Cloner = struct {
     /// argument values for later parameter decomposition instead of cloning
     /// the argument expressions directly.
     let_case_builds: std.ArrayList(*LetCaseBuild),
+    /// Fresh output locals bound by the recursive let statement whose value is
+    /// currently cloning. A callable worker created while filling such a value
+    /// must capture the recursive slot itself, not a field projected from it,
+    /// so construction does not read the still-zeroed recursive payload.
+    active_recursive_value_locals: std.AutoHashMap(Ast.LocalId, void),
     /// Bindings created while producing a structured value, not yet emitted.
     /// Each holds a fresh local the value's leaves reference. They are
     /// emitted — oldest outermost, preserving evaluation order — at the
@@ -3762,9 +4318,11 @@ const Cloner = struct {
             .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
+            .loop_result_tuple_subsets = std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
+            .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
             .pending = .empty,
             .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
             .effect_marks = 0,
@@ -3793,9 +4351,11 @@ const Cloner = struct {
             .subst = Subst.init(pass.allocator),
             .inline_stack = .empty,
             .loop_stack = .empty,
+            .loop_result_tuple_subsets = std.AutoHashMap(Ast.ExprId, LoopResultTupleSubset).init(pass.allocator),
             .join_stack = .empty,
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
+            .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
             .pending = .empty,
             .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
             .effect_marks = 0,
@@ -3828,14 +4388,17 @@ const Cloner = struct {
         self.expr_window_starts.deinit();
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
+        self.loop_result_tuple_subsets.deinit();
         self.join_stack.deinit(self.pass.allocator);
         self.let_case_builds.deinit(self.pass.allocator);
+        self.active_recursive_value_locals.deinit();
         self.subst.deinit();
     }
 
     fn collectCallPatternsInExpr(self: *Cloner, owner: Ast.FnId, expr_id: Ast.ExprId) Common.LowerError!void {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -4113,6 +4676,7 @@ const Cloner = struct {
     fn rewriteCallsWithValuesInExpr(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!void {
         const expr = self.pass.program.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -4291,6 +4855,7 @@ const Cloner = struct {
             const new_call: Ast.ExprData = .{ .call_proc = .{
                 .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before value-aware rewriting") },
                 .args = try self.pass.program.addExprSpan(rewritten_args.items),
+                .iterator_procedure = call.iterator_procedure,
                 .captures = call.captures,
                 .is_cold = call.is_cold,
             } };
@@ -4865,6 +5430,7 @@ const Cloner = struct {
 
         const expr = self.pass.program.getExpr(expr_id);
         const data: Ast.ExprData = switch (expr.data) {
+            .@"unreachable" => .@"unreachable",
             .local => |local| .{ .local = local },
             .unit => .unit,
             .uninitialized => .uninitialized,
@@ -4926,7 +5492,16 @@ const Cloner = struct {
             } },
             .block => |block| return try self.cloneBlock(expr.ty, block),
             .loop_ => |loop| return try self.materialize(try self.cloneLoopValue(expr.ty, loop)),
-            .break_ => |maybe| .{ .break_ = if (maybe) |value| try self.cloneExpr(value) else null },
+            .break_ => |maybe| .{ .break_ = if (maybe) |value| blk: {
+                const projected = if (self.loop_stack.getLastOrNull()) |loop|
+                    if (loop.result_tuple_subset) |subset| projected: {
+                        const result = (try self.trimLoopResultTuple(value, subset)) orelse value;
+                        break :projected result;
+                    } else value
+                else
+                    value;
+                break :blk try self.cloneExpr(projected);
+            } else null },
             .continue_ => |continue_| try self.cloneContinue(continue_),
             .join_point => |join_point| return try self.cloneJoinPoint(expr.ty, join_point),
             .jump => |jump| blk: {
@@ -5046,6 +5621,8 @@ const Cloner = struct {
     }
 
     fn cloneLetValue(self: *Cloner, let_: anytype) Common.LowerError!Value {
+        if (try self.projectedLoopLetExpr(let_)) |projected| return try self.cloneExprValue(projected);
+
         const value = try self.cloneExprValue(let_.value);
         const value_expr = try self.materialize(value);
         if (self.caseExprFromValue(value)) |case_expr| {
@@ -5112,6 +5689,280 @@ const Cloner = struct {
         } } }) };
     }
 
+    /// Project dead fields from a loop's result ABI using the exact binding
+    /// pattern and continuation that consume it. This is a result-boundary
+    /// transformation only: the loop still carries its complete state through
+    /// every `continue`, while each `break` returns only fields used after the
+    /// loop. Returns null when the binding is not a compiler-generated tuple
+    /// state or when every field remains live.
+    fn projectedLoopLetExpr(self: *Cloner, let_: anytype) Common.LowerError!?Ast.ExprId {
+        const loop_expr = self.pass.program.getExpr(let_.value);
+        const loop = switch (loop_expr.data) {
+            .loop_ => |loop| loop,
+            else => return null,
+        };
+
+        var kept_indices = std.ArrayList(u32).empty;
+        defer kept_indices.deinit(self.pass.allocator);
+        var kept_pats = std.ArrayList(Ast.PatId).empty;
+        defer kept_pats.deinit(self.pass.allocator);
+        var kept_tys = std.ArrayList(Type.TypeId).empty;
+        defer kept_tys.deinit(self.pass.allocator);
+        var source_arity: usize = 0;
+        var aggregate_local: ?Ast.LocalId = null;
+        var aggregate_tys: ?[]Type.TypeId = null;
+        defer if (aggregate_tys) |tys| self.pass.allocator.free(tys);
+        var projected_locals: ?[]?Ast.LocalId = null;
+        defer if (projected_locals) |locals| self.pass.allocator.free(locals);
+
+        switch (self.pass.program.getPat(let_.bind).data) {
+            .tuple => |items_span| {
+                const source_items = try GuardedList.dupe(self.pass.allocator, Ast.PatId, self.pass.program.patSpan(items_span));
+                defer self.pass.allocator.free(source_items);
+                if (source_items.len < 2) return null;
+                source_arity = source_items.len;
+                for (source_items, 0..) |pat_id, index| {
+                    const pat = self.pass.program.getPat(pat_id);
+                    const local = switch (pat.data) {
+                        .bind => |local| local,
+                        else => return null,
+                    };
+                    if (localUseCountInExpr(self.pass.program, local, let_.rest) == 0) continue;
+                    try kept_indices.append(self.pass.allocator, @intCast(index));
+                    try kept_pats.append(self.pass.allocator, pat_id);
+                    try kept_tys.append(self.pass.allocator, pat.ty);
+                }
+            },
+            .bind => |local| {
+                const type_span = switch (self.pass.program.types.get(loop_expr.ty)) {
+                    .tuple => |items| items,
+                    else => return null,
+                };
+                const source_tys = try GuardedList.dupe(self.pass.allocator, Type.TypeId, self.pass.program.types.span(type_span));
+                aggregate_tys = source_tys;
+                if (source_tys.len < 2) return null;
+                source_arity = source_tys.len;
+
+                const used = try self.pass.allocator.alloc(bool, source_arity);
+                defer self.pass.allocator.free(used);
+                @memset(used, false);
+                if (!collectTupleLocalDemandInExpr(self.pass.program, local, let_.rest, used)) return null;
+
+                const locals = try self.pass.allocator.alloc(?Ast.LocalId, source_arity);
+                projected_locals = locals;
+                @memset(locals, null);
+                aggregate_local = local;
+                for (source_tys, used, 0..) |ty, is_used, index| {
+                    if (!is_used) continue;
+                    const projected_local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+                    locals[index] = projected_local;
+                    try kept_indices.append(self.pass.allocator, @intCast(index));
+                    try kept_pats.append(self.pass.allocator, try self.pass.program.addPat(.{
+                        .ty = ty,
+                        .data = .{ .bind = projected_local },
+                    }));
+                    try kept_tys.append(self.pass.allocator, ty);
+                }
+            },
+            else => return null,
+        }
+        if (kept_indices.items.len == 0 or kept_indices.items.len == source_arity) return null;
+
+        const projected_ty = if (kept_tys.items.len == 1)
+            kept_tys.items[0]
+        else
+            try self.pass.program.types.add(.{ .tuple = try self.pass.program.types.addSpan(kept_tys.items) });
+        const projected_pat = if (kept_pats.items.len == 1)
+            kept_pats.items[0]
+        else
+            try self.pass.program.addPat(.{
+                .ty = projected_ty,
+                .data = .{ .tuple = try self.pass.program.addPatSpan(kept_pats.items) },
+            });
+        const kept = try self.pass.arena.allocator().dupe(u32, kept_indices.items);
+        const subset = LoopResultTupleSubset{
+            .source_arity = source_arity,
+            .kept_indices = kept,
+            .ty = projected_ty,
+        };
+        const projected_body = (try self.cloneLoopControlExprWithResultTupleSubset(loop.body, subset)) orelse return null;
+        try self.loop_result_tuple_subsets.put(projected_body, subset);
+        const projected_loop = try self.addExpr(.{ .ty = projected_ty, .data = .{ .loop_ = .{
+            .params = loop.params,
+            .initial_values = loop.initial_values,
+            .body = projected_body,
+        } } });
+
+        var projected_rest = let_.rest;
+        if (aggregate_local) |local| {
+            const source_tys = aggregate_tys orelse Common.invariant("loop result-tuple subset had no source tuple types");
+            const locals = projected_locals orelse Common.invariant("loop result-tuple subset had no selected locals");
+            const items = try self.pass.arena.allocator().alloc(Value, source_arity);
+            for (source_tys, locals, 0..) |ty, maybe_local, index| {
+                const item_expr = if (maybe_local) |projected_local|
+                    try self.addExpr(.{ .ty = ty, .data = .{ .local = projected_local } })
+                else
+                    try self.addExpr(.{ .ty = ty, .data = .@"unreachable" });
+                items[index] = .{ .expr = item_expr };
+            }
+
+            const change_start = self.subst.watermark();
+            errdefer self.subst.restore(change_start);
+            try self.subst.put(self.pass.program, local, .{ .tuple = .{
+                .ty = loop_expr.ty,
+                .items = items,
+            } });
+            projected_rest = try self.cloneExpr(let_.rest);
+            self.subst.restore(change_start);
+        }
+
+        return try self.addExpr(.{ .ty = self.pass.program.getExpr(projected_rest).ty, .data = .{ .let_ = .{
+            .bind = projected_pat,
+            .value = projected_loop,
+            .rest = projected_rest,
+            .comptime_site = let_.comptime_site,
+        } } });
+    }
+
+    /// Copy the result-control spine of one loop body at a narrowed result-tuple
+    /// type. A null result means the expression can complete normally and the
+    /// requested item subset therefore does not apply. Nested loops own their own breaks
+    /// and are never traversed here.
+    fn cloneLoopControlExprWithResultTupleSubset(self: *Cloner, expr_id: Ast.ExprId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.ExprId {
+        const saved_loc = self.current_loc;
+        defer self.current_loc = saved_loc;
+        const saved_region = self.current_region;
+        defer self.current_region = saved_region;
+        const expr_loc = self.pass.program.exprLoc(expr_id);
+        if (expr_loc.hasLocation()) self.current_loc = expr_loc;
+        const expr_region = self.pass.program.exprRegion(expr_id);
+        if (!expr_region.isEmpty()) self.current_region = expr_region;
+
+        const expr = self.pass.program.getExpr(expr_id);
+        const data: Ast.ExprData = switch (expr.data) {
+            .@"unreachable" => .@"unreachable",
+            .crash => |msg| .{ .crash = msg },
+            .comptime_exhaustiveness_failed => |site| .{ .comptime_exhaustiveness_failed = site },
+            .return_ => |ret| .{ .return_ = ret },
+            .continue_ => |continue_| .{ .continue_ = continue_ },
+            .break_ => |maybe| .{ .break_ = if (maybe) |value|
+                (try self.trimLoopResultTuple(value, subset)) orelse return null
+            else
+                return null },
+            .let_ => |let_| .{ .let_ = .{
+                .bind = let_.bind,
+                .value = let_.value,
+                .rest = (try self.cloneLoopControlExprWithResultTupleSubset(let_.rest, subset)) orelse return null,
+                .comptime_site = let_.comptime_site,
+            } },
+            .block => |block| blk: {
+                const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
+                defer self.pass.allocator.free(source);
+                const statements = try self.pass.allocator.alloc(Ast.StmtId, source.len);
+                defer self.pass.allocator.free(statements);
+                for (source, statements) |stmt, *out| {
+                    if (try self.cloneLoopControlStmtWithResultTupleSubset(stmt, subset)) |projected| {
+                        out.* = projected;
+                    } else {
+                        out.* = stmt;
+                    }
+                }
+                const final_expr = (try self.cloneLoopControlExprWithResultTupleSubset(block.final_expr, subset)) orelse return null;
+                break :blk .{ .block = .{
+                    .statements = try self.pass.program.addStmtSpan(statements),
+                    .final_expr = final_expr,
+                } };
+            },
+            .if_ => |if_| blk: {
+                const branches = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
+                defer self.pass.allocator.free(branches);
+                const projected = try self.pass.allocator.alloc(Ast.IfBranch, branches.len);
+                defer self.pass.allocator.free(projected);
+                for (branches, projected) |branch, *out| out.* = .{
+                    .cond = branch.cond,
+                    .body = (try self.cloneLoopControlExprWithResultTupleSubset(branch.body, subset)) orelse return null,
+                };
+                break :blk .{ .if_ = .{
+                    .branches = try self.pass.program.addIfBranchSpan(projected),
+                    .final_else = (try self.cloneLoopControlExprWithResultTupleSubset(if_.final_else, subset)) orelse return null,
+                } };
+            },
+            .match_ => |match| blk: {
+                const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(match.branches));
+                defer self.pass.allocator.free(branches);
+                const projected = try self.pass.allocator.alloc(Ast.Branch, branches.len);
+                defer self.pass.allocator.free(projected);
+                for (branches, projected) |branch, *out| out.* = .{
+                    .pat = branch.pat,
+                    .guard = branch.guard,
+                    .body = (try self.cloneLoopControlExprWithResultTupleSubset(branch.body, subset)) orelse return null,
+                };
+                break :blk .{ .match_ = .{
+                    .scrutinee = match.scrutinee,
+                    .branches = try self.pass.program.addBranchSpan(projected),
+                    .comptime_site = match.comptime_site,
+                } };
+            },
+            .comptime_branch_taken => |taken| .{ .comptime_branch_taken = .{
+                .site = taken.site,
+                .branch_index = taken.branch_index,
+                .body = (try self.cloneLoopControlExprWithResultTupleSubset(taken.body, subset)) orelse return null,
+            } },
+            .join_point => |join_point| .{ .join_point = .{
+                .id = join_point.id,
+                .params = join_point.params,
+                .body = (try self.cloneLoopControlExprWithResultTupleSubset(join_point.body, subset)) orelse return null,
+                .remainder = (try self.cloneLoopControlExprWithResultTupleSubset(join_point.remainder, subset)) orelse return null,
+            } },
+            .if_initialized_payload => |payload| .{ .if_initialized_payload = .{
+                .cond = payload.cond,
+                .cond_mask = payload.cond_mask,
+                .payload = payload.payload,
+                .uninitialized_is_cold = payload.uninitialized_is_cold,
+                .initialized = (try self.cloneLoopControlExprWithResultTupleSubset(payload.initialized, subset)) orelse return null,
+                .uninitialized = (try self.cloneLoopControlExprWithResultTupleSubset(payload.uninitialized, subset)) orelse return null,
+            } },
+            .loop_ => return null,
+            else => return null,
+        };
+        return try self.addExpr(.{ .ty = subset.ty, .data = data });
+    }
+
+    fn cloneLoopControlStmtWithResultTupleSubset(self: *Cloner, stmt_id: Ast.StmtId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.StmtId {
+        const stmt = self.pass.program.getStmt(stmt_id);
+        const projected: Ast.Stmt = switch (stmt) {
+            .let_ => |let_| .{ .let_ = .{
+                .pat = let_.pat,
+                .value = (try self.cloneLoopControlExprWithResultTupleSubset(let_.value, subset)) orelse return null,
+                .recursive = let_.recursive,
+                .comptime_site = let_.comptime_site,
+            } },
+            .expr => |value| .{ .expr = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
+            .expect => |value| .{ .expect = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
+            .dbg => |value| .{ .dbg = (try self.cloneLoopControlExprWithResultTupleSubset(value, subset)) orelse return null },
+            else => return null,
+        };
+        return try self.pass.program.addStmt(projected);
+    }
+
+    fn trimLoopResultTuple(self: *Cloner, value_expr: Ast.ExprId, subset: LoopResultTupleSubset) Common.LowerError!?Ast.ExprId {
+        const tuple = switch (self.pass.program.getExpr(value_expr).data) {
+            .tuple => |items| try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(items)),
+            else => return null,
+        };
+        defer self.pass.allocator.free(tuple);
+        if (tuple.len != subset.source_arity) return null;
+        if (subset.kept_indices.len == 1) return tuple[subset.kept_indices[0]];
+
+        const items = try self.pass.allocator.alloc(Ast.ExprId, subset.kept_indices.len);
+        defer self.pass.allocator.free(items);
+        for (subset.kept_indices, items) |index, *out| out.* = tuple[index];
+        return try self.addExpr(.{
+            .ty = subset.ty,
+            .data = .{ .tuple = try self.pass.program.addExprSpan(items) },
+        });
+    }
+
     /// Dissolve a binding by naming its value's opaque leaves as pending
     /// bindings: the value keeps its structure, uses substitute leaf
     /// references, and the pending bindings are emitted where the stack next
@@ -5153,6 +6004,10 @@ const Cloner = struct {
     }
 
     fn cloneLet(self: *Cloner, let_: anytype) Common.LowerError!Ast.ExprData {
+        if (try self.projectedLoopLetExpr(let_)) |projected| {
+            return self.pass.program.getExpr(try self.cloneExpr(projected)).data;
+        }
+
         const value = try self.cloneExprValue(let_.value);
         const value_expr = try self.materialize(value);
         const change_start = self.subst.watermark();
@@ -5638,6 +6493,7 @@ const Cloner = struct {
     fn cloneDivergentAtType(self: *Cloner, expr_id: Ast.ExprId, ty: Type.TypeId) Common.LowerError!?Ast.ExprId {
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
+            .@"unreachable" => try self.addExpr(.{ .ty = ty, .data = .@"unreachable" }),
             .crash => |msg| try self.addExpr(.{ .ty = ty, .data = .{ .crash = msg } }),
             .comptime_exhaustiveness_failed => |site| try self.addExpr(.{ .ty = ty, .data = .{ .comptime_exhaustiveness_failed = site } }),
             .return_ => |ret| try self.addExpr(.{ .ty = ty, .data = .{ .return_ = .{
@@ -5962,6 +6818,7 @@ const Cloner = struct {
     }
 
     fn cloneLoopValue(self: *Cloner, ty: Type.TypeId, loop: anytype) Common.LowerError!Value {
+        const result_tuple_subset = self.loop_result_tuple_subsets.get(loop.body);
         const params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
         defer self.pass.allocator.free(params);
         const initial_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(loop.initial_values));
@@ -6042,6 +6899,11 @@ const Cloner = struct {
         // The failed clone is discarded and the attempt repeats. Each retry
         // erases at least one constructor leaf, so attempts are bounded by the
         // leaf count.
+        //
+        // Shape splitting is proved only by the local `continue` edges below.
+        // A `return` exits the enclosing function outside that fixed point, so
+        // a loop containing one must retain its whole runtime slots.
+        if (exprContainsReturn(self.pass.program, loop.body)) has_constructor = false;
         while (has_constructor) {
             const attempt_pending = self.pending.items.len;
             var new_params = std.ArrayList(Ast.TypedLocal).empty;
@@ -6072,7 +6934,11 @@ const Cloner = struct {
                 }
             }
 
-            try self.loop_stack.append(self.pass.allocator, .{ .values = shapes, .any_demoted = false });
+            try self.loop_stack.append(self.pass.allocator, .{
+                .values = shapes,
+                .any_demoted = false,
+                .result_tuple_subset = result_tuple_subset,
+            });
             const body = try self.cloneExpr(loop.body);
             const frame = self.loop_stack.pop() orelse Common.invariant("loop stack underflow after split attempt");
 
@@ -6128,7 +6994,11 @@ const Cloner = struct {
             final.* = whole.local;
         }
         try self.retargetLoopForwardConditions(initial_exprs, forward_sources, forward_finals);
-        try self.loop_stack.append(self.pass.allocator, .{ .values = whole_shapes, .any_demoted = false });
+        try self.loop_stack.append(self.pass.allocator, .{
+            .values = whole_shapes,
+            .any_demoted = false,
+            .result_tuple_subset = result_tuple_subset,
+        });
         const body = try self.cloneExpr(loop.body);
         if (self.loop_stack.pop() == null) Common.invariant("loop stack underflow after whole-state body clone");
         return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .loop_ = .{
@@ -6173,6 +7043,12 @@ const Cloner = struct {
     /// then materializes as written. Returns null on a pinned block with all
     /// speculative work undone.
     fn cloneBlockValue(self: *Cloner, block: anytype) Common.LowerError!?Value {
+        // The block-final position is the capability that makes an
+        // `unreachable` marker valid. Treating this block as transparent would
+        // let the marker escape into an ordinary expression position (for
+        // example, the rest of a synthesized `let`).
+        if (self.pass.program.getExpr(block.final_expr).data == .@"unreachable") return null;
+
         const change_start = self.subst.watermark();
         const pending_entry = self.pending.items.len;
 
@@ -6229,6 +7105,8 @@ const Cloner = struct {
         const saved_entry_marks = self.region_entry_marks;
         defer self.region_entry_marks = saved_entry_marks;
 
+        const terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
+
         const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
         defer self.pass.allocator.free(source);
 
@@ -6239,7 +7117,23 @@ const Cloner = struct {
             // Cloning it as one lets a branch-built value sink the tail into
             // the branches, where each branch's constructor is known.
             switch (self.pass.program.getStmt(stmt)) {
-                .let_ => |let_| if (!let_.recursive) {
+                .let_ => |let_| if (!let_.recursive and
+                    (!terminated or
+                        (self.pass.program.getExpr(let_.value).data == .loop_ and
+                            (self.pass.tuplePatternIsPartiallyUsedInBlockTail(
+                                let_.pat,
+                                self.pass.program.stmtSpan(block.statements),
+                                index + 1,
+                                block.final_expr,
+                            ) or
+                                try self.pass.aggregateLoopBindingIsPartiallyUsedInBlockTail(
+                                    let_.pat,
+                                    let_.value,
+                                    self.pass.program.stmtSpan(block.statements),
+                                    index + 1,
+                                    block.final_expr,
+                                )))))
+                {
                     const tail = try self.pass.program.addExpr(.{ .ty = ty, .data = .{ .block = .{
                         .statements = try self.pass.program.addStmtSpan(source[index + 1 ..]),
                         .final_expr = block.final_expr,
@@ -6308,6 +7202,7 @@ const Cloner = struct {
             return .{ .call_proc = .{
                 .callee = call.callee,
                 .args = try self.cloneExprSpan(call.args),
+                .iterator_procedure = call.iterator_procedure,
                 .captures = try self.cloneCaptureOperandSpan(call.captures),
                 .is_cold = true,
             } };
@@ -6316,6 +7211,7 @@ const Cloner = struct {
         const callee = Ast.localDirectCallee(call) orelse return .{ .call_proc = .{
             .callee = call.callee,
             .args = try self.cloneExprSpan(call.args),
+            .iterator_procedure = call.iterator_procedure,
             .captures = try self.cloneCaptureOperandSpan(call.captures),
             .is_cold = call.is_cold,
         } };
@@ -6344,6 +7240,7 @@ const Cloner = struct {
                     return .{ .call_proc = .{
                         .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
                         .args = try self.pass.program.addExprSpan(rewritten_args.items),
+                        .iterator_procedure = call.iterator_procedure,
                         .captures = try self.cloneCaptureOperandSpan(call.captures),
                         .is_cold = call.is_cold,
                     } };
@@ -6367,6 +7264,7 @@ const Cloner = struct {
             return .{ .call_proc = .{
                 .callee = call.callee,
                 .args = try self.pass.program.addExprSpan(residual_args),
+                .iterator_procedure = call.iterator_procedure,
                 .captures = try self.cloneCaptureOperandSpan(call.captures),
                 .is_cold = call.is_cold,
             } };
@@ -6374,6 +7272,7 @@ const Cloner = struct {
         return .{ .call_proc = .{
             .callee = call.callee,
             .args = try self.cloneExprSpan(call.args),
+            .iterator_procedure = call.iterator_procedure,
             .captures = try self.cloneCaptureOperandSpan(call.captures),
             .is_cold = call.is_cold,
         } };
@@ -7580,8 +8479,14 @@ const Cloner = struct {
         args_span: Ast.Span(Ast.ExprId),
     ) Common.LowerError!Value {
         var callable_call_size: usize = 0;
-        for (callable.captures) |capture| callable_call_size += self.knownConstructorSize(capture.value);
-        callable_call_size += self.argsKnownConstructorSize(args_span);
+        for (callable.captures) |capture| callable_call_size +|= self.knownConstructorSize(capture.value);
+        callable_call_size +|= self.argsKnownConstructorSize(args_span);
+        if (callable_call_size == known_constructor_size_cap) {
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .call_value = .{
+                .callee = try self.materialize(.{ .callable = callable }),
+                .args = try self.cloneExprSpan(args_span),
+            } } }) };
+        }
         for (self.inline_stack.items) |active| {
             if (active.fn_id != callable.fn_id) continue;
             if (callable_call_size == 0 or callable_call_size >= active.known_size) {
@@ -7669,7 +8574,10 @@ const Cloner = struct {
         captures_span: Ast.Span(Ast.CaptureOperand),
         original_expr: Ast.ExprId,
     ) Common.LowerError!Value {
-        const direct_call_size = self.argsKnownConstructorSize(args_span) + self.captureOperandsKnownConstructorSize(captures_span);
+        const direct_call_size = self.argsKnownConstructorSize(args_span) +| self.captureOperandsKnownConstructorSize(captures_span);
+        if (direct_call_size == known_constructor_size_cap) {
+            return .{ .expr = try self.cloneExprPlain(original_expr) };
+        }
         for (self.inline_stack.items) |active| {
             if (active.fn_id != callee) continue;
             if (direct_call_size == 0 or direct_call_size >= active.known_size) {
@@ -8066,6 +8974,98 @@ const Cloner = struct {
         }
     }
 
+    fn markActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) Allocator.Error!void {
+        const pat = self.pass.program.getPat(pat_id);
+        switch (pat.data) {
+            .bind => |local| try self.active_recursive_value_locals.put(local, {}),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => {},
+            .as => |as| {
+                try self.markActiveRecursiveValuePat(as.pattern);
+                try self.active_recursive_value_locals.put(as.local, {});
+            },
+            .record => |fields| {
+                const record_fields = self.pass.program.recordDestructSpan(fields);
+                for (0..record_fields.len) |index| {
+                    try self.markActiveRecursiveValuePat(GuardedList.at(record_fields, index).pattern);
+                }
+            },
+            .tuple => |items| {
+                const children = self.pass.program.patSpan(items);
+                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .tag => |tag| {
+                const children = self.pass.program.patSpan(tag.payloads);
+                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .nominal => |backing| try self.markActiveRecursiveValuePat(backing),
+            .list => |list| {
+                const children = self.pass.program.patSpan(list.patterns);
+                for (0..children.len) |index| try self.markActiveRecursiveValuePat(GuardedList.at(children, index));
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| try self.markActiveRecursiveValuePat(rest_pattern);
+                }
+            },
+            .str_pattern => |str| {
+                const steps = self.pass.program.strPatternStepSpan(str.steps);
+                for (0..steps.len) |index| {
+                    if (GuardedList.at(steps, index).capture) |capture| try self.markActiveRecursiveValuePat(capture);
+                }
+            },
+        }
+    }
+
+    fn unmarkActiveRecursiveValuePat(self: *Cloner, pat_id: Ast.PatId) void {
+        const pat = self.pass.program.getPat(pat_id);
+        switch (pat.data) {
+            .bind => |local| _ = self.active_recursive_value_locals.remove(local),
+            .wildcard,
+            .int_lit,
+            .dec_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .str_lit,
+            => {},
+            .as => |as| {
+                self.unmarkActiveRecursiveValuePat(as.pattern);
+                _ = self.active_recursive_value_locals.remove(as.local);
+            },
+            .record => |fields| {
+                const record_fields = self.pass.program.recordDestructSpan(fields);
+                for (0..record_fields.len) |index| {
+                    self.unmarkActiveRecursiveValuePat(GuardedList.at(record_fields, index).pattern);
+                }
+            },
+            .tuple => |items| {
+                const children = self.pass.program.patSpan(items);
+                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .tag => |tag| {
+                const children = self.pass.program.patSpan(tag.payloads);
+                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
+            },
+            .nominal => |backing| self.unmarkActiveRecursiveValuePat(backing),
+            .list => |list| {
+                const children = self.pass.program.patSpan(list.patterns);
+                for (0..children.len) |index| self.unmarkActiveRecursiveValuePat(GuardedList.at(children, index));
+                if (list.rest) |rest| {
+                    if (rest.pattern) |rest_pattern| self.unmarkActiveRecursiveValuePat(rest_pattern);
+                }
+            },
+            .str_pattern => |str| {
+                const steps = self.pass.program.strPatternStepSpan(str.steps);
+                for (0..steps.len) |index| {
+                    if (GuardedList.at(steps, index).capture) |capture| self.unmarkActiveRecursiveValuePat(capture);
+                }
+            },
+        }
+    }
+
     const BinderCloneMode = enum {
         /// The surrounding clone has already replaced every use of this
         /// binding with a known value. The emitted pattern still needs its own
@@ -8173,10 +9173,14 @@ const Cloner = struct {
                 break :blk .{ .uninitialized = try self.clonePat(pat, .bind_runtime) };
             },
             .let_ => |let_| blk: {
+                if (let_.recursive) try self.markActiveRecursiveValuePat(let_.pat);
+                defer if (let_.recursive) self.unmarkActiveRecursiveValuePat(let_.pat);
                 const recursive_pat = if (let_.recursive)
                     try self.clonePat(let_.pat, .bind_runtime)
                 else
                     null;
+                if (recursive_pat) |pat| try self.markActiveRecursiveValuePat(pat);
+                defer if (recursive_pat) |pat| self.unmarkActiveRecursiveValuePat(pat);
                 const value = try self.cloneExprValue(let_.value);
                 const value_expr = try self.materialize(value);
                 if (try self.bindPatToReusableValue(let_.pat, value) == .match) {
@@ -8417,27 +9421,120 @@ const Cloner = struct {
         return try self.materializeCallableWithCaptures(callable.ty, callable.fn_id, fn_.captures, callable.captures);
     }
 
+    fn activeRecursiveFieldTupleReadRoot(self: *Cloner, value: Value) ?Ast.ExprId {
+        const expr_id = switch (value) {
+            .expr => |expr| expr,
+            else => return null,
+        };
+        switch (self.pass.program.getExpr(expr_id).data) {
+            .field_access,
+            .tuple_access,
+            => {},
+            else => return null,
+        }
+        return self.activeRecursiveFieldTupleReadBase(expr_id);
+    }
+
+    fn activeRecursiveFieldTupleReadBase(self: *Cloner, expr_id: Ast.ExprId) ?Ast.ExprId {
+        return switch (self.pass.program.getExpr(expr_id).data) {
+            .local => |local| if (self.active_recursive_value_locals.contains(local)) expr_id else null,
+            .field_access => |field| self.activeRecursiveFieldTupleReadBase(field.receiver),
+            .tuple_access => |access| self.activeRecursiveFieldTupleReadBase(access.tuple),
+            else => null,
+        };
+    }
+
+    fn cloneFieldTupleReadReplacingRoot(
+        self: *Cloner,
+        source: Ast.ExprId,
+        root: Ast.ExprId,
+        replacement: Ast.ExprId,
+    ) Common.LowerError!Ast.ExprId {
+        if (source == root) return replacement;
+        const expr = self.pass.program.getExpr(source);
+        return switch (expr.data) {
+            .field_access => |field| try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
+                .receiver = try self.cloneFieldTupleReadReplacingRoot(field.receiver, root, replacement),
+                .field = field.field,
+            } } }),
+            .tuple_access => |access| try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
+                .tuple = try self.cloneFieldTupleReadReplacingRoot(access.tuple, root, replacement),
+                .elem_index = access.elem_index,
+            } } }),
+            else => Common.invariant("recursive field/tuple read replacement reached a non-access expression before its root"),
+        };
+    }
+
     fn materializeCallableWorker(self: *Cloner, callable: CallableValue) Common.LowerError!Ast.ExprId {
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
-        if (self.pass.callable_workers.get(source_fn_id)) |worker_fn_id| {
-            const worker = self.pass.program.getFn(worker_fn_id);
-            return try self.materializeCallableWithCaptures(callable.ty, worker_fn_id, worker.captures, callable.captures);
-        }
-
         const source_fn = self.pass.program.getFn(source_fn_id);
-        const source_body = switch (source_fn.body) {
-            .roc => |body| body,
-            .hosted => Common.invariant("hosted callable value needed a rewritten body"),
-        };
         const source_captures = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
         defer self.pass.allocator.free(source_captures);
         if (source_captures.len != callable.captures.len) {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
 
-        // Capture locals are the worker's dynamic inputs. Their values belong
-        // on each function reference, not in the worker identity or body.
-        const captures_span = source_fn.captures;
+        const worker_key: CallableWorkerIdentity = .{
+            .template = Mono.fnTemplateDigest(
+                source_fn.source orelse Common.invariant("rewritten callable source had no Monotype template identity"),
+                &self.pass.program.types,
+                &self.pass.program.names,
+            ),
+            .capture_abi = self.callableCaptureAbiDigest(source_captures, callable.captures),
+        };
+        if (self.pass.callable_workers.get(worker_key)) |worker_fn_id| {
+            const worker = self.pass.program.getFn(worker_fn_id);
+            return try self.materializeCallableWithCaptures(callable.ty, worker_fn_id, worker.captures, callable.captures);
+        }
+
+        const source_body = switch (source_fn.body) {
+            .roc => |body| body,
+            .hosted => Common.invariant("hosted callable value needed a rewritten body"),
+        };
+        // Capture locals are the worker's dynamic inputs. Preserve each
+        // source capture's complete identity, but give its slot the exact type
+        // of the rewritten operand that this worker body consumes.
+        const worker_captures = try self.pass.allocator.alloc(Ast.TypedLocal, source_captures.len);
+        defer self.pass.allocator.free(worker_captures);
+        const worker_capture_values = try self.pass.allocator.alloc(CaptureValue, source_captures.len);
+        defer self.pass.allocator.free(worker_capture_values);
+        const worker_body_values = try self.pass.allocator.alloc(Value, source_captures.len);
+        defer self.pass.allocator.free(worker_body_values);
+        for (source_captures, 0..) |source_capture, index| {
+            const id = self.pass.program.captureIdOfLocal(source_capture.local);
+            const capture_value = callableCaptureValueForId(callable.captures, id) orelse
+                Common.invariant("rewritten callable had no value for a source capture slot");
+            const field_tuple_read_root = self.activeRecursiveFieldTupleReadRoot(capture_value);
+            const capture_ty = if (field_tuple_read_root) |root|
+                self.pass.program.getExpr(root).ty
+            else
+                valueType(self.pass.program, capture_value);
+            const source_local = self.pass.program.getLocal(source_capture.local);
+            const local = try self.pass.program.addLocalWithCaptureIdentity(
+                self.pass.symbols.fresh(),
+                capture_ty,
+                source_local.binder,
+                id,
+                source_local.checked_capture_id,
+            );
+            worker_captures[index] = .{ .local = local, .ty = capture_ty };
+            const local_expr = try self.addExpr(.{
+                .ty = capture_ty,
+                .data = .{ .local = local },
+            });
+            if (field_tuple_read_root) |root| {
+                const source_expr = switch (capture_value) {
+                    .expr => |expr| expr,
+                    else => unreachable,
+                };
+                worker_capture_values[index] = .{ .id = id, .value = .{ .expr = root } };
+                worker_body_values[index] = .{ .expr = try self.cloneFieldTupleReadReplacingRoot(source_expr, root, local_expr) };
+            } else {
+                worker_capture_values[index] = .{ .id = id, .value = capture_value };
+                worker_body_values[index] = .{ .expr = local_expr };
+            }
+        }
+        const captures_span = try self.pass.program.addTypedLocalSpan(worker_captures);
 
         const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
         defer self.pass.allocator.free(source_args);
@@ -8456,24 +9553,29 @@ const Cloner = struct {
         const worker_fn_id = try self.pass.program.addFn(.{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = args_span,
             .captures = captures_span,
             .body = .hosted,
             .ret = source_fn.ret,
         });
-        try self.pass.callable_workers.put(source_fn_id, worker_fn_id);
+        try self.pass.callable_workers.put(worker_key, worker_fn_id);
         try self.pass.callable_sources.put(worker_fn_id, source_fn_id);
         try self.pass.copyProcDebugName(source_fn.symbol, symbol);
 
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
 
-        for (source_captures) |source_capture| {
-            const local_expr = try self.addExpr(.{
-                .ty = source_capture.ty,
-                .data = .{ .local = source_capture.local },
-            });
-            try self.subst.put(self.pass.program, source_capture.local, .{ .expr = local_expr });
+        for (source_captures, worker_body_values) |source_capture, capture_value| {
+            try self.subst.put(self.pass.program, source_capture.local, capture_value);
+            // Different Monotype specializations of one lexical capture can
+            // leave distinct local ids with the same binder and monomorphic
+            // type in a callable template. A shared callable worker has one
+            // dynamic slot for that identity, so clone every equivalent use
+            // through the selected source capture local.
+            if (Subst.binderIdentityOf(self.pass.program, source_capture.local)) |identity| {
+                try self.subst.putLoopCarried(identity, capture_value);
+            }
         }
         for (source_args, args) |source_arg, arg| {
             const arg_expr = try self.addExpr(.{
@@ -8493,6 +9595,7 @@ const Cloner = struct {
         self.pass.program.setFn(worker_fn_id, .{
             .symbol = symbol,
             .source = source_fn.source,
+            .signature = null,
             .args = args_span,
             .captures = captures_span,
             .body = .{ .roc = worker_body },
@@ -8503,8 +9606,30 @@ const Cloner = struct {
             callable.ty,
             worker_fn_id,
             captures_span,
-            callable.captures,
+            worker_capture_values,
         );
+    }
+
+    fn callableCaptureAbiDigest(
+        self: *Cloner,
+        source_captures: []const Ast.TypedLocal,
+        values: []const CaptureValue,
+    ) names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update("roc.spec_constr.callable_capture_abi.v1");
+        var word: [4]u8 = undefined;
+        std.mem.writeInt(u32, &word, @intCast(source_captures.len), .little);
+        hasher.update(&word);
+        for (source_captures) |capture| {
+            const id = self.pass.program.captureIdOfLocal(capture.local);
+            const value = callableCaptureValueForId(values, id) orelse
+                Common.invariant("rewritten callable had no value for a source capture slot");
+            std.mem.writeInt(u32, &word, @intFromEnum(id), .little);
+            hasher.update(&word);
+            const digest = self.pass.program.types.typeDigest(&self.pass.program.names, valueType(self.pass.program, value));
+            hasher.update(&digest.bytes);
+        }
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn materializeCallableWithCaptures(
@@ -8755,6 +9880,7 @@ const BodyLocalScope = struct {
             .uninitialized_payload,
             .crash,
             .comptime_exhaustiveness_failed,
+            .@"unreachable",
             => {},
             .lambda,
             .def_ref,
@@ -8890,7 +10016,7 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
 
 fn exprCallsFn(program: *const Ast.Program, expr_id: Ast.ExprId, fn_id: Ast.FnId) bool {
     return switch (program.getExpr(expr_id).data) {
-        .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
+        .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .crash, .comptime_exhaustiveness_failed, .uninitialized, .uninitialized_payload => false,
         .fn_ref => |fn_ref| captureOperandSpanCallsFn(program, fn_ref.captures, fn_id),
         .list, .tuple => |items| exprSpanCallsFn(program, items, fn_id),
         .record => |fields| blk: {
@@ -8989,6 +10115,7 @@ fn exprMayCrash(program: *const Ast.Program, fn_may_crash: []const bool, expr_id
         .crash, .comptime_exhaustiveness_failed => true,
         .local,
         .unit,
+        .@"unreachable",
         .int_lit,
         .frac_f32_lit,
         .frac_f64_lit,
@@ -9117,6 +10244,7 @@ fn stmtMayCrash(program: *const Ast.Program, fn_may_crash: []const bool, stmt_id
 
 fn exprContainsReturn(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     return switch (program.getExpr(expr_id).data) {
+        .@"unreachable",
         .local,
         .unit,
         .int_lit,
@@ -9236,8 +10364,182 @@ fn stmtContainsReturn(program: *const Ast.Program, stmt_id: Ast.StmtId) bool {
     };
 }
 
+/// Record the tuple fields demanded from one aggregate local, rejecting any
+/// use that observes the aggregate as a whole or through a non-tuple
+/// access. `LocalId` is program-global, so binders introduced below this
+/// expression cannot shadow the queried identity.
+fn collectTupleLocalDemandInExpr(
+    program: *const Ast.Program,
+    local: Ast.LocalId,
+    expr_id: Ast.ExprId,
+    used: []bool,
+) bool {
+    return switch (program.getExpr(expr_id).data) {
+        .local => |seen| seen != local,
+        .@"unreachable",
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        .static_data_candidate,
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => true,
+        .fn_ref => |fn_ref| collectTupleLocalDemandInCaptureOperands(program, local, fn_ref.captures, used),
+        .list,
+        .tuple,
+        => |items| collectTupleLocalDemandInExprSpan(program, local, items, used),
+        .record => |fields| blk: {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |index| {
+                if (!collectTupleLocalDemandInExpr(program, local, GuardedList.at(field_exprs, index).value, used)) break :blk false;
+            }
+            break :blk true;
+        },
+        .tag => |tag| collectTupleLocalDemandInExprSpan(program, local, tag.payloads, used),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| collectTupleLocalDemandInExpr(program, local, child, used),
+        .return_ => |ret| collectTupleLocalDemandInExpr(program, local, ret.value, used),
+        .expect_err => |expect_err| collectTupleLocalDemandInExpr(program, local, expect_err.msg, used),
+        .comptime_branch_taken => |taken| collectTupleLocalDemandInExpr(program, local, taken.body, used),
+        .let_ => |let_| collectTupleLocalDemandInExpr(program, local, let_.value, used) and
+            collectTupleLocalDemandInExpr(program, local, let_.rest, used),
+        .call_value => |call| collectTupleLocalDemandInExpr(program, local, call.callee, used) and
+            collectTupleLocalDemandInExprSpan(program, local, call.args, used),
+        .call_proc => |call| collectTupleLocalDemandInExprSpan(program, local, call.args, used) and
+            collectTupleLocalDemandInCaptureOperands(program, local, call.captures, used),
+        .low_level => |call| collectTupleLocalDemandInExprSpan(program, local, call.args, used),
+        .field_access => |field| collectTupleLocalDemandInExpr(program, local, field.receiver, used),
+        .tuple_access => |access| blk: {
+            const receiver = program.getExpr(access.tuple);
+            if (receiver.data == .local and receiver.data.local == local) {
+                if (access.elem_index >= used.len) break :blk false;
+                used[access.elem_index] = true;
+                break :blk true;
+            }
+            break :blk collectTupleLocalDemandInExpr(program, local, access.tuple, used);
+        },
+        .structural_eq => |eq| collectTupleLocalDemandInExpr(program, local, eq.lhs, used) and
+            collectTupleLocalDemandInExpr(program, local, eq.rhs, used),
+        .structural_hash => |hash| collectTupleLocalDemandInExpr(program, local, hash.value, used) and
+            collectTupleLocalDemandInExpr(program, local, hash.hasher, used),
+        .match_ => |match| blk: {
+            if (!collectTupleLocalDemandInExpr(program, local, match.scrutinee, used)) break :blk false;
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (branch.guard) |guard| {
+                    if (!collectTupleLocalDemandInExpr(program, local, guard, used)) break :blk false;
+                }
+                if (!collectTupleLocalDemandInExpr(program, local, branch.body, used)) break :blk false;
+            }
+            break :blk true;
+        },
+        .if_ => |if_| blk: {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (!collectTupleLocalDemandInExpr(program, local, branch.cond, used)) break :blk false;
+                if (!collectTupleLocalDemandInExpr(program, local, branch.body, used)) break :blk false;
+            }
+            break :blk collectTupleLocalDemandInExpr(program, local, if_.final_else, used);
+        },
+        .block => |block| blk: {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |index| {
+                if (!collectTupleLocalDemandInStmt(program, local, GuardedList.at(statements, index), used)) break :blk false;
+            }
+            break :blk collectTupleLocalDemandInExpr(program, local, block.final_expr, used);
+        },
+        .loop_ => |loop| collectTupleLocalDemandInExprSpan(program, local, loop.initial_values, used) and
+            collectTupleLocalDemandInExpr(program, local, loop.body, used),
+        .break_ => |maybe| if (maybe) |value| collectTupleLocalDemandInExpr(program, local, value, used) else true,
+        .continue_ => |continue_| collectTupleLocalDemandInExprSpan(program, local, continue_.values, used),
+        .join_point => |join_point| blk: {
+            var shadows = false;
+            const params = program.typedLocalSpan(join_point.params);
+            for (0..params.len) |index| {
+                if (GuardedList.at(params, index).local == local) {
+                    shadows = true;
+                    break;
+                }
+            }
+            if (!shadows and !collectTupleLocalDemandInExpr(program, local, join_point.body, used)) break :blk false;
+            break :blk collectTupleLocalDemandInExpr(program, local, join_point.remainder, used);
+        },
+        .jump => |jump| collectTupleLocalDemandInExprSpan(program, local, jump.args, used),
+        .if_initialized_payload => |payload| blk: {
+            if (payload.payload == local) break :blk false;
+            break :blk collectTupleLocalDemandInExpr(program, local, payload.cond, used) and
+                collectTupleLocalDemandInExpr(program, local, payload.initialized, used) and
+                collectTupleLocalDemandInExpr(program, local, payload.uninitialized, used);
+        },
+        .try_sequence => |sequence| collectTupleLocalDemandInExpr(program, local, sequence.try_expr, used) and
+            (sequence.ok_local == local or collectTupleLocalDemandInExpr(program, local, sequence.ok_body, used)),
+        .try_record_sequence => |sequence| collectTupleLocalDemandInExpr(program, local, sequence.try_expr, used) and
+            (sequence.value_local == local or sequence.rest_local == local or
+                collectTupleLocalDemandInExpr(program, local, sequence.ok_body, used)),
+    };
+}
+
+fn collectTupleLocalDemandInExprSpan(
+    program: *const Ast.Program,
+    local: Ast.LocalId,
+    span: Ast.Span(Ast.ExprId),
+    used: []bool,
+) bool {
+    const exprs = program.exprSpan(span);
+    for (0..exprs.len) |index| {
+        if (!collectTupleLocalDemandInExpr(program, local, GuardedList.at(exprs, index), used)) return false;
+    }
+    return true;
+}
+
+fn collectTupleLocalDemandInCaptureOperands(
+    program: *const Ast.Program,
+    local: Ast.LocalId,
+    span: Ast.Span(Ast.CaptureOperand),
+    used: []bool,
+) bool {
+    const operands = program.captureOperandSpan(span);
+    for (0..GuardedList.borrowLen(operands)) |index| {
+        if (!collectTupleLocalDemandInExpr(program, local, GuardedList.at(operands, index).value, used)) return false;
+    }
+    return true;
+}
+
+fn collectTupleLocalDemandInStmt(
+    program: *const Ast.Program,
+    local: Ast.LocalId,
+    stmt_id: Ast.StmtId,
+    used: []bool,
+) bool {
+    return switch (program.getStmt(stmt_id)) {
+        .let_ => |let_| collectTupleLocalDemandInExpr(program, local, let_.value, used),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| collectTupleLocalDemandInExpr(program, local, expr, used),
+        .return_ => |ret| collectTupleLocalDemandInExpr(program, local, ret.value, used),
+        .uninitialized,
+        .crash,
+        => true,
+    };
+}
+
 fn localUseCountInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) usize {
     return switch (program.getExpr(expr_id).data) {
+        .@"unreachable" => 0,
         .local => |seen| if (seen == local) 1 else 0,
         .unit,
         .int_lit,
@@ -9393,6 +10695,7 @@ const LocalUseScan = struct {
 fn exprHasNoObservableEffect(program: *const Ast.Program, fn_effect_free: []const bool, expr_id: Ast.ExprId, allow_control: bool) bool {
     const expr = program.getExpr(expr_id);
     return switch (expr.data) {
+        .@"unreachable",
         .local,
         .unit,
         .int_lit,
@@ -9534,6 +10837,7 @@ fn localUseBeforeEffect(program: *const Ast.Program, local: Ast.LocalId, expr_id
 fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId, scan: *LocalUseScan) void {
     const expr = program.getExpr(expr_id);
     switch (expr.data) {
+        .@"unreachable" => {},
         .local => |seen| {
             if (seen == local) {
                 if (scan.seen_effect) {
@@ -9824,6 +11128,30 @@ fn sameType(program: *const Ast.Program, lhs: Type.TypeId, rhs: Type.TypeId) boo
     return std.mem.eql(u8, &lhs_digest.bytes, &rhs_digest.bytes);
 }
 
+fn typeFieldByName(fields: anytype, name: names.RecordFieldNameId) ?Type.TypeId {
+    for (0..GuardedList.borrowLen(fields)) |index| {
+        const field = GuardedList.at(fields, index);
+        if (field.name == name) return field.ty;
+    }
+    return null;
+}
+
+fn typeTagByName(
+    program: *const Ast.Program,
+    ty: Type.TypeId,
+    name: names.TagNameId,
+) ?Type.Tag {
+    const tags = switch (program.types.get(ty)) {
+        .tag_union => |tags| program.types.tagSpan(tags),
+        else => return null,
+    };
+    for (0..tags.len) |index| {
+        const tag = GuardedList.at(tags, index);
+        if (tag.name == name) return tag;
+    }
+    return null;
+}
+
 fn patternEql(program: *const Ast.Program, lhs: CallPattern, rhs: CallPattern) bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
@@ -10069,6 +11397,8 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -10079,6 +11409,7 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches

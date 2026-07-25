@@ -111,7 +111,7 @@ specific question: a substitution check answers "cannot substitute" (a missed
 optimization), and a minted-chain depth walk reports the cap (the chain takes
 the explicit `forced_dynamic` representation). Two standing instances: Monotype bounds
 minted iterator chain depth at the single construction choke point
-(`generatedIteratorType`), which is what guarantees specialization terminates
+(`generatedIteratorNode` plus graph finalization), which is what guarantees specialization terminates
 for recursively-constructed chains regardless of call structure; and
 constructor specialization bounds its substitution-candidate value walk
 (`valueCanSubstitute`), because a loop-carried value can reference itself and
@@ -1807,6 +1807,20 @@ same nested function instance. Lambdas and closures use the current function
 digest. That makes a lambda inside a nested local procedure belong to that
 nested local procedure, so captures come from the correct body instance.
 
+Function-context identity contains only durable checked identities and type
+digests. Draft-local allocation ids are operational binder-to-value mappings;
+they are not checked identity and must not affect a nested function or local
+procedure digest. Captured runtime values remain separate from `FnDef` identity,
+as described above.
+
+When Monotype restores a capturing function from `ConstStore`, it preserves the
+stored nested `FnDef`, including its producer-authored context function digest
+and local-procedure-context digest. Restoration may install fresh draft locals
+for the stored captures, but it must not recompute either digest from those
+consumer-side locals. Thus a restored function and the corresponding runtime
+successor use the same callable identity whenever their checked identity,
+monomorphic type, evidence, and captures agree.
+
 When Monotype has put a nested function in the nested definition table, that
 table is the only owner of the function body. Later value occurrences of the
 same `FnTemplate` are references to that nested definition; they do not rebuild
@@ -2193,16 +2207,20 @@ additional nominal arguments. Each adapter layer therefore embeds its concrete
 predecessor by value. A bounded chain is a finite tower of distinct nominal
 identities rather than one public nominal with a recursive self edge.
 
-The representation producer is `generatedIteratorType` in
-`src/postcheck/monotype/lower.zig`. It computes:
+The representation producer is `generatedIteratorNode` in
+`src/postcheck/monotype/lower.zig`, together with
+`InstGraph.finalizeGeneratedIteratorRepresentations` in
+`src/postcheck/monotype/solve.zig`. Construction records the exact public
+source, producer kind, component nodes, callable evidence, and private backing
+in the active instantiation graph. Finalization consumes that complete graph
+before any durable Monotype type is sealed. Together they compute:
 
 - `List.iter` as a first-class source representation rather than a public
   recursive `Iter` boundary;
 - source depth 1;
 - adapter depth as one plus the maximum minted depth reachable by value through
   its components;
-- a hard minted depth limit of 16;
-- a structural-walk budget of 64.
+- a hard minted depth limit of 16.
 
 A public `Iter` expected type constrains the checked result type; it does not
 veto producer-owned representation evidence. A source or adapter whose inputs
@@ -2219,14 +2237,95 @@ depth, and named backings are not traversed.
 If the next chain would exceed the limit, Monotype interns one
 `forced_dynamic` iterator type per item-type digest. Its public-shaped backing
 is recursively rewritten to its own type, giving recursive construction a
-finite type fixed point. The bounded walk reports the cap when its own budget is
-exhausted, so exhaustion selects the explicit dynamic tier rather than allowing
-the minted type universe to grow without bound.
-
-This cap is a type-universe bound, not a call-depth or specialization-request
-counter. Every path that mints an iterator passes through the same producer, so
-recursive functions, loops, and ordinary calls all receive the same finite
+finite type fixed point. An exact memoized walk over the finite instantiation
+graph computes the maximum stored iterator depth; a value cycle selects the
+explicit forced-dynamic fixed point. Graph size alone never changes the
 representation decision.
+
+Recursive specialization contributes an explicit second proof of the dynamic
+tier. Each in-progress specialization snapshots every permanent member of each
+ordered argument's union class. When a recursive edge reaches that
+specialization, a request argument introduced after the snapshot is recorded as
+a representation-growing recursive slot before the two function interfaces are
+related. If that slot subsequently joins distinct minted iterator identities,
+the graph records that the resulting iterator class must use the forced-dynamic
+fixed point. Recursion through any alias already present in the initial class is
+not representation growth and remains eligible for the minted tier. This makes
+the distinction producer-authored: finalization consumes the recorded recursive
+edge and minted join instead of inferring recursion from a finished type shape,
+union-find root selection, or call-stack depth.
+
+The recursive edge itself is also producer-authored. Every draft function
+records the draft owner that created it, forming an explicit active ownership
+tree. A partial open-interface match may reuse an in-progress specialization
+only when the current owner descends from that specialization in this tree.
+Shared graph cells alone cannot classify two sibling calls as recursion. Exact
+completed interfaces may still deduplicate normally, but only an explicit
+ancestor edge invokes recursive-interface unification and records recursive
+representation growth.
+
+Finalization rebuilds a selected forced-dynamic class with exactly one public
+item argument and an exact self-recursive backing before identity sealing.
+It does not restamp a minted backing whose component arguments still encode the
+growing chain. Once representation finalization, identity sealing, and graph
+freezing finish, the durable Monotype is immutable and no consumer may reopen,
+widen, or reinterpret it.
+
+Iterator-for lowering obtains the step result shape from the exact generated
+iterator node when one is present. The checked step type supplies the public
+interface and topology only; it cannot replace or merge the producer-owned
+private `rest` representation. This keeps the loop's initial state and every
+back-edge state in the same explicit representation family.
+
+Nested call and dispatch operands carry producer evidence through the active
+instantiation graph until that graph's single final seal. Relation production
+passes the exact result node to the consuming call request; it does not seal an
+intermediate `TypeId`, re-import that snapshot, or fall back to the checked
+public cell after discarding private representation evidence.
+
+When a dispatch expression produces generated-private evidence for a live
+checked-public result cell, Monotype selects that representation through the
+dedicated `selectGeneratedPrivateRepresentation` capability before lowering
+the dispatch. The capability exists only during relation production, requires
+an explicitly directed public-to-private edge, and rejects every class that
+contains an imported finished Monotype. Ordinary graph unification rejects the
+same edge. This preserves producer selection for branch results without making
+public/private merging—or reopening a durable Monotype—available as a general
+unification behavior. If the requested public interface is already a finished
+Monotype, the producer relates its distinct private result to that immutable
+interface without merging either class, and the enclosing procedure or
+compile-time wrapper carries the private result cell as its exact output
+witness. ConstStore preserves that witness beside the stored value, and restore
+relates the checked public interface to it without ordinary unification.
+
+Record constructors preserve that distinction structurally. If a field is a
+finished generated-private witness, the constructor emits a distinct record
+witness that references the field directly and relates that record to the
+checked-public container. It never merges the child into the public field cell
+or asks a later consumer to recover the child's runtime representation from the
+public container shape.
+
+Each generated-private request also retains its exact checked-source function
+node. That source node can itself contain upstream private arguments, so a
+callee relates its fresh checked root to the source through opaque interface
+relations; it never fully unifies the two function graphs. Expected private
+results remain request-owned nodes while their checked result cells stay fresh
+public interfaces. This keeps an adapter's input and output identities distinct
+even when the source signature uses one public `Iter` type variable for both.
+
+Match lowering likewise relates each checked pattern interface to the exact
+scrutinee node without merging a generated-private root into that public
+interface. Once all pattern relations have settled, record-field/tag-payload
+traversal walks the checked pattern and rebinds its pre-registered locals to the
+exact child graph cells before the guard or branch body is lowered. Later pattern
+materialization consumes those same cells. Branch code therefore specializes
+from producer-owned representation evidence rather than from the checked
+pattern's public approximation.
+
+The cap is a type-universe bound, not a call-depth or specialization-request
+counter. Every generated iterator passes through the same graph-owned producer
+and pre-seal finalizer, so recursive functions, loops, and ordinary calls all
+receive the same finite representation decision.
 
 #### Tier Unification And Callable Flow
 
@@ -2240,9 +2339,17 @@ tier explicitly:
   without discarding callable members;
 - equal tiers use ordinary named-type equality.
 
-At a forced-dynamic relation, Lambda Solved unifies the item type and both
-backings before linking the other type to the dynamic root. This is what carries
-every reachable finite step implementation into the dynamic callable set.
+At a forced-dynamic relation, Lambda Solved always unifies the public item type.
+A minted peer also joins its generated-private backing into the dynamic backing;
+an ordinary public peer has no private representation authority, so its backing
+is not merged or reinterpreted.
+
+Lambda Solved transfers callable evidence across a public-to-generated relation
+with a separate structure-preserving walk. That walk validates corresponding
+public and private structure while retaining both sealed Monotype roots, and it
+unifies only callable slots and still-open Lambda Solved slots. This makes a
+SpecConstr-authored callable worker visible in the exact private representation
+that contains it without using the public representation as a replacement.
 
 When a complete Monotype type clone contains a forced-dynamic iterator,
 Lambda Solved marks the callable in that iterator's backing as erased. The mark
@@ -2367,6 +2474,13 @@ and restores the node at that exact type; the checked public type is used only
 to assert that the saved representation has the checked root type.
 Representation evidence therefore survives CTFE without a consumer
 reconstructing it from constant node shape.
+
+For a finite callable inside that exact witness, the Lambda Solved function
+type node is the sole authority for the durable `ConstStore` function type.
+Runtime callable variants may have different specialization-private Monotype
+signatures; the const writer never chooses one variant or requires those
+private signatures to be identical in order to reconstruct their shared source
+interface.
 
 #### Correctness Boundaries
 
@@ -2915,22 +3029,59 @@ instantiation model makes the intended data flow explicit, so the first
 constraint and every later constraint meet in the same graph node before the
 final Monotype body is emitted.
 
-An unconstrained checked type variable that remains open after checking lowers
-to the empty tag union in Monotype. This is not a default choice. It records the
-invariant that no runtime value can be constructed at that type. Values such as `[]`
-can still be represented as `List([ ])` because they contain no elements, and
-code that would need an actual element value must have constrained the element
-type earlier or must be unreachable at runtime.
+During active Monotype specialization, unresolved checked variables and row
+extensions remain instantiation graph nodes. They are not represented by
+durable Monotype `TypeId`s.
+
+Type-shaped inspection during relation production is allowed only for a fully
+resolved graph node. It materializes an immutable active snapshot: later graph
+relations invalidate the snapshot cache and a subsequent inspection allocates
+a fresh snapshot rather than refilling an observed `TypeId`. The draft retains
+the graph node, not the snapshot id, and final sealing allocates fresh durable
+ids. Consequently neither an unresolved variable nor an open row can ever be
+observed as `tag_union []`, and no `TypeId` can change from that shape to a
+different type after a consumer has seen it.
+
+The only time an unresolved checked variable with an empty-tag-union row
+default may become durable `tag_union []` is final graph sealing, after every
+checked relation and specialization demand for that body has been applied.
+After sealing, `tag_union []` is closed and uninhabited. Values such as `[]` can
+still be represented as `List(tag_union [])` because they contain no elements,
+and code that would need an actual element value must have constrained the
+element type earlier or must be unreachable at runtime.
+
+Expression lowering is demand-aware. A runtime-value demand requires a
+constructible monomorphic value. If a checked generic value remains
+unconstrained and no runtime value can exist at its final type, lowering it
+under a runtime-value demand is a compiler invariant violation.
+
+Runtime-reachability guards captured while lowering a branch can exempt a
+demand whose value is proven unreachable, but they are not part of
+specialization identity. A request beneath one guard context may reuse a
+specialization created beneath another; each such reuse is recorded, and final
+sealing re-verifies the reused body's runtime-value demands. A demand already
+certified under its creation context covers the one emitted body —
+statement-position guards are not monotonic across call sites in one block —
+and a reuse whose own context cannot certify an otherwise-uncertified demand
+is a compiler invariant violation. Bodies are never duplicated per guard
+context.
+
+An inspect-only demand may render results determined by type or callable
+identity without lowering a runtime value into Monotype IR. For example,
+inspecting a standalone function value may produce `<function>` without
+lowering the function body. A subsequent call, export, dispatch target, or
+other body-specialization demand must request a concrete body specialization
+with sufficient type evidence.
 
 During Monotype construction, an open checked variable is an unresolved graph
 node carrying the variable's numeric and row defaults. Unification resolves it
 when call-site arguments, expected lambda types, numeric literals, or checked
-type relations provide concrete evidence; defaults apply only at
-materialization. While solving is still active, users hold instantiation graph
-nodes rather than final Monotype type ids. Materialization turns solved graph
-nodes into immutable interned Monotype type nodes. Recursive groups may reserve
-their ids inside the type interner while the group is being sealed, but no type
-id that is visible in Monotype IR is later refilled or changed. This is
+type relations provide concrete evidence; defaults apply only during final
+graph sealing. While solving is still active, users hold instantiation graph
+nodes rather than final Monotype type ids. Final graph sealing turns solved
+graph nodes into immutable interned Monotype type nodes. Recursive groups may
+reserve their ids inside the type interner while the group is being sealed, but
+no type id that is visible in Monotype IR is later refilled or changed. This is
 ordinary type solving inside one stage. Once Monotype IR is output, no
 unresolved node remains reachable and no later stage may change a type.
 
@@ -3102,6 +3253,44 @@ promoted, or checked-stage generated function. It does not contain a capture
 record, closure layout, callable tag, erased ABI, or lowered call target.
 Captures remain ordinary free variables until Monotype Lifted IR records them
 on lifted function definitions.
+
+Checked capture identities are construction-time provenance, not durable
+post-check value identity. One checked binder can materialize into several
+runtime values when specialization instantiates it more than once. When a
+Monotype body materialization is committed, each of its checked capture
+identities receives a program-global identity derived from the first final
+`LocalId` in that equivalence class. Local aliases within the same
+materialization retain one identity; a separate materialization receives a
+different identity even when it came from the same checked binder. The checked
+binder remains separate metadata for lexical binding and substitution. The original checked capture
+identity is also carried in a separate provenance field solely for writing a
+compile-time result back to `ConstStore`; it is never used for runtime capture
+joining. Consequently, separate
+materializations cannot collide merely because they came from one checked
+binder. A downstream one-to-one capture rewrite preserves the complete
+post-check capture identity explicitly, while a one-to-many materialization
+receives distinct identities at the producer boundary. Lifting and specialization
+must join capture slots and operands only by that explicit post-check identity;
+they never recover identity from binder, symbol, type, source text, or runtime
+representation.
+
+Draft body ownership is equally strict. A copied lexical binder map may expose
+an enclosing value to a nested function, but a source binding pattern always
+materializes its runtime local under the current specialization owner. It may
+reuse only a pre-registered local owned by that same owner; it must never bind
+to a local owned by an enclosing or sibling materialization merely because the
+checked binder id is the same. Draft sealing retains or suppresses whole owned
+specializations and rejects every retained record that references suppressed
+owned content, so cross-materialization local reuse cannot become durable
+Monotype IR.
+
+Open nested-specialization reuse is therefore owner-scoped. Before lifting, a
+nested body refers to `DraftLocalId`s from one explicit materialization owner;
+equal function interfaces, capture types, or checked binder provenance do not
+make those locals interchangeable with another owner's locals. Only requests
+from the same draft owner may reuse an in-progress nested body. Final
+specialization identity and capture ABI identity remain responsible for durable
+deduplication after owner-local bodies have been sealed.
 
 ### Monotype Specialization
 
@@ -3752,6 +3941,21 @@ unary functions unless the source type explicitly returns another function.
 Lambda-set solving, erased callable ABI solving, and specialization identity all
 use the full ordered argument list plus the result type.
 
+Monotype records whether a function signature's argument and result positions
+are independent roots or one exact producer-authored graph. The generated
+`Iter.fromStep` boundary uses the exact-graph relation because its result
+iterator intentionally retains the step function argument's runtime callable
+representation; ordinary function signatures use independent roots. Monotype
+Lifted retains an exact graph only while that ABI is unchanged. Lambda Solved
+then imports it from a single signature root, preserving recursive edges and
+intentional sharing between an argument and a nested result slot, and relates
+the lifted argument locals and callable member to those exact slots. A
+transformation that synthesizes a different function ABI clears the producer
+signature and provides its new argument and result slots explicitly. Consumers
+never infer signature relationships by comparing `TypeId`s from independently
+imported roots: equal type ids describe equal Monotype shapes, not runtime
+value flow.
+
 ### Lambda Solving
 
 Lambda Solved IR keeps the Monotype Lifted expression storage and adds solved
@@ -4113,6 +4317,15 @@ The output owns all of these stores and spans. Consumers borrow the fields they
 need and must not add their own side stores for the same data. `LirImage`
 contains only the ARC-inserted LIR fields: `store`, `layouts`, `root_procs`,
 platform entrypoints, and target usize.
+
+For shared-memory `LirImage` IPC, the mapping allocator is output-only.
+Compiler scratch, Monotype graphs, and every pre-ARC IR use ordinary
+reclaimable compiler storage. The IPC path copies the exact ARC-inserted store,
+layout, root, and entrypoint arrays into the mapping; it does not rerun lowering
+or derive any missing data while copying. An in-process embedder may instead
+own compilation and the final image in one caller-provided arena, then install
+offsets with `fillHeaderInBuffer`; that arena owns the whole compilation
+lifetime and is not the shared-memory IPC transport.
 
 ### Layout Selection
 

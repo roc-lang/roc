@@ -39,6 +39,13 @@ const MethodRegistryTestCheckedBodies = struct {
     ) ?checked_ids.CheckedExprId {
         unreachable;
     }
+
+    pub fn statementIdForSource(
+        _: *const @This(),
+        _: can.CIR.Statement.Idx,
+    ) ?checked_ids.CheckedStatementId {
+        unreachable;
+    }
 };
 
 // primitives - nums //
@@ -5055,6 +5062,29 @@ test "check type - early return - pass" {
         \\}
     ;
     try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - unreachable final expression does not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    x + 1
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+}
+
+test "check type - unreachable statements do not constrain early return" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    y = x + 1
+        \\    y
+        \\}
+        \\result = f(1.I64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
 }
 
 test "check type - final infinite loop can satisfy annotated return type" {

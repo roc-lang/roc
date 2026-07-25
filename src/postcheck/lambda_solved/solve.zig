@@ -59,6 +59,7 @@ const Solver = struct {
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
     active_unifications: std.AutoHashMap(UnifyPair, void),
+    active_private_evidence_relations: std.AutoHashMap(UnifyPair, void),
 
     const FunctionShape = struct {
         args: Type.Span,
@@ -113,10 +114,12 @@ const Solver = struct {
             .join_points = .empty,
             .return_contexts = .empty,
             .active_unifications = std.AutoHashMap(UnifyPair, void).init(allocator),
+            .active_private_evidence_relations = std.AutoHashMap(UnifyPair, void).init(allocator),
         };
     }
 
     fn deinit(self: *Solver) void {
+        self.active_private_evidence_relations.deinit();
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
@@ -180,6 +183,7 @@ const Solver = struct {
             });
         }
 
+        try self.markForcedDynamicIteratorCallables();
         try self.closeUnfilledCallableSlots();
 
         try self.program.expr_tys.ensureTotalCapacity(self.allocator, self.expr_tys.len);
@@ -210,16 +214,6 @@ const Solver = struct {
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
         const arg_locals = self.lifted.typedLocalSpan(fn_.args);
-        const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
-        defer self.allocator.free(args);
-        for (arg_locals, 0..) |arg, i| {
-            const local = self.lifted.locals[@intFromEnum(arg.local)];
-            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
-                Common.invariant("Lambda Solved function argument type differed from its local type");
-            }
-            args[i] = self.localTy(arg.local);
-        }
-
         const capture_locals = self.lifted.typedLocalSpan(fn_.captures);
         const captures = try self.allocator.alloc(Type.Capture, capture_locals.len);
         defer self.allocator.free(captures);
@@ -230,6 +224,7 @@ const Solver = struct {
                 .symbol = local.symbol,
                 .binder = local.binder,
                 .capture_id = local.capture_id,
+                .checked_capture_id = local.checked_capture_id,
                 .ty = self.localTy(capture.local),
             };
         }
@@ -240,6 +235,39 @@ const Solver = struct {
             .captures = capture_span,
         }};
         const callable = try self.program.types.add(.{ .lambda_set = try self.program.types.addMembers(&members) });
+
+        if (fn_.signature) |signature| {
+            var cloner = TypeCloner.init(self);
+            defer cloner.deinit();
+            const fn_ty = try cloner.lower(signature);
+            try cloner.markForcedDynamicCallables();
+            const func = switch (self.program.types.rootContentCompressed(fn_ty)) {
+                .func => |value| value,
+                else => Common.invariant("producer-authored lifted function signature was not a function"),
+            };
+            if (func.args.count() != arg_locals.len) {
+                Common.invariant("producer-authored lifted function signature arity changed before Lambda Solved");
+            }
+            for (arg_locals, 0..) |arg, i| {
+                const local = self.lifted.locals[@intFromEnum(arg.local)];
+                if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+                    Common.invariant("Lambda Solved function argument type differed from its local type");
+                }
+                try self.unify(self.localTy(arg.local), self.program.types.spanItem(func.args, i));
+            }
+            try self.unify(func.callable, callable);
+            return self.program.types.rootCompressed(fn_ty);
+        }
+
+        const args = try self.allocator.alloc(Type.TypeVarId, arg_locals.len);
+        defer self.allocator.free(args);
+        for (arg_locals, 0..) |arg, i| {
+            const local = self.lifted.locals[@intFromEnum(arg.local)];
+            if (@import("builtin").mode == .Debug and local.ty != arg.ty) {
+                Common.invariant("Lambda Solved function argument type differed from its local type");
+            }
+            args[i] = self.localTy(arg.local);
+        }
 
         return try self.program.types.add(.{ .func = .{
             .args = try self.program.types.addSpan(args),
@@ -419,6 +447,7 @@ const Solver = struct {
             .crash,
             .comptime_exhaustiveness_failed,
             => {},
+            .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
             .list => |items| {
                 const elem_ty = try self.listElem(expected);
                 for (self.lifted.exprSpan(items)) |child| {
@@ -448,7 +477,6 @@ const Solver = struct {
                     _ = try self.expectExpr(payload, expected_payload_ty);
                 }
             },
-            .static_data_candidate => |candidate| _ = try self.expectExpr(candidate.runtime_expr, expected),
             .nominal => |backing| {
                 if (try self.namedBacking(expected)) |backing_ty| {
                     if (self.hasBuiltinOwner(expected, .fields) or self.hasBuiltinOwner(expected, .field)) {
@@ -609,6 +637,7 @@ const Solver = struct {
                 try self.unify(self.localTy(sequence.rest_local), try self.recordField(ok_record_ty, sequence.rest_field));
                 _ = try self.expectExpr(sequence.ok_body, expected);
             },
+            .@"unreachable" => {},
             .block => |block| {
                 for (self.lifted.stmtSpan(block.statements)) |stmt| try self.inferStmt(stmt);
                 _ = try self.expectExpr(block.final_expr, expected);
@@ -823,7 +852,7 @@ const Solver = struct {
 
     fn hasGeneratedOpaquePatOwner(self: *Solver, pat_id: Lifted.PatId) bool {
         return switch (self.lifted.types.get(self.lifted.pats[@intFromEnum(pat_id)].ty)) {
-            .named => |named| isGeneratedOpaqueEvidenceOwner(named.builtin_owner),
+            .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
             else => false,
         };
     }
@@ -841,134 +870,18 @@ const Solver = struct {
         const generated = self.program.types.rootCompressed(generated_ty);
         const expected = self.program.types.rootCompressed(expected_ty);
         if (generated == expected) return;
-
-        const generated_score = generatedBackingScore(self.program.types.get(generated)) orelse {
-            try self.unify(generated, expected);
-            return;
-        };
-        const expected_score = generatedBackingScore(self.program.types.get(expected)) orelse {
-            try self.unify(generated, expected);
-            return;
-        };
-
-        if (generated_score > expected_score) {
-            self.program.types.set(expected, .{ .link = generated });
-        } else if (expected_score > generated_score) {
-            self.program.types.set(generated, .{ .link = expected });
-        } else {
-            try self.unify(generated, expected);
-        }
+        // The caller reached this path only through a pattern whose named
+        // backing carries generated-private authority. Preserve that explicit
+        // producer-owned backing deterministically; structural size is not an
+        // authority signal.
+        self.program.types.set(expected, .{ .link = generated });
     }
 
     fn expectExpr(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
         const slot = try self.expectExprSlot(expr_id, expected);
         const inferred = try self.inferExpr(expr_id);
         try self.unify(slot, inferred);
-        try self.expectGeneratedIteratorBackingExpr(expr_id, expected, slot, inferred);
         return self.program.types.rootCompressed(slot);
-    }
-
-    fn expectGeneratedIteratorBackingExpr(
-        self: *Solver,
-        expr_id: Lifted.ExprId,
-        expected: Type.TypeVarId,
-        slot: Type.TypeVarId,
-        inferred: Type.TypeVarId,
-    ) Allocator.Error!void {
-        const backing_ty = self.generatedIteratorBacking(expected) orelse
-            self.generatedIteratorBacking(slot) orelse
-            self.generatedIteratorBacking(inferred) orelse
-            return;
-        switch (self.lifted.exprs[@intFromEnum(expr_id)].data) {
-            .record,
-            .tuple,
-            .tag,
-            .nominal,
-            .let_,
-            .static_data_candidate,
-            => {},
-            else => return,
-        }
-        try self.expectExprAtTypeEvenIfDone(expr_id, backing_ty);
-    }
-
-    fn expectExprAtTypeEvenIfDone(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!void {
-        const expr = self.lifted.exprs[@intFromEnum(expr_id)];
-        switch (expr.data) {
-            .record => |fields| {
-                for (self.lifted.fieldExprSpan(fields)) |field| {
-                    const field_ty = try self.recordField(expected, field.name);
-                    try self.expectExprAtTypeEvenIfDone(field.value, field_ty);
-                }
-            },
-            .tuple => |items| {
-                const item_tys = try self.tupleItemsSpan(expected);
-                const children = self.lifted.exprSpan(items);
-                if (item_tys.count() != children.len) Common.invariant("tuple expression arity differs from generated backing type");
-                for (children, 0..) |child, i| {
-                    try self.expectExprAtTypeEvenIfDone(child, self.program.types.spanItem(item_tys, i));
-                }
-            },
-            .tag => |tag| {
-                const payload_tys = try self.tagPayloadsSpan(expected, tag.name);
-                const payloads = self.lifted.exprSpan(tag.payloads);
-                if (payload_tys.count() != payloads.len) Common.invariant("tag expression payload arity differs from generated backing type");
-                for (payloads, 0..) |payload, i| {
-                    try self.expectExprAtTypeEvenIfDone(payload, self.program.types.spanItem(payload_tys, i));
-                }
-            },
-            .static_data_candidate => |candidate| try self.expectExprAtTypeEvenIfDone(candidate.runtime_expr, expected),
-            .nominal => |backing| {
-                const backing_ty = try self.namedBacking(expected) orelse expected;
-                try self.expectExprAtTypeEvenIfDone(backing, backing_ty);
-            },
-            .let_ => |let_| {
-                const value_ty = try self.inferExpr(let_.value);
-                try self.bindPattern(let_.bind, value_ty);
-                try self.expectExprAtTypeEvenIfDone(let_.rest, expected);
-            },
-            .match_ => |match| {
-                // The match slot was solved at the minted nominal type during
-                // the first walk. Its branch bodies still need the backing
-                // type, without unifying the match node with that backing.
-                const scrutinee_ty = try self.inferExpr(match.scrutinee);
-                for (self.lifted.branchSpan(match.branches)) |branch| {
-                    try self.bindPattern(branch.pat, scrutinee_ty);
-                    if (branch.guard) |guard| _ = try self.inferExpr(guard);
-                    try self.expectExprAtTypeEvenIfDone(branch.body, expected);
-                }
-            },
-            .if_ => |if_| {
-                for (self.lifted.ifBranchSpan(if_.branches)) |branch| {
-                    _ = try self.inferExpr(branch.cond);
-                    try self.expectExprAtTypeEvenIfDone(branch.body, expected);
-                }
-                try self.expectExprAtTypeEvenIfDone(if_.final_else, expected);
-            },
-            .block => |block| try self.expectExprAtTypeEvenIfDone(block.final_expr, expected),
-            .comptime_branch_taken => |taken| try self.expectExprAtTypeEvenIfDone(taken.body, expected),
-            .if_initialized_payload => |payload_switch| {
-                _ = try self.inferExpr(payload_switch.cond);
-                _ = self.localTy(payload_switch.payload);
-                try self.expectExprAtTypeEvenIfDone(payload_switch.initialized, expected);
-                try self.expectExprAtTypeEvenIfDone(payload_switch.uninitialized, expected);
-            },
-            .try_sequence => |sequence| try self.expectExprAtTypeEvenIfDone(sequence.ok_body, expected),
-            .try_record_sequence => |sequence| try self.expectExprAtTypeEvenIfDone(sequence.ok_body, expected),
-            else => {
-                const inferred = try self.inferExpr(expr_id);
-                // An opaque leaf that already carries the generated nominal
-                // has no backing expression to revisit. Its construction site
-                // was traversed separately; keep this use at the nominal type.
-                if (self.generatedIteratorBacking(inferred) != null and
-                    self.generatedIteratorBacking(expected) == null)
-                {
-                    return;
-                }
-                const slot = try self.expectExprSlot(expr_id, expected);
-                try self.unify(slot, inferred);
-            },
-        }
     }
 
     fn exprSlot(self: *Solver, expr_id: Lifted.ExprId) Allocator.Error!Type.TypeVarId {
@@ -1049,6 +962,21 @@ const Solver = struct {
         return context.solved_ret;
     }
 
+    fn markForcedDynamicIteratorCallables(self: *Solver) Allocator.Error!void {
+        self.program.types.compressAllRoots();
+        const count = self.program.types.vars.items.len;
+        for (0..count) |index| {
+            const ty: Type.TypeVarId = @enumFromInt(@as(u32, @intCast(index)));
+            if (self.program.types.rootCompressed(ty) != ty) continue;
+            switch (self.program.types.get(ty)) {
+                .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                    try self.markErasedCallablesReachedByType(ty);
+                },
+                else => {},
+            }
+        }
+    }
+
     fn sameMonoType(self: *Solver, a: MonoType.TypeId, b: MonoType.TypeId) Allocator.Error!bool {
         if (a == b) return true;
         return try self.lifted.types.typeEql(self.allocator, self.lifted.names, a, b);
@@ -1077,17 +1005,13 @@ const Solver = struct {
     fn markErasedCallablesReachedByType(self: *Solver, ty: Type.TypeVarId) Allocator.Error!void {
         var active = std.AutoHashMap(Type.TypeVarId, void).init(self.allocator);
         defer active.deinit();
-        try self.markErasedCallablesReachedByTypeInner(ty, &active, false);
+        try self.markErasedCallablesReachedByTypeInner(ty, &active);
     }
 
     fn markErasedCallablesReachedByTypeInner(
         self: *Solver,
         ty: Type.TypeVarId,
         active: *std.AutoHashMap(Type.TypeVarId, void),
-        // True while walking the backing of a bounded `Iter`/`Stream` nominal.
-        // Its step closure stays a lambda set (inline captures) rather than
-        // erasing to a boxed callable; every other function still erases.
-        in_iter_backing: bool,
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(ty);
         if (active.contains(root)) return;
@@ -1096,58 +1020,56 @@ const Solver = struct {
 
         switch (self.program.types.get(root)) {
             .link => Common.invariant("Lambda Solved root returned a link"),
-            .unbound, .forall, .primitive, .zst, .erased => {},
-            .func => |func| {
-                if (in_iter_backing) {
-                    try self.markErasedCallablesReachedByTypeInner(func.callable, active, false);
-                } else {
-                    const erased = try self.program.types.add(.{ .erased = .{
-                        .source_fn_ty = try self.solvedTypeDigest(root),
-                        .members = .empty(),
-                    } });
-                    try self.unify(func.callable, erased);
+            .unbound, .forall, .primitive, .zst => {},
+            .erased => |erased| {
+                for (self.program.types.memberSpan(erased.members)) |member| {
+                    for (self.program.types.captureSpan(member.captures)) |capture| {
+                        try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
+                    }
                 }
-                for (self.program.types.span(func.args)) |arg| {
-                    try self.markErasedCallablesReachedByTypeInner(arg, active, false);
-                }
-                try self.markErasedCallablesReachedByTypeInner(func.ret, active, false);
             },
-            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active, in_iter_backing),
-            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active, in_iter_backing),
+            .func => |func| {
+                const erased = try self.program.types.add(.{ .erased = .{
+                    .source_fn_ty = try self.solvedTypeDigest(root),
+                    .members = .empty(),
+                } });
+                try self.unify(func.callable, erased);
+                for (self.program.types.span(func.args)) |arg| {
+                    try self.markErasedCallablesReachedByTypeInner(arg, active);
+                }
+                try self.markErasedCallablesReachedByTypeInner(func.ret, active);
+            },
+            .list => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
+            .box => |elem| try self.markErasedCallablesReachedByTypeInner(elem, active),
             .tuple => |items| {
                 for (self.program.types.span(items)) |item| {
-                    try self.markErasedCallablesReachedByTypeInner(item, active, in_iter_backing);
+                    try self.markErasedCallablesReachedByTypeInner(item, active);
                 }
             },
             .record => |fields| {
                 for (self.program.types.fieldSpan(fields)) |field| {
-                    try self.markErasedCallablesReachedByTypeInner(field.ty, active, in_iter_backing);
+                    try self.markErasedCallablesReachedByTypeInner(field.ty, active);
                 }
             },
             .tag_union => |tags| {
                 for (self.program.types.tagSpan(tags)) |tag| {
                     for (self.program.types.span(tag.payloads)) |payload| {
-                        try self.markErasedCallablesReachedByTypeInner(payload, active, in_iter_backing);
+                        try self.markErasedCallablesReachedByTypeInner(payload, active);
                     }
                 }
             },
             .named => |named| {
                 for (self.program.types.span(named.args)) |arg| {
-                    try self.markErasedCallablesReachedByTypeInner(arg, active, false);
+                    try self.markErasedCallablesReachedByTypeInner(arg, active);
                 }
                 if (named.backing) |backing| {
-                    const backing_is_iter = named.def.iterator_representation == .minted and
-                        if (named.builtin_owner) |owner|
-                            static_dispatch.isIteratorOwner(owner)
-                        else
-                            false;
-                    try self.markErasedCallablesReachedByTypeInner(backing.ty, active, backing_is_iter);
+                    try self.markErasedCallablesReachedByTypeInner(backing.ty, active);
                 }
             },
             .lambda_set => |members| {
                 for (self.program.types.memberSpan(members)) |member| {
                     for (self.program.types.captureSpan(member.captures)) |capture| {
-                        try self.markErasedCallablesReachedByTypeInner(capture.ty, active, in_iter_backing);
+                        try self.markErasedCallablesReachedByTypeInner(capture.ty, active);
                     }
                 }
             },
@@ -1158,9 +1080,7 @@ const Solver = struct {
         var cloner = TypeCloner.init(self);
         defer cloner.deinit();
         const lowered = try cloner.lower(ty);
-        for (cloner.forced_dynamic_backings.items) |backing| {
-            try self.markErasedCallablesReachedByType(backing);
-        }
+        try cloner.markForcedDynamicCallables();
         return lowered;
     }
 
@@ -1223,30 +1143,11 @@ const Solver = struct {
         };
     }
 
-    fn generatedIteratorBacking(self: *Solver, ty: Type.TypeVarId) ?Type.TypeVarId {
-        return switch (self.program.types.rootContent(ty)) {
-            .named => |named| blk: {
-                if (named.def.iterator_representation == .none) break :blk null;
-                const owner = named.builtin_owner orelse break :blk null;
-                if (!static_dispatch.isIteratorOwner(owner)) break :blk null;
-                break :blk if (named.backing) |backing| backing.ty else null;
-            },
-            else => null,
-        };
-    }
-
     fn hasBuiltinOwner(self: *Solver, ty: Type.TypeVarId, owner: static_dispatch.BuiltinOwner) bool {
         return switch (self.program.types.rootContentCompressed(ty)) {
             .named => |named| if (named.builtin_owner) |builtin_owner| builtin_owner == owner else false,
             else => false,
         };
-    }
-
-    fn generatedOpaqueEvidenceScore(self: *Solver, named: anytype) u8 {
-        if (!isGeneratedOpaqueEvidenceOwner(named.builtin_owner)) return 0;
-
-        const backing = named.backing orelse return 0;
-        return generatedBackingScore(self.program.types.rootContentCompressed(backing.ty)) orelse 2;
     }
 
     fn bindLowLevelTypes(
@@ -1431,27 +1332,6 @@ const Solver = struct {
             return;
         }
 
-        // An empty tag union is the seal for a slot that no value reached: a
-        // variable that was defaulted at Monotype materialization rather than
-        // constrained by evidence (see Monotype import, which re-enters it as an
-        // unresolved node instead of a closed row). Two representations of the
-        // same runtime type can therefore disagree here — most visibly in the
-        // phantom argument types of a function value that is inspected but never
-        // called (`|x, y| x + y` rendered as `<function>`), where the callee's
-        // own body solves an argument to a concrete number while the referencing
-        // site left the shared variable to seal as `[]`. Such a slot fixes no
-        // layout, so it yields to a concrete peer instead of tripping the
-        // exact-match invariant, matching how the Monotype layer lets local
-        // evidence supersede an empty tag union.
-        if (isEmptyTagUnion(left) and !isEmptyTagUnion(right)) {
-            self.program.types.set(a, .{ .link = b });
-            return;
-        }
-        if (isEmptyTagUnion(right) and !isEmptyTagUnion(left)) {
-            self.program.types.set(b, .{ .link = a });
-            return;
-        }
-
         switch (left) {
             .primitive => |left_primitive| switch (right) {
                 .primitive => |right_primitive| {
@@ -1558,40 +1438,189 @@ const Solver = struct {
                         Common.invariant("named type identity failed Lambda Solved unification");
                     }
                     try self.unifySpans(left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
-                    // Aliases have already been unwrapped above. Generated
-                    // compile-time evidence owners (`FieldNames`/`FieldName`/
-                    // `ParseTagUnionSpec`) use their backing only to carry
-                    // evidence rows, so two values with the same nominal identity
-                    // may intentionally have different backing rows; the
-                    // higher-scored backing is selected without unifying them.
-                    // Iterators are excluded: a minted `Iter`/`Stream` keeps its
-                    // step callable in its backing, so two same-identity minted
-                    // iterators must unify their backings for the step callable
-                    // members to merge. Selecting one backing by score instead
-                    // would drop a step closure, leaving a zero-sized callable a
-                    // later construction then mismatches at the box boundary.
-                    if (isScoreSelectedEvidenceOwner(left_named.builtin_owner) or
-                        isScoreSelectedEvidenceOwner(right_named.builtin_owner))
-                    {
-                        if (self.generatedOpaqueEvidenceScore(right_named) > self.generatedOpaqueEvidenceScore(left_named)) {
+                    if (left_named.backing) |left_backing| {
+                        const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
+                        if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
+                        if (left_backing.authority == right_backing.authority) {
+                            try self.unify(left_backing.ty, right_backing.ty);
+                            self.program.types.set(b, .{ .link = a });
+                        } else if (left_backing.authority == .generated_private) {
+                            try self.relateGeneratedPrivateEvidence(right_backing.ty, left_backing.ty);
+                            self.program.types.set(b, .{ .link = a });
+                        } else if (right_backing.authority == .generated_private) {
+                            try self.relateGeneratedPrivateEvidence(left_backing.ty, right_backing.ty);
                             self.program.types.set(a, .{ .link = b });
                         } else {
-                            self.program.types.set(b, .{ .link = a });
+                            Common.invariant("named type backing authorities were incompatible during Lambda Solved unification");
                         }
+                    } else if (right_named.backing != null) {
+                        Common.invariant("named type backing differed during Lambda Solved unification");
                     } else {
-                        if (left_named.backing) |left_backing| {
-                            const right_backing = right_named.backing orelse Common.invariant("named type backing differed during Lambda Solved unification");
-                            if (left_backing.use != right_backing.use) Common.invariant("named type backing use differed during Lambda Solved unification");
-                            try self.unify(left_backing.ty, right_backing.ty);
-                        } else if (right_named.backing != null) {
-                            Common.invariant("named type backing differed during Lambda Solved unification");
-                        }
                         self.program.types.set(b, .{ .link = a });
                     }
                 },
                 else => Common.invariant("named type failed Lambda Solved unification"),
             },
             .link, .unbound, .forall => unreachable,
+        }
+    }
+
+    /// Transfer Lambda Solved callable evidence from a checked-public value
+    /// shape into its producer-authored generated-private representation.
+    /// Monotype has already sealed both representations, so this relation
+    /// deliberately preserves every composite and named root. Only callable
+    /// slots (and still-open Lambda Solved slots) are unified.
+    fn relateGeneratedPrivateEvidence(
+        self: *Solver,
+        public_ty: Type.TypeVarId,
+        private_ty: Type.TypeVarId,
+    ) Allocator.Error!void {
+        const public_root = self.program.types.rootCompressed(public_ty);
+        const private_root = self.program.types.rootCompressed(private_ty);
+        if (public_root == private_root) return;
+
+        const pair = UnifyPair.init(public_root, private_root);
+        const active = try self.active_private_evidence_relations.getOrPut(pair);
+        if (active.found_existing) return;
+        defer _ = self.active_private_evidence_relations.remove(pair);
+
+        const public = self.program.types.get(public_root);
+        const private = self.program.types.get(private_root);
+        if (public == .unbound or private == .unbound or
+            public == .lambda_set or private == .lambda_set or
+            public == .erased or private == .erased)
+        {
+            try self.unify(public_root, private_root);
+            return;
+        }
+
+        switch (public) {
+            .link, .unbound, .lambda_set, .erased => unreachable,
+            .forall => Common.invariant("generated-private evidence relation received a generalized public type"),
+            .primitive => |public_primitive| switch (private) {
+                .primitive => |private_primitive| if (public_primitive != private_primitive) {
+                    Common.invariant("generated-private evidence relation received different primitive types");
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .zst => if (private != .zst) Common.invariant("generated-private evidence relation received different type structure"),
+            .list => |public_elem| switch (private) {
+                .list => |private_elem| try self.relateGeneratedPrivateEvidence(public_elem, private_elem),
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .box => |public_elem| switch (private) {
+                .box => |private_elem| try self.relateGeneratedPrivateEvidence(public_elem, private_elem),
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .tuple => |public_items| switch (private) {
+                .tuple => |private_items| {
+                    if (public_items.count() != private_items.count()) {
+                        Common.invariant("generated-private evidence relation received tuples of different arity");
+                    }
+                    for (0..public_items.count()) |index| {
+                        try self.relateGeneratedPrivateEvidence(
+                            self.program.types.spanItem(public_items, index),
+                            self.program.types.spanItem(private_items, index),
+                        );
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .record => |public_fields| switch (private) {
+                .record => |private_fields| {
+                    if (public_fields.count() != private_fields.count()) {
+                        Common.invariant("generated-private evidence relation received records with different fields");
+                    }
+                    for (0..public_fields.count()) |index| {
+                        const public_field = self.program.types.fieldItem(public_fields, index);
+                        const private_field = self.program.types.fieldItem(private_fields, index);
+                        if (public_field.name != private_field.name) {
+                            Common.invariant("generated-private evidence relation received records with different fields");
+                        }
+                        try self.relateGeneratedPrivateEvidence(public_field.ty, private_field.ty);
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .tag_union => |public_tags| switch (private) {
+                .tag_union => |private_tags| {
+                    if (public_tags.count() != private_tags.count()) {
+                        Common.invariant("generated-private evidence relation received tag unions with different tags");
+                    }
+                    for (0..public_tags.count()) |tag_index| {
+                        const public_tag = self.program.types.tagItem(public_tags, tag_index);
+                        const private_tag = self.program.types.tagItem(private_tags, tag_index);
+                        if (public_tag.name != private_tag.name or public_tag.checked_name != private_tag.checked_name or
+                            public_tag.payloads.count() != private_tag.payloads.count())
+                        {
+                            Common.invariant("generated-private evidence relation received tag unions with different tags");
+                        }
+                        for (0..public_tag.payloads.count()) |payload_index| {
+                            try self.relateGeneratedPrivateEvidence(
+                                self.program.types.spanItem(public_tag.payloads, payload_index),
+                                self.program.types.spanItem(private_tag.payloads, payload_index),
+                            );
+                        }
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .func => |public_fn| switch (private) {
+                .func => |private_fn| {
+                    if (public_fn.args.count() != private_fn.args.count()) {
+                        Common.invariant("generated-private evidence relation received functions of different arity");
+                    }
+                    for (0..public_fn.args.count()) |index| {
+                        try self.relateGeneratedPrivateEvidence(
+                            self.program.types.spanItem(public_fn.args, index),
+                            self.program.types.spanItem(private_fn.args, index),
+                        );
+                    }
+                    try self.unify(public_fn.callable, private_fn.callable);
+                    try self.relateGeneratedPrivateEvidence(public_fn.ret, private_fn.ret);
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
+            .named => |public_named| switch (private) {
+                .named => |private_named| {
+                    const same_identity = public_named.kind == private_named.kind and
+                        std.meta.eql(public_named.def, private_named.def) and
+                        public_named.builtin_owner == private_named.builtin_owner;
+                    if (!same_identity and MonoType.iteratorRelation(public_named, private_named) == .ordinary) {
+                        Common.invariant("generated-private evidence relation received different named types");
+                    }
+                    if (same_identity) {
+                        if (public_named.args.count() != private_named.args.count()) {
+                            Common.invariant("generated-private evidence relation received named types with different arity");
+                        }
+                        for (0..public_named.args.count()) |index| {
+                            try self.relateGeneratedPrivateEvidence(
+                                self.program.types.spanItem(public_named.args, index),
+                                self.program.types.spanItem(private_named.args, index),
+                            );
+                        }
+                        if (public_named.backing) |public_backing| {
+                            const private_backing = private_named.backing orelse
+                                Common.invariant("generated-private evidence relation received different named backing presence");
+                            if (public_backing.use != private_backing.use) {
+                                Common.invariant("generated-private evidence relation received different named backing uses");
+                            }
+                            try self.relateGeneratedPrivateEvidence(public_backing.ty, private_backing.ty);
+                        } else if (private_named.backing != null) {
+                            Common.invariant("generated-private evidence relation received different named backing presence");
+                        }
+                    } else {
+                        if (public_named.args.count() == 0 or private_named.args.count() == 0) {
+                            Common.invariant("generated-private iterator evidence lacked a public item argument");
+                        }
+                        try self.relateGeneratedPrivateEvidence(
+                            self.program.types.spanItem(public_named.args, 0),
+                            self.program.types.spanItem(private_named.args, 0),
+                        );
+                    }
+                },
+                else => Common.invariant("generated-private evidence relation received different type structure"),
+            },
         }
     }
 
@@ -1631,13 +1660,32 @@ const Solver = struct {
         }
 
         try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
-        try self.unifyIteratorBackings(left, right);
+        const dynamic = if (left_dynamic) left else right;
+        const other = if (left_dynamic) right else left;
+        switch (other.def.iterator_representation) {
+            .none => try self.relateForcedDynamicPublicEvidence(dynamic, other),
+            .minted => try self.unifyGeneratedIteratorBackings(left, right),
+            .forced_dynamic => Common.invariant("forced-dynamic iterator relation received two dynamic representations"),
+        }
         if (left_dynamic) {
             self.program.types.set(right_ty, .{ .link = left_ty });
         } else {
             self.program.types.set(left_ty, .{ .link = right_ty });
         }
         return true;
+    }
+
+    fn relateForcedDynamicPublicEvidence(self: *Solver, dynamic: anytype, public: anytype) Allocator.Error!void {
+        const public_backing = public.backing orelse return;
+        const dynamic_backing = dynamic.backing orelse
+            Common.invariant("forced-dynamic iterator relation found dynamic backing on only one side");
+        if (public_backing.use != dynamic_backing.use) {
+            Common.invariant("forced-dynamic iterator relation found different backing uses");
+        }
+        if (public_backing.authority != .checked_public or dynamic_backing.authority != .generated_private) {
+            Common.invariant("forced-dynamic iterator evidence relation received incorrect backing authority");
+        }
+        try self.relateGeneratedPrivateEvidence(public_backing.ty, dynamic_backing.ty);
     }
 
     fn unifyGeneratedIteratorJoin(
@@ -1659,6 +1707,9 @@ const Solver = struct {
                 Common.invariant("generated iterator join found backing on only one side");
             if (left_backing.use != right_backing.use) {
                 Common.invariant("generated iterator join found different backing uses");
+            }
+            if (left_backing.authority != right_backing.authority) {
+                Common.invariant("generated iterator join found different backing authorities");
             }
             try self.unify(left_backing.ty, right_backing.ty);
         } else if (right.backing != null) {
@@ -1687,7 +1738,19 @@ const Solver = struct {
         }
         try self.unify(self.program.types.spanItem(left.args, 0), self.program.types.spanItem(right.args, 0));
 
-        if (left.def.iterator_representation == .minted) {
+        const left_minted = left.def.iterator_representation == .minted;
+        const generated = if (left_minted) left else right;
+        const public = if (left_minted) right else left;
+        if (public.backing) |public_backing| {
+            const generated_backing = generated.backing orelse
+                Common.invariant("generated iterator evidence had no private backing");
+            if (generated_backing.authority != .generated_private) {
+                Common.invariant("generated iterator evidence backing lacked private authority");
+            }
+            try self.relateGeneratedPrivateEvidence(public_backing.ty, generated_backing.ty);
+        }
+
+        if (left_minted) {
             self.program.types.set(right_ty, .{ .link = left_ty });
         } else {
             self.program.types.set(left_ty, .{ .link = right_ty });
@@ -1695,17 +1758,18 @@ const Solver = struct {
         return true;
     }
 
-    fn unifyIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
-        if (left.backing) |left_backing| {
-            const right_backing = right.backing orelse
-                Common.invariant("iterator unification found backing on only one side");
-            if (left_backing.use != right_backing.use) {
-                Common.invariant("iterator unification found different backing uses");
-            }
-            try self.unify(left_backing.ty, right_backing.ty);
-        } else if (right.backing != null) {
-            Common.invariant("iterator unification found backing on only one side");
+    fn unifyGeneratedIteratorBackings(self: *Solver, left: anytype, right: anytype) Allocator.Error!void {
+        const left_backing = left.backing orelse
+            Common.invariant("generated iterator relation found backing on only one side");
+        const right_backing = right.backing orelse
+            Common.invariant("generated iterator relation found backing on only one side");
+        if (left_backing.use != right_backing.use) {
+            Common.invariant("generated iterator relation found different backing uses");
         }
+        if (left_backing.authority != .generated_private or right_backing.authority != .generated_private) {
+            Common.invariant("private iterator relation received a checked-public backing");
+        }
+        try self.unify(left_backing.ty, right_backing.ty);
     }
 
     fn transparentAliasBacking(content: Type.Content) ?Type.TypeVarId {
@@ -1715,15 +1779,6 @@ const Solver = struct {
             else
                 null,
             else => null,
-        };
-    }
-
-    /// A tag union with no tags is the materialized seal for an unconstrained
-    /// slot; it is uninhabited and fixes no layout.
-    fn isEmptyTagUnion(content: Type.Content) bool {
-        return switch (content) {
-            .tag_union => |tags| tags.count() == 0,
-            else => false,
         };
     }
 
@@ -1927,18 +1982,15 @@ fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
 const TypeCloner = struct {
     solver: *Solver,
     map: std.AutoHashMap(MonoType.TypeId, Type.TypeVarId),
-    forced_dynamic_backings: std.ArrayList(Type.TypeVarId),
 
     fn init(solver: *Solver) TypeCloner {
         return .{
             .solver = solver,
             .map = std.AutoHashMap(MonoType.TypeId, Type.TypeVarId).init(solver.allocator),
-            .forced_dynamic_backings = .empty,
         };
     }
 
     fn deinit(self: *TypeCloner) void {
-        self.forced_dynamic_backings.deinit(self.solver.allocator);
         self.map.deinit();
     }
 
@@ -1946,14 +1998,24 @@ const TypeCloner = struct {
         if (self.map.get(ty)) |cached| return cached;
         const reserved = try self.solver.program.types.add(.unbound);
         try self.map.put(ty, reserved);
-        const content = try self.lowerContent(self.solver.lifted.types.get(ty));
-        self.solver.program.types.set(reserved, content);
-        if (content == .named and content.named.def.iterator_representation == .forced_dynamic) {
-            const backing = content.named.backing orelse
-                Common.invariant("forced-dynamic iterator reached Lambda Solved without a backing type");
-            try self.forced_dynamic_backings.append(self.solver.allocator, backing.ty);
-        }
+        self.solver.program.types.set(reserved, try self.lowerContent(self.solver.lifted.types.get(ty)));
         return reserved;
+    }
+
+    /// Apply the explicit dynamic boundary only after the entire requested
+    /// Monotype clone is complete. A forced iterator can be reached while an
+    /// enclosing function or payload clone still holds reservations, so doing
+    /// this per-node would let callable identity observe an unfinished graph.
+    fn markForcedDynamicCallables(self: *TypeCloner) Allocator.Error!void {
+        var entries = self.map.iterator();
+        while (entries.next()) |entry| {
+            switch (self.solver.lifted.types.get(entry.key_ptr.*)) {
+                .named => |named| if (named.def.iterator_representation == .forced_dynamic) {
+                    try self.solver.markErasedCallablesReachedByType(entry.value_ptr.*);
+                },
+                else => {},
+            }
+        }
     }
 
     /// Re-materializes a nominal record's declared field order from the monotype
@@ -2020,13 +2082,14 @@ const TypeCloner = struct {
                     .builtin_owner = named.builtin_owner,
                     .args = try self.solver.program.types.addSpan(args),
                     .backing = if (named.backing) |raw_backing| blk_backing: {
-                        const backing_ty = if (isGeneratedOpaqueEvidenceOwner(named.builtin_owner))
+                        const backing_ty = if (raw_backing.authority == .generated_private)
                             raw_backing.ty
                         else
                             try self.structuralBackingForNamed(named.def, raw_backing.ty);
                         break :blk_backing .{
                             .ty = try self.lower(backing_ty),
                             .use = raw_backing.use,
+                            .authority = raw_backing.authority,
                         };
                     } else null,
                     .declared_order = try self.lowerDeclaredOrder(named.declared_order),
@@ -2074,27 +2137,15 @@ const TypeCloner = struct {
     }
 };
 
-fn generatedBackingScore(content: Type.Content) ?u8 {
-    return switch (content) {
-        .record => |fields| if (fields.count() == 0) 1 else 2,
-        .zst => 1,
-        else => null,
-    };
-}
-
-fn isGeneratedOpaqueEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    return MonoType.generatedEvidenceOwnerUsesBacking(owner orelse return false);
-}
-
-/// A generated-backing owner whose same-identity instances carry independent
-/// evidence backing rows that unification selects by score rather than unifies
-/// (`FieldNames`/`FieldName`/`ParseTagUnionSpec`). Iterators also carry a
-/// generated backing but are excluded here: their same-identity instances share
-/// one backing structure whose step callable members must merge, so they take
-/// ordinary backing unification instead of score selection.
-fn isScoreSelectedEvidenceOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    const resolved = owner orelse return false;
-    return isGeneratedOpaqueEvidenceOwner(resolved) and !static_dispatch.isIteratorOwner(resolved);
+fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
+    return left.module == right.module and
+        left.type_name == right.type_name and
+        left.source_decl == right.source_decl and
+        optionalDigestEql(left.generated, right.generated) and
+        left.iterator_representation == right.iterator_representation and
+        left.iterator_kind == right.iterator_kind and
+        left.iterator_depth == right.iterator_depth and
+        std.meta.eql(left.iterator_topology, right.iterator_topology);
 }
 
 fn iteratorLikeOwnerFromPair(
@@ -2116,23 +2167,7 @@ fn iteratorLikeOwnerFromPair(
 }
 
 fn isIteratorLikeOwner(owner: ?static_dispatch.BuiltinOwner) bool {
-    const actual = owner orelse return false;
-    return switch (actual) {
-        .iter,
-        .stream,
-        => true,
-        else => false,
-    };
-}
-
-fn sameMonoTypeDef(left: MonoType.TypeDef, right: MonoType.TypeDef) bool {
-    return left.module == right.module and
-        left.type_name == right.type_name and
-        left.source_decl == right.source_decl and
-        optionalDigestEql(left.generated, right.generated) and
-        left.iterator_representation == right.iterator_representation and
-        left.iterator_kind == right.iterator_kind and
-        left.iterator_depth == right.iterator_depth;
+    return static_dispatch.isIteratorOwner(owner orelse return false);
 }
 
 fn optionalDigestEql(left: ?names.TypeDigest, right: ?names.TypeDigest) bool {

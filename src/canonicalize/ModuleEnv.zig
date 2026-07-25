@@ -573,17 +573,27 @@ pub const MethodBinding = extern struct {
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
 
-/// Checked dispatch metadata for one source `for` loop.
-///
-/// Checking writes this when it creates the loop's required `iter` and `next`
-/// static-dispatch constraints. Checked artifact publication consumes it to
-/// publish an explicit iterator-for plan for mono lowering.
+/// Exact checker-owned shape of an iterator step result.
+pub const IteratorStepTopology = extern struct {
+    done_tag_ident: u32,
+    one_tag_ident: u32,
+    skip_tag_ident: u32,
+    item_field_ident: u32,
+    rest_field_ident: u32,
+    one_payload_var: u32,
+    skip_payload_var: u32,
+};
+
+/// Checked dispatch and topology metadata for one source `for` loop.
+/// Later stages consume these exact identities instead of inferring the
+/// iterator protocol from names or row shapes.
 pub const ForLoopDispatchPlan = extern struct {
     node_idx: u32,
     pattern_idx: u32,
     iterable_idx: u32,
     iter_fn_var: u32,
     next_fn_var: u32,
+    step_topology: IteratorStepTopology,
 
     pub const SafeList = collections.SafeList(@This());
 };
@@ -3634,6 +3644,7 @@ pub fn recordForLoopDispatchPlan(
     iterable_idx: Node.Idx,
     iter_fn_var: TypeVar,
     next_fn_var: TypeVar,
+    step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
     const raw_node: u32 = @intFromEnum(node_idx);
     const raw_pattern: u32 = @intFromEnum(pattern_idx);
@@ -3646,6 +3657,7 @@ pub fn recordForLoopDispatchPlan(
             .iterable_idx = raw_iterable,
             .iter_fn_var = @intFromEnum(iter_fn_var),
             .next_fn_var = @intFromEnum(next_fn_var),
+            .step_topology = step_topology,
         };
         return;
     }
@@ -3655,6 +3667,7 @@ pub fn recordForLoopDispatchPlan(
         .iterable_idx = raw_iterable,
         .iter_fn_var = @intFromEnum(iter_fn_var),
         .next_fn_var = @intFromEnum(next_fn_var),
+        .step_topology = step_topology,
     });
 }
 

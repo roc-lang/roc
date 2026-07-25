@@ -117,6 +117,7 @@ fn copyVarCtx(ctx: *const CopyContext, source_var: Var) std.mem.Allocator.Error!
     try ctx.dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
+        .empty_tag_union_is_default = resolved.desc.empty_tag_union_is_default,
     });
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion

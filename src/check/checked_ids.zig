@@ -20,10 +20,16 @@ pub const CheckedTypeId = enum(u32) { _ };
 pub const CheckedTypeSchemeId = enum(u32) { _ };
 /// Public `PatternBinderId` declaration.
 pub const PatternBinderId = enum(u32) { _ };
+/// Stable identity of a generalized-local dispatch scope within a checked
+/// module artifact.
+pub const DispatchScopeId = enum(u32) { _ };
 
-/// One canonical identity for a closure capture, carried immutably through
-/// every post-check IR so that operand↔slot joins are exact key lookups
-/// instead of fuzzy multi-key matches.
+/// One explicit identity for a closure capture. Checked artifacts and active
+/// Monotype instantiation use the checked identities below; final Monotype
+/// publication replaces every materialized capturable local's provisional
+/// identity with a program-global lift identity. Operand↔slot joins therefore
+/// remain exact key lookups without conflating distinct specializations of one
+/// checked binder.
 ///
 /// The `u32` is split into two disjoint ranges by the high bit:
 ///
@@ -76,8 +82,8 @@ pub const CaptureId = enum(u32) {
         return @enumFromInt(index | generated_bit);
     }
 
-    /// The generated capture id minted by closure lifting / spec_constr for a
-    /// per-Lifted-program counter value.
+    /// The generated capture id minted by final Monotype publication, closure
+    /// lifting, or spec_constr for a per-Lifted-program counter value.
     pub fn generatedLift(index: u32) CaptureId {
         std.debug.assert(index <= max_generated_index);
         return @enumFromInt(index | generated_bit | lift_bit);
@@ -91,6 +97,11 @@ pub const CaptureId = enum(u32) {
     /// Whether this id names a compiler-synthesized capturable local.
     pub fn isGenerated(self: CaptureId) bool {
         return !self.isCanonical();
+    }
+
+    /// Whether this id belongs to the lift-time generated sub-range.
+    pub fn isGeneratedLift(self: CaptureId) bool {
+        return (@intFromEnum(self) & (generated_bit | lift_bit)) == (generated_bit | lift_bit);
     }
 
     /// The `PatternBinderId` this canonical id was derived from. Asserts the id

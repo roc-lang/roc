@@ -127,6 +127,10 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
+    /// The checker closed this otherwise-unresolved variable to `[]` after
+    /// proving that no runtime constructor can inhabit it. The checked output
+    /// preserves the variable identity and carries `[]` only as its row default.
+    empty_tag_union_is_default: bool = false,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
