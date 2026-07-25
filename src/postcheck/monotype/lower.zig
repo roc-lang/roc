@@ -22522,12 +22522,7 @@ const BodyContext = struct {
         return active.local;
     }
 
-    fn topLevelConstBinderForRef(
-        self: *BodyContext,
-        store_view: ModuleView,
-        const_ref: checked.ConstRef,
-    ) ?checked.PatternBinderId {
-        _ = self;
+    fn topLevelConstBinderForRef(store_view: ModuleView, const_ref: checked.ConstRef) ?checked.PatternBinderId {
         const owner = switch (const_ref.owner) {
             .top_level_binding => |owner| owner,
             .hoisted_expr => return null,
@@ -22569,7 +22564,7 @@ const BodyContext = struct {
         cell: DraftTypeCell,
         scope: *ActiveConstBindingScope,
     ) Allocator.Error!bool {
-        const binder = self.topLevelConstBinderForRef(store_view, const_ref) orelse return false;
+        const binder = topLevelConstBinderForRef(store_view, const_ref) orelse return false;
         const local = try self.addLocalWithBinderCell(
             self.builder.symbols.fresh(),
             cell,

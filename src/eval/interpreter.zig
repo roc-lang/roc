@@ -1410,46 +1410,35 @@ pub const Interpreter = struct {
         path: []const DebugValuePathStep,
         comptime reason: []const u8,
     ) noreturn {
-        _ = path;
-        self.debugValueShapePanic(proc_id, stmt_id, local_id, layout_idx, reason);
-    }
-
-    fn debugValueShapePanic(
-        self: *LirInterpreter,
-        proc_id: LirProcSpecId,
-        stmt_id: ?CFStmtId,
-        local_id: LocalId,
-        layout_idx: layout_mod.Idx,
-        comptime reason: []const u8,
-    ) noreturn {
         if (comptime builtin.target.os.tag == .freestanding) {
             @trap();
         } else {
             if (stmt_id) |id| {
                 self.invariantFailed(
-                    "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape: {s}",
+                    "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape at path {any}: {s}",
                     .{
                         @intFromEnum(proc_id),
                         @intFromEnum(id),
                         self.store.getCFStmt(id),
                         @intFromEnum(local_id),
                         @intFromEnum(layout_idx),
+                        path,
                         reason,
                     },
                 );
             }
 
             self.invariantFailed(
-                "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape: {s}",
+                "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape at path {any}: {s}",
                 .{
                     @intFromEnum(proc_id),
                     @intFromEnum(local_id),
                     @intFromEnum(layout_idx),
+                    path,
                     reason,
                 },
             );
         }
-        unreachable;
     }
 
     fn debugPrintStmtChain(self: *LirInterpreter, start_stmt: CFStmtId, limit: usize) void {
