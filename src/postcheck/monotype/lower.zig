@@ -3555,7 +3555,7 @@ const Builder = struct {
         if (self.static_data_ids.get(use)) |existing| return existing;
 
         // Structural dedup can only compare committed types; graph cells keep
-        // identity semantics until final sealing commits them.
+        // identity comparison until final sealing commits them.
         if (use.type_cell == .sealed) {
             for (self.static_data_uses.items, 0..) |existing, index| {
                 if (!moduleBytesEqual(existing.module.bytes, use.module.bytes) or
@@ -8263,8 +8263,8 @@ fn verifyReusedDemandRange(
         // The creation context's certification covers the one emitted body:
         // statement-position guard frames are not monotonic across call sites
         // in one block, so a reusing context can legitimately lack a frame
-        // (e.g. a call lowered before the statement whose result proves later
-        // statements unreachable) without the demand becoming executable.
+        // (e.g. a call lowered before the DraftStmt whose result proves later
+        // DraftStmt nodes unreachable) without the demand needing runtime code.
         if (try evaluator.holds(demand.impossibility_proof)) continue;
         if (try evaluator.holds(reuse.prefix_proof)) continue;
         if (try evaluator.holds(demand.local_proof)) continue;
@@ -10261,7 +10261,7 @@ const ActiveReturnTarget = struct {
 };
 
 const ActiveConstBinding = struct {
-    const_ref: checked.ConstRef,
+    const_use: checked.ConstLocator,
     binder: checked.PatternBinderId,
     local: DraftLocalId,
     used: bool = false,
@@ -10375,9 +10375,9 @@ const BodyContext = struct {
     /// body contexts, where the same integer names an unrelated root.
     current_entry_root: ?EntryRoot = null,
     /// Generated local for the top-level constant root currently being
-    /// restored. Recursive references to that exact ConstRef consume this
-    /// local so the restored value becomes an explicit recursive binding
-    /// instead of an unbounded chain of deferred const expansions.
+    /// restored. Recursive references to that exact checked const identity
+    /// consume this local so the restored value becomes an explicit recursive
+    /// binding instead of an unbounded chain of deferred const expansions.
     active_const_binding: ?*ActiveConstBinding = null,
     /// Evidence for the current callable's dispatch requirements (innermost
     /// vector plus lexical parents for nested local functions). Body contexts
@@ -22517,17 +22517,17 @@ const BodyContext = struct {
             .platform_required_const => |required| required.const_use,
             else => return null,
         };
-        if (!constRefEql(active.const_ref, const_use.const_ref)) return null;
+        if (!constUseEql(active.const_use, const_use.const_ref)) return null;
         active.used = true;
         return active.local;
     }
 
-    fn topLevelConstBinderForRef(store_view: ModuleView, const_ref: checked.ConstRef) ?checked.PatternBinderId {
-        const owner = switch (const_ref.owner) {
+    fn topLevelConstBinderForUse(store_view: ModuleView, const_use: checked.ConstLocator) ?checked.PatternBinderId {
+        const owner = switch (const_use.owner) {
             .top_level_binding => |owner| owner,
             .hoisted_expr => return null,
         };
-        if (!moduleBytesEqual(checked.constModuleId(const_ref).bytes, store_view.key.bytes)) {
+        if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
             Common.invariant("top-level const template referenced a different checked module");
         }
         const root_id = store_view.compile_time_roots.lookupIdByPattern(owner.pattern) orelse
@@ -22553,18 +22553,18 @@ const BodyContext = struct {
     fn inheritActiveConstBinding(self: *BodyContext, parent: *BodyContext) Allocator.Error!void {
         self.active_const_binding = parent.active_const_binding;
         const active = self.active_const_binding orelse return;
-        if (!moduleBytesEqual(checked.constModuleId(active.const_ref).bytes, self.view.key.bytes)) return;
+        if (!moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes)) return;
         try self.binders.put(active.binder, active.local);
     }
 
     fn enterActiveConstBindingAtCell(
         self: *BodyContext,
         store_view: ModuleView,
-        const_ref: checked.ConstRef,
+        const_use: checked.ConstLocator,
         cell: DraftTypeCell,
         scope: *ActiveConstBindingScope,
     ) Allocator.Error!bool {
-        const binder = topLevelConstBinderForRef(store_view, const_ref) orelse return false;
+        const binder = topLevelConstBinderForUse(store_view, const_use) orelse return false;
         const local = try self.addLocalWithBinderCell(
             self.builder.symbols.fresh(),
             cell,
@@ -22573,7 +22573,7 @@ const BodyContext = struct {
         try self.bindLocalNameFromView(store_view, local, binder);
         scope.* = .{
             .active = .{
-                .const_ref = const_ref,
+                .const_use = const_use,
                 .binder = binder,
                 .local = local,
             },
@@ -23272,7 +23272,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         eval: checked.ConstEvalTemplate,
-        const_ref: checked.ConstRef,
+        const_use: checked.ConstLocator,
         ty: Type.TypeId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
@@ -23280,7 +23280,7 @@ const BodyContext = struct {
         return try self.lowerConstEvalTemplateUseAtNode(
             store_view,
             eval,
-            const_ref,
+            const_use,
             try self.activeNodeFromType(ty),
             source_region_override,
             current_entry_root,
@@ -23291,7 +23291,7 @@ const BodyContext = struct {
         self: *BodyContext,
         store_view: ModuleView,
         eval: checked.ConstEvalTemplate,
-        const_ref: checked.ConstRef,
+        const_use: checked.ConstLocator,
         request_node: NodeId,
         source_region_override: ?base.Region,
         current_entry_root: ?EntryRoot,
@@ -23326,9 +23326,9 @@ const BodyContext = struct {
 
         var active_const_binding: ActiveConstBinding = undefined;
         var has_active_const_binding = false;
-        switch (const_ref.owner) {
+        switch (const_use.owner) {
             .top_level_binding => |owner| {
-                if (!moduleBytesEqual(checked.constModuleId(const_ref).bytes, store_view.key.bytes)) {
+                if (!moduleBytesEqual(checked.constModuleId(const_use).bytes, store_view.key.bytes)) {
                     Common.invariant("top-level const eval template referenced a different checked module");
                 }
                 const root = store_view.compile_time_roots.root(body.root);
@@ -23356,7 +23356,7 @@ const BodyContext = struct {
                 try body_ctx.bindLocalName(local, binder);
                 try body_ctx.binders.put(binder, local);
                 active_const_binding = .{
-                    .const_ref = const_ref,
+                    .const_use = const_use,
                     .binder = binder,
                     .local = local,
                 };
@@ -40311,8 +40311,10 @@ fn moduleBytesEqual(a: [32]u8, b: [32]u8) bool {
     return std.mem.eql(u8, a[0..], b[0..]);
 }
 
-fn constRefEql(a: checked.ConstRef, b: checked.ConstRef) bool {
-    return moduleBytesEqual(a.artifact.bytes, b.artifact.bytes) and
+fn constUseEql(a: checked.ConstLocator, b: checked.ConstLocator) bool {
+    const left_checked_module = checked.constModuleId(a);
+    const right_checked_module = checked.constModuleId(b);
+    return moduleBytesEqual(left_checked_module.bytes, right_checked_module.bytes) and
         constOwnerEql(a.owner, b.owner) and
         a.template == b.template and
         std.mem.eql(u8, a.source_scheme.bytes[0..], b.source_scheme.bytes[0..]);

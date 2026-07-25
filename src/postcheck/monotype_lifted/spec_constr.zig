@@ -9362,7 +9362,7 @@ const Cloner = struct {
         return try self.materializeCallableWithCaptures(callable.ty, callable.fn_id, fn_.captures, callable.captures);
     }
 
-    fn activeRecursiveProjectionRoot(self: *Cloner, value: Value) ?Ast.ExprId {
+    fn activeRecursiveFieldTupleReadRoot(self: *Cloner, value: Value) ?Ast.ExprId {
         const expr_id = switch (value) {
             .expr => |expr| expr,
             else => return null,
@@ -9373,19 +9373,19 @@ const Cloner = struct {
             => {},
             else => return null,
         }
-        return self.activeRecursiveProjectionBase(expr_id);
+        return self.activeRecursiveFieldTupleReadBase(expr_id);
     }
 
-    fn activeRecursiveProjectionBase(self: *Cloner, expr_id: Ast.ExprId) ?Ast.ExprId {
+    fn activeRecursiveFieldTupleReadBase(self: *Cloner, expr_id: Ast.ExprId) ?Ast.ExprId {
         return switch (self.pass.program.getExpr(expr_id).data) {
             .local => |local| if (self.active_recursive_value_locals.contains(local)) expr_id else null,
-            .field_access => |field| self.activeRecursiveProjectionBase(field.receiver),
-            .tuple_access => |access| self.activeRecursiveProjectionBase(access.tuple),
+            .field_access => |field| self.activeRecursiveFieldTupleReadBase(field.receiver),
+            .tuple_access => |access| self.activeRecursiveFieldTupleReadBase(access.tuple),
             else => null,
         };
     }
 
-    fn cloneProjectionReplacingRoot(
+    fn cloneFieldTupleReadReplacingRoot(
         self: *Cloner,
         source: Ast.ExprId,
         root: Ast.ExprId,
@@ -9395,14 +9395,14 @@ const Cloner = struct {
         const expr = self.pass.program.getExpr(source);
         return switch (expr.data) {
             .field_access => |field| try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
-                .receiver = try self.cloneProjectionReplacingRoot(field.receiver, root, replacement),
+                .receiver = try self.cloneFieldTupleReadReplacingRoot(field.receiver, root, replacement),
                 .field = field.field,
             } } }),
             .tuple_access => |access| try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
-                .tuple = try self.cloneProjectionReplacingRoot(access.tuple, root, replacement),
+                .tuple = try self.cloneFieldTupleReadReplacingRoot(access.tuple, root, replacement),
                 .elem_index = access.elem_index,
             } } }),
-            else => Common.invariant("recursive projection replacement reached a non-projection before its root"),
+            else => Common.invariant("recursive field/tuple read replacement reached a non-access expression before its root"),
         };
     }
 
@@ -9445,8 +9445,8 @@ const Cloner = struct {
             const id = self.pass.program.captureIdOfLocal(source_capture.local);
             const capture_value = callableCaptureValueForId(callable.captures, id) orelse
                 Common.invariant("rewritten callable had no value for a source capture slot");
-            const projection_root = self.activeRecursiveProjectionRoot(capture_value);
-            const capture_ty = if (projection_root) |root|
+            const field_tuple_read_root = self.activeRecursiveFieldTupleReadRoot(capture_value);
+            const capture_ty = if (field_tuple_read_root) |root|
                 self.pass.program.getExpr(root).ty
             else
                 valueType(self.pass.program, capture_value);
@@ -9463,13 +9463,13 @@ const Cloner = struct {
                 .ty = capture_ty,
                 .data = .{ .local = local },
             });
-            if (projection_root) |root| {
+            if (field_tuple_read_root) |root| {
                 const source_expr = switch (capture_value) {
                     .expr => |expr| expr,
                     else => unreachable,
                 };
                 worker_capture_values[index] = .{ .id = id, .value = .{ .expr = root } };
-                worker_body_values[index] = .{ .expr = try self.cloneProjectionReplacingRoot(source_expr, root, local_expr) };
+                worker_body_values[index] = .{ .expr = try self.cloneFieldTupleReadReplacingRoot(source_expr, root, local_expr) };
             } else {
                 worker_capture_values[index] = .{ .id = id, .value = capture_value };
                 worker_body_values[index] = .{ .expr = local_expr };
