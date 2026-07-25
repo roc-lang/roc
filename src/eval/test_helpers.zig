@@ -1952,6 +1952,7 @@ fn moduleDiagnosticsHaveErrors(
     return false;
 }
 
+/// Render reported problems for a source string checked with explicit import modules.
 pub fn renderProblemsWithConfigAndImports(
     allocator: Allocator,
     source_kind: SourceKind,

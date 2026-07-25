@@ -27,6 +27,7 @@ pub const SpecializationCaptureAbi = enum {
     erased,
 };
 
+/// Which Lambda Mono function owns the capture ABI recorded for a specialization.
 pub const SpecializationCaptureSource = enum {
     solved,
     own,
