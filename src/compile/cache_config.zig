@@ -62,7 +62,8 @@ pub const Constants = struct {
     /// 36: Checked iterator procedure identity includes Str.iter_utf8.
     /// 37: Nested procedure sites declare their producer-authored evidence source.
     /// 38: Platform provides entries include their exact platform-local definition.
-    pub const CACHE_VERSION = 39;
+    /// 39: ModuleEnv stores exact top-level demand dependencies.
+    pub const CACHE_VERSION = 40;
 };
 
 /// Configuration for the Roc cache system.
