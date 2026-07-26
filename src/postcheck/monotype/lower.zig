@@ -1827,19 +1827,6 @@ const Builder = struct {
         const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
             Common.invariant("callable eval template root had no checked entry wrapper");
 
-        const wrapper_args = try self.program.types.addSpan(&.{});
-        const wrapper_fn_ty = try self.program.types.add(.{ .func = .{
-            .args = wrapper_args,
-            .ret = mono_fn_ty,
-        } });
-        const wrapper_template = self.fnDefForTemplate(
-            view,
-            wrapper.template,
-            wrapper.checked_fn_root,
-            view.types.rootKey(wrapper.checked_fn_root),
-            wrapper_fn_ty,
-        );
-
         const graph = try InstGraph.create(self.allocator, &self.program.types, &self.program.names);
         defer graph.destroy();
         const saved_graph = self.active_graph;
@@ -1852,15 +1839,14 @@ const Builder = struct {
         defer body_draft.deinit();
         var body_ctx = try BodyContext.init(self.allocator, self, view, wrapper.template, graph, &body_draft);
         defer body_ctx.deinit();
-        const root_fn_key = Ast.fnTemplateDigest(wrapper_template, &self.program.types, &self.program.names);
-        body_ctx.owner_context_fn_key = root_fn_key;
-        body_ctx.current_fn_key = root_fn_key;
-        try body_ctx.constrainTypeToMono(wrapper.checked_fn_root, wrapper_fn_ty);
-        try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
-        try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
         const draft = FinalBodyOutputGuard.begin(self);
-        const lowered = try body_ctx.lowerComptimeRootExprAtType(wrapper.body_expr, mono_fn_ty);
+        const lowered = try body_ctx.lowerPendingCallableEvalBindingValue(
+            view,
+            template,
+            root,
+            mono_fn_ty,
+        );
         const draft_end = draft.end(self);
         const sealed = try self.sealActiveBodyDraft(graph, &body_draft, draft, draft_end, null, null, null, null);
         defer sealed.deinit(self.allocator);
@@ -5366,6 +5352,9 @@ const Builder = struct {
         root_fn: ?DraftFnId,
     ) Allocator.Error!ActiveBodyDraftSeal {
         final_guard.assertNoFinalBodyOutput(final_end);
+        if (body_draft.active_callable_eval_bindings.items.len != 0) {
+            Common.invariant("unfinished callable eval binding reached Monotype body sealing");
+        }
         try self.prepareDraftDeferredExprs(body_draft, graph);
         try prepareDraftHostedBoundaries(body_draft, graph);
         try graph.finalizeGeneratedIteratorRepresentations();
@@ -8440,6 +8429,18 @@ const DraftDeferredConstUse = struct {
     restored_source: ?DraftExprId = null,
 };
 
+/// A pending compile-time callable root currently being expanded into the
+/// active body draft. The reserved local is the forward value used by a
+/// recursive edge; after the expansion completes it is bound by an explicit
+/// recursive let around the produced callable value.
+const ActiveCallableEvalBinding = struct {
+    module: checked.ModuleId,
+    root: checked.ComptimeRootId,
+    request_node: NodeId,
+    local: DraftLocalId,
+    used: bool = false,
+};
+
 /// One deferred structural derivation over an operand whose graph node may
 /// still carry live row defaults; the eq and hash flavors share this record
 /// and the prepare/emit pipeline. For equality, `lhs`/`rhs` are the two
@@ -8824,6 +8825,7 @@ const BodyDraftStore = struct {
     template_specs: std.ArrayList(DraftTemplateSpec),
     template_spec_lookup: std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)),
     hosted_boundaries: std.ArrayList(DraftHostedBoundary),
+    active_callable_eval_bindings: std.ArrayList(ActiveCallableEvalBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
     deferred_structural_serializations: std.ArrayList(DraftDeferredStructuralSerialization),
@@ -8891,6 +8893,7 @@ const BodyDraftStore = struct {
             .template_specs = .empty,
             .template_spec_lookup = std.AutoHashMap(DraftTemplateLookupAddress, std.ArrayList(u32)).init(allocator),
             .hosted_boundaries = .empty,
+            .active_callable_eval_bindings = .empty,
             .deferred_const_uses = .empty,
             .deferred_structural_eqs = .empty,
             .deferred_structural_serializations = .empty,
@@ -9015,6 +9018,7 @@ const BodyDraftStore = struct {
         self.prepared_codec_calls.deinit(self.allocator);
         self.deferred_structural_eqs.deinit(self.allocator);
         self.deferred_const_uses.deinit(self.allocator);
+        self.active_callable_eval_bindings.deinit(self.allocator);
         self.hosted_boundaries.deinit(self.allocator);
         self.string_bytes.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
@@ -14231,16 +14235,6 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerComptimeRootExprAtType(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        const exhaustiveness_scope = self.comptime_exhaustiveness_context.enterCompileTimeRoot();
-        defer exhaustiveness_scope.leave();
-        return try self.lowerExprAtType(expr_id, ty);
-    }
-
     fn lowerComptimeRootExprAtCell(
         self: *BodyContext,
         expr_id: checked.CheckedExprId,
@@ -15132,7 +15126,12 @@ const BodyContext = struct {
         try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
         try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
-        return try body_ctx.lowerComptimeRootExprAtType(wrapper.body_expr, mono_fn_ty);
+        return try body_ctx.lowerPendingCallableEvalRoot(
+            view,
+            template.root,
+            wrapper.body_expr,
+            try body_ctx.activeNodeFromType(mono_fn_ty),
+        );
     }
 
     fn lowerCallableEvalBindingValueAtNode(
@@ -15181,10 +15180,86 @@ const BodyContext = struct {
         try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
         try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
 
-        return try body_ctx.lowerComptimeRootExprAtCell(
+        return try body_ctx.lowerPendingCallableEvalRoot(
+            view,
+            template.root,
             wrapper.body_expr,
-            DraftTypeCell.fromGraphNode(request_fn_node),
+            request_fn_node,
         );
+    }
+
+    fn lowerPendingCallableEvalRoot(
+        self: *BodyContext,
+        view: ModuleView,
+        root_id: checked.ComptimeRootId,
+        body_expr: checked.CheckedExprId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftExprId {
+        if (try self.activeCallableEvalBindingExpr(view, root_id, request_fn_node)) |active| return active;
+
+        const request_cell = DraftTypeCell.fromGraphNode(request_fn_node);
+        const local = try self.reserveCallableEvalBinding(view, root_id, request_fn_node);
+        const lowered = try self.lowerComptimeRootExprAtCell(body_expr, request_cell);
+        return try self.finishCallableEvalBinding(view, root_id, request_cell, local, lowered);
+    }
+
+    fn activeCallableEvalBindingExpr(
+        self: *BodyContext,
+        view: ModuleView,
+        root_id: checked.ComptimeRootId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!?DraftExprId {
+        var index = self.draft.active_callable_eval_bindings.items.len;
+        while (index > 0) {
+            index -= 1;
+            const active = self.draft.active_callable_eval_bindings.items[index];
+            if (!moduleBytesEqual(active.module.bytes, view.key.bytes) or active.root != root_id) continue;
+
+            try relateRequestComponent(self.graph, active.request_node, request_fn_node);
+            self.draft.active_callable_eval_bindings.items[index].used = true;
+            return try self.addExprWithTypeCell(
+                DraftTypeCell.fromGraphNode(request_fn_node),
+                .{ .local = active.local },
+            );
+        }
+
+        return null;
+    }
+
+    fn reserveCallableEvalBinding(
+        self: *BodyContext,
+        view: ModuleView,
+        root_id: checked.ComptimeRootId,
+        request_fn_node: NodeId,
+    ) Allocator.Error!DraftLocalId {
+        const local = try self.addLocalWithBinderCell(
+            self.builder.symbols.fresh(),
+            DraftTypeCell.fromGraphNode(request_fn_node),
+            null,
+        );
+        try self.draft.active_callable_eval_bindings.append(self.allocator, .{
+            .module = view.key,
+            .root = root_id,
+            .request_node = request_fn_node,
+            .local = local,
+        });
+        return local;
+    }
+
+    fn finishCallableEvalBinding(
+        self: *BodyContext,
+        view: ModuleView,
+        root_id: checked.ComptimeRootId,
+        request_cell: DraftTypeCell,
+        local: DraftLocalId,
+        lowered: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        const active = self.draft.active_callable_eval_bindings.pop().?;
+        if (!moduleBytesEqual(active.module.bytes, view.key.bytes) or active.root != root_id or active.local != local) {
+            Common.invariant("callable eval binding reservation changed before completion");
+        }
+        if (!active.used) return lowered;
+        return try self.wrapRecursiveConstLocalAtTypeCell(local, request_cell, lowered);
     }
 
     fn lowerInspectOnlyCall(

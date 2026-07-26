@@ -810,6 +810,12 @@ store: NodeStore,
 /// Set after canonicalization completes. Must not be accessed before then.
 evaluation_order: ?*DependencyGraph.EvaluationOrder,
 
+/// Exact strict-demand edges between top-level definitions. Canonicalization
+/// produces this data and serialization preserves it for checked-artifact
+/// publication; unlike `evaluation_order`, it is not a transient traversal aid.
+top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
+top_level_demand_dependencies_ready: bool,
+
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
 /// checked-artifact consumption. Serialized user modules intentionally do not
 /// preserve this flag; the baked builtin module does, because its static env is
@@ -947,6 +953,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.imports.relocate(offset);
     self.file_dependencies.relocate(offset);
     self.store.relocate(offset);
+    self.top_level_demand_dependencies.relocate(offset);
     self.method_idents.relocate(offset);
     self.method_defs.relocate(offset);
     self.for_loop_dispatch_plans.relocate(offset);
@@ -978,6 +985,8 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
     self.evaluation_order = null; // Will be set after canonicalization completes
+    self.top_level_demand_dependencies = .{};
+    self.top_level_demand_dependencies_ready = false;
     self.runtime_prepared = false;
 }
 
@@ -1026,6 +1035,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
         .evaluation_order = null, // Will be set after canonicalization completes
+        .top_level_demand_dependencies = .{},
+        .top_level_demand_dependencies_ready = false,
         .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -1062,6 +1073,7 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1069,6 +1081,41 @@ pub fn deinit(self: *Self) void {
         eval_order.deinit();
         self.gpa.destroy(eval_order);
     }
+}
+
+/// Replace the module's exact strict-demand relation with freshly produced
+/// canonical dependency data. Ownership of `dependencies` transfers here.
+pub fn setTopLevelDemandDependencies(
+    self: *Self,
+    dependencies: DependencyGraph.Dependency.SafeList,
+) void {
+    self.top_level_demand_dependencies.deinit(self.gpa);
+    self.top_level_demand_dependencies = dependencies;
+    self.top_level_demand_dependencies_ready = true;
+}
+
+/// Return the exact strict-demand relation produced by canonicalization.
+pub fn topLevelDemandDependencies(self: *const Self) []const DependencyGraph.Dependency {
+    std.debug.assert(self.top_level_demand_dependencies_ready);
+    return self.top_level_demand_dependencies.items.items;
+}
+
+/// Whether canonicalization has produced the exact strict-demand relation.
+pub fn topLevelDemandDependenciesReady(self: *const Self) bool {
+    return self.top_level_demand_dependencies_ready;
+}
+
+/// Whether one exact strict-demand edge was produced by canonicalization.
+pub fn hasTopLevelDemandDependency(
+    self: *const Self,
+    dependent: CIR.Def.Idx,
+    dependency: CIR.Def.Idx,
+) bool {
+    return DependencyGraph.hasDependency(
+        self.topLevelDemandDependencies(),
+        dependent,
+        dependency,
+    );
 }
 
 /// Deinitialize a cached module environment.
@@ -3329,8 +3376,10 @@ pub const Serialized = extern struct {
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
+    top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
+    top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
-    runtime_prepared_padding: [7]u8,
+    runtime_prepared_padding: [6]u8,
     // Well-known identifier indices (serialized directly, no lookup needed during deserialization)
     idents: CommonIdents,
     import_mapping_reserved: [6]u64, // Reserved space for import_mapping (AutoHashMap is ~40 bytes), initialized at runtime
@@ -3409,6 +3458,12 @@ pub const Serialized = extern struct {
         // Serialize NodeStore
         try self.store.serialize(&env.store, allocator, writer);
 
+        try self.top_level_demand_dependencies.serialize(
+            &env.top_level_demand_dependencies,
+            allocator,
+            writer,
+        );
+
         // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
         // Preserve display_module_name_idx since the ident store is also serialized and indices remain valid.
@@ -3421,8 +3476,9 @@ pub const Serialized = extern struct {
         self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
         self.self_module_identity_padding = 0;
         self.evaluation_order_reserved = 0;
+        self.top_level_demand_dependencies_ready = env.top_level_demand_dependencies_ready;
         self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
-        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0, 0 };
+        self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0 };
         // Serialize well-known identifier indices directly (no lookup needed during deserialization)
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
@@ -3489,6 +3545,8 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -3548,6 +3606,8 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null,
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -3609,6 +3669,8 @@ pub const Serialized = extern struct {
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
+            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
+            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),

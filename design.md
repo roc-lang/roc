@@ -1701,6 +1701,15 @@ the checked module is finalized. The durable checked module data stores only the
 roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
 
+Canonicalization also outputs the exact strict-demand edges between top-level
+definitions. Those edges are durable `ModuleEnv` data, serialized independently
+of the transient SCC evaluation order, because `RootRequestTable` scheduling
+and compile-time finalization must distinguish eager dependencies from references
+inside delayed callable bodies. Those consumers use the serialized relation
+directly; they must not infer strictness from checked template references,
+rebuild it from CIR, or treat a missing relation as an empty one. This relation
+is durable `ModuleEnv` data, not a dependency graph stored in the checked module.
+
 A checked module must not permanently store a hoisted-root dependency graph or
 per-expression dependency metadata. The durable checked data is the compile-time
 roots, their sorted compile-time request order, their `ConstStore` payloads, and
