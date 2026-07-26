@@ -749,11 +749,242 @@ const Pass = struct {
         try self.scalarizeKnownLoops(original_fn_count);
         try self.createSpecializations(original_fn_count);
         try self.projectUnusedLoopResults();
+        try self.localizeSingleUseTailRecursiveWorkers(original_fn_count);
         try Lift.recomputeCaptures(self.allocator, self.program);
         self.verifyRewrittenCaptureGain(capture_snapshot);
         try self.verifyRewrittenBodyLocals(original_fn_count);
 
         self.program.next_symbol = self.symbols.next;
+    }
+
+    /// Turn a specialized tail-recursive worker with exactly one external use
+    /// into a recursive join point at that use. Specialization has already
+    /// exposed the worker's constructor leaves as scalar arguments here, so
+    /// moving that exact ABI into the caller preserves the specialized loop
+    /// without paying an out-of-line call or duplicating any code.
+    fn localizeSingleUseTailRecursiveWorkers(self: *Pass, original_fn_count: usize) Common.LowerError!void {
+        const fn_count = self.program.fnCount();
+        for (original_fn_count..fn_count) |worker_index| {
+            const worker_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(worker_index)));
+            const worker = self.program.getFn(worker_id);
+            const body = switch (worker.body) {
+                .roc => |body| body,
+                .hosted => continue,
+            };
+
+            // A source-level return is relative to the worker procedure. It
+            // cannot be moved across a procedure boundary until the IR gives
+            // it an explicit continuation target.
+            if (exprContainsReturn(self.program, body)) continue;
+
+            const tail = tailSelfCallSummary(self.program, body, worker_id);
+            if (!tail.valid or tail.count == 0) continue;
+
+            var uses: FnUseSummary = .{};
+            for (0..fn_count) |owner_index| {
+                const owner_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(owner_index)));
+                const owner_body = switch (self.program.getFn(owner_id).body) {
+                    .roc => |owner_body| owner_body,
+                    .hosted => continue,
+                };
+                collectFnUsesInExpr(self.program, owner_body, owner_id, worker_id, &uses);
+            }
+            for (self.program.rootsView()) |root| {
+                if (root.fn_id == worker_id) uses.value_refs += 1;
+            }
+
+            if (uses.external_calls != 1 or uses.value_refs != 0) continue;
+            const call_expr = uses.external_call_expr orelse
+                Common.invariant("single-use specialized worker had no external call expression");
+            try self.localizeTailRecursiveWorker(worker_id, call_expr);
+        }
+    }
+
+    fn localizeTailRecursiveWorker(
+        self: *Pass,
+        worker_id: Ast.FnId,
+        call_expr_id: Ast.ExprId,
+    ) Common.LowerError!void {
+        const worker = self.program.getFn(worker_id);
+        const worker_body = switch (worker.body) {
+            .roc => |body| body,
+            .hosted => Common.invariant("hosted specialized worker reached join-point localization"),
+        };
+        const call_expr = self.program.getExpr(call_expr_id);
+        const call = switch (call_expr.data) {
+            .call_proc => |call| call,
+            else => Common.invariant("specialized worker use stopped being a direct call before localization"),
+        };
+        if (Ast.localDirectCallee(call) != worker_id) {
+            Common.invariant("specialized worker use changed callee before localization");
+        }
+        if (call.is_cold) return;
+
+        const source_args = try GuardedList.dupe(self.allocator, Ast.TypedLocal, self.program.typedLocalSpan(worker.args));
+        defer self.allocator.free(source_args);
+        const source_captures = try GuardedList.dupe(self.allocator, Ast.TypedLocal, self.program.typedLocalSpan(worker.captures));
+        defer self.allocator.free(source_captures);
+
+        var params = std.ArrayList(Ast.TypedLocal).empty;
+        defer params.deinit(self.allocator);
+
+        var cloner = Cloner.initForRewrite(self);
+        defer cloner.deinit();
+        cloner.inline_direct_calls = false;
+        cloner.rewrite_call_patterns = false;
+        cloner.emit_callable_workers = false;
+
+        for (source_args) |source_arg| {
+            const local = try self.program.addLocal(self.symbols.fresh(), source_arg.ty);
+            try params.append(self.allocator, .{ .local = local, .ty = source_arg.ty });
+            const local_expr = try self.program.addExpr(.{ .ty = source_arg.ty, .data = .{ .local = local } });
+            try cloner.subst.put(self.program, source_arg.local, .{ .expr = local_expr });
+        }
+        for (source_captures) |source_capture| {
+            const local = try self.program.addLocal(self.symbols.fresh(), source_capture.ty);
+            try params.append(self.allocator, .{ .local = local, .ty = source_capture.ty });
+            const local_expr = try self.program.addExpr(.{ .ty = source_capture.ty, .data = .{ .local = local } });
+            try cloner.subst.put(self.program, source_capture.local, .{ .expr = local_expr });
+        }
+
+        const cloned_body = try cloner.cloneExpr(worker_body);
+        const loop_join = self.freshJoinPoint();
+        const localized_body = try self.rewriteTailSelfCallsAsJumps(cloned_body, worker_id, worker.captures, loop_join);
+
+        var initial_values = std.ArrayList(Ast.ExprId).empty;
+        defer initial_values.deinit(self.allocator);
+        const call_args = self.program.exprSpan(call.args);
+        for (0..call_args.len) |index| try initial_values.append(self.allocator, GuardedList.at(call_args, index));
+        try self.appendCaptureValuesForSlots(worker.captures, call.captures, &initial_values);
+        if (initial_values.items.len != params.items.len) {
+            Common.invariant("localized worker initial value count differed from join parameter count");
+        }
+
+        const initial_jump = try self.program.addExpr(.{ .ty = call_expr.ty, .data = .{ .jump = .{
+            .target = loop_join,
+            .args = try self.program.addExprSpan(initial_values.items),
+        } } });
+        self.program.setExprData(call_expr_id, .{ .join_point = .{
+            .id = loop_join,
+            .params = try self.program.addTypedLocalSpan(params.items),
+            .body = localized_body,
+            .remainder = initial_jump,
+        } });
+    }
+
+    fn appendCaptureValuesForSlots(
+        self: *Pass,
+        slots_span: Ast.Span(Ast.TypedLocal),
+        operands_span: Ast.Span(Ast.CaptureOperand),
+        out: *std.ArrayList(Ast.ExprId),
+    ) Allocator.Error!void {
+        const slots = self.program.typedLocalSpan(slots_span);
+        const operands = self.program.captureOperandSpan(operands_span);
+        if (slots.len != operands.len) {
+            Common.invariant("localized worker capture operand count differed from capture slot count");
+        }
+        for (0..slots.len) |slot_index| {
+            const slot = GuardedList.at(slots, slot_index);
+            const id = self.program.captureIdOfLocal(slot.local);
+            var value: ?Ast.ExprId = null;
+            for (0..operands.len) |operand_index| {
+                const operand = GuardedList.at(operands, operand_index);
+                if (operand.id == id) {
+                    value = operand.value;
+                    break;
+                }
+            }
+            try out.append(self.allocator, value orelse
+                Common.invariant("localized worker call omitted a keyed capture operand"));
+        }
+    }
+
+    /// Rewrite only syntactic tail positions, after `tailSelfCallSummary` has
+    /// proved every recursive call is in one of them. Named jumps deliberately
+    /// target the new outer join even when the tail position is nested under a
+    /// different loop or join point.
+    fn rewriteTailSelfCallsAsJumps(
+        self: *Pass,
+        expr_id: Ast.ExprId,
+        worker_id: Ast.FnId,
+        capture_slots: Ast.Span(Ast.TypedLocal),
+        loop_join: Ast.JoinPointId,
+    ) Common.LowerError!Ast.ExprId {
+        const expr = self.program.getExpr(expr_id);
+        switch (expr.data) {
+            .call_proc => |call| {
+                if (Ast.localDirectCallee(call) != worker_id) return expr_id;
+                var values = std.ArrayList(Ast.ExprId).empty;
+                defer values.deinit(self.allocator);
+                const args = self.program.exprSpan(call.args);
+                for (0..args.len) |index| try values.append(self.allocator, GuardedList.at(args, index));
+                try self.appendCaptureValuesForSlots(capture_slots, call.captures, &values);
+                self.program.setExprData(expr_id, .{ .jump = .{
+                    .target = loop_join,
+                    .args = try self.program.addExprSpan(values.items),
+                } });
+            },
+            .let_ => |let_| {
+                var rewritten = let_;
+                rewritten.rest = try self.rewriteTailSelfCallsAsJumps(let_.rest, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .let_ = rewritten });
+            },
+            .match_ => |match| {
+                const branches = try GuardedList.dupe(self.allocator, Ast.Branch, self.program.branchSpan(match.branches));
+                defer self.allocator.free(branches);
+                for (branches) |*branch| {
+                    branch.body = try self.rewriteTailSelfCallsAsJumps(branch.body, worker_id, capture_slots, loop_join);
+                }
+                var rewritten = match;
+                rewritten.branches = try self.program.addBranchSpan(branches);
+                self.program.setExprData(expr_id, .{ .match_ = rewritten });
+            },
+            .if_ => |if_| {
+                const branches = try GuardedList.dupe(self.allocator, Ast.IfBranch, self.program.ifBranchSpan(if_.branches));
+                defer self.allocator.free(branches);
+                for (branches) |*branch| {
+                    branch.body = try self.rewriteTailSelfCallsAsJumps(branch.body, worker_id, capture_slots, loop_join);
+                }
+                self.program.setExprData(expr_id, .{ .if_ = .{
+                    .branches = try self.program.addIfBranchSpan(branches),
+                    .final_else = try self.rewriteTailSelfCallsAsJumps(if_.final_else, worker_id, capture_slots, loop_join),
+                } });
+            },
+            .block => |block| {
+                var rewritten = block;
+                rewritten.final_expr = try self.rewriteTailSelfCallsAsJumps(block.final_expr, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .block = rewritten });
+            },
+            .join_point => |join_point| {
+                var rewritten = join_point;
+                rewritten.body = try self.rewriteTailSelfCallsAsJumps(join_point.body, worker_id, capture_slots, loop_join);
+                rewritten.remainder = try self.rewriteTailSelfCallsAsJumps(join_point.remainder, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .join_point = rewritten });
+            },
+            .if_initialized_payload => |payload_switch| {
+                var rewritten = payload_switch;
+                rewritten.initialized = try self.rewriteTailSelfCallsAsJumps(payload_switch.initialized, worker_id, capture_slots, loop_join);
+                rewritten.uninitialized = try self.rewriteTailSelfCallsAsJumps(payload_switch.uninitialized, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .if_initialized_payload = rewritten });
+            },
+            .try_sequence => |sequence| {
+                var rewritten = sequence;
+                rewritten.ok_body = try self.rewriteTailSelfCallsAsJumps(sequence.ok_body, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .try_sequence = rewritten });
+            },
+            .try_record_sequence => |sequence| {
+                var rewritten = sequence;
+                rewritten.ok_body = try self.rewriteTailSelfCallsAsJumps(sequence.ok_body, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .try_record_sequence = rewritten });
+            },
+            .comptime_branch_taken => |taken| {
+                var rewritten = taken;
+                rewritten.body = try self.rewriteTailSelfCallsAsJumps(taken.body, worker_id, capture_slots, loop_join);
+                self.program.setExprData(expr_id, .{ .comptime_branch_taken = rewritten });
+            },
+            else => {},
+        }
+        return expr_id;
     }
 
     /// Debug-only: the capture local ids each original fn declares before any
@@ -10011,6 +10242,274 @@ fn localExpr(program: *const Ast.Program, expr_id: Ast.ExprId) ?Ast.LocalId {
     return switch (program.getExpr(expr_id).data) {
         .local => |local| local,
         else => null,
+    };
+}
+
+const FnUseSummary = struct {
+    external_calls: usize = 0,
+    external_call_expr: ?Ast.ExprId = null,
+    value_refs: usize = 0,
+};
+
+fn collectFnUsesInExpr(
+    program: *const Ast.Program,
+    expr_id: Ast.ExprId,
+    owner: Ast.FnId,
+    target: Ast.FnId,
+    uses: *FnUseSummary,
+) void {
+    switch (program.getExpr(expr_id).data) {
+        .local,
+        .unit,
+        .@"unreachable",
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        => {},
+        .fn_ref => |fn_ref| {
+            if (fn_ref.fn_id == target) uses.value_refs += 1;
+            collectFnUsesInCaptureOperands(program, fn_ref.captures, owner, target, uses);
+        },
+        .list,
+        .tuple,
+        => |items| collectFnUsesInExprSpan(program, items, owner, target, uses),
+        .record => |fields| {
+            const values = program.fieldExprSpan(fields);
+            for (0..values.len) |index| {
+                collectFnUsesInExpr(program, GuardedList.at(values, index).value, owner, target, uses);
+            }
+        },
+        .tag => |tag| collectFnUsesInExprSpan(program, tag.payloads, owner, target, uses),
+        .static_data_candidate => |candidate| collectFnUsesInExpr(program, candidate.runtime_expr, owner, target, uses),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| collectFnUsesInExpr(program, child, owner, target, uses),
+        .return_ => |ret| collectFnUsesInExpr(program, ret.value, owner, target, uses),
+        .expect_err => |expect_err| collectFnUsesInExpr(program, expect_err.msg, owner, target, uses),
+        .comptime_branch_taken => |taken| collectFnUsesInExpr(program, taken.body, owner, target, uses),
+        .let_ => |let_| {
+            collectFnUsesInExpr(program, let_.value, owner, target, uses);
+            collectFnUsesInExpr(program, let_.rest, owner, target, uses);
+        },
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => Common.invariant("pre-lift function expression reached specialized-worker use scan"),
+        .call_value => |call| {
+            collectFnUsesInExpr(program, call.callee, owner, target, uses);
+            collectFnUsesInExprSpan(program, call.args, owner, target, uses);
+        },
+        .call_proc => |call| {
+            if (Ast.localDirectCallee(call) == target and owner != target) {
+                uses.external_calls += 1;
+                uses.external_call_expr = expr_id;
+            }
+            collectFnUsesInExprSpan(program, call.args, owner, target, uses);
+            collectFnUsesInCaptureOperands(program, call.captures, owner, target, uses);
+        },
+        .low_level => |call| collectFnUsesInExprSpan(program, call.args, owner, target, uses),
+        .field_access => |field| collectFnUsesInExpr(program, field.receiver, owner, target, uses),
+        .tuple_access => |access| collectFnUsesInExpr(program, access.tuple, owner, target, uses),
+        .structural_eq => |eq| {
+            collectFnUsesInExpr(program, eq.lhs, owner, target, uses);
+            collectFnUsesInExpr(program, eq.rhs, owner, target, uses);
+        },
+        .structural_hash => |hash| {
+            collectFnUsesInExpr(program, hash.value, owner, target, uses);
+            collectFnUsesInExpr(program, hash.hasher, owner, target, uses);
+        },
+        .match_ => |match| {
+            collectFnUsesInExpr(program, match.scrutinee, owner, target, uses);
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (branch.guard) |guard| collectFnUsesInExpr(program, guard, owner, target, uses);
+                collectFnUsesInExpr(program, branch.body, owner, target, uses);
+            }
+        },
+        .if_ => |if_| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                collectFnUsesInExpr(program, branch.cond, owner, target, uses);
+                collectFnUsesInExpr(program, branch.body, owner, target, uses);
+            }
+            collectFnUsesInExpr(program, if_.final_else, owner, target, uses);
+        },
+        .block => |block| {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |index| {
+                collectFnUsesInStmt(program, GuardedList.at(statements, index), owner, target, uses);
+            }
+            collectFnUsesInExpr(program, block.final_expr, owner, target, uses);
+        },
+        .loop_ => |loop| {
+            collectFnUsesInExprSpan(program, loop.initial_values, owner, target, uses);
+            collectFnUsesInExpr(program, loop.body, owner, target, uses);
+        },
+        .break_ => |maybe| if (maybe) |value| collectFnUsesInExpr(program, value, owner, target, uses),
+        .continue_ => |continue_| collectFnUsesInExprSpan(program, continue_.values, owner, target, uses),
+        .join_point => |join_point| {
+            collectFnUsesInExpr(program, join_point.body, owner, target, uses);
+            collectFnUsesInExpr(program, join_point.remainder, owner, target, uses);
+        },
+        .jump => |jump| collectFnUsesInExprSpan(program, jump.args, owner, target, uses),
+        .if_initialized_payload => |payload_switch| {
+            collectFnUsesInExpr(program, payload_switch.cond, owner, target, uses);
+            collectFnUsesInExpr(program, payload_switch.initialized, owner, target, uses);
+            collectFnUsesInExpr(program, payload_switch.uninitialized, owner, target, uses);
+        },
+        .try_sequence => |sequence| {
+            collectFnUsesInExpr(program, sequence.try_expr, owner, target, uses);
+            collectFnUsesInExpr(program, sequence.ok_body, owner, target, uses);
+        },
+        .try_record_sequence => |sequence| {
+            collectFnUsesInExpr(program, sequence.try_expr, owner, target, uses);
+            collectFnUsesInExpr(program, sequence.ok_body, owner, target, uses);
+        },
+    }
+}
+
+fn collectFnUsesInExprSpan(
+    program: *const Ast.Program,
+    span: Ast.Span(Ast.ExprId),
+    owner: Ast.FnId,
+    target: Ast.FnId,
+    uses: *FnUseSummary,
+) void {
+    const exprs = program.exprSpan(span);
+    for (0..exprs.len) |index| {
+        collectFnUsesInExpr(program, GuardedList.at(exprs, index), owner, target, uses);
+    }
+}
+
+fn collectFnUsesInCaptureOperands(
+    program: *const Ast.Program,
+    span: Ast.Span(Ast.CaptureOperand),
+    owner: Ast.FnId,
+    target: Ast.FnId,
+    uses: *FnUseSummary,
+) void {
+    const operands = program.captureOperandSpan(span);
+    for (0..operands.len) |index| {
+        collectFnUsesInExpr(program, GuardedList.at(operands, index).value, owner, target, uses);
+    }
+}
+
+fn collectFnUsesInStmt(
+    program: *const Ast.Program,
+    stmt_id: Ast.StmtId,
+    owner: Ast.FnId,
+    target: Ast.FnId,
+    uses: *FnUseSummary,
+) void {
+    switch (program.getStmt(stmt_id)) {
+        .let_ => |let_| collectFnUsesInExpr(program, let_.value, owner, target, uses),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| collectFnUsesInExpr(program, expr, owner, target, uses),
+        .return_ => |ret| collectFnUsesInExpr(program, ret.value, owner, target, uses),
+        .uninitialized,
+        .crash,
+        => {},
+    }
+}
+
+const TailSelfCallSummary = struct {
+    valid: bool = true,
+    count: usize = 0,
+
+    fn merge(self: *TailSelfCallSummary, other: TailSelfCallSummary) void {
+        self.valid = self.valid and other.valid;
+        self.count += other.count;
+    }
+};
+
+/// Prove that every self call occurs in a result position from which the
+/// worker returns directly. The accepted set is the exact lifted-IR
+/// tail-position grammar; any self call in an operand or statement rejects
+/// localization.
+fn tailSelfCallSummary(program: *const Ast.Program, expr_id: Ast.ExprId, target: Ast.FnId) TailSelfCallSummary {
+    const expr = program.getExpr(expr_id);
+    return switch (expr.data) {
+        .call_proc => |call| blk: {
+            if (exprSpanCallsFn(program, call.args, target) or
+                captureOperandSpanCallsFn(program, call.captures, target))
+            {
+                break :blk .{ .valid = false };
+            }
+            break :blk if (Ast.localDirectCallee(call) == target)
+                .{ .count = 1 }
+            else
+                .{};
+        },
+        .let_ => |let_| if (exprCallsFn(program, let_.value, target))
+            .{ .valid = false }
+        else
+            tailSelfCallSummary(program, let_.rest, target),
+        .match_ => |match| blk: {
+            if (exprCallsFn(program, match.scrutinee, target)) break :blk .{ .valid = false };
+            var summary: TailSelfCallSummary = .{};
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (branch.guard) |guard| {
+                    if (exprCallsFn(program, guard, target)) break :blk .{ .valid = false };
+                }
+                summary.merge(tailSelfCallSummary(program, branch.body, target));
+            }
+            break :blk summary;
+        },
+        .if_ => |if_| blk: {
+            var summary: TailSelfCallSummary = .{};
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |index| {
+                const branch = GuardedList.at(branches, index);
+                if (exprCallsFn(program, branch.cond, target)) break :blk .{ .valid = false };
+                summary.merge(tailSelfCallSummary(program, branch.body, target));
+            }
+            summary.merge(tailSelfCallSummary(program, if_.final_else, target));
+            break :blk summary;
+        },
+        .block => |block| blk: {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |index| {
+                if (stmtCallsFn(program, GuardedList.at(statements, index), target)) {
+                    break :blk .{ .valid = false };
+                }
+            }
+            break :blk tailSelfCallSummary(program, block.final_expr, target);
+        },
+        .join_point => |join_point| blk: {
+            var summary = tailSelfCallSummary(program, join_point.body, target);
+            summary.merge(tailSelfCallSummary(program, join_point.remainder, target));
+            break :blk summary;
+        },
+        .if_initialized_payload => |payload_switch| blk: {
+            if (exprCallsFn(program, payload_switch.cond, target)) break :blk .{ .valid = false };
+            var summary = tailSelfCallSummary(program, payload_switch.initialized, target);
+            summary.merge(tailSelfCallSummary(program, payload_switch.uninitialized, target));
+            break :blk summary;
+        },
+        .try_sequence => |sequence| if (exprCallsFn(program, sequence.try_expr, target))
+            .{ .valid = false }
+        else
+            tailSelfCallSummary(program, sequence.ok_body, target),
+        .try_record_sequence => |sequence| if (exprCallsFn(program, sequence.try_expr, target))
+            .{ .valid = false }
+        else
+            tailSelfCallSummary(program, sequence.ok_body, target),
+        .comptime_branch_taken => |taken| tailSelfCallSummary(program, taken.body, target),
+        else => if (exprCallsFn(program, expr_id, target)) .{ .valid = false } else .{},
     };
 }
 

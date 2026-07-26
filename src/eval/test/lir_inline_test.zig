@@ -3650,16 +3650,6 @@ fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.jump_count >= 2;
 }
 
-fn isFusedRawListLoop(shape: ProcShape) bool {
-    return shape.list_get_unsafe_count >= 1 and
-        shape.join_count >= 1 and
-        shape.direct_call_count == 0;
-}
-
-fn rawListAccessOutsideLoop(shape: ProcShape) bool {
-    return shape.list_get_unsafe_count >= 1 and shape.join_count == 0;
-}
-
 fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) TestError!void {
     const allocator = std.testing.allocator;
 
@@ -5892,7 +5882,10 @@ test "iter alloc static: runtime list for-loop has no boxed iterator state" {
     try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &lowered.lowered);
 }
 
-test "issue 10301 fold over effect-produced list scalarizes" {
+// Repro for https://github.com/roc-lang/roc/issues/10340: the fold must
+// scalarize into one self-contained raw-indexed loop in the root proc, without
+// peeling the first step and calling a separate fused worker for the rest.
+test "issue 10340 fold over effect-produced list scalarizes in root" {
     const allocator = std.testing.allocator;
     const source =
         \\produce : U64 -> List(U64)
@@ -5907,14 +5900,27 @@ test "issue 10301 fold over effect-produced list scalarizes" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
-    // The fold fuses as a peel plus worker, the same shape a static-list fold
-    // takes: the root runs the first step inline and calls the fused worker
-    // once for the rest. Exactly one reachable proc is a self-contained
-    // raw-indexed loop with no per-element call, and every raw list access
-    // lives inside a loop-carrying proc — a retained per-element step proc is
-    // loop-less, so none may remain.
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeCount(allocator, &optimized.lowered, isFusedRawListLoop));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeCount(allocator, &optimized.lowered, rawListAccessOutsideLoop));
+    const root_shape = try collectProcShape(allocator, &optimized.lowered, try rootProc(&optimized.lowered));
+    const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
+    try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
+    try std.testing.expect(root_shape.join_count >= 1);
+    try std.testing.expectEqual(@as(usize, 0), root_shape.direct_call_count);
+    try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 1026), value.read(u64)),
+    }
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10317: a loop-carried

@@ -2441,6 +2441,23 @@ body still sees the shape; and a join with exactly one jump site is not shared
 control at all — its body is cloned directly at that site against the site's
 full symbolic values.
 
+Call-pattern specialization may also expose a tail-recursive worker whose
+entire specialized ABI is scalar even though its only external call remains in
+the function that initiated specialization. When such a generated worker has
+exactly one direct external call, is never used as a function value or root,
+and every self call is in a proven tail position, SpecConstr localizes it as a
+recursive typed join point at that call site. The worker arguments and keyed
+capture operands become join parameters, the external call becomes the initial
+jump, and tail self calls become back-edge jumps. This is a code-motion proof,
+not a size heuristic: one external use proves the body is not duplicated, and
+the syntactic tail-position proof preserves the recursive control boundary.
+Workers with procedure-relative early `return`s remain procedures until return
+continuations are explicit in the lifted IR. Localizing after worker creation
+lets iterator clients retain the scalar ABI specialization already computed by
+the general call-pattern machinery, so an enclosing fold can contain the same
+self-contained scalar loop as a source loop without changing iterator runtime
+representation.
+
 SpecConstr's symbolic values carry only pure structure; effects live in
 bindings. A pending binding created for an effectful computation may move to
 its region boundary only when its recorded emission window proves the hoist
