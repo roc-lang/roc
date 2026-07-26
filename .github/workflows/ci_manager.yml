@@ -109,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -122,9 +122,12 @@ jobs:
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
+      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
+      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
+      # target from the host arch, so install the musl target per runner arch.
       - name: Install Rust musl target (Linux)
         if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-musl
+        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
 
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
@@ -217,6 +220,22 @@ jobs:
             shard: windows-harness
             timeout_minutes: 120
             minici_args: ["--minici-from", *minici_harness_boundary]
+          # arm64 Linux runs no `core` shard: those are early-module Zig unit
+          # tests, which are arch-independent and already covered on arm64 by
+          # the macos-15 shards. The unique arm64+ELF+glibc signal (linking,
+          # host builds, native codegen) lives in `zig` and `harness`.
+          #
+          # These entries must stay below the macOS ones: they alias anchors
+          # that the macOS entries define, and YAML requires the definition to
+          # come first.
+          - os: ubuntu-24.04-arm
+            shard: ubuntu-arm-zig
+            timeout_minutes: 120
+            minici_args: ["--minici-after", *minici_core_boundary, "--minici-before", *minici_harness_boundary]
+          - os: ubuntu-24.04-arm
+            shard: ubuntu-arm-harness
+            timeout_minutes: 120
+            minici_args: ["--minici-from", *minici_harness_boundary]
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -242,9 +261,12 @@ jobs:
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
+      # RustGlue's glue-runtime contract case compiles a `#![no_std]` host with
+      # `rustc --target <arch>-unknown-linux-musl`, and build.zig derives that
+      # target from the host arch, so install the musl target per runner arch.
       - name: Install Rust musl target (Linux)
         if: runner.os == 'Linux'
-        run: rustup target add x86_64-unknown-linux-musl
+        run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
 
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
@@ -262,7 +284,7 @@ jobs:
       # suite for speed. Keep the exact-bit float contract PR-gated with a
       # focused invocation so backend drift cannot wait for the nightly suite.
       - name: Check exact float bits with LLVM
-        if: matrix.shard == 'ubuntu-full' || matrix.shard == 'macos-harness' || matrix.shard == 'windows-harness'
+        if: matrix.shard == 'ubuntu-full' || matrix.shard == 'ubuntu-arm-harness' || matrix.shard == 'macos-harness' || matrix.shard == 'windows-harness'
         run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
