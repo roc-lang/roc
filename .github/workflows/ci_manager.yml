@@ -129,6 +129,17 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
 
+      # `build-ci` depends on `build-coverage-tools`, and build.zig only
+      # compiles kcov on Linux arm64 (see `is_coverage_supported`), so arm64 is
+      # the only runner here that needs kcov's headers. Without them the
+      # `kcov_system_lib` link (-lz -lcurl) fails. Mirrors ci_zig.yml's nightly
+      # coverage setup.
+      - name: Install kcov dependencies (Linux arm64)
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
+
       - name: Cache Zig dependency packages
         uses: actions/cache@v6.1.0 # ratchet:actions/cache@v6.1.0
         with:
@@ -156,11 +167,15 @@ jobs:
       # on stdout for flaky-retry to match. The minici shards below then consume
       # the build artifact and go straight to the run steps, so their failures
       # are genuine and never retried.
+      # No `error_string_contains` override: this command has no flake signature
+      # of its own, so it uses the action's default list. The override that used
+      # to be here was a stale copy of that default plus a bare `503`, which
+      # matched the runner temp path (`.../2fdaaa19-b503-4660-...`) printed in
+      # every failed build command -- so a deterministic failure retried 4x.
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
           command: zig build build-ci
-          error_string_contains: "HttpConnectionClosing|build.zig.zon|TemporaryNameServerFailure|error: cannot download|EndOfStream|WriteFailed|503|bad HTTP response code"
           retry_count: 3
 
       - name: Pack MiniCI build artifact
@@ -267,6 +282,15 @@ jobs:
       - name: Install Rust musl target (Linux)
         if: runner.os == 'Linux'
         run: rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
+
+      # `run-coverage-parser` is the last MiniCI job, so the harness shard runs
+      # the kcov that `build-ci` compiled. This is a different runner than the
+      # build job, so kcov's shared libraries have to be present here too.
+      - name: Install kcov dependencies (Linux arm64)
+        if: runner.os == 'Linux' && runner.arch == 'ARM64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
 
       # The embedded lld-link resolves /defaultlib via the LIB env and roc's
       # linker locates the Windows SDK/MSVC libpaths at runtime (needed by
