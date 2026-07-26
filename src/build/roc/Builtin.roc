@@ -47,8 +47,16 @@ Builtin :: [].{
 	# at the next boundary; that is how a format skips entries it can rule out
 	# without tokenizing them. Dicts use parse_dict_start, parse_dict_next,
 	# parse_dict_after_key between a key and its value, and
-	# parse_dict_after_entry. Dict keys are parsed by parse_key_* methods,
-	# which are ordinary state-based parsers like any other value parser.
+	# parse_dict_after_entry.
+	#
+	# A dict key that the format renders as a key string — a Str, a Bool, a
+	# number, or a tag union whose tags all lack payloads — is read and written
+	# by the parse_key_* and encode_key_* methods. Any other key is read and
+	# written by the key type's own codec, after parse_key_start or
+	# encode_key_start opens the key position. A format whose key position only
+	# holds strings, as JSON's does, implements the key-string methods and not
+	# those two, so a dict keyed by a record is rejected against that format
+	# rather than by a rule every format shares.
 	Encoding :: {}.{
 		# Compiler-generated structural record field-name metadata used by derived
 		# parsers. The phantom _shape ties a FieldName handle to the exact

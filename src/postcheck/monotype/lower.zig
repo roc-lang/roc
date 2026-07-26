@@ -10642,7 +10642,11 @@ const BodyContext = struct {
             return try self.collectSerializationPlanInputs(kind, payload_ty, encoding_ty, plan, inputs);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.collectSerializationPlanInputs(kind, dict.value_ty, encoding_ty, plan, inputs);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                try self.collectSerializationPlanInputs(kind, dict_shape, encoding_ty, plan, inputs);
+            }
+            return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
@@ -17502,7 +17506,11 @@ const BodyContext = struct {
             return try self.buildParserConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.buildParserConstructionPrecomputedPlan(plan, dict.value_ty, encoding_expr, encoding_ty, str_ty);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                try self.buildParserConstructionPrecomputedPlan(plan, dict_shape, encoding_expr, encoding_ty, str_ty);
+            }
+            return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
@@ -17548,7 +17556,11 @@ const BodyContext = struct {
             return try self.buildEncodeConstructionPrecomputedPlan(plan, payload_ty, encoding_expr, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.buildEncodeConstructionPrecomputedPlan(plan, dict.value_ty, encoding_expr, encoding_ty, str_ty);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                try self.buildEncodeConstructionPrecomputedPlan(plan, dict_shape, encoding_expr, encoding_ty, str_ty);
+            }
+            return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
@@ -17603,7 +17615,11 @@ const BodyContext = struct {
             return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, encoding_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict.value_ty, encoding_ty, str_ty);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                try self.buildEncodeRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict_shape, encoding_ty, str_ty);
+            }
+            return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
@@ -17794,7 +17810,11 @@ const BodyContext = struct {
             return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, payload_ty, str_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict.value_ty, str_ty);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                try self.buildParserRestoredPrecomputedPlan(plan, fn_value, store_view, fn_view, dict_shape, str_ty);
+            }
+            return;
         }
 
         switch (self.builder.shapeContent(shape_ty)) {
@@ -17853,7 +17873,11 @@ const BodyContext = struct {
             return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, payload_ty);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, dict.value_ty);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                try self.appendParserPrecomputedRecordShapes(plan, shapes, seen, dict_shape);
+            }
+            return;
         }
 
         if (seen.contains(shape_ty)) return;
@@ -20130,6 +20154,7 @@ const BodyContext = struct {
             try self.localExpr(entry_state_local, state_ty),
             state_ty,
             key_parse_ret_ty,
+            precomputed_plan,
         );
         const key_local = try self.addLocal(self.builder.symbols.fresh(), key_ty);
         const after_key_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -20245,6 +20270,7 @@ const BodyContext = struct {
         state_expr: DraftExprId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         if (self.parseDictKeyMethodName(key_ty)) |method_name| {
             return try self.lowerParseFormatMethod(
@@ -20258,7 +20284,29 @@ const BodyContext = struct {
         if (self.dictKeyUnitTags(key_ty)) |tags_span| {
             return try self.lowerParseUnitTagDictKey(tags_span, key_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty);
         }
-        Common.invariant("dict parse key type was unsupported");
+
+        // A key the format cannot render as a key string is read by the key's
+        // own parser, after `parse_key_start` opens the key position.
+        const ret_info = self.tryInfo(ret_ty);
+        const start_try_ty = try self.tryTypeLike(ret_ty, state_ty, ret_info.err_ty);
+        const start_try = try self.lowerParseFormatMethod(
+            "parse_key_start",
+            &.{ encoding_expr, state_expr },
+            &.{ encoding_ty, state_ty },
+            encoding_ty,
+            start_try_ty,
+        );
+        const opened_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const key_parse = try self.lowerParseShapeHelperCall(
+            key_ty,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(opened_local, state_ty),
+            state_ty,
+            ret_ty,
+            precomputed_plan,
+        );
+        return try self.sequenceTry(start_try, start_try_ty, opened_local, key_parse, ret_ty);
     }
 
     /// An enum key arrives as text, and an unmatched name is the one dict
@@ -28523,7 +28571,21 @@ const BodyContext = struct {
         return null;
     }
 
-    fn dictKeyTypeIsSupported(self: *BodyContext, ty: Type.TypeId) bool {
+    /// The shapes a derived codec reads out of a dict: always its value, plus
+    /// its key when the key needs its own codec rather than the key-string
+    /// methods. Every walk over a dict's codec-reachable shapes goes through
+    /// here so the rule lives in one place.
+    fn dictCodecShapes(self: *BodyContext, dict: DictEntryShape, buf: *[2]Type.TypeId) []const Type.TypeId {
+        buf[0] = dict.value_ty;
+        if (self.dictKeyIsStringRendered(dict.key_ty)) return buf[0..1];
+        buf[1] = dict.key_ty;
+        return buf[0..2];
+    }
+
+    /// Whether a dict key renders as a key string, which is what the
+    /// `parse_key_*`/`encode_key_*` methods read and write. Any other key is
+    /// read by its own codec behind `parse_key_start`/`encode_key_start`.
+    fn dictKeyIsStringRendered(self: *BodyContext, ty: Type.TypeId) bool {
         return self.parseDictKeyMethodName(ty) != null or self.dictKeyUnitTags(ty) != null;
     }
 
@@ -30397,7 +30459,9 @@ const BodyContext = struct {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
                 if (!try self.parseFieldTypeIsSupported(elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
-                if (!self.dictKeyTypeIsSupported(dict.key_ty)) Common.invariant("structural parser dict key type was not supported");
+                if (!self.dictKeyIsStringRendered(dict.key_ty) and !try self.parseFieldTypeIsSupported(dict.key_ty, false)) {
+                    Common.invariant("structural parser dict key type was not supported");
+                }
                 if (!try self.parseFieldTypeIsSupported(dict.value_ty, false)) Common.invariant("structural parser dict value type was not supported");
             } else {
                 switch (self.builder.shapeContent(shape_ty)) {
@@ -31292,6 +31356,7 @@ const BodyContext = struct {
             encoding_ty,
             method.state_ty,
             method.result_ty,
+            precomputed_plan,
         );
         const value_writer = try self.lowerEncodeValueThunk(
             value_ty,
@@ -31335,6 +31400,7 @@ const BodyContext = struct {
         encoding_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const thunk_ty = try self.functionType(&.{state_ty}, ret_ty);
         const state_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
@@ -31346,6 +31412,7 @@ const BodyContext = struct {
             try self.localExpr(state_local, state_ty),
             state_ty,
             ret_ty,
+            precomputed_plan,
         );
         return try self.lowerGeneratedEncoderCallbackLambda(
             thunk_ty,
@@ -31363,6 +31430,7 @@ const BodyContext = struct {
         state_expr: DraftExprId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         if (self.encodeDictKeyMethodName(key_ty)) |method_name| {
             return try self.lowerEncodeFormatMethod(
@@ -31384,7 +31452,29 @@ const BodyContext = struct {
                 ret_ty,
             );
         }
-        Common.invariant("dict encode key type was unsupported");
+
+        // Mirrors the parse side: a key the format cannot render as a key
+        // string is written by the key's own encoder, after `encode_key_start`
+        // opens the key position.
+        const start_expr = try self.lowerEncodeFormatMethod(
+            "encode_key_start",
+            &.{ encoding_expr, state_expr },
+            &.{ encoding_ty, state_ty },
+            encoding_ty,
+            ret_ty,
+        );
+        const opened_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
+        const key_encode = try self.lowerEncodeShapeHelperCall(
+            key_ty,
+            key_expr,
+            encoding_expr,
+            encoding_ty,
+            try self.localExpr(opened_local, state_ty),
+            state_ty,
+            ret_ty,
+            precomputed_plan,
+        );
+        return try self.sequenceEncodeTry(start_expr, ret_ty, opened_local, key_encode, ret_ty);
     }
 
     fn lowerEncodeUnitTagDictKeyToString(
@@ -32591,7 +32681,10 @@ const BodyContext = struct {
         }
         if ((try self.customParserLookup(ty)) != null) return true;
         if (self.setPayloadType(ty)) |payload_ty| return try self.parseFieldTypeIsSupported(payload_ty, false);
-        if (self.dictEntryShape(ty)) |dict| return self.dictKeyTypeIsSupported(dict.key_ty) and try self.parseFieldTypeIsSupported(dict.value_ty, false);
+        if (self.dictEntryShape(ty)) |dict| {
+            const key_ok = self.dictKeyIsStringRendered(dict.key_ty) or try self.parseFieldTypeIsSupported(dict.key_ty, false);
+            return key_ok and try self.parseFieldTypeIsSupported(dict.value_ty, false);
+        }
         return switch (self.builder.shapeContent(ty)) {
             .list => |elem_ty| try self.parseFieldTypeIsSupported(elem_ty, false),
             .box => |payload_ty| try self.parseFieldTypeIsSupported(payload_ty, false),
@@ -32636,7 +32729,10 @@ const BodyContext = struct {
         }
         if ((try self.customEncoderForLookup(ty)) != null) return true;
         if (self.setPayloadType(ty)) |payload_ty| return try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty);
-        if (self.dictEntryShape(ty)) |dict| return self.dictKeyTypeIsSupported(dict.key_ty) and try self.encodeFieldTypeIsSupported(dict.value_ty, encoding_ty);
+        if (self.dictEntryShape(ty)) |dict| {
+            const key_ok = self.dictKeyIsStringRendered(dict.key_ty) or try self.encodeFieldTypeIsSupported(dict.key_ty, encoding_ty);
+            return key_ok and try self.encodeFieldTypeIsSupported(dict.value_ty, encoding_ty);
+        }
         return switch (self.builder.shapeContent(ty)) {
             .list => |elem_ty| try self.encodeFieldTypeIsSupported(elem_ty, encoding_ty),
             .box => |payload_ty| try self.encodeFieldTypeIsSupported(payload_ty, encoding_ty),
@@ -32927,26 +33023,54 @@ const BodyContext = struct {
 
     /// The one shape a derived codec reads out of a builtin keyed container:
     /// a dict's value, or a set's element. Null for anything else.
+    /// The shapes a derived codec reads out of a builtin keyed container: a
+    /// dict's value and its key, or a set's element. Empty for anything else.
     ///
-    /// A dict's key is read by the `parse_key_*`/`encode_key_*` methods rather
-    /// than by a derived shape codec, so it is deliberately not included.
-    fn graphBuiltinContainerShapeNode(self: *BodyContext, node: NodeId) ?NodeId {
+    /// A key the format renders as a key string is read by the `parse_key_*`
+    /// and `encode_key_*` methods rather than by a shape codec, so only a key
+    /// that needs its own codec is included.
+    fn graphBuiltinContainerShapeNodes(self: *BodyContext, node: NodeId, buf: *[2]NodeId) []const NodeId {
         const named = switch (self.graph.content(node)) {
             .named => |named| named,
-            else => return null,
+            else => return &.{},
         };
-        const owner = named.builtin_owner orelse return null;
-        return switch (owner) {
-            .dict => blk: {
+        const owner = named.builtin_owner orelse return &.{};
+        switch (owner) {
+            .dict => {
                 if (named.args.len != 2) Common.invariant("builtin Dict node had an unexpected arity");
-                break :blk named.args[1];
+                buf[0] = named.args[1];
+                if (self.graphNodeIsStringRenderedDictKey(named.args[0])) return buf[0..1];
+                buf[1] = named.args[0];
+                return buf[0..2];
             },
-            .set => blk: {
+            .set => {
                 if (named.args.len != 1) Common.invariant("builtin Set node had an unexpected arity");
-                break :blk named.args[0];
+                buf[0] = named.args[0];
+                return buf[0..1];
             },
-            else => null,
-        };
+            else => return &.{},
+        }
+    }
+
+    /// Whether a dict key node is one the `parse_key_*`/`encode_key_*` methods
+    /// read, which is every key kind that renders as a key string.
+    fn graphNodeIsStringRenderedDictKey(self: *BodyContext, node: NodeId) bool {
+        switch (self.graph.content(node)) {
+            .tag_union => |row| {
+                for (row.tags) |tag| {
+                    if (tag.payloads.len != 0) return false;
+                }
+                return true;
+            },
+            .named => |named| {
+                const owner = named.builtin_owner orelse return false;
+                return switch (owner) {
+                    .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => true,
+                    else => false,
+                };
+            },
+            else => return false,
+        }
     }
 
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) bool {
@@ -34178,14 +34302,20 @@ const BodyContext = struct {
         // codec reads. Walking into one prepares calls over internals that are
         // never parsed or encoded, so the walk uses the element shape the codec
         // actually reaches instead.
-        if (self.graphBuiltinContainerShapeNode(shape_node)) |value_node| {
-            return try self.prepareCustomCodecCallsAtNode(
-                boundary_expr,
-                kind,
-                value_node,
-                boundary_callable_node,
-                seen,
-            );
+        var container_buf: [2]NodeId = undefined;
+        const container_shapes = self.graphBuiltinContainerShapeNodes(shape_node, &container_buf);
+        if (container_shapes.len != 0) {
+            var container_added = false;
+            for (container_shapes) |container_shape| {
+                container_added = try self.prepareCustomCodecCallsAtNode(
+                    boundary_expr,
+                    kind,
+                    container_shape,
+                    boundary_callable_node,
+                    seen,
+                ) or container_added;
+            }
+            return container_added;
         }
 
         var added = false;
@@ -34449,7 +34579,11 @@ const BodyContext = struct {
             return try self.parserShapeNeedsRequiredFieldError(payload_ty, visited);
         }
         if (self.dictEntryShape(ty)) |dict| {
-            return try self.parserShapeNeedsRequiredFieldError(dict.value_ty, visited);
+            var dict_buf: [2]Type.TypeId = undefined;
+            for (self.dictCodecShapes(dict, &dict_buf)) |dict_shape| {
+                if (try self.parserShapeNeedsRequiredFieldError(dict_shape, visited)) return true;
+            }
+            return false;
         }
 
         return switch (self.builder.shapeContent(ty)) {

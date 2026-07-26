@@ -20579,6 +20579,20 @@ fn varSupportsStringRenderedDictKey(self: *Self, var_: Var) std.mem.Allocator.Er
     };
 }
 
+/// A dict key is supported when the format can read it at a key position:
+/// key-string keys through `parse_key_*`, anything else through the key's own
+/// derived parser, which the `parse_key_start` gate admits.
+fn varSupportsDerivedDictKeyParse(self: *Self, key_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!bool {
+    if (try self.varSupportsStringRenderedDictKey(key_var)) return true;
+    return try self.varSupportsDerivedParseShape(key_var, env, region);
+}
+
+fn varSupportsDerivedDictKeyEncode(self: *Self, key_var: Var, encoding_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!DerivedSupport {
+    const string_rendered = try self.varSupportsStringRenderedKeyForDerivedEncode(key_var);
+    if (string_rendered == .supported) return .supported;
+    return try self.varSupportsDerivedEncodeShape(key_var, encoding_var, env, region);
+}
+
 /// Whether a dict key type can be rendered as a key string, which is what the
 /// `parse_key_*`/`encode_key_*` methods read and write. Composite keys are
 /// excluded here, so derived codecs reject them for every format even though
@@ -20807,7 +20821,7 @@ fn nominalSupportsDerivedParseShape(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return try self.varSupportsIsEq(args.key) and
             try self.varSupportsToHash(args.key) and
-            try self.varSupportsStringRenderedDictKey(args.key) and
+            try self.varSupportsDerivedDictKeyParse(args.key, env, region) and
             try self.varSupportsDerivedParseShape(args.value, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
@@ -20838,7 +20852,7 @@ fn nominalSupportsDerivedParseField(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return try self.varSupportsIsEq(args.key) and
             try self.varSupportsToHash(args.key) and
-            try self.varSupportsStringRenderedDictKey(args.key) and
+            try self.varSupportsDerivedDictKeyParse(args.key, env, region) and
             try self.varSupportsDerivedParseShape(args.value, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
@@ -21006,7 +21020,7 @@ fn nominalSupportsDerivedEncodeShape(
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return combineDerivedSupport(
-            try self.varSupportsStringRenderedKeyForDerivedEncode(args.key),
+            try self.varSupportsDerivedDictKeyEncode(args.key, encoding_var, env, region),
             try self.varSupportsDerivedEncodeShape(args.value, encoding_var, env, region),
         );
     }
@@ -23107,22 +23121,37 @@ fn validateDerivedParseNominal(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         if (!try self.varSupportsIsEq(args.key)) return .unsupported;
         if (!try self.varSupportsToHash(args.key)) return .unsupported;
-        if (!try self.varSupportsStringRenderedDictKey(args.key)) return .unsupported;
         switch (try self.validateDerivedParseDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        switch (try self.validateParseKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return result,
-        }
-        if (try self.varIsClosedUnitTagUnion(args.key)) {
-            const str_var = try self.freshStr(env, region);
-            switch (try self.validateParseKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
+        if (try self.varSupportsStringRenderedDictKey(args.key)) {
+            switch (try self.validateParseKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
-            switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+            if (try self.varIsClosedUnitTagUnion(args.key)) {
+                const str_var = try self.freshStr(env, region);
+                switch (try self.validateParseKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| return result,
+                }
+                switch (try self.validateInvalidValueMethod(encoding_var, state_var, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| return result,
+                }
+            }
+        } else {
+            // A key the format cannot render as a key string is read by the
+            // key type's own parser. `parse_key_start` is what admits that: a
+            // format whose key position only holds strings does not implement
+            // it, so such a key is rejected there rather than by a rule in the
+            // compiler that every format has to share.
+            switch (try self.validateDictProtocolMethod(encoding_var, state_var, "parse_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
+            switch (try self.validateDerivedParseVar(args.key, encoding_var, state_var, err_var, constraint, env, region, visited, .shape)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }
@@ -23529,18 +23558,30 @@ fn validateDerivedEncodeNominal(
         return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited);
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
-        if (!try self.varSupportsStringRenderedDictKey(args.key)) return .unsupported;
         switch (try self.validateDerivedEncodeDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
         }
-        switch (try self.validateEncodeKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return result,
-        }
-        if (try self.varIsClosedUnitTagUnion(args.key)) {
-            const str_var = try self.freshStr(env, region);
-            switch (try self.validateEncodeKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
+        if (try self.varSupportsStringRenderedDictKey(args.key)) {
+            switch (try self.validateEncodeKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
+            if (try self.varIsClosedUnitTagUnion(args.key)) {
+                const str_var = try self.freshStr(env, region);
+                switch (try self.validateEncodeKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
+                    .ok => {},
+                    .unsupported, .reported_error => |result| return result,
+                }
+            }
+        } else {
+            // Mirrors the parse side: `encode_key_start` is what admits a key
+            // the format cannot render as a key string.
+            switch (try self.validateDictProtocolMethod(encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region)) {
+                .ok => {},
+                .unsupported, .reported_error => |result| return result,
+            }
+            switch (try self.validateDerivedEncodeVar(args.key, encoding_var, state_var, err_var, constraint, env, region, visited)) {
                 .ok => {},
                 .unsupported, .reported_error => |result| return result,
             }

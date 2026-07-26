@@ -94,6 +94,11 @@ Counted := [Default].{
 	parse_dict_after_entry : Counted, State -> Try([Continue(State), Done(State)], [Bad, ..])
 	parse_dict_after_entry = |_, _| Err(Bad)
 
+	## This format's key position holds any value, so a key the driver cannot
+	## render as a key string is read by the key's own parser.
+	parse_key_start : Counted, State -> Try(State, [Bad, ..])
+	parse_key_start = |_, state| Ok(state)
+
 	parse_key_str : Counted, State -> Try({ value : Str, rest : State }, [Bad, ..])
 	parse_key_str = |_, state| take_token(state)
 
@@ -297,4 +302,26 @@ expect {
 	result = parse("L 2 T 2 1 a T 2 2 b")
 
 	result == Ok([(1, "a"), (2, "b")])
+}
+
+## A key the format cannot render as a key string is read by the key's own
+## parser, which is what `parse_key_start` admits.
+expect {
+	result : Try(Dict({ x : U64, y : U64 }, Str), [Bad, MissingRequiredField(Str)])
+	result = parse("D 1 R 2 x 1 y 2 here")
+
+	match result {
+		Ok(d) => Dict.get(d, { x: 1, y: 2 }) == Ok("here")
+		Err(_) => False
+	}
+}
+
+expect {
+	result : Try(Dict((U64, Str), U64), [Bad, MissingRequiredField(Str)])
+	result = parse("D 1 T 2 3 k 9")
+
+	match result {
+		Ok(d) => Dict.get(d, (3, "k")) == Ok(9)
+		Err(_) => False
+	}
 }
