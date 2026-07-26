@@ -9515,7 +9515,7 @@ const BodyContext = struct {
                 const wrapper = self.view.intrinsic_wrappers.get(wrapper_id);
                 return switch (wrapper.intrinsic) {
                     .str_inspect => try self.lowerStrInspectIntrinsic(fn_ty, ret_ty),
-                    .structural_eq => try self.lowerStructuralEqIntrinsic(fn_ty, ret_ty),
+                    .structural_eq => try self.lowerStructuralEqIntrinsic(fn_ty, wrapper.checked_fn_root, ret_ty),
                 };
             },
         }
@@ -9538,7 +9538,12 @@ const BodyContext = struct {
         };
     }
 
-    fn lowerStructuralEqIntrinsic(self: *BodyContext, fn_ty: Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!LoweredTemplateBody {
+    fn lowerStructuralEqIntrinsic(
+        self: *BodyContext,
+        fn_ty: Type.TypeId,
+        checked_fn_root: checked.CheckedTypeId,
+        ret_ty: Type.TypeId,
+    ) Allocator.Error!LoweredTemplateBody {
         const fn_data = self.builder.functionShape(fn_ty, "structural equality intrinsic had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(fn_data.args));
         defer self.allocator.free(arg_tys);
@@ -9553,9 +9558,13 @@ const BodyContext = struct {
         // This wrapper IS its type's `is_eq` method target, so the body must
         // expand the top layer structurally: `lowerEqualityExpr` would resolve
         // the method lookup back to this wrapper and emit an infinite self-call.
+        // The wrapper's own checked function type names the type it compares,
+        // so the components its expansion reaches carry a checked receiver
+        // (reunify.md section 9.6).
         const body = try self.lowerDerivationExpansion(EqDeriver, arg_tys[0], .{ .lhs = lhs_expr, .rhs = rhs_expr }, .{
             .method_name = "is_eq",
             .result_ty = ret_ty,
+            .checked_ty = self.checkedFunctionArgumentType(checked_fn_root, 0),
         });
         return .{
             .args = try self.addTypedLocalSpan(&.{ typed_lhs, typed_rhs }),
@@ -17653,7 +17662,7 @@ const BodyContext = struct {
             .hosted_proc,
             .promoted_top_level_proc,
             .platform_required_proc,
-            => rehearsal.openRequestEdge(self.view.key.bytes, record.expr),
+            => rehearsal.openRequestEdge(self.view.key.bytes, record.expr, null),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -17694,7 +17703,7 @@ const BodyContext = struct {
         // instantiation site records, so it names the site whose
         // dense actuals bind the callee scheme (reunify.md sections 7.2, 9.1).
         if (self.builder.rehearsal) |rehearsal| {
-            rehearsal.openRequestEdge(self.view.key.bytes, self.view.resolved_refs.records[raw].expr);
+            rehearsal.openRequestEdge(self.view.key.bytes, self.view.resolved_refs.records[raw].expr, null);
         }
         defer self.closeRequestEdge();
         return switch (self.view.resolved_refs.records[raw].ref) {
@@ -21339,8 +21348,25 @@ const BodyContext = struct {
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.argsSlice(self.view.static_dispatch_plans), self.builder.program.types.span(fn_data.args), pre_lowered);
         // Debug/probe-only: a resolved dispatch target instantiates the selected
         // callee's scheme, and the plan's checked expression is the `use_node`
-        // half of that edge's identity (reunify.md sections 7.2, 9.7).
-        if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr);
+        // half of that edge's identity (reunify.md sections 7.2, 9.7). A target
+        // each specialization edge supplies instead is only named per edge, so
+        // reunify.md section 7.2's coverage rule records a site for it exactly
+        // where checking could name the callee scheme; the edge additionally
+        // cites section 9.6's constrained-dispatch rule, which covers it where
+        // no site was recorded, and hands over the plan's own checked dispatcher
+        // and callable types.
+        const covering_rule: ?spec_rehearsal.GeneratedEdge = switch (plan.resolution) {
+            .constraint => .{
+                .rule = .constraint_dispatch_receiver,
+                .source = .{
+                    .module_bytes = self.view.key.bytes,
+                    .receiver = plan.dispatcher_ty,
+                    .witness = .{ .callable = plan.callable_ty },
+                },
+            },
+            else => null,
+        };
+        if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr, covering_rule);
         defer self.closeRequestEdge();
         return .{ .call_proc = .{
             .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, try self.evidenceForResolvedTarget(plan.resolution), .checked_use_site))),
@@ -21359,7 +21385,7 @@ const BodyContext = struct {
         return switch (plan.result_mode) {
             .equality => |eq| if (eq.structural_allowed) blk: {
                 const operands = try self.lowerStructuralEqualityOperands(plan, arg_ctx);
-                var result = try self.lowerEqualityExpr(operands.derived_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
+                var result = try self.lowerEqualityExpr(operands.derived_ty, plan.dispatcher_ty, operands.first, operands.second, self.view.names.methodNameText(plan.method), ret_ty);
                 if (eq.negated) {
                     result = try self.lowLevelExpr(.bool_not, &.{result}, ret_ty);
                 }
@@ -21367,7 +21393,7 @@ const BodyContext = struct {
             } else Common.invariant("structural equality dispatch plan did not permit structural equality"),
             .hash => |hash| if (hash.structural_allowed) blk: {
                 const operands = try self.lowerStructuralBinaryOperands("hash", plan, callable_mono_ty, arg_ctx, pre_lowered);
-                break :blk try self.lowerHashExpr(operands.derived_ty, operands.first, operands.second, ret_ty);
+                break :blk try self.lowerHashExpr(operands.derived_ty, plan.dispatcher_ty, operands.first, operands.second, ret_ty);
             } else Common.invariant("structural hash dispatch plan did not permit structural hashing"),
             .value => Common.invariant("value dispatch plan reached structural equality lowering"),
             .parser_for => Common.invariant("parser_for dispatch plan reached structural equality lowering"),
@@ -24001,7 +24027,7 @@ const BodyContext = struct {
         const operand_ty = try self.structuralEqualityOperandType(eq);
         const lhs = try self.lowerExprAtType(eq.lhs, operand_ty);
         const rhs = try self.lowerExprAtType(eq.rhs, operand_ty);
-        var result = try self.lowerEqualityExpr(operand_ty, lhs, rhs, "is_eq", ret_ty);
+        var result = try self.lowerEqualityExpr(operand_ty, self.view.bodies.expr(eq.lhs).ty, lhs, rhs, "is_eq", ret_ty);
         if (eq.negated) {
             result = try self.lowLevelExpr(.bool_not, &.{result}, ret_ty);
         }
@@ -24080,6 +24106,7 @@ const BodyContext = struct {
     fn lowerEqualityExpr(
         self: *BodyContext,
         ty: Type.TypeId,
+        checked_ty: ?checked.CheckedTypeId,
         lhs: DraftExprId,
         rhs: DraftExprId,
         method_name: []const u8,
@@ -24088,6 +24115,7 @@ const BodyContext = struct {
         return try self.lowerDerivation(EqDeriver, ty, .{ .lhs = lhs, .rhs = rhs }, .{
             .method_name = method_name,
             .result_ty = bool_ty,
+            .checked_ty = checked_ty,
         });
     }
 
@@ -24097,6 +24125,7 @@ const BodyContext = struct {
     fn lowerHashExpr(
         self: *BodyContext,
         value_ty: Type.TypeId,
+        checked_value_ty: ?checked.CheckedTypeId,
         value: DraftExprId,
         hasher: DraftExprId,
         hasher_ty: Type.TypeId,
@@ -24104,6 +24133,7 @@ const BodyContext = struct {
         return try self.lowerDerivation(HashDeriver, value_ty, .{ .value = value, .hasher = hasher }, .{
             .method_name = "to_hash",
             .result_ty = hasher_ty,
+            .checked_ty = checked_value_ty,
         });
     }
 
@@ -24139,7 +24169,132 @@ const BodyContext = struct {
     const DerivationCtx = struct {
         method_name: []const u8,
         result_ty: Type.TypeId,
+        /// The checked type of the position the walk is at, when this module's
+        /// checked store names the same position (reunify.md section 9.6). A
+        /// component call reads it to name the receiver its declared rule binds
+        /// from; a position the checked walk cannot follow carries null and its
+        /// call hands over no receiver.
+        checked_ty: ?checked.CheckedTypeId = null,
+
+        /// The same derivation at a component position whose checked type is
+        /// `component`.
+        fn at(self: DerivationCtx, component: ?checked.CheckedTypeId) DerivationCtx {
+            return .{
+                .method_name = self.method_name,
+                .result_ty = self.result_ty,
+                .checked_ty = component,
+            };
+        }
     };
+
+    /// How many alias layers the checked side of the derivation walk is read
+    /// through before it must be the shape the Monotype side reached, and how
+    /// many extension links a row is followed through. Both nest a handful deep
+    /// at most; these only bound input.
+    const max_checked_component_depth: u32 = 32;
+
+    /// The checked payload at `checked_ty` with transparent aliases erased, or
+    /// null when the walk runs past its depth bound.
+    fn checkedDerivationPayload(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+    ) ?checked.CheckedTypePayload {
+        var ty = checked_ty;
+        var depth: u32 = 0;
+        while (depth < max_checked_component_depth) : (depth += 1) {
+            switch (self.view.types.payload(ty)) {
+                .alias => |alias| ty = alias.backing,
+                else => |payload| return payload,
+            }
+        }
+        return null;
+    }
+
+    /// The checked type of the record field the Monotype walk descended into,
+    /// found by the field's own name through the checked row and its extension
+    /// links, or null when the checked side names no such field.
+    fn checkedRecordFieldType(
+        self: *BodyContext,
+        checked_ty: ?checked.CheckedTypeId,
+        field_name: names.RecordFieldNameId,
+    ) Allocator.Error!?checked.CheckedTypeId {
+        var current = checked_ty orelse return null;
+        var depth: u32 = 0;
+        while (depth < max_checked_component_depth) : (depth += 1) {
+            const payload = self.checkedDerivationPayload(current) orelse return null;
+            const fields = switch (payload) {
+                .record => |record| record.fields,
+                .record_unbound => |unbound| unbound,
+                else => return null,
+            };
+            for (fields) |field| {
+                const label = try self.builder.recordFieldName(self.view, field.name);
+                if (label == field_name) return field.ty;
+            }
+            current = switch (payload) {
+                .record => |record| record.ext,
+                else => return null,
+            };
+        }
+        return null;
+    }
+
+    /// The checked type of a checked function's argument at `index`, or null
+    /// when the checked side is not a function that long.
+    fn checkedFunctionArgumentType(
+        self: *BodyContext,
+        checked_ty: checked.CheckedTypeId,
+        index: usize,
+    ) ?checked.CheckedTypeId {
+        const payload = self.checkedDerivationPayload(checked_ty) orelse return null;
+        return switch (payload) {
+            .function => |fn_ty| if (index < fn_ty.args.len) fn_ty.args[index] else null,
+            else => null,
+        };
+    }
+
+    /// The checked type of the tuple element at `index`, or null when the
+    /// checked side is not a tuple that long.
+    fn checkedTupleElementType(
+        self: *BodyContext,
+        checked_ty: ?checked.CheckedTypeId,
+        index: usize,
+    ) ?checked.CheckedTypeId {
+        const current = checked_ty orelse return null;
+        const payload = self.checkedDerivationPayload(current) orelse return null;
+        return switch (payload) {
+            .tuple => |elems| if (index < elems.len) elems[index] else null,
+            else => null,
+        };
+    }
+
+    /// The checked type of one payload of the tag the Monotype walk descended
+    /// into, found by the tag's own name through the checked row and its
+    /// extension links, or null when the checked side names no such payload.
+    fn checkedTagPayloadType(
+        self: *BodyContext,
+        checked_ty: ?checked.CheckedTypeId,
+        tag_name: names.TagNameId,
+        index: usize,
+    ) Allocator.Error!?checked.CheckedTypeId {
+        var current = checked_ty orelse return null;
+        var depth: u32 = 0;
+        while (depth < max_checked_component_depth) : (depth += 1) {
+            const payload = self.checkedDerivationPayload(current) orelse return null;
+            const tag_union = switch (payload) {
+                .tag_union => |tag_union| tag_union,
+                else => return null,
+            };
+            for (tag_union.tags) |tag| {
+                const label = try self.builder.tagName(self.view, tag.name);
+                if (label != tag_name) continue;
+                const args = tag.argsSlice(self.view.types);
+                return if (index < args.len) args[index] else null;
+            }
+            current = tag_union.ext;
+        }
+        return null;
+    }
 
     fn lowerDerivation(
         self: *BodyContext,
@@ -24259,8 +24414,21 @@ const BodyContext = struct {
         const arg_tys = D.methodArgTypes(ty, ctx.result_ty);
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
         const args = D.callArgs(operand);
+        // Debug/probe-only: the component call has no checked use site, so it
+        // cites reunify.md section 9.6's derivation rule and hands over the
+        // checked type of the position the walk is at. The derivation dispatches
+        // on argument zero for both derivations, which is the position the
+        // rule's witness compares.
+        const edge: MethodCallEdge = .{ .generated = .{
+            .rule = .structural_derivation_component,
+            .source = if (ctx.checked_ty) |receiver| .{
+                .module_bytes = self.view.key.bytes,
+                .receiver = receiver,
+                .witness = .{ .receiver_at_argument = 0 },
+            } else null,
+        } };
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
-            .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .structural_derivation_component } }))),
+            .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, edge))),
             .args = try self.addExprSpan(&args),
         } } });
     }
@@ -24329,7 +24497,8 @@ const BodyContext = struct {
         while (i < fields_copy.len) : (i += 1) {
             const field = fields_copy[if (D.forward) i else fields_copy.len - 1 - i];
             const component = try D.componentForField(self, operand, state, field);
-            const result = try self.lowerDerivation(D, field.ty, component, ctx);
+            const component_ctx = ctx.at(try self.checkedRecordFieldType(ctx.checked_ty, field.name));
+            const result = try self.lowerDerivation(D, field.ty, component, component_ctx);
             state = try D.combine(self, state, result, ctx);
         }
         return state;
@@ -24351,7 +24520,8 @@ const BodyContext = struct {
             const index = if (D.forward) i else items_copy.len - 1 - i;
             const item_ty = items_copy[index];
             const component = try D.componentForTuple(self, operand, state, item_ty, index);
-            const result = try self.lowerDerivation(D, item_ty, component, ctx);
+            const component_ctx = ctx.at(self.checkedTupleElementType(ctx.checked_ty, index));
+            const result = try self.lowerDerivation(D, item_ty, component, component_ctx);
             state = try D.combine(self, state, result, ctx);
         }
         return state;
@@ -24381,7 +24551,7 @@ const BodyContext = struct {
         const value_ty = try self.lowerExprType(h.value);
         const value = try self.lowerExprAtType(h.value, value_ty);
         const hasher = try self.lowerExprAtType(h.hasher, hasher_ty);
-        return try self.lowerHashExpr(value_ty, value, hasher, hasher_ty);
+        return try self.lowerHashExpr(value_ty, self.view.bodies.expr(h.value).ty, value, hasher, hasher_ty);
     }
 
     /// Emit `Hasher.write_u64(hasher, value)` as a low-level operation.
@@ -26715,7 +26885,7 @@ const BodyContext = struct {
                         .source = .{
                             .module_bytes = self.view.key.bytes,
                             .receiver = plan.dispatcher_ty,
-                            .requested = plan.callable_ty,
+                            .witness = .{ .callable = plan.callable_ty },
                         },
                     } },
                 ))),
@@ -27897,7 +28067,7 @@ const BodyContext = struct {
                 },
             }
         }
-        return try self.lowerEqualityExpr(entry.ty, scrutinee, expected, "is_eq", try self.builder.primitiveType(.bool));
+        return try self.lowerEqualityExpr(entry.ty, null, scrutinee, expected, "is_eq", try self.builder.primitiveType(.bool));
     }
 
     /// Take ownership of the literal-equality conditions collected since
@@ -28119,10 +28289,12 @@ const EqDeriver = struct {
         const lhs_inner = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const rhs_inner = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
 
+        // A checked nominal names no backing type of its own, so the backing
+        // position carries no checked receiver.
         const compare = try self.lowerDerivation(EqDeriver, backing_ty, .{
             .lhs = try self.localExpr(lhs_inner, backing_ty),
             .rhs = try self.localExpr(rhs_inner, backing_ty),
-        }, ctx);
+        }, ctx.at(null));
 
         const lhs_pat = try self.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.bindPat(lhs_inner, backing_ty) } });
         const rhs_pat = try self.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.bindPat(rhs_inner, backing_ty) } });
@@ -28210,7 +28382,8 @@ const EqDeriver = struct {
         var i = payloads.len;
         while (i > 0) {
             i -= 1;
-            const payload_eq = try self.lowerDerivation(EqDeriver, payloads[i], .{ .lhs = lhs_exprs[i], .rhs = rhs_exprs[i] }, ctx);
+            const payload_ctx = ctx.at(try self.checkedTagPayloadType(ctx.checked_ty, tag.name, i));
+            const payload_eq = try self.lowerDerivation(EqDeriver, payloads[i], .{ .lhs = lhs_exprs[i], .rhs = rhs_exprs[i] }, payload_ctx);
             body = try self.ifExpr(payload_eq, body, try self.boolLiteral(false, ctx.result_ty), ctx.result_ty);
         }
 
@@ -28333,10 +28506,12 @@ const HashDeriver = struct {
         }
 
         const inner = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
+        // A checked nominal names no backing type of its own, so the backing
+        // position carries no checked receiver.
         const hashed = try self.lowerDerivation(HashDeriver, backing_ty, .{
             .value = try self.localExpr(inner, backing_ty),
             .hasher = operand.hasher,
-        }, ctx);
+        }, ctx.at(null));
         const pat = try self.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.bindPat(inner, backing_ty) } });
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
             .bind = pat,
@@ -28391,7 +28566,8 @@ const HashDeriver = struct {
         // First write the discriminant index, then thread each payload's hash.
         var acc = try self.hasherWriteU64(hasher, variant_index, ctx.result_ty);
         for (payloads, 0..) |payload_ty, i| {
-            acc = try self.lowerDerivation(HashDeriver, payload_ty, .{ .value = payload_exprs[i], .hasher = acc }, ctx);
+            const payload_ctx = ctx.at(try self.checkedTagPayloadType(ctx.checked_ty, tag.name, i));
+            acc = try self.lowerDerivation(HashDeriver, payload_ty, .{ .value = payload_exprs[i], .hasher = acc }, payload_ctx);
         }
 
         const tag_pat = try self.addPat(.{ .ty = value_ty, .data = .{ .tag = .{

@@ -98,8 +98,8 @@ pub const GeneratedInstantiationRule = enum {
     /// are recorded under a use node of zero and no use expression names them.
     ///
     /// Binder mapping (exact, total): the callee's scheme binder `i` takes
-    /// argument `i` of the dispatch plan's own checked dispatcher type, read
-    /// alias-transparently as a named type. `Builtin.List.iter` is
+    /// argument `i` of the dispatch plan's own checked dispatcher type, emitted
+    /// under the requesting body's environment. `Builtin.List.iter` is
     /// `List(item) -> Iter(item)` over a `List(X)` dispatcher, and
     /// `Builtin.Iter.next` is `Iter(item) -> [...]` over an `Iter(X)` dispatcher;
     /// in both the dispatcher's argument list is exactly the callee's binder
@@ -110,6 +110,26 @@ pub const GeneratedInstantiationRule = enum {
     /// requesting body's environment, must equal the callee scheme root emitted
     /// under the binding.
     iterator_dispatch_receiver,
+    /// A `where`-constrained method call: the checker resolved the dispatch to
+    /// `constraint(depth, index)`, so the callee is chosen per specialization
+    /// from the evidence chain and checking recorded no instantiation site for
+    /// the edge — the callee scheme is not known where the site would be
+    /// written.
+    ///
+    /// Binder mapping (exact, total): the callee's scheme binder `i` takes
+    /// argument `i` of the plan's own checked dispatcher type, emitted under the
+    /// requesting body's environment. The dispatcher is the constrained variable
+    /// itself, so only the environment holds its value: `dict_find_from`'s
+    /// `found_key == key` dispatches `k.is_eq` on `k`, which the requesting
+    /// binding holds as `Dict(A, B)`, and `Builtin.Dict.is_eq`'s binder list is
+    /// exactly that argument list in order. A dispatcher whose argument count
+    /// differs from the callee scheme's binder count is outside the rule and
+    /// binds nothing.
+    ///
+    /// Witness: the plan's own checked callable type, emitted under the
+    /// requesting body's environment, must equal the callee scheme root emitted
+    /// under the binding.
+    constraint_dispatch_receiver,
     /// `to_inspect` on a component of the value being inspected.
     ///
     /// Declared-but-unbound. Missing datum: the inspect walk descends a Monotype
@@ -120,10 +140,19 @@ pub const GeneratedInstantiationRule = enum {
     inspect_component,
     /// `is_eq`/`to_hash` on a component the structural-derivation ladder reached.
     ///
-    /// Declared-but-unbound. Missing datum: as for `inspect_component` — the
-    /// derivation ladder is driven entirely by Monotype structure (its expansion
-    /// stack and memoized helper defs are keyed on Monotype ids), so the checked
-    /// type of the component it dispatches on does not exist at the call.
+    /// Binder mapping (exact, total): the callee's scheme binder `i` takes
+    /// argument `i` of the component's own checked type, emitted under the
+    /// requesting body's environment. The ladder descends a Monotype and carries
+    /// the checked type of the same position beside it, stepping into record
+    /// fields by name, tuple elements and tag payloads by position, and a
+    /// nominal's backing; a component whose checked side does not reach the same
+    /// position hands over no receiver and stays unbound. A component whose
+    /// argument count differs from the callee scheme's binder count is outside
+    /// the rule and binds nothing.
+    ///
+    /// Witness: the callee scheme root emitted under the binding must carry the
+    /// emitted receiver at the argument position the derivation dispatches on,
+    /// which is argument zero for both `is_eq` and `to_hash`.
     structural_derivation_component,
     /// `is_eq` on the scrutinee type of a literal pattern.
     ///
@@ -174,9 +203,11 @@ pub const GeneratedInstantiationRule = enum {
     /// stays declared-but-unbound until its missing datum above is supplied.
     pub fn declaresBinderSource(self: GeneratedInstantiationRule) bool {
         return switch (self) {
-            .iterator_dispatch_receiver => true,
-            .inspect_component,
+            .iterator_dispatch_receiver,
+            .constraint_dispatch_receiver,
             .structural_derivation_component,
+            => true,
+            .inspect_component,
             .pattern_literal_equality,
             .set_literal_helper,
             .dict_literal_helper,
@@ -201,12 +232,30 @@ pub const GeneratedEdge = struct {
 };
 
 /// The checked data one generating site hands over: the module whose store holds
-/// both ids, the receiver the rule's binder mapping reads, and the callable the
-/// request names, which the exact structural witness compares against.
+/// its ids, the receiver the rule's binder mapping reads, and the exact
+/// structural witness the rule accepts its binding under.
 pub const GeneratedSource = struct {
     module_bytes: [32]u8,
     receiver: checked.CheckedTypeId,
-    requested: checked.CheckedTypeId,
+    witness: GeneratedWitness,
+};
+
+/// The exact structural witness one declared rule accepts a binding under
+/// (reunify.md sections 7.5, 9.6). Both forms compare an emission of the callee
+/// scheme root under the binding against an emission the requesting body already
+/// names, so neither accepts a binding the checked data does not prove.
+pub const GeneratedWitness = union(enum) {
+    /// The checked callable the request names: the callee scheme root, emitted
+    /// under the binding, must equal this type emitted under the requesting
+    /// body's environment.
+    callable: checked.CheckedTypeId,
+    /// The argument position of the callee scheme root that the rule's receiver
+    /// occupies: that argument, emitted under the binding, must equal the
+    /// receiver emitted under the requesting body's environment. This is the
+    /// witness available where the requesting body names a receiver but no
+    /// checked callable — a compiler-generated component call builds its
+    /// callable from the component type it reached.
+    receiver_at_argument: u32,
 };
 
 /// The requesting edge of one specialization: the module whose body made the
@@ -217,6 +266,13 @@ pub const GeneratedSource = struct {
 pub const RequestEdge = struct {
     module_bytes: [32]u8,
     use_expr: checked.CheckedExprId,
+    /// The declared rule that covers this edge where checking recorded no site
+    /// for it (reunify.md sections 7.2, 9.6). A `where`-constrained dispatch
+    /// records an ordinary site wherever checking could name the callee scheme,
+    /// and none where the callee is only chosen per specialization edge; the
+    /// rule states where the binder values come from in the second case and is
+    /// never consulted in the first.
+    covering_rule: ?GeneratedEdge = null,
     /// The requesting body's own binding at the moment the request was made. A
     /// request that reserves is lowered later, from a completely different frame
     /// stack, so the environment a symbolic actual resolves under travels with
@@ -978,11 +1034,17 @@ pub const Rehearsal = struct {
     /// caller's module and the checked expression the use sits at. The scope
     /// must be closed by `closeRequest` when the request finishes, so an edge no
     /// reservation claimed cannot be read by a later, unrelated request.
-    pub fn openRequestEdge(self: *Rehearsal, module_bytes: [32]u8, use_expr: checked.CheckedExprId) void {
+    pub fn openRequestEdge(
+        self: *Rehearsal,
+        module_bytes: [32]u8,
+        use_expr: checked.CheckedExprId,
+        covering_rule: ?GeneratedEdge,
+    ) void {
         if (self.disabled) return;
         const edge = RequestEdge{
             .module_bytes = module_bytes,
             .use_expr = use_expr,
+            .covering_rule = covering_rule,
             .caller = self.captureCallerEnvironment(module_bytes),
         };
         self.requests.append(self.allocator, .{ .checked = edge }) catch {
@@ -1416,7 +1478,11 @@ pub const Rehearsal = struct {
             return .edge_unusable;
         };
         const site = self.siteFor(caller, edge.use_expr, owner_node) catch |err| return switch (err) {
-            error.NoSite => .no_site,
+            // Checking recorded no site for this edge, which is where the edge's
+            // declared covering rule states the binding instead (reunify.md
+            // sections 7.2, 9.6). The rule is consulted only here, so an edge
+            // that does carry a site never sees it.
+            error.NoSite => self.resolveEnvironmentFromCoveringRule(start, frame, edge),
             error.SiteAmbiguous => .site_ambiguous,
             error.Unavailable => .edge_unusable,
         };
@@ -1534,6 +1600,49 @@ pub const Rehearsal = struct {
         return null;
     }
 
+    /// Resolve one specialization whose requesting edge carries a checked use
+    /// site that recorded nothing, through the declared rule that edge cites
+    /// (reunify.md sections 7.2, 9.6). Reports the skip class when the edge
+    /// names no rule or the rule produced no binding.
+    fn resolveEnvironmentFromCoveringRule(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        frame: *Frame,
+        edge: RequestEdge,
+    ) ?EdgeSkip {
+        const covering = edge.covering_rule orelse return .no_site;
+        const outcome = &self.generated_outcomes[@intFromEnum(covering.rule)];
+        outcome.claimed += 1;
+        const named: EdgeSkip = .{ .generated_request = covering.rule };
+        const scheme_id = start.template_scheme orelse {
+            census.bump("rehearsal_skip_generated_edge");
+            return named;
+        };
+        const scheme = start.cursor.view.schemeById(scheme_id) orelse {
+            census.bump("rehearsal_skip_generated_edge");
+            return named;
+        };
+        // A rule edge into a scheme with no binders has exactly one
+        // instantiation; the ground path already resolves those exactly.
+        if (scheme.gv_len == 0) {
+            outcome.ground += 1;
+            census.bump("rehearsal_skip_generated_edge");
+            return named;
+        }
+        const declared_source = if (covering.rule.declaresBinderSource()) covering.source else null;
+        const source = declared_source orelse {
+            outcome.unbound += 1;
+            census.bump("rehearsal_skip_generated_edge");
+            census.bump("rehearsal_generated_rule_declared_unbound");
+            return named;
+        };
+        if (self.bindGeneratedRule(start, frame, scheme_id, scheme, source, edge.caller, outcome)) {
+            return null;
+        }
+        census.bump("rehearsal_skip_generated_edge");
+        return named;
+    }
+
     /// Resolve one specialization whose request came from a declared
     /// compiler-generated edge (reunify.md section 9.6). The rule names where
     /// its binder values come from; a rule that declares no source leaves the
@@ -1579,11 +1688,13 @@ pub const Rehearsal = struct {
     }
 
     /// Apply one declared rule's binder mapping and accept the binding only
-    /// under the exact structural witness the rule declares: the callee scheme
-    /// root emitted under the binding must equal the checked callable the
-    /// request names, emitted under the requesting body's own environment
-    /// (reunify.md sections 7.5, 9.6). A binding without that witness is
-    /// released and the specialization stays unresolved.
+    /// under the exact structural witness the rule declares (reunify.md sections
+    /// 7.5, 9.6). The mapping reads the receiver EMITTED under the requesting
+    /// body's environment rather than the receiver's checked payload: a
+    /// `where`-constrained dispatcher names only the constrained variable, whose
+    /// value lives in the environment, and a receiver that is already a checked
+    /// nominal reaches the same argument list either way. A binding without its
+    /// witness is released and the specialization stays unresolved.
     fn bindGeneratedRule(
         self: *Rehearsal,
         start: SpecializationStart,
@@ -1607,17 +1718,6 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_generated_rule_scheme_captures");
             return false;
         }
-        const arguments = receiverArguments(caller.view, source.receiver) orelse {
-            outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_receiver_not_named");
-            return false;
-        };
-        if (!receiverSuppliesBinders(arguments, binders)) {
-            outcome.receiver_unusable += 1;
-            census.bump("rehearsal_generated_rule_receiver_arity_differs");
-            return false;
-        }
-
         const caller_env: ?*const direct_translate.BindingEnvironment = if (captured_caller) |*held|
             held.environment()
         else
@@ -1631,27 +1731,43 @@ pub const Rehearsal = struct {
         else
             .unresolved_request_context;
 
+        const receiver = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver) orelse {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_receiver_untranslatable");
+            return false;
+        };
+        const argument_count = receiverArgumentCount(&self.store, receiver) orelse {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_receiver_not_named");
+            return false;
+        };
+        if (argument_count != binders.len) {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_receiver_arity_differs");
+            return false;
+        }
+
         const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
             self.fail();
             return false;
         };
         defer self.allocator.free(bound);
-        for (arguments, 0..) |argument, index| {
-            const translated = self.translateActual(caller, caller_env, caller_owner_node, argument) orelse {
+        for (0..binders.len) |index| {
+            const argument = receiverArgumentAt(&self.store, receiver, index) orelse {
                 outcome.receiver_unusable += 1;
                 census.bump("rehearsal_generated_rule_argument_untranslatable");
                 return false;
             };
-            if (self.carriesResidualMaterialization(translated)) {
+            if (self.carriesResidualMaterialization(argument)) {
                 noteResidualOrigin(frame, self.classifyResidualActual(
                     caller,
                     caller_owner_node,
-                    argument,
+                    source.receiver,
                     caller_env,
                     caller_origin,
                 ));
             }
-            bound[index] = direct_translate.BoundType.of(translated);
+            bound[index] = direct_translate.BoundType.of(argument);
         }
 
         const scheme_ident = direct_translate.SchemeIdent{
@@ -1668,8 +1784,25 @@ pub const Rehearsal = struct {
             return false;
         };
         const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
-        const requested = self.emitQuietly(caller, caller_env, caller_owner_node, source.requested);
-        if (!self.generatedWitnessAgrees(declared, requested, outcome)) {
+        // The two witness forms compare different halves of the same emission:
+        // a rule the requesting body hands a checked callable compares the whole
+        // scheme root, and a rule that hands only a receiver compares the scheme
+        // root's own dispatch argument against that receiver. The second form
+        // names no requesting root, so its specialization contributes no
+        // interface relation.
+        const requested: ?Type.TypeId = switch (source.witness) {
+            .callable => |callable| self.emitQuietly(caller, caller_env, caller_owner_node, callable),
+            .receiver_at_argument => null,
+        };
+        const witness_left: ?Type.TypeId = switch (source.witness) {
+            .callable => declared,
+            .receiver_at_argument => |index| if (declared) |root| functionArgumentAt(&self.store, root, index) else null,
+        };
+        const witness_right: ?Type.TypeId = switch (source.witness) {
+            .callable => requested,
+            .receiver_at_argument => receiver,
+        };
+        if (!self.generatedWitnessAgrees(witness_left, witness_right, outcome)) {
             chain.release(self.allocator);
             return false;
         }
@@ -2919,40 +3052,49 @@ pub const Rehearsal = struct {
     }
 };
 
-/// How many alias layers a declared receiver is read through before it must be
-/// a named type. Aliases nest a handful deep at most; this only bounds input.
-const max_receiver_alias_depth: u32 = 8;
-
-/// The declared receiver's positional arguments, read alias-transparently, or
-/// null when the receiver is not a named type at all. This is the only shape a
-/// declared generated rule's binder mapping reads: positions of the nominal the
-/// generating site dispatched on, never a match against the concrete callable
-/// (reunify.md sections 9.5, 9.6).
-fn receiverArguments(
-    view: checked.CheckedTypeStoreView,
-    receiver: checked.CheckedTypeId,
-) ?[]const checked.CheckedTypeId {
-    var ty = receiver;
-    var depth: u32 = 0;
-    while (depth < max_receiver_alias_depth) : (depth += 1) {
-        switch (view.payload(ty)) {
-            .nominal => |nominal| return nominal.args,
-            .alias => |alias| ty = alias.backing,
-            else => return null,
-        }
-    }
-    return null;
+/// How many positional arguments an emitted receiver carries, or null when the
+/// emission is not a shape a declared rule's binder mapping reads. This is the
+/// only shape the mapping reads: positions of the type the generating site
+/// dispatched on, never a match against the concrete callable (reunify.md
+/// sections 9.5, 9.6). The count is what decides arity: every declared mapping
+/// is positional and total, so a receiver carrying more or fewer arguments than
+/// the callee has binders names a different generator than the rule declares.
+/// `List` and `Box` emit their element as the structural shape rather than a
+/// named node, so their single argument is read from that shape.
+fn receiverArgumentCount(store: *const Type.Store, receiver: Type.TypeId) ?usize {
+    return switch (store.get(receiver)) {
+        .named => |named| GuardedList.borrowLen(store.span(named.args)),
+        .list, .box => 1,
+        else => null,
+    };
 }
 
-/// Whether a declared receiver's positional arguments can supply a callee
-/// scheme's binders. Every declared mapping is positional and total, so the two
-/// lists must have the same length; a receiver that is shorter or longer names a
-/// different generator than the rule declares and binds nothing.
-fn receiverSuppliesBinders(
-    arguments: []const checked.CheckedTypeId,
-    binders: []const checked.CheckedTypeId,
-) bool {
-    return arguments.len == binders.len;
+/// The emitted receiver's argument at `index`, or null when the emission carries
+/// no such position.
+fn receiverArgumentAt(store: *const Type.Store, receiver: Type.TypeId, index: usize) ?Type.TypeId {
+    return switch (store.get(receiver)) {
+        .named => |named| blk: {
+            const args = store.span(named.args);
+            if (index >= GuardedList.borrowLen(args)) break :blk null;
+            break :blk GuardedList.at(args, index);
+        },
+        .list, .box => |elem| if (index == 0) elem else null,
+        else => null,
+    };
+}
+
+/// The argument at `index` of an emitted function type, or null when the type is
+/// not a function or carries no such argument. The receiver-position witness
+/// reads the callee scheme root through this.
+fn functionArgumentAt(store: *const Type.Store, root: Type.TypeId, index: u32) ?Type.TypeId {
+    return switch (store.get(root)) {
+        .func => |fn_ty| blk: {
+            const args = store.span(fn_ty.args);
+            if (index >= GuardedList.borrowLen(args)) break :blk null;
+            break :blk GuardedList.at(args, index);
+        },
+        else => null,
+    };
 }
 
 /// The declared rule a skip names, or `none` for a skip that names no rule.
@@ -3006,164 +3148,144 @@ fn descriptorsAgree(emitted: policy.NamedDescriptor, sealed: policy.NamedDescrip
 
 const testing = std.testing;
 
-/// A minimal hand-built checked type store view, enough to read the receiver
-/// shapes a declared generated rule's binder mapping accepts and rejects.
+/// A minimal hand-built emitted type store, enough to read the receiver shapes a
+/// declared generated rule's binder mapping accepts and rejects.
 const ReceiverFixture = struct {
     allocator: Allocator,
-    source_names: names.NameStore,
-    payloads: std.ArrayList(checked.StoredCheckedTypePayload),
-    type_id_pool: std.ArrayList(checked.CheckedTypeId),
+    program_names: names.NameStore,
+    store: Type.Store,
     module_hash: [32]u8,
+    /// The checked id the next named type carries, so two named types in one
+    /// fixture never share a checked identity.
+    next_checked_id: u32,
 
     fn init(allocator: Allocator) ReceiverFixture {
         return .{
             .allocator = allocator,
-            .source_names = names.NameStore.init(allocator),
-            .payloads = .empty,
-            .type_id_pool = .empty,
+            .program_names = names.NameStore.init(allocator),
+            .store = Type.Store.init(allocator),
             .module_hash = [_]u8{9} ** 32,
+            .next_checked_id = 1,
         };
     }
 
     fn deinit(self: *ReceiverFixture) void {
-        self.type_id_pool.deinit(self.allocator);
-        self.payloads.deinit(self.allocator);
-        self.source_names.deinit();
+        self.store.deinit();
+        self.program_names.deinit();
     }
 
-    fn add(self: *ReceiverFixture, payload: checked.StoredCheckedTypePayload) Allocator.Error!checked.CheckedTypeId {
-        const id: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.payloads.items.len)));
-        try self.payloads.append(self.allocator, payload);
-        return id;
+    fn addPrimitive(self: *ReceiverFixture, primitive: Type.Primitive) Allocator.Error!Type.TypeId {
+        return try self.store.add(.{ .primitive = primitive });
     }
 
-    fn addFlex(self: *ReceiverFixture) Allocator.Error!checked.CheckedTypeId {
-        return try self.add(.{ .flex = .{} });
-    }
-
-    /// A named type with `args` positional arguments, which is the only receiver
-    /// shape any declared rule's mapping reads.
+    /// A named type with `args` positional arguments, which is one of the two
+    /// receiver shapes any declared rule's mapping reads.
     fn addNamed(
         self: *ReceiverFixture,
         name_text: []const u8,
-        args: []const checked.CheckedTypeId,
-    ) Allocator.Error!checked.CheckedTypeId {
-        const name = try self.source_names.internTypeName(name_text);
-        const module = try self.source_names.internModuleIdentity(&self.module_hash);
-        const start: u32 = @intCast(self.type_id_pool.items.len);
-        try self.type_id_pool.appendSlice(self.allocator, args);
-        return try self.add(.{ .nominal = .{
-            .name = name,
-            .origin_module = module,
-            .owner_module = .{ .bytes = self.module_hash },
-            .is_opaque = false,
-            .representation = .opaque_without_backing,
-            .args = .{ .start = start, .len = @intCast(args.len) },
+        args: []const Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const type_name = try self.program_names.internTypeName(name_text);
+        const module = try self.program_names.internModuleIdentity(&self.module_hash);
+        const span = try self.store.addSpan(args);
+        const checked_id: checked.CheckedTypeId = @enumFromInt(self.next_checked_id);
+        self.next_checked_id += 1;
+        return try self.store.add(.{ .named = .{
+            .named_type = .{ .module = .{}, .ty = checked_id },
+            .def = .{ .module = module, .type_name = type_name },
+            .kind = .nominal,
+            .args = span,
         } });
     }
 
-    fn addAlias(
-        self: *ReceiverFixture,
-        name_text: []const u8,
-        backing: checked.CheckedTypeId,
-    ) Allocator.Error!checked.CheckedTypeId {
-        const name = try self.source_names.internTypeName(name_text);
-        const module = try self.source_names.internModuleIdentity(&self.module_hash);
-        return try self.add(.{ .alias = .{
-            .name = name,
-            .origin_module = module,
-            .owner_module = .{ .bytes = self.module_hash },
-            .backing = backing,
-        } });
+    fn addList(self: *ReceiverFixture, elem: Type.TypeId) Allocator.Error!Type.TypeId {
+        return try self.store.add(.{ .list = elem });
     }
 
     fn addFunction(
         self: *ReceiverFixture,
-        args: []const checked.CheckedTypeId,
-        ret: checked.CheckedTypeId,
-    ) Allocator.Error!checked.CheckedTypeId {
-        const start: u32 = @intCast(self.type_id_pool.items.len);
-        try self.type_id_pool.appendSlice(self.allocator, args);
-        return try self.add(.{ .function = .{
-            .kind = .pure,
-            .args = .{ .start = start, .len = @intCast(args.len) },
-            .ret = ret,
-        } });
-    }
-
-    fn view(self: *ReceiverFixture) checked.CheckedTypeStoreView {
-        return .{
-            .stored_payloads = self.payloads.items,
-            .type_id_pool = self.type_id_pool.items,
-        };
+        args: []const Type.TypeId,
+        ret: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const span = try self.store.addSpan(args);
+        return try self.store.add(.{ .func = .{ .args = span, .ret = ret } });
     }
 };
 
-test "the iterator dispatch rule accepts a named receiver and reads its arguments in order" {
+test "a declared rule reads a named receiver's arguments in order" {
     var fixture = ReceiverFixture.init(testing.allocator);
     defer fixture.deinit();
 
-    const item = try fixture.addFlex();
-    const other = try fixture.addFlex();
-    // `Builtin.List.iter` is `List(item) -> Iter(item)`: one binder, and the
-    // dispatcher's single argument is exactly that binder's value.
-    const list = try fixture.addNamed("List", &.{item});
-    const arguments = receiverArguments(fixture.view(), list) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(usize, 1), arguments.len);
-    try testing.expectEqual(item, arguments[0]);
-    try testing.expect(receiverSuppliesBinders(arguments, &.{item}));
+    const item = try fixture.addPrimitive(.u64);
+    const other = try fixture.addPrimitive(.str);
+    // `Builtin.Set.is_eq` is `Set(a), Set(a) -> Bool`: one binder, and the
+    // receiver's single argument is exactly that binder's value.
+    const set = try fixture.addNamed("Set", &.{item});
+    try testing.expectEqual(@as(?usize, 1), receiverArgumentCount(&fixture.store, set));
+    try testing.expectEqual(@as(?Type.TypeId, item), receiverArgumentAt(&fixture.store, set, 0));
+    try testing.expectEqual(@as(?Type.TypeId, null), receiverArgumentAt(&fixture.store, set, 1));
 
     // A two-argument receiver reads both, in declaration order.
     const dict = try fixture.addNamed("Dict", &.{ item, other });
-    const pair = receiverArguments(fixture.view(), dict) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(usize, 2), pair.len);
-    try testing.expectEqual(item, pair[0]);
-    try testing.expectEqual(other, pair[1]);
+    try testing.expectEqual(@as(?usize, 2), receiverArgumentCount(&fixture.store, dict));
+    try testing.expectEqual(@as(?Type.TypeId, item), receiverArgumentAt(&fixture.store, dict, 0));
+    try testing.expectEqual(@as(?Type.TypeId, other), receiverArgumentAt(&fixture.store, dict, 1));
 }
 
-test "the iterator dispatch rule reads its receiver alias-transparently" {
+test "a declared rule reads a list receiver's element as its one argument" {
     var fixture = ReceiverFixture.init(testing.allocator);
     defer fixture.deinit();
 
-    const item = try fixture.addFlex();
-    const iterator = try fixture.addNamed("Iter", &.{item});
-    const aliased = try fixture.addAlias("Stepper", iterator);
-    const twice = try fixture.addAlias("Steps", aliased);
-
-    const arguments = receiverArguments(fixture.view(), twice) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(usize, 1), arguments.len);
-    try testing.expectEqual(item, arguments[0]);
+    // `List` emits as the structural list shape rather than a named node, so
+    // `Builtin.List.iter`'s one binder is read from that shape.
+    const item = try fixture.addPrimitive(.u64);
+    const list = try fixture.addList(item);
+    try testing.expectEqual(@as(?usize, 1), receiverArgumentCount(&fixture.store, list));
+    try testing.expectEqual(@as(?Type.TypeId, item), receiverArgumentAt(&fixture.store, list, 0));
+    try testing.expectEqual(@as(?Type.TypeId, null), receiverArgumentAt(&fixture.store, list, 1));
 }
 
-test "a receiver that is not a named type binds nothing" {
+test "a receiver whose emission carries no argument list binds nothing" {
     var fixture = ReceiverFixture.init(testing.allocator);
     defer fixture.deinit();
 
-    const item = try fixture.addFlex();
-    const bare = try fixture.addFlex();
+    const item = try fixture.addPrimitive(.u64);
     const function = try fixture.addFunction(&.{item}, item);
 
-    try testing.expect(receiverArguments(fixture.view(), bare) == null);
-    try testing.expect(receiverArguments(fixture.view(), function) == null);
+    try testing.expect(receiverArgumentCount(&fixture.store, item) == null);
+    try testing.expect(receiverArgumentCount(&fixture.store, function) == null);
 }
 
 test "a receiver whose argument count differs from the callee's binders binds nothing" {
     var fixture = ReceiverFixture.init(testing.allocator);
     defer fixture.deinit();
 
-    const key = try fixture.addFlex();
-    const value = try fixture.addFlex();
+    const key = try fixture.addPrimitive(.u64);
+    const value = try fixture.addPrimitive(.str);
     const dict = try fixture.addNamed("Dict", &.{ key, value });
-    const arguments = receiverArguments(fixture.view(), dict) orelse return error.TestUnexpectedResult;
 
     // A one-binder callee cannot take a two-argument receiver's positions, and a
     // zero-argument receiver cannot supply a one-binder callee — which is
     // exactly why the encoding-format rules stay declared-but-unbound.
-    try testing.expect(!receiverSuppliesBinders(arguments, &.{key}));
+    try testing.expectEqual(@as(?usize, 2), receiverArgumentCount(&fixture.store, dict));
     const format = try fixture.addNamed("JsonEncoding", &.{});
-    const none = receiverArguments(fixture.view(), format) orelse return error.TestUnexpectedResult;
-    try testing.expect(!receiverSuppliesBinders(none, &.{key}));
-    try testing.expect(receiverSuppliesBinders(none, &.{}));
+    try testing.expectEqual(@as(?usize, 0), receiverArgumentCount(&fixture.store, format));
+}
+
+test "the receiver-position witness reads the callee scheme root's dispatch argument" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const item = try fixture.addPrimitive(.u64);
+    const boolean = try fixture.addPrimitive(.bool);
+    const set = try fixture.addNamed("Set", &.{item});
+    // `Set.is_eq : Set(a), Set(a) -> Bool` under the binding: argument zero is
+    // the position the derivation dispatched on.
+    const root = try fixture.addFunction(&.{ set, set }, boolean);
+    try testing.expectEqual(@as(?Type.TypeId, set), functionArgumentAt(&fixture.store, root, 0));
+    try testing.expectEqual(@as(?Type.TypeId, set), functionArgumentAt(&fixture.store, root, 1));
+    try testing.expectEqual(@as(?Type.TypeId, null), functionArgumentAt(&fixture.store, root, 2));
+    try testing.expectEqual(@as(?Type.TypeId, null), functionArgumentAt(&fixture.store, set, 0));
 }
 
 test "only the declared rules that carry a checked receiver bind from one" {
@@ -3172,7 +3294,6 @@ test "only the declared rules that carry a checked receiver bind from one" {
     // nothing until that datum reaches its generating site.
     const unbound = [_]GeneratedInstantiationRule{
         .inspect_component,
-        .structural_derivation_component,
         .pattern_literal_equality,
         .set_literal_helper,
         .dict_literal_helper,
@@ -3182,11 +3303,16 @@ test "only the declared rules that carry a checked receiver bind from one" {
         .json_invalid_value,
     };
     for (unbound) |rule| try testing.expect(!rule.declaresBinderSource());
-    try testing.expect(GeneratedInstantiationRule.iterator_dispatch_receiver.declaresBinderSource());
+    const bound = [_]GeneratedInstantiationRule{
+        .iterator_dispatch_receiver,
+        .constraint_dispatch_receiver,
+        .structural_derivation_component,
+    };
+    for (bound) |rule| try testing.expect(rule.declaresBinderSource());
 
     // Every declared rule is in exactly one of the two lists, so a rule added
     // later cannot slip in without declaring which it is.
-    try testing.expectEqual(generated_rule_count, unbound.len + 1);
+    try testing.expectEqual(generated_rule_count, unbound.len + bound.len);
 }
 
 test "a seal trace joins one node's checked provenance to its sealed id" {

@@ -415,14 +415,17 @@ pub const Census = struct {
     // the concrete callable. The `receiver_*` counters bound the ways a
     // declared source failed to supply the mapping, and the `witness_*`
     // counters are what accepts a binding: the callee scheme root emitted under
-    // it must be the same type as the checked callable the request names
-    // (reunify.md 7.5). A binding whose witness is absent or disagrees is
+    // it must be the same type as the checked callable the request names, or —
+    // where the request names only a receiver — the scheme root's own dispatch
+    // argument must be the same type as that receiver (reunify.md 7.5). A
+    // binding whose witness is absent or disagrees is
     // released. The per-rule split is dumped as `rehearsal_generated_rule`
     // lines, because summing rules that bind with rules that stay unbound would
     // hide exactly the distinction section 9.6 requires.
     rehearsal_generated_rule_declared_unbound: Counter = Counter.init(0),
     rehearsal_generated_rule_caller_module_absent: Counter = Counter.init(0),
     rehearsal_generated_rule_scheme_captures: Counter = Counter.init(0),
+    rehearsal_generated_rule_receiver_untranslatable: Counter = Counter.init(0),
     rehearsal_generated_rule_receiver_not_named: Counter = Counter.init(0),
     rehearsal_generated_rule_receiver_arity_differs: Counter = Counter.init(0),
     rehearsal_generated_rule_argument_untranslatable: Counter = Counter.init(0),

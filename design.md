@@ -3597,33 +3597,66 @@ from checked type content; no stage asks "which owners could match this
 constraint?".
 
 **Declared generated-edge instantiation rules.** A compiler-generated edge has
-no checked use site, so no checked instantiation record states what its callee
-scheme's binders took at that edge, and nothing may match the concrete callable
-structurally to invent one (reunify.md section 9.6). Each generating site
-instead names one of the rules below, and each rule states exactly where its
-binder values come from and which exact witness accepts a binding it produces.
-There is no generic generated instantiator: a generator whose mapping cannot be
-made exact and total is declared here as unbound, naming the datum it is
-missing, and binds nothing until that datum reaches its site. The inventory is
+no checked instantiation record stating what its callee scheme's binders took
+at that edge, and nothing may match the concrete callable structurally to
+invent one (reunify.md section 9.6). Each generating site instead names one of
+the rules below, and each rule states exactly where its binder values come from
+and which exact witness accepts a binding it produces. There is no generic
+generated instantiator: a generator whose mapping cannot be made exact and
+total is declared here as unbound, naming the datum it is missing, and binds
+nothing until that datum reaches its site. The inventory is
 `GeneratedInstantiationRule` in `src/postcheck/monotype/spec_rehearsal.zig`,
 with accepted and rejected tests beside it.
 
-The one rule whose generating site holds a checked receiver:
+Every bound mapping reads its receiver as the receiver EMITTED under the
+requesting body's binding, not as the receiver's checked payload: a
+`where`-constrained dispatcher names only the constrained variable, whose value
+lives in that binding, while a receiver that is already a named checked type
+reaches the same argument list either way. `List` and `Box` emit their element
+as the structural shape rather than a named node, so their single argument is
+read from that shape.
+
+The rules whose generating sites hold a checked receiver:
 
 - `iterator_dispatch_receiver` — a `for` loop's `iter` and `next` calls. The
   checker introduces both as synthetic receiver-dispatch constraints with no
   introducing expression, so their dispatch-target instantiation records land
   under a use node of zero and no use expression names them. Mapping: the
   callee scheme's binder `i` takes argument `i` of the dispatch plan's own
-  checked dispatcher type, read alias-transparently as a named type.
-  `Builtin.List.iter` is `List(item) -> Iter(item)` over a `List(X)` dispatcher
-  and `Builtin.Iter.next` is `Iter(item) -> [...]` over an `Iter(X)`
-  dispatcher, so in both the dispatcher's argument list is the callee's binder
-  list in order. A dispatcher whose argument count differs from the binder
-  count is outside the rule and binds nothing. Witness: the plan's own checked
-  callable type, instantiated under the requesting body's binding, must be the
-  same type as the callee scheme root instantiated under the binding the rule
-  produced.
+  checked dispatcher type. `Builtin.List.iter` is `List(item) -> Iter(item)`
+  over a `List(X)` dispatcher and `Builtin.Iter.next` is `Iter(item) -> [...]`
+  over an `Iter(X)` dispatcher, so in both the dispatcher's argument list is the
+  callee's binder list in order. A dispatcher whose argument count differs from
+  the binder count is outside the rule and binds nothing. Witness: the plan's
+  own checked callable type, instantiated under the requesting body's binding,
+  must be the same type as the callee scheme root instantiated under the binding
+  the rule produced.
+- `constraint_dispatch_receiver` — a `where`-constrained method call whose
+  dispatch checking resolved to `constraint(depth, index)`. The callee is chosen
+  per specialization from the evidence chain, so the coverage rule records a
+  site for the edge exactly where checking could name the callee scheme, and
+  this rule covers the edge where no site was recorded; it is consulted only
+  there, and an edge that does carry a site never reaches it. Mapping: the
+  callee scheme's binder `i` takes argument `i` of the plan's own checked
+  dispatcher type. `dict_find_from`'s `found_key == key` dispatches `k.is_eq` on
+  the constrained variable `k`, which the requesting binding holds as
+  `Dict(A, B)`, and `Builtin.Dict.is_eq`'s binder list is exactly that argument
+  list in order. Witness: as for `iterator_dispatch_receiver`, over the plan's
+  own checked callable type.
+- `structural_derivation_component` — `is_eq`/`to_hash` on a component the
+  structural-derivation ladder reached. The ladder descends a Monotype and
+  carries the checked type of the same position beside it, stepping into record
+  fields by name, tuple elements and tag payloads by position; its entry
+  positions are the dispatch plan's checked dispatcher type and, for the
+  structural-equality intrinsic wrapper, that wrapper's own checked function
+  type. Mapping: the callee scheme's binder `i` takes argument `i` of the
+  component's checked type. Witness: the callee scheme root instantiated under
+  the binding must carry the emitted receiver at the argument position the
+  derivation dispatches on, which is argument zero for both derivations — the
+  ladder builds its callable from the component type it reached, so no checked
+  callable names it. A checked nominal names no instantiated backing type of its
+  own, so a component reached by expanding a nominal's backing hands over no
+  receiver and stays unbound.
 
 The rules that are declared but unbound, each with the datum its generating
 site does not hold:
@@ -3631,11 +3664,6 @@ site does not hold:
 - `inspect_component` — `to_inspect` on a component. The inspect walk descends
   a Monotype and calls the component method on a Monotype component; the
   checked type the walk started from is not carried down.
-- `structural_derivation_component` — `is_eq`/`to_hash` on a component the
-  structural-derivation ladder reached. The ladder is driven entirely by
-  Monotype structure (its expansion stack and memoized helper defs are keyed on
-  Monotype ids), so the component it dispatches on has no checked type at the
-  call.
 - `pattern_literal_equality` — `is_eq` on a literal pattern's scrutinee. The
   guard entry carries the Monotype the comparison happens at, not the
   scrutinee's checked type.
