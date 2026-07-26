@@ -128,6 +128,8 @@ var site_imported_dispatch = std.atomic.Value(u64).init(0);
 // (defining artifact not among the loaded import views, or its owner unindexed).
 var site_imported_defining_scheme_resolved = std.atomic.Value(u64).init(0);
 var site_imported_without_defining_scheme = std.atomic.Value(u64).init(0);
+var annotation_scheme_owner_aliased = std.atomic.Value(u64).init(0);
+var annotation_scheme_owner_diverged = std.atomic.Value(u64).init(0);
 
 // Slice 2 (this sub-slice) residual-variable dispositions (reunify.md 7.4 phase
 // one). Every reachable plain-unconstrained residual variable in a published scheme
@@ -445,6 +447,20 @@ pub fn recordImportedSiteResolution(resolved: bool) void {
     }
 }
 
+/// Record whether one annotated definition's annotation pre-declaration names the
+/// same scheme as the definition itself (reunify.md 7.1): `aliased` when the exact
+/// witness held and the annotation node's use sites publish under the definition's
+/// owner node, `diverged` when the two snapshots disagree on binder count or
+/// canonical digest and both owners stay distinct.
+pub fn recordAnnotationSchemeOwner(aliased: bool) void {
+    if (comptime !enabled) return;
+    if (aliased) {
+        _ = annotation_scheme_owner_aliased.fetchAdd(1, .monotonic);
+    } else {
+        _ = annotation_scheme_owner_diverged.fetchAdd(1, .monotonic);
+    }
+}
+
 /// Which residual-variable disposition outcome a census record counts (reunify.md
 /// 7.4, Slice 2 phase one): `contextual` (adopts an enclosing use edge's concrete
 /// type), `uninhabited` (defaults to the uninhabited leaf, matching today's
@@ -656,6 +672,8 @@ pub fn dumpAppend() void {
     sink.print("site_imported_dispatch={d}\n", .{site_imported_dispatch.load(.monotonic)});
     sink.print("site_imported_defining_scheme_resolved={d}\n", .{site_imported_defining_scheme_resolved.load(.monotonic)});
     sink.print("site_imported_without_defining_scheme={d}\n", .{site_imported_without_defining_scheme.load(.monotonic)});
+    sink.print("annotation_scheme_owner_aliased={d}\n", .{annotation_scheme_owner_aliased.load(.monotonic)});
+    sink.print("annotation_scheme_owner_diverged={d}\n", .{annotation_scheme_owner_diverged.load(.monotonic)});
     sink.print("disposition_contextual={d}\n", .{disposition_contextual.load(.monotonic)});
     sink.print("disposition_uninhabited={d}\n", .{disposition_uninhabited.load(.monotonic)});
     sink.print("residual_undisposed={d}\n", .{residual_undisposed.load(.monotonic)});

@@ -7321,6 +7321,64 @@ const InstantiationEdgeKey = struct {
     scheme_owner_node: u32,
 };
 
+/// Index the annotation nodes that name the same scheme as the definition they
+/// annotate (reunify.md 7.1: one definition, one scheme owner).
+///
+/// Checking declares an annotated definition's scheme from its annotation before
+/// any body runs, and freezes that pre-declaration as a snapshot owned by the
+/// ANNOTATION node. A reference made before the definition's own body is checked
+/// instantiates that pre-declared copy, so its use-site record names the
+/// annotation node as the owning scheme's snapshot node while the definition's
+/// own scheme is owned by its expression node — two owner identities for one
+/// definition, which leaves a consumer unable to name the edge that requested a
+/// specialization of that definition.
+///
+/// The entry is only made under an exact witness: both nodes carry a scheme
+/// snapshot, the two snapshots' canonical structural digests are equal, and they
+/// declare the same number of binders — so the annotation copy and the
+/// definition's own scheme order their binders identically and a positional
+/// actual vector recorded against one is a vector over the other. A definition
+/// whose annotation and body schemes differ is left with both owners.
+fn indexAnnotationSchemeOwners(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    out: *std.AutoHashMap(u32, u32),
+) Allocator.Error!void {
+    const module_env = module.moduleEnvConst();
+    if (module_env.scheme_snapshots.items.items.len == 0) return;
+
+    var snapshot_by_owner = std.AutoHashMap(u32, u32).init(allocator);
+    defer snapshot_by_owner.deinit();
+    for (module_env.scheme_snapshots.items.items, 0..) |record, index| {
+        const entry = try snapshot_by_owner.getOrPut(record.owner_node);
+        // Keep-first matches the snapshot selection publication already uses.
+        if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+    }
+
+    for (0..module_env.all_defs.span.len) |offset| {
+        const def_idx = module_env.store.defAt(module_env.all_defs, offset);
+        const def = module_env.store.getDef(def_idx);
+        const annotation_idx = def.annotation orelse continue;
+        const annotation_node = @intFromEnum(annotation_idx);
+        const definition_node = @intFromEnum(def.expr);
+        if (annotation_node == definition_node) continue;
+        const annotation_snapshot = snapshot_by_owner.get(annotation_node) orelse continue;
+        const definition_snapshot = snapshot_by_owner.get(definition_node) orelse continue;
+        const annotation_record = module_env.scheme_snapshots.items.items[annotation_snapshot];
+        const definition_record = module_env.scheme_snapshots.items.items[definition_snapshot];
+        if (annotation_record.binders_len != definition_record.binders_len) {
+            reunify_census.recordAnnotationSchemeOwner(false);
+            continue;
+        }
+        if (std.mem.order(u8, &annotation_record.digest, &definition_record.digest) != .eq) {
+            reunify_census.recordAnnotationSchemeOwner(false);
+            continue;
+        }
+        try out.put(annotation_node, definition_node);
+        reunify_census.recordAnnotationSchemeOwner(true);
+    }
+}
+
 /// Publish the checker's dense positional scheme-instantiation sites into the
 /// checked store (reunify.md 7.2, Slice 2). Each record's stable edge is deduped
 /// keep-first (matching the constrained-pair records); ordinary sites translate
@@ -7351,12 +7409,25 @@ fn publishInstantiationSites(
     var seen = std.AutoHashMap(InstantiationEdgeKey, u32).init(allocator);
     defer seen.deinit();
 
+    // One definition owns one scheme: a use that instantiated the definition's
+    // annotation pre-declaration names the same scheme as one that instantiated
+    // the definition's own, so the edge is published under the definition's owner
+    // node either way.
+    var annotation_owners = std.AutoHashMap(u32, u32).init(allocator);
+    defer annotation_owners.deinit();
+    try indexAnnotationSchemeOwners(allocator, module, &annotation_owners);
+
     for (module_env.scheme_use_sites.items.items, 0..) |record, record_idx| {
+        const is_local = std.meta.eql(record.defining_module_hash, ModuleEnv.scheme_use_site_local_module);
+        const scheme_owner_node = if (is_local)
+            annotation_owners.get(record.scheme_owner_node) orelse record.scheme_owner_node
+        else
+            record.scheme_owner_node;
         const edge = InstantiationEdgeKey{
             .use_node = record.use_node,
             .slot_kind = record.slot_kind,
             .slot_data = record.slot_data,
-            .scheme_owner_node = record.scheme_owner_node,
+            .scheme_owner_node = scheme_owner_node,
         };
         const seen_entry = try seen.getOrPut(edge);
         if (seen_entry.found_existing) {
@@ -7370,8 +7441,8 @@ fn publishInstantiationSites(
         // index rather than this module's (reunify.md 7.1, Slice 2). The resolved
         // id is DEFINING-artifact-local; `defining_module_hash` qualifies it. A
         // local site resolves through this module's owner map.
-        const is_imported = !std.meta.eql(record.defining_module_hash, ModuleEnv.scheme_use_site_local_module);
-        const local_scheme_id: ?CheckedTypeSchemeId = if (is_imported) null else scheme_id_by_owner.get(record.scheme_owner_node);
+        const is_imported = !is_local;
+        const local_scheme_id: ?CheckedTypeSchemeId = if (is_imported) null else scheme_id_by_owner.get(scheme_owner_node);
         const imported_scheme_id: ?CheckedTypeSchemeId = if (is_imported)
             resolveImportedDefiningScheme(imports, record.defining_module_hash, record.scheme_owner_node)
         else
@@ -7425,7 +7496,7 @@ fn publishInstantiationSites(
             .use_node = record.use_node,
             .slot_kind = record.slot_kind,
             .slot_data = record.slot_data,
-            .scheme_owner_node = record.scheme_owner_node,
+            .scheme_owner_node = scheme_owner_node,
             .scheme = if (resolved_scheme) |sid| @intFromEnum(sid) else instantiation_site_scheme_none,
             .instantiated_root = instantiated_root,
             .actuals_start = actuals_range.start,

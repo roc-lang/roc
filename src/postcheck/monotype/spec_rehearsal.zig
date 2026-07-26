@@ -248,11 +248,44 @@ const ClaimedRequest = union(enum) {
     generated: GeneratedRequest,
 };
 
+/// Where the residual materialization one binding carries came from, so a
+/// mismatching position attributes its empty tag union to the exact binding
+/// that produced it rather than to the position it surfaced at. A binding that
+/// inherits a residual value from its requesting context inherits that
+/// context's origin, so every cascade reports the origin at its head.
+pub const ResidualOrigin = enum {
+    /// No binder of this binding carries a residual materialization.
+    absent,
+    /// The request carried no requesting environment, because an enclosing
+    /// specialization's own environment never resolved (its class is one of the
+    /// `rehearsal_edgeless_binders_*` counters), so an actual naming that
+    /// context's binder resolved against nothing.
+    unresolved_request_context,
+    /// The actual is a checked variable that some scheme of the requesting
+    /// module names as a binder, which this environment chain does not bind.
+    scheme_binder,
+    /// The actual is a residual variable carrying a disposition recorded under
+    /// the requesting body context itself (reunify.md section 7.4), so the
+    /// emission applied exactly the disposition checking recorded there.
+    disposed_here,
+    /// The actual is a residual variable carrying a disposition recorded under a
+    /// different body context than the requesting one (reunify.md section 7.4).
+    disposed_elsewhere,
+    /// The actual is a residual variable carrying no disposition at all.
+    undisposed,
+    /// The actual reaches no checked variable: its empty tag union is checked
+    /// content, not a materialization.
+    closed_empty_row,
+};
+
 /// A copy of one requesting body's binding environment chain, owned by the edge
 /// that captured it. The chain's innermost level is the requesting body's own
 /// binding; its enclosing levels are the lexical environments that body itself
 /// resolved under (reunify.md sections 7.1, 7.3).
 pub const CapturedEnvironment = struct {
+    /// The requesting context's own residual origin, so a binding that inherits
+    /// a residual value reports where that value came from.
+    residual_origin: ResidualOrigin = .absent,
     module_bytes: [32]u8,
     owner_node: u32,
     chain: EnvironmentChain,
@@ -444,6 +477,8 @@ const Frame = struct {
     /// environment: the request context's side of the same interface.
     request_root: ?Type.TypeId,
     env_ready: bool,
+    /// Where this binding's residual materialization came from, if any.
+    residual_origin: ResidualOrigin = .absent,
 
     fn environment(self: *const Frame) ?*const direct_translate.BindingEnvironment {
         return self.chain.innermost();
@@ -615,13 +650,22 @@ fn firstDifference(
     };
     if (depth >= max_difference_depth) return here;
     if (here.left.tag != here.right.tag or here.left.children != here.right.children) return here;
+    // A named head's own identity fields are part of the difference, so a
+    // disagreement there is where the two types part company even though every
+    // head below it agrees.
+    if (here.named_field != .not_named and here.named_field != .equal) return here;
 
     var index: u32 = 0;
     while (index < here.left.children) : (index += 1) {
         const left_child = childAt(left_store, left, index) orelse return here;
         const right_child = childAt(right_store, right, index) orelse return here;
-        const left_digest = left_store.typeDigest(name_store, left_child);
-        const right_digest = right_store.typeDigest(name_store, right_child);
+        // Descend by the ENTRY-INDEPENDENT digest (reunify.md section 8.3): a
+        // stored digest encodes a recursive back reference by visiting-stack
+        // position, so two children of one rooted graph reached through
+        // different entry paths compare unequal and the walk would descend a
+        // rooting difference instead of the content one it is looking for.
+        const left_digest = left_store.unfoldedDigest(name_store, left_child);
+        const right_digest = right_store.unfoldedDigest(name_store, right_child);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) continue;
         return firstDifference(left_store, left_child, right_store, right_child, name_store, depth + 1);
     }
@@ -1046,6 +1090,7 @@ pub const Rehearsal = struct {
             .module_bytes = frame.env_module_bytes,
             .owner_node = frame.owner_node,
             .chain = chain,
+            .residual_origin = frame.residual_origin,
         };
     }
 
@@ -1383,6 +1428,10 @@ pub const Rehearsal = struct {
             captured.owner_node
         else
             checked.checked_residual_disposition_module_body_owner;
+        const caller_origin: ResidualOrigin = if (edge.caller) |captured|
+            captured.residual_origin
+        else
+            .unresolved_request_context;
         const scheme_id = site.schemeId() orelse {
             census.bump("rehearsal_skip_scheme_unresolved");
             return .edge_unusable;
@@ -1428,19 +1477,14 @@ pub const Rehearsal = struct {
                 return .edge_unusable;
             }
             const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return .edge_unusable;
-            if (HeadShape.of(&self.store, translated).isEmptyTagUnionHead()) {
-                if (caller_env == null) {
-                    census.bump("rehearsal_actual_residual_without_caller_env");
-                } else {
-                    census.bump("rehearsal_actual_residual_with_caller_env");
-                }
-                switch (caller.view.payload(actual)) {
-                    .flex, .rigid => {
-                        census.bump("rehearsal_actual_residual_bare_variable");
-                        classifyResidualActual(caller, caller_owner_node, actual, caller_env);
-                    },
-                    else => census.bump("rehearsal_actual_residual_structure"),
-                }
+            if (self.carriesResidualMaterialization(translated)) {
+                noteResidualOrigin(frame, self.classifyResidualActual(
+                    caller,
+                    caller_owner_node,
+                    actual,
+                    caller_env,
+                    caller_origin,
+                ));
             }
             bound[filled] = direct_translate.BoundType.of(translated);
             filled += 1;
@@ -1582,6 +1626,10 @@ pub const Rehearsal = struct {
             held.owner_node
         else
             checked.checked_residual_disposition_module_body_owner;
+        const caller_origin: ResidualOrigin = if (captured_caller) |held|
+            held.residual_origin
+        else
+            .unresolved_request_context;
 
         const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
             self.fail();
@@ -1594,6 +1642,15 @@ pub const Rehearsal = struct {
                 census.bump("rehearsal_generated_rule_argument_untranslatable");
                 return false;
             };
+            if (self.carriesResidualMaterialization(translated)) {
+                noteResidualOrigin(frame, self.classifyResidualActual(
+                    caller,
+                    caller_owner_node,
+                    argument,
+                    caller_env,
+                    caller_origin,
+                ));
+            }
             bound[index] = direct_translate.BoundType.of(translated);
         }
 
@@ -1778,6 +1835,10 @@ pub const Rehearsal = struct {
             captured.owner_node
         else
             checked.checked_residual_disposition_module_body_owner;
+        const caller_origin: ResidualOrigin = if (edge.caller) |captured|
+            captured.residual_origin
+        else
+            .unresolved_request_context;
 
         const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
             self.fail();
@@ -1790,19 +1851,14 @@ pub const Rehearsal = struct {
                 return false;
             }
             const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return false;
-            if (HeadShape.of(&self.store, translated).isEmptyTagUnionHead()) {
-                if (caller_env == null) {
-                    census.bump("rehearsal_actual_residual_without_caller_env");
-                } else {
-                    census.bump("rehearsal_actual_residual_with_caller_env");
-                }
-                switch (caller.view.payload(actual)) {
-                    .flex, .rigid => {
-                        census.bump("rehearsal_actual_residual_bare_variable");
-                        classifyResidualActual(caller, caller_owner_node, actual, caller_env);
-                    },
-                    else => census.bump("rehearsal_actual_residual_structure"),
-                }
+            if (self.carriesResidualMaterialization(translated)) {
+                noteResidualOrigin(frame, self.classifyResidualActual(
+                    caller,
+                    caller_owner_node,
+                    actual,
+                    caller_env,
+                    caller_origin,
+                ));
             }
             bound[index] = direct_translate.BoundType.of(translated);
         }
@@ -1949,47 +2005,90 @@ pub const Rehearsal = struct {
         return null;
     }
 
-    /// Name why one checked actual translated to a residual materialization:
-    /// the checked variable it names is a scheme binder of the requesting
-    /// module, carries a residual disposition in this body context or another
-    /// one, or carries none at all.
+    /// Name why one checked actual translated to a value carrying a residual
+    /// materialization, and report the origin that value inherits: the actual
+    /// reaches a checked variable this environment does not bind (a scheme
+    /// binder of the requesting module, a variable disposed in another body
+    /// context, or an undisposed one), it reaches only variables the caller
+    /// already bound to a residual value, or it reaches none at all and its
+    /// empty row is checked content.
     fn classifyResidualActual(
+        self: *Rehearsal,
         caller: direct_translate.ModuleCursor,
         owner_node: u32,
         actual: checked.CheckedTypeId,
         caller_env: ?*const direct_translate.BindingEnvironment,
-    ) void {
-        if (caller_env != null) {
-            var inherited = false;
-            var cursor = caller_env;
-            while (cursor) |env| : (cursor = env.parent) {
-                for (env.binders) |binder| {
-                    if (binder == actual) inherited = true;
-                }
-            }
-            if (inherited) {
+        caller_origin: ResidualOrigin,
+    ) ResidualOrigin {
+        if (caller_env == null) {
+            census.bump("rehearsal_actual_residual_without_caller_env");
+            return .unresolved_request_context;
+        }
+        census.bump("rehearsal_actual_residual_with_caller_env");
+        const free = self.firstFreeVariable(caller.view, actual, caller_env) orelse {
+            // Every variable the actual reaches is bound, so the residual came
+            // in through one of those bindings — or the empty row is checked
+            // content the requesting body really names.
+            if (caller_origin != .absent) {
                 census.bump("rehearsal_actual_residual_inherited");
-            } else {
-                census.bump("rehearsal_actual_residual_unbound_here");
+                return caller_origin;
             }
+            census.bump("rehearsal_actual_residual_closed_empty_row");
+            return .closed_empty_row;
+        };
+        census.bump("rehearsal_actual_residual_unbound_here");
+        switch (caller.view.payload(actual)) {
+            .flex, .rigid => census.bump("rehearsal_actual_residual_bare_variable"),
+            else => census.bump("rehearsal_actual_residual_structure"),
         }
         for (caller.view.schemes) |scheme| {
             for (scheme.generalizedVars(caller.view)) |binder| {
-                if (binder != actual) continue;
+                if (binder != free) continue;
                 census.bump("rehearsal_actual_residual_is_scheme_binder");
-                return;
+                return .scheme_binder;
             }
         }
         for (caller.view.residualDispositions()) |disposition| {
-            if (disposition.type_id != @intFromEnum(actual)) continue;
+            if (disposition.type_id != @intFromEnum(free)) continue;
             if (disposition.scheme_owner_node == owner_node) {
                 census.bump("rehearsal_actual_residual_disposed_here");
-            } else {
-                census.bump("rehearsal_actual_residual_disposed_elsewhere");
+                return .disposed_here;
             }
-            return;
+            census.bump("rehearsal_actual_residual_disposed_elsewhere");
+            return .disposed_elsewhere;
         }
         census.bump("rehearsal_actual_residual_undisposed");
+        return .undisposed;
+    }
+
+    /// Whether a stored type carries the empty tag union anywhere, which is what
+    /// an undisposed, undefaulted residual variable materializes to. Checking
+    /// the whole value rather than its head catches a residual nested inside a
+    /// structure, which is where most bound residuals sit.
+    fn carriesResidualMaterialization(self: *Rehearsal, root: Type.TypeId) bool {
+        var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return false;
+        while (stack.pop()) |ty| {
+            const gop = visited.getOrPut(ty) catch return false;
+            if (gop.found_existing) continue;
+            if (HeadShape.of(&self.store, ty).isEmptyTagUnionHead()) return true;
+            var index: u32 = 0;
+            while (childAt(&self.store, ty, index)) |child| : (index += 1) {
+                stack.append(self.allocator, child) catch return false;
+            }
+        }
+        return false;
+    }
+
+    /// Fold one actual's residual origin into the binding's: the first origin a
+    /// binding takes on is the one it reports, so a binding names the head of
+    /// its own cascade rather than the last binder that repeated it.
+    fn noteResidualOrigin(frame: *Frame, origin: ResidualOrigin) void {
+        if (frame.residual_origin != .absent) return;
+        frame.residual_origin = origin;
     }
 
     /// Name the owner kind of the callee scheme one resolved environment binds,
@@ -2348,6 +2447,15 @@ pub const Rehearsal = struct {
                     census.bump("rehearsal_unbound_residual_env_without_binders");
                 } else {
                     census.bump("rehearsal_unbound_residual_env_with_binders");
+                }
+                switch (frame.residual_origin) {
+                    .absent => census.bump("rehearsal_unbound_origin_absent"),
+                    .unresolved_request_context => census.bump("rehearsal_unbound_origin_unresolved_context"),
+                    .scheme_binder => census.bump("rehearsal_unbound_origin_scheme_binder"),
+                    .disposed_here => census.bump("rehearsal_unbound_origin_disposed_here"),
+                    .disposed_elsewhere => census.bump("rehearsal_unbound_origin_disposed_elsewhere"),
+                    .undisposed => census.bump("rehearsal_unbound_origin_undisposed"),
+                    .closed_empty_row => census.bump("rehearsal_unbound_origin_closed_empty_row"),
                 }
                 self.classifyUnboundPosition(frame, address);
             } else if (difference.left.tag != difference.right.tag) {

@@ -247,6 +247,24 @@ pub const Census = struct {
     rehearsal_unbound_disposed_other_owner: Counter = Counter.init(0),
     rehearsal_unbound_undisposed: Counter = Counter.init(0),
     rehearsal_unbound_no_free_variable: Counter = Counter.init(0),
+    // Where each residual-materialization mismatch's empty tag union entered the
+    // binding, followed back through every inherited binding to the head of its
+    // cascade. `unresolved_context` is a request made under a specialization
+    // whose own environment never resolved (the `edgeless_binders_*` classes
+    // name which); `scheme_binder` is an actual naming a binder no chain level
+    // binds; `disposed_here`, `disposed_elsewhere`, and `undisposed` are the
+    // reunify.md 7.4 disposition classes, split by whether the disposition the
+    // checked module records for that variable belongs to the requesting body
+    // context; `closed_empty_row` is an actual whose empty row is
+    // checked content rather than a materialization; `absent` is a binding no
+    // residual actual reached, so the position produced its own.
+    rehearsal_unbound_origin_absent: Counter = Counter.init(0),
+    rehearsal_unbound_origin_unresolved_context: Counter = Counter.init(0),
+    rehearsal_unbound_origin_scheme_binder: Counter = Counter.init(0),
+    rehearsal_unbound_origin_disposed_here: Counter = Counter.init(0),
+    rehearsal_unbound_origin_disposed_elsewhere: Counter = Counter.init(0),
+    rehearsal_unbound_origin_undisposed: Counter = Counter.init(0),
+    rehearsal_unbound_origin_closed_empty_row: Counter = Counter.init(0),
     // Whether the value a binder was bound to is itself a residual
     // materialization — the requesting edge's checked actual did not translate
     // to real content — split by whether the requesting body had an environment
@@ -257,6 +275,10 @@ pub const Census = struct {
     rehearsal_actual_residual_bare_variable: Counter = Counter.init(0),
     rehearsal_actual_residual_structure: Counter = Counter.init(0),
     rehearsal_actual_residual_is_scheme_binder: Counter = Counter.init(0),
+    // An actual whose translated value carries the empty tag union while the
+    // actual itself reaches no checked variable: the empty row is content the
+    // requesting body really names, not a residual materialization.
+    rehearsal_actual_residual_closed_empty_row: Counter = Counter.init(0),
     // Whether the requesting body's environment already carried this actual as
     // one of its own binders — so the residual value was inherited from the
     // caller's binding rather than produced here.

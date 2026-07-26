@@ -1047,6 +1047,12 @@ const Builder = struct {
     /// tag, so recognize them by their declaring module and name to stamp a
     /// `BuiltinOwner`. Downstream layout/erasure stages read that owner to keep
     /// the step closure inline instead of erasing it to a boxed callable.
+    ///
+    /// A checked nominal's type name is qualified when it was reached through
+    /// the declaring module's own name and bare when it was reached through the
+    /// enclosing block, so both spellings name the same declaration and both
+    /// stamp the same owner: the module role above already restricts the match
+    /// to a builtin-declared nominal.
     fn builtinOwnerForNominal(
         self: *Builder,
         view: ModuleView,
@@ -1056,8 +1062,8 @@ const Builder = struct {
         const source_view = self.moduleForDigest(moduleDigestFromId(nominal.owner_module));
         if (source_view.module_env.module_role != .builtin) return null;
         const name_text = view.names.typeNameText(nominal.name);
-        if (Ident.textEql(name_text, "Iter")) return .iter;
-        if (Ident.textEql(name_text, "Stream")) return .stream;
+        if (Ident.textEql(name_text, "Iter") or Ident.textEql(name_text, "Builtin.Iter")) return .iter;
+        if (Ident.textEql(name_text, "Stream") or Ident.textEql(name_text, "Builtin.Stream")) return .stream;
         return null;
     }
 

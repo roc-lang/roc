@@ -68,7 +68,10 @@ pub const Constants = struct {
     /// 41: checked procedure templates carry their owning scheme's dense id, and a
     ///     scheme's captured-binder closure covers the enclosing binders its body
     ///     reaches rather than only those its root reaches.
-    pub const CACHE_VERSION = 41;
+    /// 42: an instantiation site whose use instantiated an annotated definition's
+    ///     annotation pre-declaration is published under that definition's own
+    ///     scheme owner node, so one definition has one scheme owner identity.
+    pub const CACHE_VERSION = 42;
 };
 
 /// Configuration for the Roc cache system.
