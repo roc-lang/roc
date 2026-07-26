@@ -3397,6 +3397,19 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, .{ .context = ctx });
 }
 
+fn unifyNominalConstructorBacking(
+    self: *Self,
+    expected_backing: Var,
+    actual_backing: Var,
+    env: *Env,
+    ctx: problem.Context.NominalConstructorContext,
+) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(expected_backing, actual_backing, env, .{
+        .context = .{ .nominal_constructor = ctx },
+        .root_relation = .nominal_constructor_backing,
+    });
+}
+
 /// Check if a variable contains an infinite type after solving a binding.
 /// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
 ///
@@ -17079,9 +17092,12 @@ fn checkNominalTypeUsage(
         //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
         // Convert CIR.Expr.NominalBackingType to Context.NominalConstructorContext.BackingType
         const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
-        const result = try self.unifyInContext(nominal_backing_var, actual_backing_var, env, .{
-            .nominal_constructor = .{ .backing_type = context_backing_type },
-        });
+        const result = try self.unifyNominalConstructorBacking(
+            nominal_backing_var,
+            actual_backing_var,
+            env,
+            .{ .backing_type = context_backing_type },
+        );
 
         // Handle the result of unification
         switch (result) {

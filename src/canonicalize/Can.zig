@@ -87,6 +87,7 @@ const ActiveDeclScope = struct {
     binding: ActiveDeclBinding,
     value_entry_start: usize,
     type_entry_start: usize,
+    import_alias_entry_start: usize,
 };
 
 const ActiveDeclValueEntry = struct {
@@ -97,6 +98,13 @@ const ActiveDeclValueEntry = struct {
 };
 
 const ActiveDeclTypeEntry = struct {
+    ident: Ident.Idx,
+    decl_idx: AST.DeclIndex.DeclIdx,
+    binding: ActiveDeclBinding,
+    previous: ?usize,
+};
+
+const ActiveDeclImportAliasEntry = struct {
     ident: Ident.Idx,
     decl_idx: AST.DeclIndex.DeclIdx,
     binding: ActiveDeclBinding,
@@ -230,6 +238,12 @@ active_decl_scopes: std.AutoHashMapUnmanaged(AST.DeclIndex.ScopeIdx, ActiveDeclB
 active_decl_types: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
 /// Change log backing active_decl_types so scope exit restores shadowed names.
 active_decl_type_entries: std.ArrayListUnmanaged(ActiveDeclTypeEntry) = .empty,
+/// Top active import declaration for each whole-scope module alias.
+active_decl_import_aliases: std.AutoHashMapUnmanaged(Ident.Idx, usize) = .{},
+/// Change log backing active_decl_import_aliases so scope exit restores shadowed aliases.
+active_decl_import_alias_entries: std.ArrayListUnmanaged(ActiveDeclImportAliasEntry) = .empty,
+/// Import aliases already prepared from parser declarations before source-order canonicalization.
+forward_prepared_import_aliases: std.AutoHashMapUnmanaged(AST.Statement.Idx, void) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
 /// Set of identifiers exposed from this module header (values not used)
@@ -611,6 +625,9 @@ pub fn deinit(
     self.active_decl_scopes.deinit(gpa);
     self.active_decl_types.deinit(gpa);
     self.active_decl_type_entries.deinit(gpa);
+    self.active_decl_import_aliases.deinit(gpa);
+    self.active_decl_import_alias_entries.deinit(gpa);
+    self.forward_prepared_import_aliases.deinit(gpa);
     self.function_regions.deinit();
 
     self.var_function_regions.deinit(gpa);
@@ -1212,6 +1229,7 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     };
     const value_entry_start = self.active_decl_value_entries.items.len;
     const type_entry_start = self.active_decl_type_entries.items.len;
+    const import_alias_entry_start = self.active_decl_import_alias_entries.items.len;
 
     try self.active_decl_scopes.put(self.env.gpa, scope_idx, active_binding);
 
@@ -1245,18 +1263,42 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
             });
             try self.active_decl_types.put(self.env.gpa, ident, type_entry_idx);
         }
+
+        var import_iter = parser_scope.import_alias_decls.iterator();
+        while (import_iter.next()) |entry| {
+            const ident = entry.key_ptr.*;
+            const decl_idx = entry.value_ptr.first orelse continue;
+            const previous = self.active_decl_import_aliases.get(ident);
+            const import_entry_idx = self.active_decl_import_alias_entries.items.len;
+            try self.active_decl_import_alias_entries.append(self.env.gpa, .{
+                .ident = ident,
+                .decl_idx = decl_idx,
+                .binding = active_binding,
+                .previous = previous,
+            });
+            try self.active_decl_import_aliases.put(self.env.gpa, ident, import_entry_idx);
+        }
     }
 
     try self.decl_scope_stack.append(self.env.gpa, .{
         .binding = active_binding,
         .value_entry_start = value_entry_start,
         .type_entry_start = type_entry_start,
+        .import_alias_entry_start = import_alias_entry_start,
     });
 }
 
 fn declScopeExit(self: *Self) void {
     const active_scope = self.decl_scope_stack.pop().?;
     _ = self.active_decl_scopes.remove(active_scope.binding.parser_scope);
+    while (self.active_decl_import_alias_entries.items.len > active_scope.import_alias_entry_start) {
+        const entry = self.active_decl_import_alias_entries.pop().?;
+        if (entry.previous) |previous| {
+            self.active_decl_import_aliases.getPtr(entry.ident).?.* = previous;
+        } else {
+            _ = self.active_decl_import_aliases.remove(entry.ident);
+        }
+    }
     while (self.active_decl_type_entries.items.len > active_scope.type_entry_start) {
         const entry = self.active_decl_type_entries.pop().?;
         if (entry.previous) |previous| {
@@ -1350,6 +1392,11 @@ fn activeDeclScopeDeclaresType(self: *Self, ident: Ident.Idx) ?ActiveDeclTypeEnt
         return entry;
     }
     return null;
+}
+
+fn activeDeclScopeDeclaresImportAlias(self: *const Self, ident: Ident.Idx) ?ActiveDeclImportAliasEntry {
+    const entry_idx = self.active_decl_import_aliases.get(ident) orelse return null;
+    return self.active_decl_import_alias_entries.items[entry_idx];
 }
 
 fn parserDeclIsDefiningAssocAlias(self: *const Self, decl_idx: AST.DeclIndex.DeclIdx) bool {
@@ -7242,7 +7289,7 @@ fn canonicalizeQualifiedIdentExpr(
         }
     }
 
-    const module_info: ?Scope.ModuleAliasInfo = self.scopeLookupModule(module_alias) orelse blk: {
+    const module_info: ?Scope.ModuleAliasInfo = (try self.scopeLookupOrPrepareModule(module_alias)) orelse blk: {
         if (self.hasAvailableModuleEnv(module_alias)) {
             break :blk Scope.ModuleAliasInfo{
                 .module_name = module_alias,
@@ -13770,7 +13817,7 @@ fn finishNominalConstructionForType(
             .free_vars = DataSpan.empty(),
         };
     };
-    const is_imported = self.scopeLookupModule(first_tok_ident) != null;
+    const is_imported = (try self.scopeLookupOrPrepareModule(first_tok_ident)) != null;
     const full_type_name = self.parse_ir.resolveQualifiedName(type_expr.qualifiers, type_expr.token, &strip_tokens);
 
     if (self.lookupAvailableModuleEnv(first_tok_ident)) |auto_imported_type| {
@@ -13837,7 +13884,7 @@ fn finishNominalConstructionForType(
         }
     }
 
-    const module_info = self.scopeLookupModule(first_tok_ident).?;
+    const module_info = (try self.scopeLookupOrPrepareModule(first_tok_ident)).?;
     const module_name = module_info.module_name;
     const import_idx = self.scopeLookupImportedModule(module_name) orelse {
         return CanonicalizedExpr{
@@ -14073,7 +14120,7 @@ fn finishTagExprWithArgs(
         // name the same-named constructor of an exposed nominal type `Tag` in
         // that module. Local type declarations and explicit exposed type names
         // above take precedence; this handles the module-qualified form.
-        if (self.scopeLookupModule(type_tok_ident)) |module_info| {
+        if (try self.scopeLookupOrPrepareModule(type_tok_ident)) |module_info| {
             const module_name = module_info.module_name;
             const import_idx = self.scopeLookupImportedModule(module_name) orelse {
                 return CanonicalizedExpr{
@@ -14148,7 +14195,7 @@ fn finishTagExprWithArgs(
         // Check if the first qualifier is an imported name
         const first_tok_idx = qualifier_toks[0];
         const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable;
-        const is_imported = self.scopeLookupModule(first_tok_ident) != null;
+        const is_imported = (try self.scopeLookupOrPrepareModule(first_tok_ident)) != null;
 
         // Build the full qualified type name from ALL qualifiers (the tag name is separate in e.token)
         // For Foo.Bar.X: qualifiers=[Foo, Bar], token=X, type name="Foo.Bar"
@@ -14245,7 +14292,7 @@ fn finishTagExprWithArgs(
         // For Imported.Foo.Bar.X: module=Imported, type=Foo.Bar, tag=X
         // qualifiers=[Imported, Foo, Bar], so type name is built from qualifiers[1..]
 
-        const module_info = self.scopeLookupModule(first_tok_ident).?; // Already checked above
+        const module_info = (try self.scopeLookupOrPrepareModule(first_tok_ident)).?; // Already checked above
         const module_name = module_info.module_name;
         // Check if this is imported in the current scope
         const import_idx = self.scopeLookupImportedModule(module_name) orelse {
@@ -14816,7 +14863,7 @@ fn finishTagPattern(
         );
         const full_type_ident = try self.env.insertIdent(base.Ident.for_text(full_type_name));
 
-        const module_info = self.scopeLookupModule(first_tok_ident) orelse {
+        const module_info = (try self.scopeLookupOrPrepareModule(first_tok_ident)) orelse {
             if (try self.scopeLookupOrPrepareTypeDecl(full_type_ident)) |nominal_type_decl_stmt_idx| {
                 switch (self.env.store.getStatement(nominal_type_decl_stmt_idx)) {
                     .s_nominal_decl => {
@@ -18663,7 +18710,7 @@ fn canonicalizeTypeAnnoBasicType(
             }
         }
 
-        if (self.scopeLookupModule(first_qualifier_ident)) |module_info| {
+        if (try self.scopeLookupOrPrepareModule(first_qualifier_ident)) |module_info| {
             const module_name = module_info.module_name;
             const import_idx = self.scopeLookupImportedModule(module_name) orelse {
                 return try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .module_not_imported = .{
@@ -18743,7 +18790,7 @@ fn canonicalizeTypeAnnoBasicType(
         const module_alias = try self.env.insertIdent(base.Ident.for_text(module_alias_text));
 
         // Check if this is a module alias
-        const module_info = self.scopeLookupModule(module_alias) orelse {
+        const module_info = (try self.scopeLookupOrPrepareModule(module_alias)) orelse {
             // Module is not in current scope - but check if it's a type name first
             if (try self.scopeLookupTypeBinding(module_alias)) |_| {
                 // This is in scope as a type/value, but doesn't expose the nested type being requested
@@ -19775,8 +19822,8 @@ fn scopeLookupOrPrepareTypeBinding(self: *Self, ident_idx: Ident.Idx) std.mem.Al
     return try self.ensureParserTypeBinding(ident_idx);
 }
 
-/// Look up a module alias in the scope hierarchy
-fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
+/// Look up a module alias already present in the canonical scope hierarchy.
+fn scopeLookupModuleInCanonicalScopes(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAliasInfo {
     // Search from innermost to outermost scope
     var i = self.scopes.items.len;
     while (i > 0) {
@@ -19792,15 +19839,99 @@ fn scopeLookupModule(self: *const Self, alias_name: Ident.Idx) ?Scope.ModuleAlia
     return null;
 }
 
+/// Look up a module alias, preparing its whole-scope parser declaration on demand.
+fn scopeLookupOrPrepareModule(self: *Self, alias_name: Ident.Idx) std.mem.Allocator.Error!?Scope.ModuleAliasInfo {
+    if (self.scopeLookupModuleInCanonicalScopes(alias_name)) |module_info| return module_info;
+
+    try self.ensureParserImportAlias(alias_name);
+    return self.scopeLookupModuleInCanonicalScopes(alias_name);
+}
+
+fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator.Error!void {
+    const entry = self.activeDeclScopeDeclaresImportAlias(alias_name) orelse return;
+    const decl = self.parse_ir.decl_index.decls.items[@intFromEnum(entry.decl_idx)];
+    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
+    if (self.forward_prepared_import_aliases.contains(ast_stmt_idx)) return;
+
+    const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
+    const import_stmt = switch (ast_stmt) {
+        .import => |import_stmt| import_stmt,
+        else => return,
+    };
+    if (import_stmt.nested_import) return;
+
+    const base_module_name = self.parse_ir.tokens.resolveIdentifier(import_stmt.module_name_tok) orelse return;
+    const module_name = if (import_stmt.qualifier_tok) |qualifier_tok| blk: {
+        if (self.parse_ir.tokens.resolveIdentifier(qualifier_tok) == null) return;
+        const qualifier_region = self.parse_ir.tokens.resolve(qualifier_tok);
+        const module_region = self.parse_ir.tokens.resolve(import_stmt.module_name_tok);
+        const full_name = self.parse_ir.env.source[qualifier_region.start.offset..module_region.end.offset];
+        const valid_ident = base.Ident.from_bytes(full_name) catch return;
+        break :blk try self.env.insertIdent(valid_ident);
+    } else base_module_name;
+
+    const resolved_alias = try self.resolveModuleAlias(import_stmt.alias_tok, module_name) orelse return;
+    if (!resolved_alias.eql(alias_name)) return;
+
+    const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
+    const exposed_items_start = self.env.store.scratchExposedItemTop();
+    const empty_exposes = try self.env.store.exposedItemSpanFrom(exposed_items_start);
+    try self.scopeIntroduceModuleAliasAt(
+        entry.binding.canonical_scope,
+        alias_name,
+        module_name,
+        import_region,
+        empty_exposes,
+        import_stmt.qualifier_tok != null,
+        false,
+    );
+
+    const module_name_text = self.env.getIdent(module_name);
+    const module_import_idx = try self.env.imports.getOrPutWithIdent(
+        self.env.gpa,
+        &self.env.common,
+        module_name_text,
+        module_name,
+    );
+    try self.import_indices.put(self.env.gpa, module_name, module_import_idx);
+    _ = try self.scopes.items[entry.binding.canonical_scope].introduceImportedModule(
+        self.env.gpa,
+        module_name,
+        module_import_idx,
+    );
+    try self.forward_prepared_import_aliases.put(self.env.gpa, ast_stmt_idx, {});
+}
+
 /// Introduce a module alias into scope
 fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span, is_package_qualified: bool) std.mem.Allocator.Error!void {
+    return self.scopeIntroduceModuleAliasAt(
+        self.currentScopeIdx(),
+        alias_name,
+        module_name,
+        import_region,
+        exposed_items_span,
+        is_package_qualified,
+        true,
+    );
+}
+
+fn scopeIntroduceModuleAliasAt(
+    self: *Self,
+    scope_idx: usize,
+    alias_name: Ident.Idx,
+    module_name: Ident.Idx,
+    import_region: Region,
+    exposed_items_span: CIR.ExposedItem.Span,
+    is_package_qualified: bool,
+    report_diagnostics: bool,
+) std.mem.Allocator.Error!void {
     const gpa = self.env.gpa;
 
-    const current_scope = &self.scopes.items[self.scopes.items.len - 1];
+    const target_scope = &self.scopes.items[scope_idx];
 
     // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
     // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes
-    if (current_scope.type_bindings.get(alias_name)) |existing_binding| {
+    if (target_scope.type_bindings.get(alias_name)) |existing_binding| {
         // Check if any exposed items have the same name as the alias
         // If so, skip the error here and let introduceItemsAliased handle it
         const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
@@ -19821,24 +19952,27 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             else => Region.zero(),
         };
 
-        try self.env.pushDiagnostic(Diagnostic{
-            .shadowing_warning = .{
-                .ident = alias_name,
-                .region = import_region,
-                .original_region = original_region,
-            },
-        });
+        if (report_diagnostics) {
+            try self.env.pushDiagnostic(Diagnostic{
+                .shadowing_warning = .{
+                    .ident = alias_name,
+                    .region = import_region,
+                    .original_region = original_region,
+                },
+            });
+        }
 
         // Don't add the duplicate binding
         return;
     }
 
     // Simplified introduction without parent lookup for now
-    const result = try current_scope.introduceModuleAlias(gpa, alias_name, module_name, is_package_qualified, null);
+    const result = try target_scope.introduceModuleAlias(gpa, alias_name, module_name, is_package_qualified, null);
 
     switch (result) {
         .success => {},
         .shadowing_warning => {
+            if (!report_diagnostics) return;
             // Create diagnostic for module alias shadowing
             try self.env.pushDiagnostic(Diagnostic{
                 .shadowing_warning = .{
@@ -19855,6 +19989,7 @@ fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Id
             if (existing_info.module_name.idx == module_name.idx) {
                 // Same module, just re-registered - not an error
             } else {
+                if (!report_diagnostics) return;
                 try self.env.pushDiagnostic(Diagnostic{
                     .shadowing_warning = .{
                         .ident = alias_name,

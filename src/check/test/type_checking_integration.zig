@@ -4935,6 +4935,43 @@ test "consolidated - record literal lifts into record-backed nominal (control)" 
     try checkTypesModule(source, .{ .pass = .last_def }, "Point");
 }
 
+test "nominal constructor rejects an already nominal record backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }.{
+        \\    inc_a : Wrap -> Wrap
+        \\    inc_a = |wrap| Wrap.{ ..wrap, a: wrap.a + 1 }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Invalid Nominal Record");
+}
+
+test "nominal constructor backing allows a nested nominal value" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Inner :: { value : U8 }
+        \\Outer :: { inner : Inner }
+        \\
+        \\inner = Inner.{ value: 1 }
+        \\outer = Outer.{ inner }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Outer");
+}
+
+test "record update still lifts to its nominal extension" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Wrap :: { a : U8, b : U8 }
+        \\
+        \\inc_a : Wrap -> Wrap
+        \\inc_a = |wrap| { ..wrap, a: wrap.a + 1 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Wrap -> Wrap");
+}
+
 test "consolidated - record literal does not lift through a newtype chain" {
     // Structural lifting is single-level only: it does NOT compose through a
     // transparent newtype chain (`Outer := Inner := { … }`). Pinned as the
