@@ -199,17 +199,72 @@ pub const Census = struct {
     rehearsal_env_resolved: Counter = Counter.init(0),
     // The subset of resolved environments whose scheme carries an EMPTY binder
     // vector: the site's arity agrees (zero actuals for zero binders), so the
-    // environment resolves, but nothing is bound and every generalized position
-    // in the body emits its residual materialization instead of the actual. This
-    // is the reunify.md 7.1 scheme-binder gap seen from the consuming side, not a
-    // translation difference.
+    // environment resolves with nothing bound.
     rehearsal_env_resolved_without_binders: Counter = Counter.init(0),
+    // The empty-binder population split by the question reunify.md 7.1 asks of
+    // it: is the empty vector exact (the scheme is genuinely monomorphic, so its
+    // root reaches no checked variable at all) or does the root reach one that no
+    // binder names? The owner split says which owner kind an unnamed one belongs
+    // to, and `imported` says whether the scheme was read out of another module's
+    // checked data. `root_variable` is the only class 7.1 forbids.
+    rehearsal_env_no_binders_root_ground: Counter = Counter.init(0),
+    rehearsal_env_no_binders_root_variable: Counter = Counter.init(0),
+    rehearsal_env_no_binders_owner_top_level: Counter = Counter.init(0),
+    rehearsal_env_no_binders_owner_nested: Counter = Counter.init(0),
+    rehearsal_env_no_binders_owner_required: Counter = Counter.init(0),
+    rehearsal_env_no_binders_owner_synthetic: Counter = Counter.init(0),
+    rehearsal_env_no_binders_snapshot_present: Counter = Counter.init(0),
+    rehearsal_env_no_binders_snapshot_absent: Counter = Counter.init(0),
+    rehearsal_env_no_binders_imported: Counter = Counter.init(0),
+    // Which environments the unbound-residual mismatches actually come from:
+    // an empty binder vector, or a populated one that still failed to name the
+    // position's variable.
+    rehearsal_unbound_residual_env_without_binders: Counter = Counter.init(0),
+    rehearsal_unbound_residual_env_with_binders: Counter = Counter.init(0),
+    // Why the free checked variable under a mismatching position was not bound:
+    // it belongs to a different checked scheme, it carries a residual
+    // disposition (and under which owner), it carries none at all, or the
+    // position reaches no free variable and the empty tag union came from
+    // somewhere else.
+    rehearsal_unbound_other_scheme_binder: Counter = Counter.init(0),
+    rehearsal_unbound_disposed_contextual: Counter = Counter.init(0),
+    rehearsal_unbound_disposed_uninhabited: Counter = Counter.init(0),
+    rehearsal_unbound_disposed_module_body: Counter = Counter.init(0),
+    rehearsal_unbound_disposed_other_owner: Counter = Counter.init(0),
+    rehearsal_unbound_undisposed: Counter = Counter.init(0),
+    rehearsal_unbound_no_free_variable: Counter = Counter.init(0),
+    // Whether the value a binder was bound to is itself a residual
+    // materialization — the requesting edge's checked actual did not translate
+    // to real content — split by whether the requesting body had an environment
+    // of its own to resolve a symbolic actual under, and by whether the checked
+    // actual is a bare variable or a structure containing one.
+    rehearsal_actual_residual_with_caller_env: Counter = Counter.init(0),
+    rehearsal_actual_residual_without_caller_env: Counter = Counter.init(0),
+    rehearsal_actual_residual_bare_variable: Counter = Counter.init(0),
+    rehearsal_actual_residual_structure: Counter = Counter.init(0),
+    rehearsal_actual_residual_is_scheme_binder: Counter = Counter.init(0),
+    // Whether the requesting body's environment already carried this actual as
+    // one of its own binders — so the residual value was inherited from the
+    // caller's binding rather than produced here.
+    rehearsal_actual_residual_inherited: Counter = Counter.init(0),
+    rehearsal_actual_residual_unbound_here: Counter = Counter.init(0),
+    rehearsal_actual_residual_disposed_here: Counter = Counter.init(0),
+    rehearsal_actual_residual_disposed_elsewhere: Counter = Counter.init(0),
+    rehearsal_actual_residual_undisposed: Counter = Counter.init(0),
+    // Whether a request carried the requesting body's own binding with it, and
+    // when it did not, why: no active frame, an active frame whose own
+    // environment never resolved, or one binding ids in another module.
+    rehearsal_caller_env_captured: Counter = Counter.init(0),
+    rehearsal_caller_env_no_frame: Counter = Counter.init(0),
+    rehearsal_caller_env_frame_not_ready: Counter = Counter.init(0),
+    rehearsal_caller_env_other_module: Counter = Counter.init(0),
     rehearsal_skip_root_edge: Counter = Counter.init(0),
     rehearsal_skip_generated_edge: Counter = Counter.init(0),
     rehearsal_skip_no_site: Counter = Counter.init(0),
     rehearsal_skip_site_ambiguous: Counter = Counter.init(0),
     rehearsal_skip_scheme_unresolved: Counter = Counter.init(0),
-    rehearsal_skip_module_absent: Counter = Counter.init(0),
+    rehearsal_skip_caller_module_absent: Counter = Counter.init(0),
+    rehearsal_skip_defining_module_absent: Counter = Counter.init(0),
     rehearsal_skip_arity_mismatch: Counter = Counter.init(0),
     rehearsal_skip_unreached_actual: Counter = Counter.init(0),
     rehearsal_skip_captured_scheme: Counter = Counter.init(0),
@@ -236,10 +291,19 @@ pub const Census = struct {
     rehearsal_type_mismatch_logical: Counter = Counter.init(0),
     // The subset of logical mismatches whose emitted type is the empty tag union
     // — the stored form an undisposed, undefaulted residual variable
-    // materializes to. A position that emits it where the graph sealed real
-    // content is a binder the environment did not carry, which is the same 7.1
-    // scheme-binder gap `env_resolved_without_binders` counts from the other side.
+    // materializes to — where the graph sealed real content. The `unbound_*`
+    // counters below say which position and which binding produced it; the
+    // corpus attributes almost all of them to a binder whose bound value was
+    // itself a residual, not to a scheme carrying no binders.
     rehearsal_type_mismatch_unbound_residual: Counter = Counter.init(0),
+    // The logical mismatches that are NOT a residual materialization, split by
+    // what actually differs at the deepest disagreeing pair: two different
+    // content heads, two rows of the same head with different widths, two named
+    // heads whose declared identity differs, and anything else.
+    rehearsal_type_mismatch_head_tag: Counter = Counter.init(0),
+    rehearsal_type_mismatch_row_width: Counter = Counter.init(0),
+    rehearsal_type_mismatch_named_identity: Counter = Counter.init(0),
+    rehearsal_type_mismatch_unclassified: Counter = Counter.init(0),
     rehearsal_type_mismatch_representation: Counter = Counter.init(0),
     // A position whose checked source lives outside the specialization's own
     // scheme module, so no binder of this environment is in scope there and it

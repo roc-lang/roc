@@ -7709,6 +7709,89 @@ fn instantiationSiteRecordsEquivalent(module: TypedCIR.Module, a_idx: u32, b_idx
     return true;
 }
 
+/// Walk state for `checkedSchemeBinderCoverage`: it records whether the scheme's
+/// root reached any checked variable, whether any of those sits outside the
+/// scheme's binding (its own binders plus its captured enclosing binders), and
+/// whether any such outside variable also lacks a final disposition.
+const SchemeBinderCoverageScan = struct {
+    store: *const CheckedTypeStore,
+    bound: *const std.AutoHashMap(CheckedTypeId, void),
+    disposed: *const std.AutoHashMap(CheckedTypeId, void),
+    reached_variable: bool = false,
+    reached_disposed: bool = false,
+    reached_unaccounted: bool = false,
+
+    pub fn visit(self: *@This(), traversal: anytype, root: CheckedTypeId) Allocator.Error!bool {
+        const payload = self.store.payload(root);
+        switch (payload) {
+            .flex, .rigid => |v| {
+                self.reached_variable = true;
+                if (self.bound.contains(root)) return true;
+                if (v.numeric_default_phase != null or v.row_default != null or self.disposed.contains(root)) {
+                    self.reached_disposed = true;
+                } else {
+                    self.reached_unaccounted = true;
+                }
+                return true;
+            },
+            else => return try checked_traverse.checkedTypePayloadVisitAllChildren(
+                .forbid,
+                traversal,
+                self.store,
+                root,
+                payload,
+                self,
+            ),
+        }
+    }
+};
+
+/// Classify one published scheme against the reunify.md 7.1/7.5 rule that every
+/// reachable checked variable of a published scheme is either a binder of a
+/// visible scheme or carries an explicit final disposition. A variable counts as
+/// bound when it is one of this scheme's own ordered binders or one of the
+/// enclosing-scheme binders it captures — a nested scheme is a closure, so those
+/// belong to its lexical environment. It counts as disposed when it carries a
+/// checked default or a published residual disposition in this scheme's body
+/// context. `unaccounted` is the class the invariant forbids: generalized
+/// structure that no binder names and no disposition settles, which is exactly
+/// the shape a missed boundary capture leaves behind.
+fn checkedSchemeBinderCoverage(
+    allocator: Allocator,
+    store: *const CheckedTypeStore,
+    scheme: CheckedTypeScheme,
+) Allocator.Error!reunify_census.SchemeBinderCoverage {
+    var bound = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer bound.deinit();
+    for (scheme.generalizedVars(store)) |gv| try bound.put(gv, {});
+    for (scheme.capturedBinders(store)) |captured| {
+        const outer_id = captured.outerScheme() orelse continue;
+        if (@intFromEnum(outer_id) >= store.schemes.items.len) continue;
+        const outer = store.schemes.items[@intFromEnum(outer_id)];
+        if (captured.binder_index >= outer.gv_len) continue;
+        try bound.put(outer.generalizedVars(store)[captured.binder_index], {});
+    }
+
+    var disposed = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer disposed.deinit();
+    for (store.residual_dispositions.items) |disposition| {
+        if (disposition.scheme_owner_node != scheme.owner_node) continue;
+        try disposed.put(disposition.typeId(), {});
+    }
+
+    var scan = SchemeBinderCoverageScan{ .store = store, .bound = &bound, .disposed = &disposed };
+    {
+        var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, SchemeBinderCoverageScan).init(allocator, &scan);
+        defer traversal.deinit();
+        _ = try traversal.visit(scheme.root);
+    }
+
+    if (!scan.reached_variable) return .ground;
+    if (scan.reached_unaccounted) return .unaccounted;
+    if (scan.reached_disposed) return .disposed;
+    return .bound;
+}
+
 /// reunify Slice 2 checked-boundary verifier (reunify.md 7.5). A Debug-only pass
 /// over a published checked type store that proves the structural invariants later
 /// slices build on. Invariants the committed data fully supports are hard —
@@ -7756,6 +7839,25 @@ fn debugVerifyCheckedBoundary(
         }
         if (@as(u64, scheme.captured_start) + scheme.captured_len > store.captured_binders.items.len) {
             checkedArtifactInvariant("boundary verifier: scheme captured-binder range is out of bounds", .{});
+        }
+    }
+
+    // Scheme binder completeness (reunify.md 7.1): a scheme whose root reaches
+    // generalized structure must publish a binder list that names it, so an empty
+    // binder vector means the source is monomorphic and never that its boundary
+    // capture was missed. Measured through the opt-in census rather than failed
+    // while the forbidden class is driven to zero.
+    if (census_on) {
+        for (store.schemes.items) |scheme| {
+            reunify_census.recordSchemeBinderCoverage(
+                try checkedSchemeBinderCoverage(allocator, store, scheme),
+                switch (scheme.owner_kind) {
+                    .top_level_def => .top_level_def,
+                    .nested_def => .nested_def,
+                    .required_type => .required_type,
+                    .synthetic => .synthetic,
+                },
+            );
         }
     }
 
@@ -29152,6 +29254,107 @@ test "checked type store preserves distinct identity roots with equal variable s
     try std.testing.expectEqual(@as(usize, 2), store.roots.items.len);
     try std.testing.expectEqual(@as(usize, 2), store.payloads.items.len);
     try std.testing.expectEqualDeep(store.payload(first), store.payload(second));
+}
+
+test "scheme binder coverage separates monomorphic, bound, disposed, and unaccounted roots" {
+    const allocator = std.testing.allocator;
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+
+    // Four roots: a ground leaf, an outer binder, an inner residual, and a
+    // variable no binder or disposition accounts for.
+    const ground = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(101));
+    try store.fillSyntheticTypeRoot(allocator, ground, .empty_record);
+    const outer_binder = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(102));
+    try store.fillSyntheticTypeRoot(allocator, outer_binder, .{ .rigid = .{} });
+    const residual = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(103));
+    try store.fillSyntheticTypeRoot(allocator, residual, .{ .flex = .{} });
+    const stray = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(104));
+    try store.fillSyntheticTypeRoot(allocator, stray, .{ .rigid = .{} });
+
+    // `reserveSyntheticTypeRoot` already published a synthetic scheme per root;
+    // the four below are the definition-owned schemes under test.
+    const first_scheme: u32 = @intCast(store.schemes.items.len);
+    const outer_binders = try store.appendTypeIds(allocator, &.{outer_binder});
+    try store.schemes.append(allocator, .{
+        .id = @enumFromInt(first_scheme),
+        .key = .{ .bytes = [_]u8{0xA1} ** 32 },
+        .owner_kind = .top_level_def,
+        .owner_node = 11,
+        .root = ground,
+    });
+    try store.schemes.append(allocator, .{
+        .id = @enumFromInt(first_scheme + 1),
+        .key = .{ .bytes = [_]u8{0xA2} ** 32 },
+        .owner_kind = .top_level_def,
+        .owner_node = 12,
+        .root = outer_binder,
+        .gv_start = outer_binders.start,
+        .gv_len = outer_binders.len,
+    });
+    // A nested closure: no binders of its own, its root is the outer scheme's
+    // binder, and it captures that binder explicitly.
+    const captured = try store.appendCapturedBinders(allocator, &.{
+        .{ .outer_scheme = first_scheme + 1, .binder_index = 0 },
+    });
+    try store.schemes.append(allocator, .{
+        .id = @enumFromInt(first_scheme + 2),
+        .key = .{ .bytes = [_]u8{0xA3} ** 32 },
+        .owner_kind = .nested_def,
+        .owner_node = 13,
+        .root = outer_binder,
+        .captured_start = captured.start,
+        .captured_len = captured.len,
+    });
+    try store.schemes.append(allocator, .{
+        .id = @enumFromInt(first_scheme + 3),
+        .key = .{ .bytes = [_]u8{0xA4} ** 32 },
+        .owner_kind = .top_level_def,
+        .owner_node = 14,
+        .root = residual,
+    });
+    try store.schemes.append(allocator, .{
+        .id = @enumFromInt(first_scheme + 4),
+        .key = .{ .bytes = [_]u8{0xA5} ** 32 },
+        .owner_kind = .top_level_def,
+        .owner_node = 15,
+        .root = stray,
+    });
+    try store.appendResidualDisposition(allocator, .{
+        .scheme_owner_node = 14,
+        .type_id = @intFromEnum(residual),
+        .kind = .uninhabited,
+    });
+
+    const coverage = struct {
+        fn of(gpa: Allocator, s: *const CheckedTypeStore, index: u32) Allocator.Error!reunify_census.SchemeBinderCoverage {
+            return checkedSchemeBinderCoverage(gpa, s, s.schemes.items[index]);
+        }
+    };
+
+    try std.testing.expectEqual(
+        reunify_census.SchemeBinderCoverage.ground,
+        try coverage.of(allocator, &store, first_scheme),
+    );
+    try std.testing.expectEqual(
+        reunify_census.SchemeBinderCoverage.bound,
+        try coverage.of(allocator, &store, first_scheme + 1),
+    );
+    // The nested closure is bound: its free variable is a captured enclosing binder.
+    try std.testing.expectEqual(
+        reunify_census.SchemeBinderCoverage.bound,
+        try coverage.of(allocator, &store, first_scheme + 2),
+    );
+    try std.testing.expectEqual(
+        reunify_census.SchemeBinderCoverage.disposed,
+        try coverage.of(allocator, &store, first_scheme + 3),
+    );
+    // The stray rigid is named by no binder and settled by no disposition.
+    try std.testing.expectEqual(
+        reunify_census.SchemeBinderCoverage.unaccounted,
+        try coverage.of(allocator, &store, first_scheme + 4),
+    );
 }
 
 test "relation projection preserves anonymous row identity and provenance" {

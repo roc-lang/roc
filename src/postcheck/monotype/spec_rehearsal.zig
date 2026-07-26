@@ -258,6 +258,9 @@ const MismatchDetail = struct {
     module_prefix: [8]u8,
     type_id: u32,
     representation: bool,
+    /// How many binders the specialization's environment carried, so a detail
+    /// says whether an unbound position sat under an empty binding.
+    binder_count: u32,
     rehearsal_digest: names.TypeDigest,
     graph_digest: names.TypeDigest,
     rehearsal_head: HeadShape,
@@ -265,15 +268,43 @@ const MismatchDetail = struct {
     difference: Difference,
 };
 
-/// A type's outermost shape: its content tag and how many children it holds.
+/// A type's outermost shape: its content tag, how many children it holds, and
+/// how many labelled entries its head declares. The two counts differ exactly
+/// where a row's width is not its payload count: `[A, B]` holds two entries and
+/// no children, and the empty tag union holds neither — the shape a residual
+/// variable materializes to.
 const HeadShape = struct {
     tag: std.meta.Tag(Type.Content),
     children: u32,
+    entries: u32,
 
     fn of(store: *const Type.Store, ty: Type.TypeId) HeadShape {
-        return .{ .tag = std.meta.activeTag(store.get(ty)), .children = childCount(store, ty) };
+        return .{
+            .tag = std.meta.activeTag(store.get(ty)),
+            .children = childCount(store, ty),
+            .entries = entryCount(store, ty),
+        };
+    }
+
+    /// Whether this head is the stored empty tag union — what an undisposed,
+    /// undefaulted residual variable translates to.
+    fn isEmptyTagUnionHead(self: HeadShape) bool {
+        return self.tag == .tag_union and self.entries == 0;
     }
 };
+
+/// How many labelled entries a head declares: a tag union's tags, a record's
+/// fields, a tuple's elements, a function's arguments, a named type's arguments.
+fn entryCount(store: *const Type.Store, ty: Type.TypeId) u32 {
+    return switch (store.get(ty)) {
+        .primitive, .zst, .erased, .list, .box => 0,
+        .tuple => |span| @intCast(GuardedList.borrowLen(store.span(span))),
+        .record => |span| @intCast(GuardedList.borrowLen(store.fieldSpan(span))),
+        .tag_union => |span| @intCast(GuardedList.borrowLen(store.tagSpan(span))),
+        .func => |fn_ty| @intCast(GuardedList.borrowLen(store.span(fn_ty.args))),
+        .named => |named| @intCast(GuardedList.borrowLen(store.span(named.args))),
+    };
+}
 
 /// How many type children a node has, counting every position the walk can
 /// descend into: a tag union's payloads across all its tags, and a named type's
@@ -622,6 +653,7 @@ pub const Rehearsal = struct {
     /// actuals resolve under.
     fn captureCallerEnvironment(self: *Rehearsal, module_bytes: [32]u8) ?CapturedEnvironment {
         const frame = self.callerFrameFor(module_bytes) orelse return null;
+        census.bump("rehearsal_caller_env_captured");
         if (frame.bound.len == 0) {
             return .{
                 .module_bytes = frame.env_module_bytes,
@@ -760,7 +792,7 @@ pub const Rehearsal = struct {
         };
         defer self.releaseEdge(edge);
         const caller = self.lookup.cursor(edge.module_bytes) orelse {
-            census.bump("rehearsal_skip_module_absent");
+            census.bump("rehearsal_skip_caller_module_absent");
             return;
         };
         const site = self.siteFor(caller, edge.use_expr) orelse return;
@@ -778,7 +810,7 @@ pub const Rehearsal = struct {
         };
         const defining_bytes = site.importedDefiningModule() orelse edge.module_bytes;
         const defining = self.lookup.cursor(defining_bytes) orelse {
-            census.bump("rehearsal_skip_module_absent");
+            census.bump("rehearsal_skip_defining_module_absent");
             return;
         };
         const scheme = defining.view.schemeById(scheme_id) orelse {
@@ -808,6 +840,20 @@ pub const Rehearsal = struct {
                 self.allocator.free(bound);
                 return;
             };
+            if (HeadShape.of(&self.store, translated).isEmptyTagUnionHead()) {
+                if (caller_env == null) {
+                    census.bump("rehearsal_actual_residual_without_caller_env");
+                } else {
+                    census.bump("rehearsal_actual_residual_with_caller_env");
+                }
+                switch (caller.view.payload(actual)) {
+                    .flex, .rigid => {
+                        census.bump("rehearsal_actual_residual_bare_variable");
+                        classifyResidualActual(caller, caller_owner_node, actual, caller_env);
+                    },
+                    else => census.bump("rehearsal_actual_residual_structure"),
+                }
+            }
             bound[filled] = direct_translate.BoundType.of(translated);
             filled += 1;
         }
@@ -819,7 +865,10 @@ pub const Rehearsal = struct {
         frame.bound = bound;
         frame.env_ready = true;
         census.bump("rehearsal_env_resolved");
-        if (binders.len == 0) census.bump("rehearsal_env_resolved_without_binders");
+        if (binders.len == 0) {
+            census.bump("rehearsal_env_resolved_without_binders");
+            self.classifyEmptyBinders(defining, scheme, site.importedDefiningModule() != null);
+        }
 
         // The two sides of this specialization's representation interface
         // (reunify.md section 11.1): the callee's scheme root emitted under the
@@ -828,6 +877,129 @@ pub const Rehearsal = struct {
         frame.interface_root = self.emitQuietly(defining, &env, scheme.owner_node, scheme.root);
         const request_env: ?*const direct_translate.BindingEnvironment = if (caller_env) |*value| value else null;
         frame.request_root = self.emitQuietly(caller, request_env, caller_owner_node, site.instantiated_root);
+    }
+
+    /// Name why one checked actual translated to a residual materialization:
+    /// the checked variable it names is a scheme binder of the requesting
+    /// module, carries a residual disposition in this body context or another
+    /// one, or carries none at all.
+    fn classifyResidualActual(
+        caller: direct_translate.ModuleCursor,
+        owner_node: u32,
+        actual: checked.CheckedTypeId,
+        caller_env: ?direct_translate.BindingEnvironment,
+    ) void {
+        if (caller_env) |env| {
+            var inherited = false;
+            for (env.binders) |binder| {
+                if (binder == actual) inherited = true;
+            }
+            if (inherited) {
+                census.bump("rehearsal_actual_residual_inherited");
+            } else {
+                census.bump("rehearsal_actual_residual_unbound_here");
+            }
+        }
+        for (caller.view.schemes) |scheme| {
+            for (scheme.generalizedVars(caller.view)) |binder| {
+                if (binder != actual) continue;
+                census.bump("rehearsal_actual_residual_is_scheme_binder");
+                return;
+            }
+        }
+        for (caller.view.residualDispositions()) |disposition| {
+            if (disposition.type_id != @intFromEnum(actual)) continue;
+            if (disposition.scheme_owner_node == owner_node) {
+                census.bump("rehearsal_actual_residual_disposed_here");
+            } else {
+                census.bump("rehearsal_actual_residual_disposed_elsewhere");
+            }
+            return;
+        }
+        census.bump("rehearsal_actual_residual_undisposed");
+    }
+
+    /// Split one empty-binder environment into the classes reunify.md 7.1
+    /// distinguishes: a genuinely monomorphic scheme (its root reaches no
+    /// residual variable, so an empty vector is the right answer) versus a gap
+    /// (the root does reach one), reported alongside the owner kind, whether a
+    /// pristine snapshot root came with it, and whether the scheme was read out
+    /// of another module's checked data.
+    fn classifyEmptyBinders(
+        self: *Rehearsal,
+        defining: direct_translate.ModuleCursor,
+        scheme: checked.CheckedTypeScheme,
+        imported: bool,
+    ) void {
+        if (self.schemeRootReachesVariable(defining.view, scheme.root)) {
+            census.bump("rehearsal_env_no_binders_root_variable");
+        } else {
+            census.bump("rehearsal_env_no_binders_root_ground");
+        }
+        switch (scheme.owner_kind) {
+            .top_level_def => census.bump("rehearsal_env_no_binders_owner_top_level"),
+            .nested_def => census.bump("rehearsal_env_no_binders_owner_nested"),
+            .required_type => census.bump("rehearsal_env_no_binders_owner_required"),
+            .synthetic => census.bump("rehearsal_env_no_binders_owner_synthetic"),
+        }
+        if (scheme.snapshotRoot() == null) {
+            census.bump("rehearsal_env_no_binders_snapshot_absent");
+        } else {
+            census.bump("rehearsal_env_no_binders_snapshot_present");
+        }
+        if (imported) census.bump("rehearsal_env_no_binders_imported");
+    }
+
+    /// Whether a checked scheme root reaches any checked variable payload —
+    /// the structure a binder would name. A scheme whose root reaches none is
+    /// monomorphic, so an empty binder vector describes it exactly.
+    fn schemeRootReachesVariable(
+        self: *Rehearsal,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+    ) bool {
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(checked.CheckedTypeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return false;
+        while (stack.pop()) |ty| {
+            const gop = visited.getOrPut(ty) catch return false;
+            if (gop.found_existing) continue;
+            switch (view.payload(ty)) {
+                .flex, .rigid => return true,
+                .pending, .err, .empty_record, .empty_tag_union => {},
+                .alias => |alias_ty| {
+                    stack.append(self.allocator, alias_ty.backing) catch return false;
+                    for (alias_ty.args) |arg| stack.append(self.allocator, arg) catch return false;
+                },
+                .record => |record_ty| {
+                    for (record_ty.fields) |field| stack.append(self.allocator, field.ty) catch return false;
+                    stack.append(self.allocator, record_ty.ext) catch return false;
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| stack.append(self.allocator, field.ty) catch return false;
+                },
+                .tuple => |elems| {
+                    for (elems) |elem| stack.append(self.allocator, elem) catch return false;
+                },
+                .nominal => |nominal_ty| {
+                    for (nominal_ty.args) |arg| stack.append(self.allocator, arg) catch return false;
+                    for (nominal_ty.padding_field_types) |field| stack.append(self.allocator, field) catch return false;
+                },
+                .function => |fn_ty| {
+                    for (fn_ty.args) |arg| stack.append(self.allocator, arg) catch return false;
+                    stack.append(self.allocator, fn_ty.ret) catch return false;
+                },
+                .tag_union => |tag_ty| {
+                    for (tag_ty.tags) |tag| {
+                        for (tag.argsSlice(view)) |arg| stack.append(self.allocator, arg) catch return false;
+                    }
+                    stack.append(self.allocator, tag_ty.ext) catch return false;
+                },
+            }
+        }
+        return false;
     }
 
     /// Emit one checked root, counting rather than classifying a walk that left
@@ -876,10 +1048,19 @@ pub const Rehearsal = struct {
     /// The innermost active environment whose binders name ids in `module_bytes`,
     /// or null when the caller is outside every active environment's module.
     fn callerFrameFor(self: *Rehearsal, module_bytes: [32]u8) ?*const Frame {
-        if (self.frames.items.len == 0) return null;
+        if (self.frames.items.len == 0) {
+            census.bump("rehearsal_caller_env_no_frame");
+            return null;
+        }
         const frame = &self.frames.items[self.frames.items.len - 1];
-        if (!frame.env_ready) return null;
-        if (!std.mem.eql(u8, &frame.env_module_bytes, &module_bytes)) return null;
+        if (!frame.env_ready) {
+            census.bump("rehearsal_caller_env_frame_not_ready");
+            return null;
+        }
+        if (!std.mem.eql(u8, &frame.env_module_bytes, &module_bytes)) {
+            census.bump("rehearsal_caller_env_other_module");
+            return null;
+        }
         return frame;
     }
 
@@ -1029,12 +1210,13 @@ pub const Rehearsal = struct {
                 census.bump("rehearsal_type_skip_other_occurrence");
                 continue;
             }
-            self.recordMismatch(address, emitted, sealed, emitted_digest, sealed_digest);
+            self.recordMismatch(frame, address, emitted, sealed, emitted_digest, sealed_digest);
         }
     }
 
     fn recordMismatch(
         self: *Rehearsal,
+        frame: *const Frame,
         address: CheckedAddress,
         emitted: Type.TypeId,
         sealed: Type.TypeId,
@@ -1047,8 +1229,22 @@ pub const Rehearsal = struct {
         } else {
             census.bump("rehearsal_type_mismatch_logical");
             const difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0);
-            if (difference.left.tag == .tag_union and difference.left.children == 0) {
+            if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
                 census.bump("rehearsal_type_mismatch_unbound_residual");
+                if (frame.binders.len == 0) {
+                    census.bump("rehearsal_unbound_residual_env_without_binders");
+                } else {
+                    census.bump("rehearsal_unbound_residual_env_with_binders");
+                }
+                self.classifyUnboundPosition(frame, address);
+            } else if (difference.left.tag != difference.right.tag) {
+                census.bump("rehearsal_type_mismatch_head_tag");
+            } else if (difference.left.entries != difference.right.entries) {
+                census.bump("rehearsal_type_mismatch_row_width");
+            } else if (difference.named_field != .not_named and difference.named_field != .equal) {
+                census.bump("rehearsal_type_mismatch_named_identity");
+            } else {
+                census.bump("rehearsal_type_mismatch_unclassified");
             }
         }
         if (self.details.items.len >= max_mismatch_details) return;
@@ -1058,12 +1254,112 @@ pub const Rehearsal = struct {
             .module_prefix = prefix,
             .type_id = address.type_id,
             .representation = representation,
+            .binder_count = @intCast(frame.binders.len),
             .rehearsal_digest = emitted_digest,
             .graph_digest = sealed_digest,
             .rehearsal_head = HeadShape.of(&self.store, emitted),
             .graph_head = HeadShape.of(self.program_types, sealed),
             .difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0),
         }) catch self.fail();
+    }
+
+    /// Name the reason one mismatching position emitted a residual
+    /// materialization: find the first checked variable it reaches that this
+    /// environment does not bind, and report whether that variable is another
+    /// checked scheme's binder, carries a residual disposition (and under
+    /// which body context), carries none, or is absent entirely.
+    fn classifyUnboundPosition(self: *Rehearsal, frame: *const Frame, address: CheckedAddress) void {
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return;
+        const in_env = std.mem.eql(u8, &address.module_bytes, &frame.env_module_bytes);
+        const free = self.firstFreeVariable(
+            cursor.view,
+            @enumFromInt(address.type_id),
+            if (in_env) frame.binders else &.{},
+        ) orelse {
+            census.bump("rehearsal_unbound_no_free_variable");
+            return;
+        };
+        for (cursor.view.schemes) |scheme| {
+            for (scheme.generalizedVars(cursor.view)) |binder| {
+                if (binder != free) continue;
+                census.bump("rehearsal_unbound_other_scheme_binder");
+                return;
+            }
+        }
+        for (cursor.view.residualDispositions()) |disposition| {
+            if (disposition.type_id != @intFromEnum(free)) continue;
+            if (disposition.scheme_owner_node == frame.owner_node) {
+                switch (disposition.kind) {
+                    .contextual => census.bump("rehearsal_unbound_disposed_contextual"),
+                    .uninhabited => census.bump("rehearsal_unbound_disposed_uninhabited"),
+                }
+                return;
+            }
+            if (disposition.scheme_owner_node == checked.checked_residual_disposition_module_body_owner) {
+                census.bump("rehearsal_unbound_disposed_module_body");
+                return;
+            }
+            census.bump("rehearsal_unbound_disposed_other_owner");
+            return;
+        }
+        census.bump("rehearsal_unbound_undisposed");
+    }
+
+    /// The first checked variable reachable from `root` that `binders` does not
+    /// name, in the walk order the translation itself descends.
+    fn firstFreeVariable(
+        self: *Rehearsal,
+        view: checked.CheckedTypeStoreView,
+        root: checked.CheckedTypeId,
+        binders: []const checked.CheckedTypeId,
+    ) ?checked.CheckedTypeId {
+        var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(checked.CheckedTypeId).empty;
+        defer stack.deinit(self.allocator);
+        stack.append(self.allocator, root) catch return null;
+        while (stack.pop()) |ty| {
+            const gop = visited.getOrPut(ty) catch return null;
+            if (gop.found_existing) continue;
+            var bound = false;
+            for (binders) |binder| {
+                if (binder == ty) bound = true;
+            }
+            if (bound) continue;
+            switch (view.payload(ty)) {
+                .flex, .rigid => return ty,
+                .pending, .err, .empty_record, .empty_tag_union => {},
+                .alias => |alias_ty| {
+                    stack.append(self.allocator, alias_ty.backing) catch return null;
+                    for (alias_ty.args) |arg| stack.append(self.allocator, arg) catch return null;
+                },
+                .record => |record_ty| {
+                    for (record_ty.fields) |field| stack.append(self.allocator, field.ty) catch return null;
+                    stack.append(self.allocator, record_ty.ext) catch return null;
+                },
+                .record_unbound => |fields| {
+                    for (fields) |field| stack.append(self.allocator, field.ty) catch return null;
+                },
+                .tuple => |elems| {
+                    for (elems) |elem| stack.append(self.allocator, elem) catch return null;
+                },
+                .nominal => |nominal_ty| {
+                    for (nominal_ty.args) |arg| stack.append(self.allocator, arg) catch return null;
+                    for (nominal_ty.padding_field_types) |field| stack.append(self.allocator, field) catch return null;
+                },
+                .function => |fn_ty| {
+                    for (fn_ty.args) |arg| stack.append(self.allocator, arg) catch return null;
+                    stack.append(self.allocator, fn_ty.ret) catch return null;
+                },
+                .tag_union => |tag_ty| {
+                    for (tag_ty.tags) |tag| {
+                        for (tag.argsSlice(view)) |arg| stack.append(self.allocator, arg) catch return null;
+                    }
+                    stack.append(self.allocator, tag_ty.ext) catch return null;
+                },
+            }
+        }
+        return null;
     }
 
     fn sealedCarriesRepresentation(self: *Rehearsal, root: Type.TypeId) bool {
@@ -1269,22 +1565,27 @@ pub const Rehearsal = struct {
             const graph_hex = std.fmt.bytesToHex(detail.graph_digest.bytes[0..8].*, .lower);
             const line = std.fmt.allocPrint(
                 self.allocator,
-                "rehearsal_mismatch_detail module={s} checked_ty={d} representation={d} rehearsal={s}/{s}:{d} graph={s}/{s}:{d} differs_at_depth={d} {s}:{d}vs{s}:{d} named_field={s} recursive={d}/{d}\n",
+                "rehearsal_mismatch_detail module={s} checked_ty={d} representation={d} binders={d} rehearsal={s}/{s}:{d}/{d} graph={s}/{s}:{d}/{d} differs_at_depth={d} {s}:{d}/{d}vs{s}:{d}/{d} named_field={s} recursive={d}/{d}\n",
                 .{
                     &module_hex,
                     detail.type_id,
                     @intFromBool(detail.representation),
+                    detail.binder_count,
                     &emitted_hex,
                     @tagName(detail.rehearsal_head.tag),
                     detail.rehearsal_head.children,
+                    detail.rehearsal_head.entries,
                     &graph_hex,
                     @tagName(detail.graph_head.tag),
                     detail.graph_head.children,
+                    detail.graph_head.entries,
                     detail.difference.depth,
                     @tagName(detail.difference.left.tag),
                     detail.difference.left.children,
+                    detail.difference.left.entries,
                     @tagName(detail.difference.right.tag),
                     detail.difference.right.children,
+                    detail.difference.right.entries,
                     @tagName(detail.difference.named_field),
                     @intFromBool(detail.difference.left_recursive),
                     @intFromBool(detail.difference.right_recursive),

@@ -146,6 +146,27 @@ var residual_undisposed = std.atomic.Value(u64).init(0);
 var site_actuals_len_matches_binders = std.atomic.Value(u64).init(0);
 var site_actuals_len_diverges_from_binders = std.atomic.Value(u64).init(0);
 
+// Slice 2 boundary verifier, scheme binder completeness (reunify.md 7.1/7.5).
+// Every published scheme is classified by what its root reaches: no checked
+// variable at all (`ground` — a genuinely monomorphic source, whose empty binder
+// vector is the right answer), only variables the scheme's binding names
+// (`bound`: its own ordered binders plus the enclosing-scheme binders it
+// captures), variables outside that binding which nonetheless carry an explicit
+// final disposition or checked default (`disposed`), or at least one variable
+// that neither names nor settles (`unaccounted`). The last is the class 7.1
+// forbids — the shape a missed boundary capture leaves behind — and must reach
+// zero before the invariant can be asserted rather than measured.
+var scheme_root_ground = std.atomic.Value(u64).init(0);
+var scheme_root_bound = std.atomic.Value(u64).init(0);
+var scheme_root_disposed = std.atomic.Value(u64).init(0);
+var scheme_root_unaccounted = std.atomic.Value(u64).init(0);
+// The forbidden class split by which owner kind published it, so a gap names the
+// checking-side boundary that must start capturing.
+var scheme_unaccounted_top_level = std.atomic.Value(u64).init(0);
+var scheme_unaccounted_nested = std.atomic.Value(u64).init(0);
+var scheme_unaccounted_required = std.atomic.Value(u64).init(0);
+var scheme_unaccounted_synthetic = std.atomic.Value(u64).init(0);
+
 // Slice 2 validation matcher (reunify.md 7.6). For each local site whose scheme is
 // verified-pristine (snapshot_root != none) and whose actuals carry no unreached
 // sentinel, the matcher applies the published substitution to the scheme structure
@@ -455,6 +476,44 @@ pub fn recordSiteActualsLenMatchesBinders(matches: bool) void {
     }
 }
 
+/// How one published scheme's root relates to its binding (reunify.md 7.1/7.5),
+/// as the boundary verifier classifies it: `ground` reaches no checked variable,
+/// `bound` reaches only variables the scheme's own or captured binders name,
+/// `disposed` reaches variables outside that binding which carry an explicit
+/// final disposition or checked default, and `unaccounted` reaches at least one
+/// variable with neither — the one class the invariant forbids.
+pub const SchemeBinderCoverage = enum {
+    ground,
+    bound,
+    disposed,
+    unaccounted,
+};
+
+/// Which owner kind published a scheme, mirroring `CheckedSchemeOwnerKind` so the
+/// census does not depend on the checked-artifact module.
+pub const SchemeOwnerCensus = enum { top_level_def, nested_def, required_type, synthetic };
+
+/// Record one published scheme's binder-coverage classification (reunify.md
+/// 7.1/7.5). Measured rather than hard-asserted while the forbidden class is
+/// still being driven to zero; that class is additionally split by owner kind.
+pub fn recordSchemeBinderCoverage(coverage: SchemeBinderCoverage, owner: SchemeOwnerCensus) void {
+    if (comptime !enabled) return;
+    switch (coverage) {
+        .ground => _ = scheme_root_ground.fetchAdd(1, .monotonic),
+        .bound => _ = scheme_root_bound.fetchAdd(1, .monotonic),
+        .disposed => _ = scheme_root_disposed.fetchAdd(1, .monotonic),
+        .unaccounted => {
+            _ = scheme_root_unaccounted.fetchAdd(1, .monotonic);
+            switch (owner) {
+                .top_level_def => _ = scheme_unaccounted_top_level.fetchAdd(1, .monotonic),
+                .nested_def => _ = scheme_unaccounted_nested.fetchAdd(1, .monotonic),
+                .required_type => _ = scheme_unaccounted_required.fetchAdd(1, .monotonic),
+                .synthetic => _ = scheme_unaccounted_synthetic.fetchAdd(1, .monotonic),
+            }
+        },
+    }
+}
+
 /// Which validation-matcher (reunify.md 7.6) outcome a census record counts.
 pub const MatcherOutcome = enum {
     match,
@@ -602,6 +661,14 @@ pub fn dumpAppend() void {
     sink.print("residual_undisposed={d}\n", .{residual_undisposed.load(.monotonic)});
     sink.print("site_actuals_len_matches_binders={d}\n", .{site_actuals_len_matches_binders.load(.monotonic)});
     sink.print("site_actuals_len_diverges_from_binders={d}\n", .{site_actuals_len_diverges_from_binders.load(.monotonic)});
+    sink.print("scheme_root_ground={d}\n", .{scheme_root_ground.load(.monotonic)});
+    sink.print("scheme_root_bound={d}\n", .{scheme_root_bound.load(.monotonic)});
+    sink.print("scheme_root_disposed={d}\n", .{scheme_root_disposed.load(.monotonic)});
+    sink.print("scheme_root_unaccounted={d}\n", .{scheme_root_unaccounted.load(.monotonic)});
+    sink.print("scheme_unaccounted_top_level={d}\n", .{scheme_unaccounted_top_level.load(.monotonic)});
+    sink.print("scheme_unaccounted_nested={d}\n", .{scheme_unaccounted_nested.load(.monotonic)});
+    sink.print("scheme_unaccounted_required={d}\n", .{scheme_unaccounted_required.load(.monotonic)});
+    sink.print("scheme_unaccounted_synthetic={d}\n", .{scheme_unaccounted_synthetic.load(.monotonic)});
     sink.print("matcher_sites_total={d}\n", .{matcher_sites_total.load(.monotonic)});
     sink.print("matcher_match={d}\n", .{matcher_match.load(.monotonic)});
     sink.print("matcher_mismatch={d}\n", .{matcher_mismatch.load(.monotonic)});
