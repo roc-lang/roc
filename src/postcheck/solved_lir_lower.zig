@@ -2754,6 +2754,8 @@ const Lowerer = struct {
 
         const field_locals = try self.allocator.alloc(LIR.LocalId, captures.len);
         defer self.allocator.free(field_locals);
+        const field_storage_tys = try self.allocator.alloc(Type.TypeId, captures.len);
+        defer self.allocator.free(field_storage_tys);
 
         const target_is_zst = self.isZstLocal(target);
         // Member captures, capture-record fields, and keyed operands are all in
@@ -2767,6 +2769,7 @@ const Lowerer = struct {
             }
             const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
             if (operand.id != capture_id) Common.invariant("capture operand CaptureId did not match its member capture slot");
+            field_storage_tys[i] = field.storage_ty;
             if (target_is_zst) {
                 field_locals[i] = try self.addTemp(field.storage_ty);
                 continue;
@@ -2787,8 +2790,7 @@ const Lowerer = struct {
         var i = captures.len;
         while (i > 0) {
             i -= 1;
-            const field = GuardedList.at(fields, i);
-            current = try self.lowerExprIntoAtType(field_locals[i], GuardedList.at(capture_operands, i).value, field.storage_ty, current);
+            current = try self.lowerExprIntoAtType(field_locals[i], GuardedList.at(capture_operands, i).value, field_storage_tys[i], current);
         }
         return current;
     }

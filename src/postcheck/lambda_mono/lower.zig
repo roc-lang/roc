@@ -991,7 +991,12 @@ const Lowerer = struct {
         capture_operands: anytype,
         capture_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const captures = self.captureSpan(capture_span);
+        const captures = try GuardedList.dupe(
+            self.allocator,
+            SolvedType.Capture,
+            self.captureSpan(capture_span),
+        );
+        defer self.allocator.free(captures);
         const fields = switch (self.program.types.get(capture_ty)) {
             .capture_record => |field_span| try GuardedList.dupe(
                 self.allocator,
