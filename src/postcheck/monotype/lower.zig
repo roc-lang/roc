@@ -36826,6 +36826,21 @@ const BodyContext = struct {
         Common.invariant("checked dispatch expression was marked divergent but no divergent operand was found");
     }
 
+    /// A rejected `from_numeral` or `from_quote` plan is non-returning just like
+    /// an ordinary rejected dispatch. Emit its Roc runtime crash without
+    /// instantiating the rejected conversion callable's type.
+    fn lowerRejectedLiteralConversionForEffectData(
+        self: *BodyContext,
+        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+    ) Allocator.Error!BodyExprData {
+        const plan_id = maybe_plan orelse Common.invariant("rejected checked literal conversion did not contain its dispatch plan");
+        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        return switch (self.dispatchRuntimePlan(plan)) {
+            .crash => |reason| .{ .crash = try self.addStringLiteral(dispatchCrashMessage(reason)) },
+            .callable => Common.invariant("callable checked literal conversion reached rejected conversion lowering"),
+        };
+    }
+
     fn lowerDivergentExprDataAtType(
         self: *BodyContext,
         checked_expr_id: checked.CheckedExprId,
@@ -36900,9 +36915,9 @@ const BodyContext = struct {
             .interpolation => |interpolation| try self.lowerDivergentInterpolationForEffectDataAtType(interpolation, ty),
             .method_eq => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
             .type_dispatch_call => |plan| try self.lowerDivergentDispatchForEffectDataAtType(plan, ty),
+            .numeral => |numeral| try self.lowerRejectedLiteralConversionForEffectData(numeral.plan),
+            .str_from_quote => |quote| try self.lowerRejectedLiteralConversionForEffectData(quote.plan),
             .pending,
-            .numeral,
-            .str_from_quote,
             .str_segment,
             .bytes_literal,
             .lookup_local,
