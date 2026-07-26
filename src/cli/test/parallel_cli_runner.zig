@@ -7137,6 +7137,7 @@ fn runGlueRuntimeCase(
     // aggregate back to the stack. On arm64musl, Zig starts a 16-byte-aligned
     // Dec aggregate in x5 instead of rounding up to x6. CGlue and RustGlue
     // continue to exercise both signatures on these targets.
+    // TODO #10392: Remove this skip after Roc uses a Zig version that lowers both signatures correctly.
     if (native_target) |target| {
         if (runtime.language == .zig and std.mem.eql(u8, runtime.platform.name, "layout-probe")) {
             if (zigCompilerMislowersLayoutProbeAbi(target.roc_target)) {
