@@ -145,7 +145,7 @@ test "HTTP header parsing platform derives structural parser without runtime all
         }
     }
 
-    try expectBinaryOmits(allocator, output_path, &.{ "cache_control", "content_length", "request_count", "x_auth_token" });
+    try expectBinaryOmits(allocator, output_path, &.{ "cache_control", "content_length", "request_count", "route_method", "route_path", "x_auth_token" });
 
     for (0..(@as(usize, 1) << optional_headers.len)) |case_index| {
         const mask: u8 = @intCast(case_index);
@@ -217,6 +217,12 @@ test "HTTP header parsing platform derives structural parser without runtime all
     const missing_required_response = try buildExpectedResponse(allocator, 999999);
     defer allocator.free(missing_required_response);
     try runServerAndCheckResponse(allocator, output_path, missing_required_request, missing_required_response);
+
+    const route_pattern_request = try buildRoutePatternRequest(allocator);
+    defer allocator.free(route_pattern_request);
+    const route_pattern_response = try buildExpectedResponse(allocator, expectedHeaderLength(0) + 3007);
+    defer allocator.free(route_pattern_response);
+    try runServerAndCheckResponse(allocator, output_path, route_pattern_request, route_pattern_response);
 
     const bad_header_request = try buildBadHeaderRequest(allocator);
     defer allocator.free(bad_header_request);
@@ -432,6 +438,24 @@ fn buildMissingRequiredRequest(allocator: std.mem.Allocator) TestError![]u8 {
     try appendHeader(&request, allocator, "Request-Count", "17");
     try request.appendSlice(allocator, "Content-Length: 0\r\n");
     try request.appendSlice(allocator, "\r\n");
+
+    return request.toOwnedSlice(allocator);
+}
+
+fn buildRoutePatternRequest(allocator: std.mem.Allocator) TestError![]u8 {
+    var request: std.ArrayList(u8) = .empty;
+    errdefer request.deinit(allocator);
+
+    try request.appendSlice(allocator, "GET /users/alice/posts/42 HTTP/1.1\r\n");
+    try request.appendSlice(allocator, "Host: localhost\r\n");
+    try appendHeader(&request, allocator, "Cache-Control", cache_control_value);
+    try appendHeader(&request, allocator, "Foo", required_foo_value);
+    try appendHeader(&request, allocator, "Request-Count", "17");
+    try appendHeader(&request, allocator, "Route-Method", "GET");
+    try appendHeader(&request, allocator, "Route-Path", "/users/alice/posts/42");
+    try appendHeader(&request, allocator, "Content-Length", "5");
+    try request.appendSlice(allocator, "\r\n");
+    try request.appendSlice(allocator, request_body);
 
     return request.toOwnedSlice(allocator);
 }
