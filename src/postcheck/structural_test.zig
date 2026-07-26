@@ -176,6 +176,19 @@ test "Lambda Solved keeps lifted syntax and stores callable sets in types" {
     try std.testing.expect(!@hasField(LambdaSolvedType.Content, "erased_fn"));
 }
 
+test "SpecConstr owns strict binding chains and retains opaque discarded work" {
+    const source = @embedFile("monotype_lifted/spec_constr.zig");
+    try expectContains(source, "const ClonedValue = struct");
+    try expectContains(source, "bindings: BindingChain");
+    try expectContains(source, "const discarded = try self.cloneExprValueInto(stmt_expr, &block_bindings)");
+    try expectContains(source, "_ = try self.makeReusableForMatch(discarded, &block_bindings)");
+    try expectNotContains(source, "fn_effect_free");
+    try expectNotContains(source, "effect_marks");
+    try expectNotContains(source, "PendingLet");
+    try expectNotContains(source, "localUseBeforeEffect");
+    try expectNotContains(source, "unsafeLeafCount");
+}
+
 test "Lambda Mono has concrete callable values and no function type" {
     try std.testing.expect(@hasField(LambdaMono.ExprData, "direct_call"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "indirect_erased_call"));

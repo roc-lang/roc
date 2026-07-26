@@ -2467,24 +2467,48 @@ the general call-pattern machinery, so an enclosing fold can contain the same
 self-contained scalar loop as a source loop without changing iterator runtime
 representation.
 
-SpecConstr's symbolic values carry only pure structure; effects live in
-bindings. A pending binding created for an effectful computation may move to
-its region boundary only when its recorded emission window proves the hoist
-crosses no other effect: windows chain from the region entry, effect-free
-bindings commute and need no window, and an effectful binding with no window
-pins its value in place. Emission windows belong to values, not call paths —
-they are keyed by the expression node, which substitution preserves, so a
-producer cloned once as an argument still proves its window when it becomes a
-binding at a later use site. Two properties are load-bearing for this policy.
-First, the effect-mark counter must observe every observable-effect emission,
-expression and statement position alike — a window that silently spanned an
-uncounted emission could hoist a binding across it. Second, any construct that
-can conditionally skip the code after it without advancing the effect marks (a
-`try` sequence's early return) must clone its continuation inside its own
-region: the region boundary is what keeps a producer created after the
-divergence from becoming a hoist candidate beside it. A rewrite that cloned a
-try continuation in its enclosing region would silently reopen effect
-reordering, and the window chain check cannot detect that itself.
+SpecConstr separates symbolic structure from strict work. A cloned value is a
+pair of an owned `BindingChain` and a symbolic `Value`. The chain contains the
+strict computations which produce the value's opaque leaves, in source
+evaluation order. Before a value may be reused through substitution, every
+non-work-free leaf is named in that chain and replaced by the resulting local;
+budget exhaustion names the entire remaining sub-value as one strict binding.
+Cloning a constructor concatenates its children's chains in field or item order.
+Cloning a sequential construct consumes the producer's chain before cloning its
+continuation and places that chain structurally before the continuation. Cloning
+a branch places each arm's chain inside that arm. Introducing a join keeps
+bindings before the case outside the join, keeps arm bindings around the
+corresponding arm jump, and keeps continuation bindings in the join body. No
+binding chain is stored in ambient cloner state, and a nested clone cannot
+observe, capture, flush, or move a chain owned by its caller.
+
+This follows the useful ownership discipline of GHC's simplifier floats: an
+expression transformation produces an ordered binding collection together with
+its expression, collections concatenate in evaluation order, and the owning
+structural boundary wraps them around the result. Roc also preserves GHC's
+important distinction between purity and speculatability: knowing that an
+expression has no language-level effect does not prove that evaluating it early
+or not at all preserves strict source evaluation behavior.
+
+This strict chain is the ordering proof. SpecConstr does not count effectful
+expressions, record emission windows, recover ordering from expression ids, or
+scan cloned bodies to decide whether a binding may cross another binding.
+Code motion is a separate decision. Language-level purity is necessary but not
+sufficient: a pure call can diverge, and a compiler-authored pure procedure can
+contain ordered implementation mutation. SpecConstr therefore does not ask an
+opaque computation for permission to move. It names the computation once in
+the chain owned by its original position, substitutes only the resulting local,
+and discards only structurally work-free value construction around those named
+leaves. This keeps iterator structure visible without discarding or commuting a
+call, loop, low-level operation, or control transfer. Any future optimization
+which does move opaque work needs an explicit earlier-stage total-and-
+speculatable proof; it must never manufacture one by scanning a procedure body.
+
+In Debug builds, placing a `BindingChain` verifies its forward/back links and
+the type of every binding, and the Monotype Lifted body verifier checks local
+scope plus join scope and arity. These checks make a lost binding, an arm-owned
+binding escaping through a malformed join, or a chain linked out of source
+order a compiler bug.
 
 A loop-carried variable's reassigned copies share its source binder but not
 its local id, so once a loop clone rebinds the carried slot, binder identity
@@ -6167,6 +6191,10 @@ Minimum boundary checks:
 - Monotype Lifted IR contains no reachable closure expressions, local function
   definitions in expression position, definition references in expression
   position, or direct calls whose callee is still a Monotype function template.
+- SpecConstr binding chains are well-linked, source-ordered, type-correct, and
+  placed by their owning expression, statement, branch, or jump site.
+- Rewritten Monotype Lifted bodies have only lexically scoped local references
+  and jumps whose target is in scope and whose argument count matches its join.
 - Lambda Solved IR has every function type in `args/callable/ret` form.
 - Lambda Solved IR has no unresolved callable slot before direct LIR lowering.
 - Lambda Mono decisions contain no function type and no value-call node.

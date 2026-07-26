@@ -418,21 +418,91 @@ const BindingChange = struct {
     previous: ?Value,
 };
 
-const PendingLet = struct {
+const StrictBinding = struct {
     local: Ast.LocalId,
     ty: Type.TypeId,
     value: Ast.ExprId,
-    /// The cloner's effect-mark count when this binding was created. A
-    /// binding created after an effect was emitted in its region must not
-    /// move to the region's start, because it would cross that effect.
-    marks: usize,
-    /// The effect-mark count from just before this binding's value expression
-    /// began cloning, making its emission window `[marks_before, marks]`. A
-    /// windowed binding may delegate to the region boundary even when its
-    /// value is effectful, because a valid window proves the hoist crosses no
-    /// other effect (see `pendingChainDelegates`). Null when the origin did
-    /// not track a window; an effectful binding with no window always pins.
-    marks_before: ?usize,
+};
+
+const BindingNode = struct {
+    binding: StrictBinding,
+    previous: ?*BindingNode = null,
+    next: ?*BindingNode = null,
+};
+
+/// A linearly owned, source-ordered chain of strict bindings. Concatenation
+/// consumes the appended chain; callers must not retain or reuse an appended
+/// chain value. Nodes live in the pass arena, so concatenation is constant time
+/// and does not copy bindings.
+const BindingChain = struct {
+    first: ?*BindingNode = null,
+    last: ?*BindingNode = null,
+
+    fn isEmpty(self: BindingChain) bool {
+        return self.first == null;
+    }
+
+    fn mark(self: BindingChain) ?*BindingNode {
+        return self.last;
+    }
+
+    fn rewind(self: *BindingChain, saved_last: ?*BindingNode) void {
+        if (saved_last) |last| {
+            last.next = null;
+            self.last = last;
+        } else {
+            self.first = null;
+            self.last = null;
+        }
+    }
+
+    fn appendBinding(self: *BindingChain, arena: Allocator, binding: StrictBinding) Allocator.Error!void {
+        const node = try arena.create(BindingNode);
+        node.* = .{ .binding = binding, .previous = self.last };
+        if (self.last) |last| {
+            last.next = node;
+        } else {
+            self.first = node;
+        }
+        self.last = node;
+    }
+
+    fn appendChain(self: *BindingChain, other: BindingChain) void {
+        if (other.first == null) return;
+        if (self.last) |last| {
+            last.next = other.first;
+            other.first.?.previous = last;
+        } else {
+            self.first = other.first;
+        }
+        self.last = other.last;
+    }
+
+    fn verify(self: BindingChain, program: *const Ast.Program) void {
+        if (!std.debug.runtime_safety) return;
+        var previous: ?*BindingNode = null;
+        var current = self.first;
+        while (current) |node| : (current = node.next) {
+            std.debug.assert(node.previous == previous);
+            std.debug.assert(program.getLocal(node.binding.local).ty == node.binding.ty);
+            std.debug.assert(program.getExpr(node.binding.value).ty == node.binding.ty);
+            previous = node;
+        }
+        std.debug.assert(previous == self.last);
+        std.debug.assert((self.first == null) == (self.last == null));
+    }
+};
+
+/// Symbolic structure plus the strict computations that produce its opaque
+/// leaves. The chain is placed exactly once before any use of `value`.
+const ClonedValue = struct {
+    bindings: BindingChain = .{},
+    value: Value,
+};
+
+const ClonedStmt = struct {
+    bindings: BindingChain = .{},
+    stmt: ?Ast.StmtId,
 };
 
 const LoopPattern = struct {
@@ -491,6 +561,7 @@ const ActiveJoinClone = struct {
 /// decided) and the symbolic value the site supplies for each binder slot.
 const LetCaseJumpSite = struct {
     expr: Ast.ExprId,
+    bindings: BindingChain,
     values: []const Value,
 };
 
@@ -531,11 +602,6 @@ const Pass = struct {
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
-    /// Per source function: whether its body performs no observable effect.
-    /// Calls to such functions are pure computations; only calls to the
-    /// rest carry effects. Functions created during specialization are past
-    /// the end of this table and count as effectful.
-    fn_effect_free: []bool,
     /// Per source function: whether an explicit Roc crash is reachable through
     /// its body or a local direct call. Such calls retain their procedure
     /// boundary so optimized debug backtraces preserve source frames.
@@ -591,33 +657,10 @@ const Pass = struct {
             };
         }
 
-        const fn_effect_free = try allocator.alloc(bool, program.fnCount());
-        errdefer allocator.free(fn_effect_free);
-        for (0..program.fnCount()) |index| {
-            const fn_ = program.getFnAt(index);
-            fn_effect_free[index] = fn_.body == .roc;
-        }
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (0..program.fnCount()) |index| {
-                const fn_ = program.getFnAt(index);
-                if (!fn_effect_free[index]) continue;
-                const body = switch (fn_.body) {
-                    .roc => |body| body,
-                    .hosted => continue,
-                };
-                if (!exprHasNoObservableEffect(program, fn_effect_free, body, true)) {
-                    fn_effect_free[index] = false;
-                    changed = true;
-                }
-            }
-        }
-
         const fn_may_crash = try allocator.alloc(bool, program.fnCount());
         errdefer allocator.free(fn_may_crash);
         @memset(fn_may_crash, false);
-        changed = true;
+        var changed = true;
         while (changed) {
             changed = false;
             for (0..program.fnCount()) |index| {
@@ -661,7 +704,6 @@ const Pass = struct {
             .program = program,
             .plans = plans,
             .symbols = .{ .next = program.next_symbol },
-            .fn_effect_free = fn_effect_free,
             .fn_may_crash = fn_may_crash,
             .peeled = peeled,
             .whole_body_cloned = whole_body_cloned,
@@ -716,7 +758,6 @@ const Pass = struct {
         self.allocator.free(self.self_recursive_fns);
         self.allocator.free(self.shape_demand_fns);
         self.allocator.free(self.fn_may_crash);
-        self.allocator.free(self.fn_effect_free);
         self.allocator.free(self.peeled);
         self.allocator.free(self.whole_body_cloned);
         for (self.plans) |*plan| plan.deinit(self.allocator);
@@ -1057,8 +1098,10 @@ const Pass = struct {
                 .allocator = self.allocator,
                 .fn_index = index,
                 .bound = std.AutoHashMap(Ast.LocalId, u32).init(self.allocator),
+                .joins = std.AutoHashMap(Ast.JoinPointId, u32).init(self.allocator),
             };
             defer validator.bound.deinit();
+            defer validator.joins.deinit();
             const args = self.program.typedLocalSpan(func.args);
             for (0..args.len) |arg_index| try validator.bind(GuardedList.at(args, arg_index).local);
             const captures = self.program.typedLocalSpan(func.captures);
@@ -3943,8 +3986,9 @@ const Pass = struct {
 
             var cloner = Cloner.initForRewrite(self);
             defer cloner.deinit();
+            var bindings: BindingChain = .{};
 
-            if (try self.appendExistingCallArgs(&cloner, spec.pattern, args, &rewritten_args)) {
+            if (try self.appendExistingCallArgs(&cloner, spec.pattern, args, &bindings, &rewritten_args)) {
                 const new_call: Ast.ExprData = .{ .call_proc = .{
                     .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before rewriting") },
                     .args = try self.program.addExprSpan(rewritten_args.items),
@@ -3952,7 +3996,7 @@ const Pass = struct {
                     .captures = call.captures,
                     .is_cold = call.is_cold,
                 } };
-                if (cloner.pending.items.len == 0) {
+                if (bindings.isEmpty()) {
                     self.program.setExprData(expr_id, new_call);
                 } else {
                     // Decomposing the argument created bindings its leaves
@@ -3960,7 +4004,7 @@ const Pass = struct {
                     // ending in the specialized call.
                     const call_ty = self.program.getExpr(expr_id).ty;
                     const call_expr = try cloner.addExpr(.{ .ty = call_ty, .data = new_call });
-                    const wrapped = try cloner.flushPendingSince(0, call_expr);
+                    const wrapped = try cloner.wrapBindings(bindings, call_expr);
                     self.program.setExprData(expr_id, self.program.getExpr(wrapped).data);
                 }
                 return;
@@ -3973,6 +4017,7 @@ const Pass = struct {
         cloner: *Cloner,
         pattern: CallPattern,
         args: []const Ast.ExprId,
+        bindings: *BindingChain,
         out: *std.ArrayList(Ast.ExprId),
     ) Allocator.Error!bool {
         const pending_start = cloner.pending.items.len;
@@ -3981,9 +4026,10 @@ const Pass = struct {
 
         if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
         for (pattern.args, args) |shape, arg| {
-            const value = try cloner.cloneExprValue(arg);
-            if (!shapeMatchesValue(self.program, shape, value)) return false;
-            try cloner.appendExprsFromValue(shape, value, out);
+            const cloned = try cloner.cloneExprValue(arg);
+            bindings.appendChain(cloned.bindings);
+            if (!shapeMatchesValue(self.program, shape, cloned.value)) return false;
+            try cloner.appendExprsFromValue(shape, cloned.value, out);
         }
         matched = true;
         return true;
@@ -4476,26 +4522,6 @@ const Cloner = struct {
     /// must capture the recursive slot itself, not a field projected from it,
     /// so construction does not read the still-zeroed recursive payload.
     active_recursive_value_locals: std.AutoHashMap(Ast.LocalId, void),
-    /// Bindings created while producing a structured value, not yet emitted.
-    /// Each holds a fresh local the value's leaves reference. They are
-    /// emitted — oldest outermost, preserving evaluation order — at the
-    /// nearest enclosing region boundary (`cloneExpr`), or earlier by any
-    /// construct that pins its value with `resolvePending`.
-    pending: std.ArrayList(PendingLet),
-    /// Emission-window starts for opaque values cloned from a known point,
-    /// keyed by their expression node. A value's window belongs to the node
-    /// itself — substitution passes the same node id around, so a pending
-    /// created for it at any later site can still prove where its effects
-    /// were emitted (see `pendingChainDelegates`). Only freshly emitted nodes
-    /// are recorded, and the first recording wins: a later touch of an
-    /// existing node is a lookup, and recording it would claim marks that
-    /// belong to other emissions.
-    expr_window_starts: std.AutoHashMap(Ast.ExprId, usize),
-    /// Count of effect-bearing expressions emitted so far. Compared against
-    /// `region_entry_marks` to decide whether a pending binding may move to
-    /// its region's start without crossing an effect.
-    effect_marks: usize,
-    region_entry_marks: usize,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `nominal.backing`/`static_data_candidate.runtime` pointer edge
@@ -4559,10 +4585,6 @@ const Cloner = struct {
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
-            .pending = .empty,
-            .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
-            .effect_marks = 0,
-            .region_entry_marks = 0,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_direct_calls = true,
@@ -4592,10 +4614,6 @@ const Cloner = struct {
             .let_case_shape_arms_remaining = let_case_shape_arm_budget,
             .let_case_builds = .empty,
             .active_recursive_value_locals = std.AutoHashMap(Ast.LocalId, void).init(pass.allocator),
-            .pending = .empty,
-            .expr_window_starts = std.AutoHashMap(Ast.ExprId, usize).init(pass.allocator),
-            .effect_marks = 0,
-            .region_entry_marks = 0,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_direct_calls = true,
@@ -4613,15 +4631,6 @@ const Cloner = struct {
     }
 
     fn deinit(self: *Cloner) void {
-        // Every decline path shrinks the bindings it created and every region
-        // boundary flushes the rest; a binding surviving to teardown was
-        // emitted nowhere, which drops its evaluation from the program. When
-        // teardown runs on an error path (allocation failure mid-clone), the
-        // stack may legitimately hold bindings the aborted clone never
-        // flushed; compilation is aborting either way.
-        if (std.debug.runtime_safety) std.debug.assert(self.pending.items.len == 0);
-        self.pending.deinit(self.pass.allocator);
-        self.expr_window_starts.deinit();
         self.inline_stack.deinit(self.pass.allocator);
         self.loop_stack.deinit(self.pass.allocator);
         self.loop_result_tuple_subsets.deinit();
@@ -4682,30 +4691,10 @@ const Cloner = struct {
                 const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(call.args));
                 defer self.pass.allocator.free(args);
 
-                // Shape detection is a discarded probe: it clones the arguments
-                // only to read their constructor shapes and emits nothing. Run
-                // it in an isolated effect context so its windows chain from a
-                // clean region entry. Effects counted while probing earlier
-                // calls in the same walk otherwise leave the effect marks
-                // advanced while the region entry stays put, so a constructed
-                // argument that carries its own effectful producer (an iterator
-                // over an effect-produced list) has that producer's emission
-                // window fall past the region entry and is pinned to an opaque
-                // value, hiding the constructor the pattern needs.
-                const pending_start = self.pending.items.len;
-                const saved_effect_marks = self.effect_marks;
-                const saved_region_entry = self.region_entry_marks;
-                self.region_entry_marks = self.effect_marks;
-                defer {
-                    self.pending.shrinkRetainingCapacity(pending_start);
-                    self.effect_marks = saved_effect_marks;
-                    self.region_entry_marks = saved_region_entry;
-                }
-
                 const values = try self.pass.allocator.alloc(Value, args.len);
                 defer self.pass.allocator.free(values);
                 for (args, 0..) |arg, index| {
-                    values[index] = try self.cloneExprValue(arg);
+                    values[index] = (try self.cloneExprValue(arg)).value;
                 }
                 try self.pass.recordCallPatternForValues(callee, values);
             },
@@ -4730,11 +4719,7 @@ const Cloner = struct {
             },
             .block => |block| {
                 const change_start = self.subst.watermark();
-                const pending_start = self.pending.items.len;
-                defer {
-                    self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_start);
-                }
+                defer self.subst.restore(change_start);
                 try self.collectCallPatternsInStmtSpan(owner, block.statements);
                 try self.collectCallPatternsInExpr(owner, block.final_expr);
             },
@@ -4793,14 +4778,10 @@ const Cloner = struct {
         try self.collectCallPatternsInExpr(owner, value_expr);
 
         const change_start = self.subst.watermark();
-        const pending_start = self.pending.items.len;
-        defer {
-            self.subst.restore(change_start);
-            self.pending.shrinkRetainingCapacity(pending_start);
-        }
+        defer self.subst.restore(change_start);
 
-        const value = try self.cloneExprValue(value_expr);
-        if (!try self.bindPatternForValueFlow(pat_id, value_expr, recursive, value)) {
+        var cloned = try self.cloneExprValue(value_expr);
+        if (!try self.bindPatternForValueFlow(pat_id, value_expr, recursive, cloned.value, &cloned.bindings)) {
             try self.shadowPatLocals(pat_id);
         }
         try self.collectCallPatternsInExpr(owner, rest_expr);
@@ -4863,12 +4844,8 @@ const Cloner = struct {
         switch (self.pass.program.getStmt(stmt_id)) {
             .let_ => |let_| {
                 try self.collectCallPatternsInExpr(owner, let_.value);
-
-                const pending_start = self.pending.items.len;
-                defer self.pending.shrinkRetainingCapacity(pending_start);
-
-                const value = try self.cloneExprValue(let_.value);
-                if (!try self.bindPatternForValueFlow(let_.pat, let_.value, let_.recursive, value)) {
+                var cloned = try self.cloneExprValue(let_.value);
+                if (!try self.bindPatternForValueFlow(let_.pat, let_.value, let_.recursive, cloned.value, &cloned.bindings)) {
                     try self.shadowPatLocals(let_.pat);
                 }
             },
@@ -4888,12 +4865,13 @@ const Cloner = struct {
         source_value: Ast.ExprId,
         recursive: bool,
         value: Value,
+        bindings: *BindingChain,
     ) Common.LowerError!bool {
         const change_before = self.subst.watermark();
-        const pending_before = self.pending.items.len;
+        const bindings_before = bindings.mark();
         if (try self.bindPatToReusableValue(pat_id, value) == .match) return true;
         self.subst.restore(change_before);
-        self.pending.shrinkRetainingCapacity(pending_before);
+        bindings.rewind(bindings_before);
 
         const pat = self.pass.program.getPat(pat_id);
         const self_referential = switch (pat.data) {
@@ -4902,10 +4880,10 @@ const Cloner = struct {
         };
         if (self_referential) return false;
 
-        const reusable = try self.makeReusableForMatch(value);
+        const reusable = try self.makeReusableForMatch(value, bindings);
         if (try self.bindPatToFlowValue(pat_id, reusable)) return true;
         self.subst.restore(change_before);
-        self.pending.shrinkRetainingCapacity(pending_before);
+        bindings.rewind(bindings_before);
         return false;
     }
 
@@ -4943,13 +4921,9 @@ const Cloner = struct {
             .let_ => |let_| {
                 try self.rewriteCallsWithValuesInExpr(let_.value);
                 const change_start = self.subst.watermark();
-                const pending_start = self.pending.items.len;
-                defer {
-                    self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_start);
-                }
-                const value = try self.cloneExprValue(let_.value);
-                if (!try self.bindPatternForValueFlow(let_.bind, let_.value, false, value)) {
+                defer self.subst.restore(change_start);
+                var cloned = try self.cloneExprValue(let_.value);
+                if (!try self.bindPatternForValueFlow(let_.bind, let_.value, false, cloned.value, &cloned.bindings)) {
                     try self.shadowPatLocals(let_.bind);
                 }
                 try self.rewriteCallsWithValuesInExpr(let_.rest);
@@ -4988,11 +4962,7 @@ const Cloner = struct {
             },
             .block => |block| {
                 const change_start = self.subst.watermark();
-                const pending_start = self.pending.items.len;
-                defer {
-                    self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_start);
-                }
+                defer self.subst.restore(change_start);
                 try self.rewriteCallsWithValuesInStmtSpan(block.statements);
                 try self.rewriteCallsWithValuesInExpr(block.final_expr);
             },
@@ -5051,9 +5021,7 @@ const Cloner = struct {
         const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(call.args));
         defer self.pass.allocator.free(args);
 
-        const pending_start = self.pending.items.len;
-        defer self.pending.shrinkRetainingCapacity(pending_start);
-
+        var bindings: BindingChain = .{};
         const values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(values);
         // A used argument's constructor only becomes visible after its
@@ -5062,10 +5030,12 @@ const Cloner = struct {
         // rewrite does; an unused argument's shape cannot matter.
         const callee_uses = self.pass.plans[raw].used_args;
         for (args, 0..) |arg, index| {
-            values[index] = if (callee_uses[index])
+            const cloned = if (callee_uses[index])
                 try self.cloneExprValueDemandingShape(arg)
             else
                 try self.cloneExprValue(arg);
+            bindings.appendChain(cloned.bindings);
+            values[index] = cloned.value;
         }
 
         for (self.pass.plans[raw].specs.items) |spec| {
@@ -5095,12 +5065,12 @@ const Cloner = struct {
                 .captures = call.captures,
                 .is_cold = call.is_cold,
             } };
-            if (self.pending.items.len == pending_start) {
+            if (bindings.isEmpty()) {
                 self.pass.program.setExprData(expr_id, new_call);
             } else {
                 const call_ty = self.pass.program.getExpr(expr_id).ty;
                 const call_expr = try self.addExpr(.{ .ty = call_ty, .data = new_call });
-                const wrapped = try self.flushPendingSince(pending_start, call_expr);
+                const wrapped = try self.wrapBindings(bindings, call_expr);
                 self.pass.program.setExprData(expr_id, self.pass.program.getExpr(wrapped).data);
             }
             return;
@@ -5164,12 +5134,8 @@ const Cloner = struct {
         switch (self.pass.program.getStmt(stmt_id)) {
             .let_ => |let_| {
                 try self.rewriteCallsWithValuesInExpr(let_.value);
-
-                const pending_start = self.pending.items.len;
-                defer self.pending.shrinkRetainingCapacity(pending_start);
-
-                const value = try self.cloneExprValue(let_.value);
-                if (!try self.bindPatternForValueFlow(let_.pat, let_.value, let_.recursive, value)) {
+                var cloned = try self.cloneExprValue(let_.value);
+                if (!try self.bindPatternForValueFlow(let_.pat, let_.value, let_.recursive, cloned.value, &cloned.bindings)) {
                     try self.shadowPatLocals(let_.pat);
                 }
             },
@@ -5300,19 +5266,17 @@ const Cloner = struct {
         const expr_region = self.pass.program.exprRegion(expr_id);
         if (!expr_region.isEmpty()) self.current_region = expr_region;
 
-        // Region boundary: pending bindings created below this expression are
-        // emitted here, where they dominate every leaf reference inside it.
-        const pending_start = self.pending.items.len;
-        const saved_entry_marks = self.region_entry_marks;
-        self.region_entry_marks = self.effect_marks;
-        defer self.region_entry_marks = saved_entry_marks;
-        const result = try self.materialize(try self.cloneExprValue(expr_id));
-        const flushed = try self.flushPendingSince(pending_start, result);
-        if (std.debug.runtime_safety) std.debug.assert(self.pending.items.len == pending_start);
-        return flushed;
+        const cloned = try self.cloneExprValue(expr_id);
+        return try self.wrapBindings(cloned.bindings, try self.materialize(cloned.value));
     }
 
-    fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+    fn cloneExprValue(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!ClonedValue {
+        var bindings: BindingChain = .{};
+        const value = try self.cloneExprValueInto(expr_id, &bindings);
+        return .{ .bindings = bindings, .value = value };
+    }
+
+    fn cloneExprValueInto(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -5328,10 +5292,10 @@ const Cloner = struct {
                 if (self.subst.get(self.pass.program, local)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .local = local } }) };
             },
-            .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref),
+            .fn_ref => |fn_ref| return try self.callableValueFromRef(expr.ty, fn_ref, bindings),
             .static_data_candidate => |candidate| {
                 const runtime = try self.pass.arena.allocator().create(Value);
-                runtime.* = try self.cloneExprValueDemandingShape(candidate.runtime_expr);
+                runtime.* = try self.cloneExprValueDemandingShapeInto(candidate.runtime_expr, bindings);
                 return .{ .static_data_candidate = .{
                     .ty = expr.ty,
                     .static_data = candidate.static_data,
@@ -5344,7 +5308,7 @@ const Cloner = struct {
                 defer self.pass.allocator.free(payload_exprs);
                 const payloads = try self.pass.arena.allocator().alloc(Value, payload_exprs.len);
                 for (payload_exprs, 0..) |payload, index| {
-                    payloads[index] = try self.cloneExprValueDemandingShape(payload);
+                    payloads[index] = try self.cloneExprValueDemandingShapeInto(payload, bindings);
                 }
                 return .{ .tag = .{
                     .ty = expr.ty,
@@ -5360,7 +5324,7 @@ const Cloner = struct {
                 for (source_fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
-                        .value = try self.cloneExprValueDemandingShape(field.value),
+                        .value = try self.cloneExprValueDemandingShapeInto(field.value, bindings),
                     };
                 }
                 return .{ .record = .{
@@ -5374,7 +5338,7 @@ const Cloner = struct {
                 defer self.pass.allocator.free(source_items);
                 const items = try self.pass.arena.allocator().alloc(Value, source_items.len);
                 for (source_items, 0..) |item, index| {
-                    items[index] = try self.cloneExprValueDemandingShape(item);
+                    items[index] = try self.cloneExprValueDemandingShapeInto(item, bindings);
                 }
                 return .{ .tuple = .{
                     .ty = expr.ty,
@@ -5382,20 +5346,20 @@ const Cloner = struct {
                 } };
             },
             .nominal => |backing| {
-                const backing_value = try self.cloneExprValueDemandingShape(backing);
+                const backing_value = try self.cloneExprValueDemandingShapeInto(backing, bindings);
                 return .{ .nominal = .{
                     .ty = expr.ty,
                     .backing = try self.copyValue(backing_value),
                 } };
             },
-            .let_ => |let_| return try self.cloneLetValue(let_),
-            .loop_ => |loop| return try self.cloneLoopValue(expr.ty, loop),
+            .let_ => |let_| return try self.cloneLetValue(let_, bindings),
+            .loop_ => |loop| return try self.cloneLoopValue(expr.ty, loop, bindings),
             .block => |block| {
-                if (try self.cloneBlockValue(block)) |value| return value;
+                if (try self.cloneBlockValue(block, bindings)) |value| return value;
                 return .{ .expr = try self.cloneExprPlain(expr_id) };
             },
             .field_access => |field| {
-                const receiver = try self.cloneExprValueDemandingShape(field.receiver);
+                const receiver = try self.cloneExprValueDemandingShapeInto(field.receiver, bindings);
                 if (fieldFromValue(self.pass.program, receiver, field.field)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .field_access = .{
                     .receiver = try self.materialize(receiver),
@@ -5403,7 +5367,7 @@ const Cloner = struct {
                 } } }) };
             },
             .tuple_access => |access| {
-                const receiver = try self.cloneExprValueDemandingShape(access.tuple);
+                const receiver = try self.cloneExprValueDemandingShapeInto(access.tuple, bindings);
                 if (itemFromValue(receiver, access.elem_index)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .tuple_access = .{
                     .tuple = try self.materialize(receiver),
@@ -5411,8 +5375,8 @@ const Cloner = struct {
                 } } }) };
             },
             .match_ => |match| {
-                const scrutinee = try self.cloneExprValueDemandingShape(match.scrutinee);
-                if (try self.simplifyKnownMatchValue(scrutinee, match.branches)) |value| return value;
+                const scrutinee = try self.cloneExprValueDemandingShapeInto(match.scrutinee, bindings);
+                if (try self.simplifyKnownMatchValue(scrutinee, match.branches, bindings)) |value| return value;
                 const scrutinee_expr = try self.materialize(scrutinee);
                 if (try self.cloneCaseOfCaseValue(expr.ty, scrutinee_expr, match.branches)) |value| return value;
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .match_ = .{
@@ -5422,9 +5386,9 @@ const Cloner = struct {
                 } } }) };
             },
             .call_value => |call| {
-                const callee = try self.cloneExprValueDemandingShape(call.callee);
+                const callee = try self.cloneExprValueDemandingShapeInto(call.callee, bindings);
                 if (callee == .callable) {
-                    return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args);
+                    return try self.inlineCallableCallValue(expr.ty, callee.callable, call.args, bindings);
                 }
                 return .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .call_value = .{
                     .callee = try self.materialize(callee),
@@ -5455,30 +5419,37 @@ const Cloner = struct {
                     call.args,
                     call.captures,
                     expr_id,
+                    bindings,
                 );
             },
             else => return .{ .expr = try self.cloneExprPlain(expr_id) },
         }
     }
 
-    fn cloneExprValueDemandingShape(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
+    fn cloneExprValueDemandingShape(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!ClonedValue {
+        var bindings: BindingChain = .{};
+        const value = try self.cloneExprValueDemandingShapeInto(expr_id, &bindings);
+        return .{ .bindings = bindings, .value = value };
+    }
+
+    fn cloneExprValueDemandingShapeInto(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
         const expr = self.pass.program.getExpr(expr_id);
         return switch (expr.data) {
             .call_proc => |call| blk: {
-                if (call.is_cold or !self.inline_direct_calls) break :blk try self.cloneExprValue(expr_id);
-                const callee = Ast.localDirectCallee(call) orelse break :blk try self.cloneExprValue(expr_id);
+                if (call.is_cold or !self.inline_direct_calls) break :blk try self.cloneExprValueInto(expr_id, bindings);
+                const callee = Ast.localDirectCallee(call) orelse break :blk try self.cloneExprValueInto(expr_id, bindings);
                 const raw = @intFromEnum(callee);
                 if (raw < self.pass.fn_may_crash.len and self.pass.fn_may_crash[raw]) {
-                    break :blk try self.cloneExprValue(expr_id);
+                    break :blk try self.cloneExprValueInto(expr_id, bindings);
                 }
-                break :blk try self.inlineDirectCallValue(callee, call.args, call.captures, expr_id);
+                break :blk try self.inlineDirectCallValue(callee, call.args, call.captures, expr_id, bindings);
             },
             .block => |block| if (self.pass.program.stmtSpan(block.statements).len == 0)
-                try self.cloneExprValueDemandingShape(block.final_expr)
+                try self.cloneExprValueDemandingShapeInto(block.final_expr, bindings)
             else
-                try self.cloneExprValue(expr_id),
-            .comptime_branch_taken => |taken| try self.cloneExprValueDemandingShape(taken.body),
-            else => try self.cloneExprValue(expr_id),
+                try self.cloneExprValueInto(expr_id, bindings),
+            .comptime_branch_taken => |taken| try self.cloneExprValueDemandingShapeInto(taken.body, bindings),
+            else => try self.cloneExprValueInto(expr_id, bindings),
         };
     }
 
@@ -5634,18 +5605,20 @@ const Cloner = struct {
         return true;
     }
 
-    fn callableValueFromRef(self: *Cloner, ty: Type.TypeId, fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue) Common.LowerError!Value {
+    fn callableValueFromRef(
+        self: *Cloner,
+        ty: Type.TypeId,
+        fn_ref: @import("../monotype/ast.zig").LiftedFunctionValue,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
         const capture_count: usize = @intCast(fn_ref.captures.len);
         const captures = try self.pass.arena.allocator().alloc(CaptureValue, capture_count);
         for (0..capture_count) |index| {
             const operand = self.pass.program.captureOperandAt(fn_ref.captures, index);
-            const window_start = self.effect_marks;
-            const expr_watermark = self.pass.program.exprCount();
             captures[index] = .{
                 .id = operand.id,
-                .value = try self.cloneExprValue(operand.value),
+                .value = try self.cloneExprValueInto(operand.value, bindings),
             };
-            try self.recordValueWindow(captures[index].value, window_start, expr_watermark);
         }
         return .{ .callable = .{
             .ty = ty,
@@ -5705,7 +5678,7 @@ const Cloner = struct {
                 .callee = try self.cloneExpr(call.callee),
                 .args = try self.cloneExprSpan(call.args),
             } },
-            .call_proc => |call| try self.cloneCallProc(call),
+            .call_proc => |call| return try self.cloneCallProc(expr.ty, call),
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
                 .args = try self.cloneExprSpan(call.args),
@@ -5727,7 +5700,11 @@ const Cloner = struct {
                 .final_else = try self.cloneExpr(if_.final_else),
             } },
             .block => |block| return try self.cloneBlock(expr.ty, block),
-            .loop_ => |loop| return try self.materialize(try self.cloneLoopValue(expr.ty, loop)),
+            .loop_ => |loop| {
+                var bindings: BindingChain = .{};
+                const value = try self.cloneLoopValue(expr.ty, loop, &bindings);
+                return try self.wrapBindings(bindings, try self.materialize(value));
+            },
             .break_ => |maybe| .{ .break_ = if (maybe) |value| blk: {
                 const projected = if (self.loop_stack.getLastOrNull()) |loop|
                     if (loop.result_tuple_subset) |subset| projected: {
@@ -5738,7 +5715,7 @@ const Cloner = struct {
                     value;
                 break :blk try self.cloneExpr(projected);
             } else null },
-            .continue_ => |continue_| try self.cloneContinue(continue_),
+            .continue_ => |continue_| return try self.cloneContinue(expr.ty, continue_),
             .join_point => |join_point| return try self.cloneJoinPoint(expr.ty, join_point),
             .jump => |jump| blk: {
                 if (self.letCaseJoinFor(jump.target)) |join| {
@@ -5856,10 +5833,12 @@ const Cloner = struct {
         Common.invariant("SpecConstr jump referenced a join point outside its lexical scope");
     }
 
-    fn cloneLetValue(self: *Cloner, let_: anytype) Common.LowerError!Value {
-        if (try self.projectedLoopLetExpr(let_)) |projected| return try self.cloneExprValue(projected);
+    fn cloneLetValue(self: *Cloner, let_: anytype, bindings: *BindingChain) Common.LowerError!Value {
+        if (try self.projectedLoopLetExpr(let_)) |projected| return try self.cloneExprValueInto(projected, bindings);
 
-        const value = try self.cloneExprValue(let_.value);
+        var value_bindings: BindingChain = .{};
+        const value = try self.cloneExprValueInto(let_.value, &value_bindings);
+        bindings.appendChain(value_bindings);
         const value_expr = try self.materialize(value);
         if (self.caseExprFromValue(value)) |case_expr| {
             if (try self.cloneLetOfCase(let_, case_expr)) |data| {
@@ -5870,18 +5849,13 @@ const Cloner = struct {
         const change_start = self.subst.watermark();
         const bound = try self.bindPatToReusableValue(let_.bind, value);
         if (bound == .match) {
-            const rest = try self.cloneExprValue(let_.rest);
+            const rest = try self.cloneExprValueInto(let_.rest, bindings);
             try self.subst.restoreFloatingLoopCarries(change_start);
             return rest;
         }
         self.subst.restore(change_start);
-        if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) {
-            const rest = try self.cloneExprValue(let_.rest);
-            try self.subst.restoreFloatingLoopCarries(change_start);
-            return rest;
-        }
-        if (try self.bindPatToPendingReusableValue(let_.bind, let_.value, false, value)) {
-            const rest = try self.cloneExprValue(let_.rest);
+        if (try self.bindPatToPositionedReusableValue(let_.bind, let_.value, false, value, bindings)) {
+            const rest = try self.cloneExprValueInto(let_.rest, bindings);
             try self.subst.restoreFloatingLoopCarries(change_start);
             return rest;
         }
@@ -5896,24 +5870,6 @@ const Cloner = struct {
         // Name the value's opaque leaves and pin them at this position: the
         // same computations in the same order, but the bound name keeps its
         // structured value for the continuation.
-        {
-            const pat = self.pass.program.getPat(let_.bind);
-            const self_referential = switch (pat.data) {
-                .bind => |local| localUseCountInExpr(self.pass.program, local, let_.value) != 0,
-                else => false,
-            };
-            if (!self_referential) {
-                const pending_before = self.pending.items.len;
-                const reusable = try self.makeReusableForMatch(value);
-                if (try self.bindPatToFlowValue(let_.bind, reusable)) {
-                    const rest = try self.materialize(try self.cloneExprValue(let_.rest));
-                    try self.subst.restoreFloatingLoopCarries(change_start);
-                    return .{ .expr = try self.flushPendingSince(pending_before, rest) };
-                }
-                self.subst.restore(change_start);
-                self.pending.shrinkRetainingCapacity(pending_before);
-            }
-        }
         const bind = try self.clonePat(let_.bind, .bind_runtime);
         const rest = try self.cloneExpr(let_.rest);
         try self.subst.restoreFloatingLoopCarries(change_start);
@@ -6199,20 +6155,17 @@ const Cloner = struct {
         });
     }
 
-    /// Dissolve a binding by naming its value's opaque leaves as pending
-    /// bindings: the value keeps its structure, uses substitute leaf
-    /// references, and the pending bindings are emitted where the stack next
-    /// flushes, still dominating every use. Sound only when every named leaf
-    /// is an effect-free computation — a pure binding commutes with any
-    /// effect between its creation point and the flush — and the value does
-    /// not reference its own binder. Returns false with all speculative work
-    /// undone.
-    fn bindPatToPendingReusableValue(
+    /// Dissolve a binding while retaining every opaque leaf in the strict
+    /// chain owned by the binding's original position. No work is discarded or
+    /// commuted: naming the leaves once makes the structured value reusable
+    /// without requiring purity, termination, or speculatability.
+    fn bindPatToPositionedReusableValue(
         self: *Cloner,
         pat_id: Ast.PatId,
         source_value: Ast.ExprId,
         recursive: bool,
         value: Value,
+        bindings: *BindingChain,
     ) Common.LowerError!bool {
         const pat = self.pass.program.getPat(pat_id);
         const self_referential = switch (pat.data) {
@@ -6221,75 +6174,22 @@ const Cloner = struct {
         };
         if (self_referential) return false;
 
-        const pending_before = self.pending.items.len;
+        const bindings_before = bindings.mark();
         const change_before = self.subst.watermark();
-        const reusable = try self.makeReusableForMatch(value);
-        for (self.pending.items[pending_before..]) |pend| {
-            if (!exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, pend.value, false)) {
-                self.subst.restore(change_before);
-                self.pending.shrinkRetainingCapacity(pending_before);
-                return false;
-            }
-        }
+        const reusable = try self.makeReusableForMatch(value, bindings);
         if (try self.bindPatToReusableValue(pat_id, reusable) != .match) {
             self.subst.restore(change_before);
-            self.pending.shrinkRetainingCapacity(pending_before);
+            bindings.rewind(bindings_before);
             return false;
         }
         return true;
     }
 
     fn cloneLet(self: *Cloner, let_: anytype) Common.LowerError!Ast.ExprData {
-        if (try self.projectedLoopLetExpr(let_)) |projected| {
-            return self.pass.program.getExpr(try self.cloneExpr(projected)).data;
-        }
-
-        const value = try self.cloneExprValue(let_.value);
-        const value_expr = try self.materialize(value);
-        const change_start = self.subst.watermark();
-        const bound = try self.bindPatToReusableValue(let_.bind, value);
-        var bind: Ast.PatId = undefined;
-        const rest = if (bound == .match) blk: {
-            const cloned = try self.cloneExpr(let_.rest);
-            self.subst.restore(change_start);
-            bind = try self.clonePat(let_.bind, .output_only);
-            break :blk cloned;
-        } else if (try self.bindPatToSingleUseRestValue(let_.bind, value, let_.rest)) blk: {
-            const cloned = try self.cloneExpr(let_.rest);
-            self.subst.restore(change_start);
-            bind = try self.clonePat(let_.bind, .output_only);
-            break :blk cloned;
-        } else blk: {
-            self.subst.restore(change_start);
-            if (self.caseExprFromValue(value)) |case_expr| {
-                if (try self.cloneLetOfCase(let_, case_expr)) |data| return data;
-            }
-            bind = try self.clonePat(let_.bind, .bind_runtime);
-            const rest = try self.cloneExpr(let_.rest);
-            self.subst.restore(change_start);
-            break :blk rest;
-        };
-        return .{ .let_ = .{
-            .bind = bind,
-            .value = value_expr,
-            .rest = rest,
-            .comptime_site = let_.comptime_site,
-        } };
-    }
-
-    fn bindPatToSingleUseRestValue(self: *Cloner, pat_id: Ast.PatId, value: Value, rest: Ast.ExprId) Common.LowerError!bool {
-        const local = switch (self.pass.program.getPat(pat_id).data) {
-            .bind => |local| local,
-            else => return false,
-        };
-        const unsafe_count = self.unsafeLeafCount(value);
-        const uses = localUseCountInExpr(self.pass.program, local, rest);
-        const before_effect = localUseBeforeEffect(self.pass.program, local, rest);
-        if (unsafe_count != 1 or uses != 1 or !before_effect) {
-            return false;
-        }
-        try self.subst.put(self.pass.program, local, value);
-        return true;
+        var bindings: BindingChain = .{};
+        const value = try self.cloneLetValue(let_, &bindings);
+        const expr = try self.wrapBindings(bindings, try self.materialize(value));
+        return self.pass.program.getExpr(expr).data;
     }
 
     fn caseExprFromValue(self: *Cloner, value: Value) ?Ast.ExprId {
@@ -6443,9 +6343,8 @@ const Cloner = struct {
         const param_expr = try self.addExpr(.{ .ty = value_ty, .data = .{ .local = join_param } });
 
         const change_start = self.subst.watermark();
-        const pending_start = self.pending.items.len;
         const bind = try self.clonePat(let_.bind, .bind_runtime);
-        const rest = try self.flushPendingSince(pending_start, try self.cloneExpr(let_.rest));
+        const rest = try self.cloneExpr(let_.rest);
         self.subst.restore(change_start);
         const continuation = try self.addExpr(.{ .ty = rest_ty, .data = .{ .let_ = .{
             .bind = bind,
@@ -6654,18 +6553,11 @@ const Cloner = struct {
     /// cloned dispatch consumes. Returns null when the arm's value is opaque,
     /// declining the whole rewrite.
     fn cloneLetOfCaseArmBody(self: *Cloner, probe: Ast.LocalId, dispatch: Ast.ExprId, branch_body: Ast.ExprId) Common.LowerError!?Ast.ExprId {
-        // The rewritten arm flushes every pending binding it creates, so it
-        // is its own region.
-        const saved_entry_marks = self.region_entry_marks;
-        self.region_entry_marks = self.effect_marks;
-        defer self.region_entry_marks = saved_entry_marks;
-
         const dispatch_ty = self.pass.program.getExpr(dispatch).ty;
         const branch_expr = self.pass.program.getExpr(branch_body);
         switch (branch_expr.data) {
             .block => |block| {
                 const change_start = self.subst.watermark();
-                const pending_entry = self.pending.items.len;
 
                 const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
                 defer self.pass.allocator.free(source);
@@ -6673,30 +6565,27 @@ const Cloner = struct {
                 var statements = std.ArrayList(Ast.StmtId).empty;
                 defer statements.deinit(self.pass.allocator);
                 for (source) |stmt| {
-                    const pending_start = self.pending.items.len;
                     const cloned = try self.cloneStmt(stmt);
-                    try self.appendPendingStmtsSince(pending_start, &statements);
-                    if (cloned) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
+                    try self.appendBindingStmts(cloned.bindings, &statements);
+                    if (cloned.stmt) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
                 }
 
-                const pending_final = self.pending.items.len;
-                const final_value = try self.cloneExprValue(block.final_expr);
-                if (final_value == .expr) {
+                const final = try self.cloneExprValue(block.final_expr);
+                if (final.value == .expr) {
                     if (try self.cloneDivergentAtType(block.final_expr, dispatch_ty)) |divergent| {
                         self.subst.restore(change_start);
-                        try self.appendPendingStmtsSince(pending_final, &statements);
+                        try self.appendBindingStmts(final.bindings, &statements);
                         return try self.addExpr(.{ .ty = dispatch_ty, .data = .{ .block = .{
                             .statements = try self.pass.program.addStmtSpan(statements.items),
                             .final_expr = divergent,
                         } } });
                     }
                     self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 }
 
-                try self.subst.put(self.pass.program, probe, final_value);
-                try self.appendPendingStmtsSince(pending_final, &statements);
+                try self.subst.put(self.pass.program, probe, final.value);
+                try self.appendBindingStmts(final.bindings, &statements);
                 const rest = try self.cloneExpr(dispatch);
                 self.subst.restore(change_start);
 
@@ -6706,20 +6595,18 @@ const Cloner = struct {
                 } } });
             },
             else => {
-                const pending_entry = self.pending.items.len;
-                const branch_value = try self.cloneExprValue(branch_body);
+                const branch = try self.cloneExprValue(branch_body);
                 const change_start = self.subst.watermark();
-                if (branch_value == .expr) {
+                if (branch.value == .expr) {
                     if (try self.cloneDivergentAtType(branch_body, dispatch_ty)) |divergent| {
                         self.subst.restore(change_start);
-                        return try self.flushPendingSince(pending_entry, divergent);
+                        return try self.wrapBindings(branch.bindings, divergent);
                     }
                     self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 }
-                try self.subst.put(self.pass.program, probe, branch_value);
-                const rest = try self.flushPendingSince(pending_entry, try self.cloneExpr(dispatch));
+                try self.subst.put(self.pass.program, probe, branch.value);
+                const rest = try self.wrapBindings(branch.bindings, try self.cloneExpr(dispatch));
                 self.subst.restore(change_start);
                 return rest;
             },
@@ -6760,14 +6647,15 @@ const Cloner = struct {
         const args = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, self.pass.program.exprSpan(jump.args));
         defer self.pass.allocator.free(args);
         const values = try arena.alloc(Value, args.len);
+        var bindings: BindingChain = .{};
         for (args, 0..) |arg, index| {
-            values[index] = try self.cloneExprValueDemandingShape(arg);
+            values[index] = try self.cloneExprValueDemandingShapeInto(arg, &bindings);
         }
         const placeholder = try self.addExpr(.{ .ty = ty, .data = .{ .jump = .{
             .target = join.id,
             .args = try self.pass.program.addExprSpan(&[_]Ast.ExprId{}),
         } } });
-        try join.sites.append(arena, .{ .expr = placeholder, .values = values });
+        try join.sites.append(arena, .{ .expr = placeholder, .bindings = bindings, .values = values });
         return placeholder;
     }
 
@@ -6781,10 +6669,6 @@ const Cloner = struct {
     /// the shared code keeps every statically known shape. The placeholder
     /// jump expression is overwritten with the cloned body.
     fn inlineLetCaseJoinAtSite(self: *Cloner, join: *LetCaseJoin, site: LetCaseJumpSite, rest_ty: Type.TypeId) Common.LowerError!void {
-        const saved_entry_marks = self.region_entry_marks;
-        self.region_entry_marks = self.effect_marks;
-        defer self.region_entry_marks = saved_entry_marks;
-
         const change_start = self.subst.watermark();
         const body = body: switch (join.binding) {
             .locals => |locals| {
@@ -6818,7 +6702,8 @@ const Cloner = struct {
                 } } });
             },
         };
-        self.pass.program.setExprData(site.expr, self.pass.program.getExpr(body).data);
+        const wrapped = try self.wrapBindings(site.bindings, body);
+        self.pass.program.setExprData(site.expr, self.pass.program.getExpr(wrapped).data);
     }
 
     /// Decompose a join's incoming values into shared parameters, clone the
@@ -6858,9 +6743,6 @@ const Cloner = struct {
         }
 
         const change_start = self.subst.watermark();
-        const saved_entry_marks = self.region_entry_marks;
-        self.region_entry_marks = self.effect_marks;
-        defer self.region_entry_marks = saved_entry_marks;
         const body = body: switch (join.binding) {
             .locals => |locals| {
                 for (locals, rebuilt) |local, value| try self.subst.put(self.pass.program, local, value);
@@ -6900,10 +6782,12 @@ const Cloner = struct {
         };
 
         for (sites, site_args) |site, list| {
-            self.pass.program.setExprData(site.expr, .{ .jump = .{
+            const jump = try self.addExpr(.{ .ty = rest_ty, .data = .{ .jump = .{
                 .target = join.id,
                 .args = try self.pass.program.addExprSpan(list.items),
-            } });
+            } } });
+            const wrapped = try self.wrapBindings(site.bindings, jump);
+            self.pass.program.setExprData(site.expr, self.pass.program.getExpr(wrapped).data);
         }
 
         return .{
@@ -7053,7 +6937,12 @@ const Cloner = struct {
         return .{ .expr = try self.addExpr(.{ .ty = leaf_ty, .data = .{ .local = param_local } }) };
     }
 
-    fn cloneLoopValue(self: *Cloner, ty: Type.TypeId, loop: anytype) Common.LowerError!Value {
+    fn cloneLoopValue(
+        self: *Cloner,
+        ty: Type.TypeId,
+        loop: anytype,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
         const result_tuple_subset = self.loop_result_tuple_subsets.get(loop.body);
         const params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(loop.params));
         defer self.pass.allocator.free(params);
@@ -7083,7 +6972,7 @@ const Cloner = struct {
         const forward_start = self.subst.watermark();
         for (params) |param| try self.shadowLocal(param.local);
         for (initial_values, 0..) |initial, index| {
-            values[index] = try self.cloneExprValueDemandingShape(initial);
+            values[index] = try self.cloneExprValueDemandingShapeInto(initial, bindings);
             if (try self.pass.shapeFromValue(values[index])) |shape| {
                 shapes[index] = shape;
                 has_constructor = true;
@@ -7141,7 +7030,6 @@ const Cloner = struct {
         // a loop containing one must retain its whole runtime slots.
         if (exprContainsReturn(self.pass.program, loop.body)) has_constructor = false;
         while (has_constructor) {
-            const attempt_pending = self.pending.items.len;
             var new_params = std.ArrayList(Ast.TypedLocal).empty;
             defer new_params.deinit(self.pass.allocator);
 
@@ -7188,10 +7076,6 @@ const Cloner = struct {
             }
 
             self.subst.restore(split_start);
-            // A discarded attempt must leave no pending binding behind: a
-            // survivor would flush at the region boundary as a live let for a
-            // clone that was thrown away, duplicating its evaluation.
-            if (std.debug.runtime_safety) std.debug.assert(self.pending.items.len == attempt_pending);
             // Back edges demoted their unsupplied leaves in place. Any slot that
             // still carries constructor structure is worth another split attempt.
             has_constructor = false;
@@ -7271,14 +7155,18 @@ const Cloner = struct {
         }
     }
 
-    /// A block whose statements all dissolve — each binds a substitutable
-    /// value, or names an effect-free computation that becomes a pending
-    /// binding — is transparent to value flow: its result keeps the final
+    /// A block whose statements all dissolve — each binding retains its strict
+    /// work in the block's source-ordered binding chain, and each discarded
+    /// expression is speculatable — is transparent to value flow: its result keeps the final
     /// expression's structure. A statement that must stay a statement (an
     /// effect, a runtime destructure, control flow) pins the block, which
     /// then materializes as written. Returns null on a pinned block with all
     /// speculative work undone.
-    fn cloneBlockValue(self: *Cloner, block: anytype) Common.LowerError!?Value {
+    fn cloneBlockValue(
+        self: *Cloner,
+        block: anytype,
+        bindings: *BindingChain,
+    ) Common.LowerError!?Value {
         // The block-final position is the capability that makes an
         // `unreachable` marker valid. Treating this block as transparent would
         // let the marker escape into an ordinary expression position (for
@@ -7286,7 +7174,7 @@ const Cloner = struct {
         if (self.pass.program.getExpr(block.final_expr).data == .@"unreachable") return null;
 
         const change_start = self.subst.watermark();
-        const pending_entry = self.pending.items.len;
+        var block_bindings: BindingChain = .{};
 
         const source = try GuardedList.dupe(self.pass.allocator, Ast.StmtId, self.pass.program.stmtSpan(block.statements));
         defer self.pass.allocator.free(source);
@@ -7295,51 +7183,40 @@ const Cloner = struct {
             const stmt = self.pass.program.getStmt(stmt_id);
             const let_ = switch (stmt) {
                 .let_ => |let_| let_,
-                // A discarded effect-free expression performs no observable
-                // work, so the statement dissolves with the block.
+                // Preserve a discarded expression's opaque work as strict
+                // bindings at this exact statement position. Only its
+                // structurally work-free result is discarded.
                 .expr => |stmt_expr| {
-                    if (exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, stmt_expr, false)) continue;
-                    self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_entry);
-                    return null;
+                    const discarded = try self.cloneExprValueInto(stmt_expr, &block_bindings);
+                    _ = try self.makeReusableForMatch(discarded, &block_bindings);
+                    continue;
                 },
                 else => {
                     self.subst.restore(change_start);
-                    self.pending.shrinkRetainingCapacity(pending_entry);
                     return null;
                 },
             };
-            const value = try self.cloneExprValue(let_.value);
+            const value = try self.cloneExprValueInto(let_.value, &block_bindings);
             if (self.caseExprFromValue(value) != null) {
                 self.subst.restore(change_start);
-                self.pending.shrinkRetainingCapacity(pending_entry);
                 return null;
             }
             if (try self.bindPatToReusableValue(let_.pat, value) == .match) continue;
-            if (!try self.bindPatToPendingReusableValue(let_.pat, let_.value, let_.recursive, value)) {
+            if (!try self.bindPatToPositionedReusableValue(let_.pat, let_.value, let_.recursive, value, &block_bindings)) {
                 self.subst.restore(change_start);
-                self.pending.shrinkRetainingCapacity(pending_entry);
                 return null;
             }
         }
 
-        const final = try self.cloneExprValue(block.final_expr);
+        const final = try self.cloneExprValueInto(block.final_expr, &block_bindings);
         self.subst.restore(change_start);
+        bindings.appendChain(block_bindings);
         return final;
     }
 
     fn cloneBlock(self: *Cloner, ty: Type.TypeId, block: anytype) Common.LowerError!Ast.ExprId {
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
-
-        // Statement boundaries are sequencing points: bindings created by a
-        // later statement flush at that statement's own position, after every
-        // effect the earlier statements emitted, so window comparisons for
-        // those bindings restart at each boundary rather than spanning the
-        // whole block. The entry value is restored on exit so bindings in the
-        // enclosing region still compare against that region's entry.
-        const saved_entry_marks = self.region_entry_marks;
-        defer self.region_entry_marks = saved_entry_marks;
 
         const terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
 
@@ -7387,11 +7264,9 @@ const Cloner = struct {
                 },
                 else => {},
             }
-            const pending_start = self.pending.items.len;
             const cloned = try self.cloneStmt(stmt);
-            try self.appendPendingStmtsSince(pending_start, &statements);
-            if (cloned) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
-            self.region_entry_marks = self.effect_marks;
+            try self.appendBindingStmts(cloned.bindings, &statements);
+            if (cloned.stmt) |cloned_stmt| try statements.append(self.pass.allocator, cloned_stmt);
         }
 
         return try self.addExpr(.{ .ty = ty, .data = .{ .block = .{
@@ -7400,11 +7275,11 @@ const Cloner = struct {
         } } });
     }
 
-    fn cloneContinue(self: *Cloner, continue_: anytype) Common.LowerError!Ast.ExprData {
+    fn cloneContinue(self: *Cloner, ty: Type.TypeId, continue_: anytype) Common.LowerError!Ast.ExprId {
         const frame_count = self.loop_stack.items.len;
-        if (frame_count == 0) return .{ .continue_ = .{
+        if (frame_count == 0) return try self.addExpr(.{ .ty = ty, .data = .{ .continue_ = .{
             .values = try self.cloneExprSpan(continue_.values),
-        } };
+        } } });
         const loop = self.loop_stack.items[frame_count - 1];
         const values = self.pass.program.exprSpan(continue_.values);
         const source_values = try GuardedList.dupe(self.pass.allocator, Ast.ExprId, values);
@@ -7413,9 +7288,10 @@ const Cloner = struct {
 
         var new_values = std.ArrayList(Ast.ExprId).empty;
         defer new_values.deinit(self.pass.allocator);
+        var bindings: BindingChain = .{};
 
         for (loop.values, source_values, 0..) |shape, value_expr, slot_index| {
-            const value = try self.cloneExprValue(value_expr);
+            const value = try self.cloneExprValueInto(value_expr, &bindings);
             const supplied = try self.supplyLoopSlotLeaves(shape, value, &new_values);
             if (supplied.demoted) {
                 // This back edge could not supply some of the slot's entry-shape
@@ -7428,29 +7304,34 @@ const Cloner = struct {
             }
         }
 
-        return .{ .continue_ = .{
+        const continued = try self.addExpr(.{ .ty = ty, .data = .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(new_values.items),
-        } };
+        } } });
+        return try self.wrapBindings(bindings, continued);
     }
 
-    fn cloneCallProc(self: *Cloner, call: @import("../monotype/ast.zig").CallProc) Common.LowerError!Ast.ExprData {
+    fn cloneCallProc(
+        self: *Cloner,
+        ty: Type.TypeId,
+        call: @import("../monotype/ast.zig").CallProc,
+    ) Common.LowerError!Ast.ExprId {
         if (call.is_cold) {
-            return .{ .call_proc = .{
+            return try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
                 .callee = call.callee,
                 .args = try self.cloneExprSpan(call.args),
                 .iterator_procedure = call.iterator_procedure,
                 .captures = try self.cloneCaptureOperandSpan(call.captures),
                 .is_cold = true,
-            } };
+            } } });
         }
 
-        const callee = Ast.localDirectCallee(call) orelse return .{ .call_proc = .{
+        const callee = Ast.localDirectCallee(call) orelse return try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = call.callee,
             .args = try self.cloneExprSpan(call.args),
             .iterator_procedure = call.iterator_procedure,
             .captures = try self.cloneCaptureOperandSpan(call.captures),
             .is_cold = call.is_cold,
-        } };
+        } } });
         const raw = @intFromEnum(callee);
         if (self.rewrite_call_patterns and raw < self.pass.plans.len) {
             const source_args = self.pass.program.exprSpan(call.args);
@@ -7459,27 +7340,32 @@ const Cloner = struct {
 
             const values = try self.pass.allocator.alloc(Value, args.len);
             defer self.pass.allocator.free(values);
+            const analyzed = try self.pass.allocator.alloc(ClonedValue, args.len);
+            defer self.pass.allocator.free(analyzed);
             const callee_uses = self.pass.plans[raw].used_args;
             for (args, 0..) |arg, index| {
-                values[index] = if (callee_uses[index])
+                analyzed[index] = if (callee_uses[index])
                     try self.cloneExprValueDemandingShape(arg)
                 else
                     try self.cloneExprValue(arg);
+                values[index] = analyzed[index].value;
             }
             try self.pass.ensureCallPatternForValues(callee, values);
 
             for (self.pass.plans[raw].specs.items) |spec| {
                 var rewritten_args = std.ArrayList(Ast.ExprId).empty;
                 defer rewritten_args.deinit(self.pass.allocator);
+                var bindings: BindingChain = .{};
 
-                if (try self.appendClonedCallArgs(spec.pattern, args, &rewritten_args)) {
-                    return .{ .call_proc = .{
+                if (try self.appendClonedCallArgs(spec.pattern, args, &bindings, &rewritten_args)) {
+                    const specialized = try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
                         .callee = .{ .lifted = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls") },
                         .args = try self.pass.program.addExprSpan(rewritten_args.items),
                         .iterator_procedure = call.iterator_procedure,
                         .captures = try self.cloneCaptureOperandSpan(call.captures),
                         .is_cold = call.is_cold,
-                    } };
+                    } } });
+                    return try self.wrapBindings(bindings, specialized);
                 }
             }
 
@@ -7488,41 +7374,43 @@ const Cloner = struct {
             // source arguments: a second clone re-descends every argument, so a
             // nested call chain (e.g. a long `+` sum) would clone each level
             // twice and expand exponentially with depth. The reuse is also
-            // required for correctness when producing the values delegated
-            // pending bindings: those flush once at the region boundary, where
-            // they dominate this call, and a re-clone of the source would emit
-            // their effects a second time.
+            // required for correctness when producing values with binding
+            // chains: those chains must be placed exactly once before the call.
             const residual_args = try self.pass.allocator.alloc(Ast.ExprId, values.len);
             defer self.pass.allocator.free(residual_args);
-            for (values, 0..) |value, index| {
+            var bindings: BindingChain = .{};
+            for (values, analyzed, 0..) |value, cloned, index| {
+                bindings.appendChain(cloned.bindings);
                 residual_args[index] = try self.materialize(value);
             }
-            return .{ .call_proc = .{
+            const residual = try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
                 .callee = call.callee,
                 .args = try self.pass.program.addExprSpan(residual_args),
                 .iterator_procedure = call.iterator_procedure,
                 .captures = try self.cloneCaptureOperandSpan(call.captures),
                 .is_cold = call.is_cold,
-            } };
+            } } });
+            return try self.wrapBindings(bindings, residual);
         }
-        return .{ .call_proc = .{
+        return try self.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{
             .callee = call.callee,
             .args = try self.cloneExprSpan(call.args),
             .iterator_procedure = call.iterator_procedure,
             .captures = try self.cloneCaptureOperandSpan(call.captures),
             .is_cold = call.is_cold,
-        } };
+        } } });
     }
 
     fn appendClonedCallArgs(
         self: *Cloner,
         pattern: CallPattern,
         args: []const Ast.ExprId,
+        bindings: *BindingChain,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!bool {
         if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
         for (pattern.args, args) |shape, arg| {
-            if (!try self.appendClonedExprsForShape(shape, arg, out)) return false;
+            if (!try self.appendClonedExprsForShape(shape, arg, bindings, out)) return false;
         }
         return true;
     }
@@ -7531,6 +7419,7 @@ const Cloner = struct {
         self: *Cloner,
         shape: Shape,
         expr_id: Ast.ExprId,
+        bindings: *BindingChain,
         out: *std.ArrayList(Ast.ExprId),
     ) Common.LowerError!bool {
         switch (shape) {
@@ -7539,7 +7428,7 @@ const Cloner = struct {
                 return true;
             },
             else => {
-                const value = try self.valueForCallArg(expr_id);
+                const value = try self.valueForCallArg(expr_id, bindings);
                 if (!shapeMatchesValue(self.pass.program, shape, value)) return false;
                 try self.appendExprsFromValue(shape, value, out);
                 return true;
@@ -7547,8 +7436,8 @@ const Cloner = struct {
         }
     }
 
-    fn valueForCallArg(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
-        return try self.cloneExprValueDemandingShape(expr_id);
+    fn valueForCallArg(self: *Cloner, expr_id: Ast.ExprId, bindings: *BindingChain) Common.LowerError!Value {
+        return try self.cloneExprValueDemandingShapeInto(expr_id, bindings);
     }
 
     fn appendExprsFromValue(
@@ -7780,59 +7669,75 @@ const Cloner = struct {
 
     fn cloneFieldAccess(self: *Cloner, ty: Type.TypeId, field: anytype) Common.LowerError!Ast.ExprId {
         const receiver = try self.cloneExprValueDemandingShape(field.receiver);
-        if (fieldFromValue(self.pass.program, receiver, field.field)) |value| return try self.materialize(value);
-        return try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
-            .receiver = try self.materialize(receiver),
+        if (fieldFromValue(self.pass.program, receiver.value, field.field)) |value| {
+            return try self.wrapBindings(receiver.bindings, try self.materialize(value));
+        }
+        const access = try self.addExpr(.{ .ty = ty, .data = .{ .field_access = .{
+            .receiver = try self.materialize(receiver.value),
             .field = field.field,
         } } });
+        return try self.wrapBindings(receiver.bindings, access);
     }
 
     fn cloneTupleAccess(self: *Cloner, ty: Type.TypeId, access: anytype) Common.LowerError!Ast.ExprId {
         const receiver = try self.cloneExprValueDemandingShape(access.tuple);
-        if (itemFromValue(receiver, access.elem_index)) |value| return try self.materialize(value);
-        return try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
-            .tuple = try self.materialize(receiver),
+        if (itemFromValue(receiver.value, access.elem_index)) |value| {
+            return try self.wrapBindings(receiver.bindings, try self.materialize(value));
+        }
+        const item = try self.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{
+            .tuple = try self.materialize(receiver.value),
             .elem_index = access.elem_index,
         } } });
+        return try self.wrapBindings(receiver.bindings, item);
     }
 
     fn cloneMatch(self: *Cloner, ty: Type.TypeId, match: @import("../monotype/ast.zig").MatchExpr) Common.LowerError!Ast.ExprId {
-        const pending_watermark = self.pending.items.len;
-        const scrutinee = try self.cloneExprValueDemandingShape(match.scrutinee);
-        if (self.knownConstructorSize(scrutinee) == known_constructor_size_cap) {
+        var scrutinee = try self.cloneExprValueDemandingShape(match.scrutinee);
+        if (self.knownConstructorSize(scrutinee.value) == known_constructor_size_cap) {
             // The scrutinee's measured size saturated the work budget: it is
             // cyclic or too deep to materialize. Skip the known-match collapse
             // and emit the residual match over a plain clone of the source
             // scrutinee, finite by construction, rather than materializing a
-            // possibly self-referential value. Dropping the first clone's
-            // delegated pending bindings keeps the scrutinee's effect emitted
-            // only by the plain re-clone.
-            self.pending.shrinkRetainingCapacity(pending_watermark);
+            // possibly self-referential value. The discarded clone owns its
+            // bindings, so the plain re-clone is the only emitted evaluation.
             return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
                 .scrutinee = try self.cloneExprPlain(match.scrutinee),
                 .branches = try self.cloneBranchSpan(match.branches),
                 .comptime_site = match.comptime_site,
             } } });
         }
-        if (try self.simplifyKnownMatch(scrutinee, match.branches)) |body| return body;
+        if (try self.simplifyKnownMatch(scrutinee.value, match.branches, &scrutinee.bindings)) |body| {
+            return try self.wrapBindings(scrutinee.bindings, body);
+        }
 
-        const scrutinee_expr = try self.materialize(scrutinee);
-        return try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
+        const scrutinee_expr = try self.materialize(scrutinee.value);
+        const residual = try self.addExpr(.{ .ty = ty, .data = .{ .match_ = .{
             .scrutinee = scrutinee_expr,
             .branches = try self.cloneBranchSpan(match.branches),
             .comptime_site = match.comptime_site,
         } } });
+        return try self.wrapBindings(scrutinee.bindings, residual);
     }
 
-    fn simplifyKnownMatch(self: *Cloner, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Ast.ExprId {
-        if (try self.simplifyKnownMatchValue(scrutinee, branches_span)) |value| {
+    fn simplifyKnownMatch(
+        self: *Cloner,
+        scrutinee: Value,
+        branches_span: Ast.Span(Ast.Branch),
+        bindings: *BindingChain,
+    ) Common.LowerError!?Ast.ExprId {
+        if (try self.simplifyKnownMatchValue(scrutinee, branches_span, bindings)) |value| {
             return try self.materialize(value);
         }
         return null;
     }
 
-    fn simplifyKnownMatchValue(self: *Cloner, scrutinee: Value, branches_span: Ast.Span(Ast.Branch)) Common.LowerError!?Value {
-        return self.selectKnownMatchValue(scrutinee, branches_span, false);
+    fn simplifyKnownMatchValue(
+        self: *Cloner,
+        scrutinee: Value,
+        branches_span: Ast.Span(Ast.Branch),
+        bindings: *BindingChain,
+    ) Common.LowerError!?Value {
+        return self.selectKnownMatchValue(scrutinee, branches_span, false, bindings);
     }
 
     /// Collapse a match whose scrutinee is a known constructor to the selected
@@ -7847,6 +7752,7 @@ const Cloner = struct {
         scrutinee: Value,
         branches_span: Ast.Span(Ast.Branch),
         decline_on_no_match: bool,
+        bindings: *BindingChain,
     ) Common.LowerError!?Value {
         if (scrutinee == .expr) return null;
         // Read each branch by stable index rather than holding a `branchSpan`
@@ -7867,15 +7773,13 @@ const Cloner = struct {
             }
             if (branch.guard != null) return null;
 
-            const pending_start = self.pending.items.len;
             const change_start = self.subst.watermark();
-            const unsafe_count = self.unsafeLeafCount(scrutinee);
-            if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, unsafe_count) == null) {
+            if (try self.bindPatToMatchValue(branch.pat, scrutinee, branch.body, bindings) == null) {
                 Common.invariant("known constructor match changed after reusable payload binding");
             }
-            const body = try self.cloneExprValue(branch.body);
+            const body = try self.cloneExprValueInto(branch.body, bindings);
             self.subst.restore(change_start);
-            return try self.resolvePending(pending_start, body);
+            return body;
         }
         if (decline_on_no_match) return null;
         Common.invariant("known constructor match had no matching branch");
@@ -7886,24 +7790,22 @@ const Cloner = struct {
         pat_id: Ast.PatId,
         value: Value,
         body: Ast.ExprId,
-        unsafe_count: usize,
+        bindings: *BindingChain,
     ) Common.LowerError!?Value {
         const pat = self.pass.program.getPat(pat_id);
         switch (pat.data) {
             .bind => |local| {
-                const prepared = try self.valueForMatchLocal(local, value, body, unsafe_count);
+                const prepared = try self.valueForMatchLocal(value, bindings);
                 try self.subst.put(self.pass.program, local, prepared);
                 return prepared;
             },
-            .wildcard => return try self.makeReusableForMatch(value),
+            .wildcard => return try self.makeReusableForMatch(value, bindings),
             .as => |as| {
-                const as_uses = localUseCountInExpr(self.pass.program, as.local, body);
-                const base = if (self.valueCanSubstitute(value) or
-                    (unsafe_count == 1 and as_uses == 1 and localUseBeforeEffect(self.pass.program, as.local, body)))
+                const base = if (self.valueCanSubstitute(value))
                     value
                 else
-                    try self.makeReusableForMatch(value);
-                const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, unsafe_count)) orelse return null;
+                    try self.makeReusableForMatch(value, bindings);
+                const prepared = (try self.bindPatToMatchValue(as.pattern, base, body, bindings)) orelse return null;
                 try self.subst.put(self.pass.program, as.local, prepared);
                 return prepared;
             },
@@ -7914,13 +7816,13 @@ const Cloner = struct {
                         pat_id,
                         candidate,
                         body,
-                        unsafe_count,
+                        bindings,
                     ),
                     .record => |record| {
                         const prepared_fields = try self.pass.arena.allocator().alloc(FieldValue, record.fields.len);
                         for (record.fields, 0..) |field, index| {
                             if (recordPatField(self.pass.program, fields, field.name)) |field_pat| {
-                                const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, unsafe_count)) orelse return null;
+                                const prepared = (try self.bindPatToMatchValue(field_pat, field.value, body, bindings)) orelse return null;
                                 prepared_fields[index] = .{
                                     .name = field.name,
                                     .value = prepared,
@@ -7928,7 +7830,7 @@ const Cloner = struct {
                             } else {
                                 prepared_fields[index] = .{
                                     .name = field.name,
-                                    .value = try self.makeReusableForMatch(field.value),
+                                    .value = try self.makeReusableForMatch(field.value, bindings),
                                 };
                             }
                         }
@@ -7937,7 +7839,7 @@ const Cloner = struct {
                             .fields = prepared_fields,
                         } };
                     },
-                    .nominal => |nominal| return try self.bindPatToMatchValueStripped(pat_id, nominal.backing.*, body, unsafe_count),
+                    .nominal => |nominal| return try self.bindPatToMatchValueStripped(pat_id, nominal.backing.*, body, bindings),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return null;
                         for (0..fields.len) |index| {
@@ -7947,7 +7849,7 @@ const Cloner = struct {
                                 .receiver = receiver,
                                 .field = field.name,
                             } } });
-                            _ = (try self.bindPatToMatchValue(field.pattern, .{ .expr = field_expr }, body, unsafe_count)) orelse return null;
+                            _ = (try self.bindPatToMatchValue(field.pattern, .{ .expr = field_expr }, body, bindings)) orelse return null;
                         }
                         return value;
                     },
@@ -7961,7 +7863,7 @@ const Cloner = struct {
                         pat_id,
                         candidate,
                         body,
-                        unsafe_count,
+                        bindings,
                     ),
                     .tuple => |tuple| {
                         if (pats.len != tuple.items.len) return null;
@@ -7969,14 +7871,14 @@ const Cloner = struct {
                         for (0..pats.len) |index| {
                             const child_pat = GuardedList.at(pats, index);
                             const child_value = tuple.items[index];
-                            items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, unsafe_count)) orelse return null;
+                            items[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, bindings)) orelse return null;
                         }
                         return Value{ .tuple = .{
                             .ty = tuple.ty,
                             .items = items,
                         } };
                     },
-                    .nominal => |nominal| return try self.bindPatToMatchValueStripped(pat_id, nominal.backing.*, body, unsafe_count),
+                    .nominal => |nominal| return try self.bindPatToMatchValueStripped(pat_id, nominal.backing.*, body, bindings),
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return null;
                         for (0..pats.len) |index| {
@@ -7986,7 +7888,7 @@ const Cloner = struct {
                                 .tuple = receiver,
                                 .elem_index = @as(u32, @intCast(index)),
                             } } });
-                            _ = (try self.bindPatToMatchValue(child_pat, .{ .expr = item_expr }, body, unsafe_count)) orelse return null;
+                            _ = (try self.bindPatToMatchValue(child_pat, .{ .expr = item_expr }, body, bindings)) orelse return null;
                         }
                         return value;
                     },
@@ -7999,7 +7901,7 @@ const Cloner = struct {
                         pat_id,
                         value.static_data_candidate,
                         body,
-                        unsafe_count,
+                        bindings,
                     );
                 }
                 const tag = tagFromValue(value) orelse return null;
@@ -8010,7 +7912,7 @@ const Cloner = struct {
                 for (0..pats.len) |index| {
                     const child_pat = GuardedList.at(pats, index);
                     const child_value = tag.payloads[index];
-                    payloads[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, unsafe_count)) orelse return null;
+                    payloads[index] = (try self.bindPatToMatchValue(child_pat, child_value, body, bindings)) orelse return null;
                 }
                 return Value{ .tag = .{
                     .ty = tag.ty,
@@ -8024,7 +7926,7 @@ const Cloner = struct {
                         pat_id,
                         value.static_data_candidate,
                         body,
-                        unsafe_count,
+                        bindings,
                     );
                 }
                 const nominal = switch (value) {
@@ -8032,7 +7934,7 @@ const Cloner = struct {
                     else => return null,
                 };
                 const backing = try self.pass.arena.allocator().create(Value);
-                backing.* = (try self.bindPatToMatchValueStripped(backing_pat, nominal.backing.*, body, unsafe_count)) orelse return null;
+                backing.* = (try self.bindPatToMatchValueStripped(backing_pat, nominal.backing.*, body, bindings)) orelse return null;
                 return Value{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = backing,
@@ -8056,10 +7958,10 @@ const Cloner = struct {
         pat_id: Ast.PatId,
         candidate: StaticDataCandidateValue,
         body: Ast.ExprId,
-        unsafe_count: usize,
+        bindings: *BindingChain,
     ) Common.LowerError!?Value {
         const runtime = try self.pass.arena.allocator().create(Value);
-        runtime.* = (try self.bindPatToMatchValueStripped(pat_id, candidate.runtime.*, body, unsafe_count)) orelse return null;
+        runtime.* = (try self.bindPatToMatchValueStripped(pat_id, candidate.runtime.*, body, bindings)) orelse return null;
         return Value{ .static_data_candidate = .{
             .ty = candidate.ty,
             .static_data = candidate.static_data,
@@ -8078,12 +7980,12 @@ const Cloner = struct {
         pat_id: Ast.PatId,
         value: Value,
         body: Ast.ExprId,
-        unsafe_count: usize,
+        bindings: *BindingChain,
     ) Common.LowerError!?Value {
         if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return null;
         self.wrapper_strip_depth += 1;
         defer self.wrapper_strip_depth -= 1;
-        return try self.bindPatToMatchValue(pat_id, value, body, unsafe_count);
+        return try self.bindPatToMatchValue(pat_id, value, body, bindings);
     }
 
     /// Node-count threshold above which a known constructor value bound to an
@@ -8104,46 +8006,32 @@ const Cloner = struct {
 
     /// Materialize a known value once and bind it reuse-safely, so it is no
     /// longer tracked as a known constructor at its use sites.
-    fn boxDeepKnownValue(self: *Cloner, value: Value) Common.LowerError!Value {
-        return try self.makeReusableForMatch(.{ .expr = try self.materialize(value) });
+    fn boxDeepKnownValue(self: *Cloner, value: Value, bindings: *BindingChain) Common.LowerError!Value {
+        return try self.makeReusableForMatch(.{ .expr = try self.materialize(value) }, bindings);
     }
 
     fn valueForMatchLocal(
         self: *Cloner,
-        local: Ast.LocalId,
         value: Value,
-        body: Ast.ExprId,
-        unsafe_count: usize,
+        bindings: *BindingChain,
     ) Common.LowerError!Value {
         if (self.knownConstructorSize(value) >= known_value_track_cap) {
-            return try self.boxDeepKnownValue(value);
+            return try self.boxDeepKnownValue(value, bindings);
         }
-        const uses = localUseCountInExpr(self.pass.program, local, body);
-        if (self.valueCanSubstitute(value) or
-            (unsafe_count == 1 and uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
-        {
-            return value;
-        }
-        return try self.makeReusableForMatchWindowed(value);
+        if (self.valueCanSubstitute(value)) return value;
+        return try self.makeReusableForMatch(value, bindings);
     }
 
     fn valueForInlineLocal(
         self: *Cloner,
-        local: Ast.LocalId,
         value: Value,
-        body: Ast.ExprId,
-        unsafe_count: usize,
+        bindings: *BindingChain,
     ) Common.LowerError!Value {
         if (self.knownConstructorSize(value) >= known_value_track_cap) {
-            return try self.boxDeepKnownValue(value);
+            return try self.boxDeepKnownValue(value, bindings);
         }
-        const uses = localUseCountInExpr(self.pass.program, local, body);
-        if (self.valueCanSubstitute(value) or
-            (unsafe_count == 1 and uses == 1 and localUseBeforeEffect(self.pass.program, local, body)))
-        {
-            return value;
-        }
-        return try self.makeReusableForMatchWindowed(value);
+        if (self.valueCanSubstitute(value)) return value;
+        return try self.makeReusableForMatch(value, bindings);
     }
 
     /// Clone a source expression to a known value for inlining, rebinding a
@@ -8151,23 +8039,20 @@ const Cloner = struct {
     /// a plain clone of the source expression instead. A saturated size means
     /// the value is cyclic or too deep to measure; boxing it would
     /// deep-materialize a possibly self-referential value, whereas a plain
-    /// clone of the source expression is finite by construction. Dropping the
-    /// first clone's delegated pending bindings keeps its effect emitted only
-    /// by the plain re-clone: a leftover pending would flush the same effect a
-    /// second time. The discarded clone's dead nodes still counted toward
-    /// `effect_marks`, which only makes downstream delegation more conservative
-    /// and is deliberately left as-is.
-    fn cloneInlineValueBoundingCycles(self: *Cloner, expr_id: Ast.ExprId) Common.LowerError!Value {
-        const window_start = self.effect_marks;
-        const expr_watermark = self.pass.program.exprCount();
-        const pending_watermark = self.pending.items.len;
-        const value = try self.cloneExprValue(expr_id);
-        if (self.knownConstructorSize(value) == known_constructor_size_cap) {
-            self.pending.shrinkRetainingCapacity(pending_watermark);
-            return try self.makeReusableForMatch(.{ .expr = try self.cloneExprPlain(expr_id) });
+    /// clone of the source expression is finite by construction. The first
+    /// clone owns its bindings, so declining it discards that entire chain and
+    /// cannot duplicate any computation when the source is cloned plainly.
+    fn cloneInlineValueBoundingCycles(
+        self: *Cloner,
+        expr_id: Ast.ExprId,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
+        const cloned = try self.cloneExprValue(expr_id);
+        if (self.knownConstructorSize(cloned.value) == known_constructor_size_cap) {
+            return try self.makeReusableForMatch(.{ .expr = try self.cloneExprPlain(expr_id) }, bindings);
         }
-        try self.recordValueWindow(value, window_start, expr_watermark);
-        return value;
+        bindings.appendChain(cloned.bindings);
+        return cloned.value;
     }
 
     /// Reported size for a known value that exhausts the size work budget: a
@@ -8275,57 +8160,6 @@ const Cloner = struct {
         return total;
     }
 
-    /// Reported unsafe-leaf count for a known value that exhausts the work
-    /// budget: a value too large to scan counts as having many unsafe leaves.
-    /// Reporting the cap (rather than a truncated count) errs every consumer
-    /// toward reuse — a count above one fails the `unsafe_count == 1`
-    /// single-substitution conditions, so the value is bound to a local and
-    /// evaluated once instead of duplicated — which is the safe direction: it
-    /// can never drop or reorder an effect a truncated count would have missed.
-    const unsafe_leaf_count_cap: usize = std.math.maxInt(usize);
-
-    /// Total work budget for scanning one known value's unsafe leaves. Shared
-    /// substructure makes an unmemoized scan re-descend combinatorially many
-    /// paths, so the scan spends one shared budget per node visit and reports
-    /// the cap when it runs out. See design.md "Core Principles" on bounded
-    /// post-check walks.
-    const unsafe_leaf_count_work_budget: u32 = 4096;
-
-    fn unsafeLeafCount(self: *Cloner, value: Value) usize {
-        var budget: u32 = unsafe_leaf_count_work_budget;
-        return self.unsafeLeafCountBudgeted(value, &budget);
-    }
-
-    fn unsafeLeafCountBudgeted(self: *Cloner, value: Value, budget: *u32) usize {
-        if (budget.* == 0) return unsafe_leaf_count_cap;
-        budget.* -= 1;
-        return switch (value) {
-            .expr => |expr| if (self.exprCanSubstitute(expr)) 0 else 1,
-            .static_data_candidate => |candidate| self.unsafeLeafCountBudgeted(candidate.runtime.*, budget),
-            .tag => |tag| blk: {
-                var count: usize = 0;
-                for (tag.payloads) |payload| count += self.unsafeLeafCountBudgeted(payload, budget);
-                break :blk count;
-            },
-            .record => |record| blk: {
-                var count: usize = 0;
-                for (record.fields) |field| count += self.unsafeLeafCountBudgeted(field.value, budget);
-                break :blk count;
-            },
-            .tuple => |tuple| blk: {
-                var count: usize = 0;
-                for (tuple.items) |item| count += self.unsafeLeafCountBudgeted(item, budget);
-                break :blk count;
-            },
-            .nominal => |nominal| self.unsafeLeafCountBudgeted(nominal.backing.*, budget),
-            .callable => |callable| blk: {
-                var count: usize = 0;
-                for (callable.captures) |capture| count += self.unsafeLeafCountBudgeted(capture.value, budget);
-                break :blk count;
-            },
-        };
-    }
-
     /// Total work budget for making one value reuse-safe. A known value is not
     /// always a small finite tree: substitution shares one value union across
     /// every use site, so a value built by a recursively-constructed chain (an
@@ -8338,81 +8172,42 @@ const Cloner = struct {
     /// as-is instead of continuing to rewrite it. See design.md "Core
     /// Principles" on bounded post-check walks.
     ///
-    /// Keeping a sub-value as-is declines the single-evaluation rewrite for it,
-    /// the same conservative direction the substitution check takes on its own
-    /// exhaustion: the values large enough to exhaust this budget are the deep
-    /// constructor chains of recursive iterator construction, whose leaves are
-    /// pure structural components, so leaving them un-rewritten at worst
-    /// recomputes a pure leaf and never drops or reorders an effect.
+    /// When the budget is exhausted, the remaining sub-value is materialized
+    /// and named as one strict binding. This bounds compiler work without
+    /// weakening single evaluation or effect ordering.
     const make_reusable_work_budget: u32 = 4096;
 
-    fn makeReusableForMatch(self: *Cloner, value: Value) Common.LowerError!Value {
+    fn makeReusableForMatch(self: *Cloner, value: Value, bindings: *BindingChain) Common.LowerError!Value {
         var budget: u32 = make_reusable_work_budget;
-        return try self.makeReusableForMatchBudgeted(value, &budget);
+        return try self.makeReusableForMatchBudgeted(value, &budget, bindings);
     }
 
-    /// Record the emission-window start for a value cloned from a known
-    /// point, keyed by its expression node. `expr_watermark` is the program's
-    /// expression count from just before the clone: only a node the clone
-    /// freshly emitted gets a window, because an existing node reached
-    /// through substitution was emitted elsewhere and a later recording
-    /// would claim marks that belong to other emissions.
-    fn recordValueWindow(self: *Cloner, value: Value, window_start: usize, expr_watermark: usize) Allocator.Error!void {
-        const expr = switch (value) {
-            .expr => |expr| expr,
-            else => return,
-        };
-        if (@intFromEnum(expr) < expr_watermark) return;
-        const entry = try self.expr_window_starts.getOrPut(expr);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = window_start;
+    fn makeReusableForMatchBudgeted(
+        self: *Cloner,
+        value: Value,
+        budget: *u32,
+        bindings: *BindingChain,
+    ) Common.LowerError!Value {
+        if (budget.* == 0) {
+            const ty = valueType(self.pass.program, value);
+            const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
+            try bindings.appendBinding(self.pass.arena.allocator(), .{
+                .local = local,
+                .ty = ty,
+                .value = try self.materialize(value),
+            });
+            return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .local = local } }) };
         }
-    }
-
-    /// Like `makeReusableForMatch`, but consults the value's recorded
-    /// emission window: the binding then carries `[marks_before, marks]`,
-    /// which lets `resolvePending` delegate it even when the value is
-    /// effectful — a window chaining from the region entry proves the hoist
-    /// to the region boundary crosses no other effect. Only a single opaque
-    /// `.expr` value has a well-defined window; every other shape, and any
-    /// value with no recorded window, takes the untracked path.
-    fn makeReusableForMatchWindowed(self: *Cloner, value: Value) Common.LowerError!Value {
-        const expr = switch (value) {
-            .expr => |expr| expr,
-            else => return try self.makeReusableForMatch(value),
-        };
-        const window_start = self.expr_window_starts.get(expr) orelse return try self.makeReusableForMatch(value);
-        if (self.valueCanSubstitute(value)) return value;
-        if (std.debug.runtime_safety) std.debug.assert(window_start <= self.effect_marks);
-        const ty = self.pass.program.getExpr(expr).ty;
-        const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-        try self.pending.append(self.pass.allocator, .{
-            .local = local,
-            .ty = ty,
-            .value = expr,
-            .marks = self.effect_marks,
-            .marks_before = window_start,
-        });
-        return .{ .expr = try self.addExpr(.{
-            .ty = ty,
-            .data = .{ .local = local },
-        }) };
-    }
-
-    fn makeReusableForMatchBudgeted(self: *Cloner, value: Value, budget: *u32) Common.LowerError!Value {
-        if (budget.* == 0) return value;
         budget.* -= 1;
         if (self.valueCanSubstitute(value)) return value;
         return switch (value) {
             .expr => |expr| blk: {
                 const ty = self.pass.program.getExpr(expr).ty;
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), ty);
-                try self.pending.append(self.pass.allocator, .{
+                try bindings.appendBinding(self.pass.arena.allocator(), .{
                     .local = local,
                     .ty = ty,
                     .value = expr,
-                    .marks = self.effect_marks,
-                    .marks_before = null,
                 });
                 break :blk Value{ .expr = try self.addExpr(.{
                     .ty = ty,
@@ -8421,12 +8216,10 @@ const Cloner = struct {
             },
             .static_data_candidate => |candidate| blk: {
                 const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), candidate.ty);
-                try self.pending.append(self.pass.allocator, .{
+                try bindings.appendBinding(self.pass.arena.allocator(), .{
                     .local = local,
                     .ty = candidate.ty,
                     .value = try self.materialize(value),
-                    .marks = self.effect_marks,
-                    .marks_before = null,
                 });
                 break :blk Value{ .expr = try self.addExpr(.{
                     .ty = candidate.ty,
@@ -8436,7 +8229,7 @@ const Cloner = struct {
             .tag => |tag| blk: {
                 const payloads = try self.pass.arena.allocator().alloc(Value, tag.payloads.len);
                 for (tag.payloads, 0..) |payload, index| {
-                    payloads[index] = try self.makeReusableForMatchBudgeted(payload, budget);
+                    payloads[index] = try self.makeReusableForMatchBudgeted(payload, budget, bindings);
                 }
                 break :blk Value{ .tag = .{
                     .ty = tag.ty,
@@ -8449,7 +8242,7 @@ const Cloner = struct {
                 for (record.fields, 0..) |field, index| {
                     fields[index] = .{
                         .name = field.name,
-                        .value = try self.makeReusableForMatchBudgeted(field.value, budget),
+                        .value = try self.makeReusableForMatchBudgeted(field.value, budget, bindings),
                     };
                 }
                 break :blk Value{ .record = .{
@@ -8460,7 +8253,7 @@ const Cloner = struct {
             .tuple => |tuple| blk: {
                 const items = try self.pass.arena.allocator().alloc(Value, tuple.items.len);
                 for (tuple.items, 0..) |item, index| {
-                    items[index] = try self.makeReusableForMatchBudgeted(item, budget);
+                    items[index] = try self.makeReusableForMatchBudgeted(item, budget, bindings);
                 }
                 break :blk Value{ .tuple = .{
                     .ty = tuple.ty,
@@ -8469,7 +8262,7 @@ const Cloner = struct {
             },
             .nominal => |nominal| blk: {
                 const backing = try self.pass.arena.allocator().create(Value);
-                backing.* = try self.makeReusableForMatchBudgeted(nominal.backing.*, budget);
+                backing.* = try self.makeReusableForMatchBudgeted(nominal.backing.*, budget, bindings);
                 break :blk Value{ .nominal = .{
                     .ty = nominal.ty,
                     .backing = backing,
@@ -8480,7 +8273,7 @@ const Cloner = struct {
                 for (callable.captures, 0..) |capture, index| {
                     captures[index] = .{
                         .id = capture.id,
-                        .value = try self.makeReusableForMatchBudgeted(capture.value, budget),
+                        .value = try self.makeReusableForMatchBudgeted(capture.value, budget, bindings),
                     };
                 }
                 break :blk Value{ .callable = .{
@@ -8492,90 +8285,43 @@ const Cloner = struct {
         };
     }
 
-    /// Emit the pending bindings created at or after `start` as a let chain
-    /// around `expr`, oldest outermost so evaluation order is preserved, and
-    /// drop them from the stack.
-    fn flushPendingSince(self: *Cloner, start: usize, expr: Ast.ExprId) Common.LowerError!Ast.ExprId {
-        if (self.pending.items.len <= start) return expr;
+    /// Place a strict chain around `expr`, oldest binding outermost.
+    fn wrapBindings(self: *Cloner, bindings: BindingChain, expr: Ast.ExprId) Common.LowerError!Ast.ExprId {
+        bindings.verify(self.pass.program);
+        if (bindings.isEmpty()) return expr;
         const ty = self.pass.program.getExpr(expr).ty;
         var result = expr;
-        var index = self.pending.items.len;
-        while (index > start) {
-            index -= 1;
-            const pending = self.pending.items[index];
+        var current = bindings.last;
+        while (current) |node| : (current = node.previous) {
+            const binding = node.binding;
             const pat = try self.pass.program.addPat(.{
-                .ty = pending.ty,
-                .data = .{ .bind = pending.local },
+                .ty = binding.ty,
+                .data = .{ .bind = binding.local },
             });
             result = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
                 .bind = pat,
-                .value = pending.value,
+                .value = binding.value,
                 .rest = result,
             } } });
         }
-        self.pending.shrinkRetainingCapacity(start);
         return result;
     }
 
-    /// Emit the pending bindings created at or after `start` as let
-    /// statements, oldest first, and drop them from the stack. Used where a
-    /// statement list is being built, so the bindings dominate the statement
-    /// whose cloning created them and everything after it.
-    fn appendPendingStmtsSince(self: *Cloner, start: usize, out: *std.ArrayList(Ast.StmtId)) Common.LowerError!void {
-        for (self.pending.items[start..]) |pending| {
+    /// Place a strict chain into a statement list, oldest first.
+    fn appendBindingStmts(self: *Cloner, bindings: BindingChain, out: *std.ArrayList(Ast.StmtId)) Common.LowerError!void {
+        bindings.verify(self.pass.program);
+        var current = bindings.first;
+        while (current) |node| : (current = node.next) {
+            const binding = node.binding;
             const pat = try self.pass.program.addPat(.{
-                .ty = pending.ty,
-                .data = .{ .bind = pending.local },
+                .ty = binding.ty,
+                .data = .{ .bind = binding.local },
             });
             try out.append(self.pass.allocator, try self.addStmt(.{ .let_ = .{
                 .pat = pat,
-                .value = pending.value,
+                .value = binding.value,
             } }));
         }
-        self.pending.shrinkRetainingCapacity(start);
-    }
-
-    /// Whether the pending bindings `[start..]` may delegate to the region
-    /// boundary under a structured body. The flushed let chain evaluates
-    /// oldest-first ahead of everything else in the region, so each
-    /// effect-carrying binding must be provably first among the effects that
-    /// remain: scanning oldest to newest, its emission window
-    /// `[marks_before, marks]` must begin exactly where the previous
-    /// effectful binding's window ended (the first at the region entry),
-    /// which proves no uncounted effect sits between them or before the
-    /// first. Bindings with effect-free values commute with every effect and
-    /// need no window. An effectful binding with no recorded window never
-    /// delegates.
-    fn pendingChainDelegates(self: *const Cloner, start: usize) bool {
-        var expected = self.region_entry_marks;
-        for (self.pending.items[start..]) |pending| {
-            if (exprHasNoObservableEffect(self.pass.program, self.pass.fn_effect_free, pending.value, false)) continue;
-            const window_start = pending.marks_before orelse {
-                return false;
-            };
-            if (window_start != expected) {
-                return false;
-            }
-            expected = pending.marks;
-        }
-        return true;
-    }
-
-    /// Resolve the pending bindings a construct created while producing
-    /// `body`. A structured value keeps its structure when every binding it
-    /// created may move to the region boundary — effect-free bindings
-    /// commute with everything, and an effectful binding qualifies only when
-    /// its emission window chains from the region entry (see
-    /// `pendingChainDelegates`), so the hoist replays the region's effects
-    /// in source order. Anything else pins the value here — it is
-    /// materialized and wrapped so evaluation order and count stay exactly
-    /// as written.
-    fn resolvePending(self: *Cloner, start: usize, body: Value) Common.LowerError!Value {
-        if (self.pending.items.len <= start) return body;
-        if (body != .expr and self.pendingChainDelegates(start)) {
-            return body;
-        }
-        return .{ .expr = try self.flushPendingSince(start, try self.materialize(body)) };
     }
 
     fn cloneCaseOfCaseValue(
@@ -8584,7 +8330,6 @@ const Cloner = struct {
         scrutinee_expr: Ast.ExprId,
         outer_branches_span: Ast.Span(Ast.Branch),
     ) Common.LowerError!?Value {
-        const pending_entry = self.pending.items.len;
         const scrutinee_data = self.pass.program.getExpr(scrutinee_expr).data;
 
         const outer_branches = self.pass.program.branchSpan(outer_branches_span);
@@ -8612,24 +8357,18 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    // Each rewritten branch flushes every pending binding it
-                    // creates, so it is its own region.
-                    const pending_start = self.pending.items.len;
-                    const saved_entry_marks = self.region_entry_marks;
-                    self.region_entry_marks = self.effect_marks;
-                    defer self.region_entry_marks = saved_entry_marks;
+                    var branch_bindings: BindingChain = .{};
                     const change_start = self.subst.watermark();
                     try self.shadowPatLocals(inner_branch.pat);
-                    const inner_value = try self.cloneExprValue(inner_branch.body);
-                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span)) orelse {
+                    const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
+                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse {
                         self.subst.restore(change_start);
-                        self.pending.shrinkRetainingCapacity(pending_entry);
                         return null;
                     };
                     rewritten[index] = .{
                         .pat = inner_branch.pat,
                         .guard = inner_branch.guard,
-                        .body = try self.flushPendingSince(pending_start, try self.materialize(outer_value)),
+                        .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
                     };
                     self.subst.restore(change_start);
                 }
@@ -8648,33 +8387,19 @@ const Cloner = struct {
                 defer self.pass.allocator.free(rewritten);
 
                 for (inner_branches, 0..) |inner_branch, index| {
-                    // Each rewritten branch flushes every pending binding it
-                    // creates, so it is its own region.
-                    const pending_start = self.pending.items.len;
-                    const saved_entry_marks = self.region_entry_marks;
-                    self.region_entry_marks = self.effect_marks;
-                    defer self.region_entry_marks = saved_entry_marks;
-                    const inner_value = try self.cloneExprValue(inner_branch.body);
-                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span)) orelse {
-                        self.pending.shrinkRetainingCapacity(pending_entry);
-                        return null;
-                    };
+                    var branch_bindings: BindingChain = .{};
+                    const inner_value = try self.cloneExprValueInto(inner_branch.body, &branch_bindings);
+                    const outer_value = (try self.distributeMatchOverValue(ty, inner_value, outer_branches_span, &branch_bindings)) orelse return null;
                     rewritten[index] = .{
                         .cond = inner_branch.cond,
-                        .body = try self.flushPendingSince(pending_start, try self.materialize(outer_value)),
+                        .body = try self.wrapBindings(branch_bindings, try self.materialize(outer_value)),
                     };
                 }
 
-                const pending_start = self.pending.items.len;
-                const saved_entry_marks = self.region_entry_marks;
-                self.region_entry_marks = self.effect_marks;
-                defer self.region_entry_marks = saved_entry_marks;
-                const else_value = try self.cloneExprValue(inner_if.final_else);
-                const outer_else = (try self.distributeMatchOverValue(ty, else_value, outer_branches_span)) orelse {
-                    self.pending.shrinkRetainingCapacity(pending_entry);
-                    return null;
-                };
-                const final_else = try self.flushPendingSince(pending_start, try self.materialize(outer_else));
+                var else_bindings: BindingChain = .{};
+                const else_value = try self.cloneExprValueInto(inner_if.final_else, &else_bindings);
+                const outer_else = (try self.distributeMatchOverValue(ty, else_value, outer_branches_span, &else_bindings)) orelse return null;
+                const final_else = try self.wrapBindings(else_bindings, try self.materialize(outer_else));
 
                 return .{ .expr = try self.addExpr(.{ .ty = ty, .data = .{ .if_ = .{
                     .branches = try self.pass.program.addIfBranchSpan(rewritten),
@@ -8700,8 +8425,9 @@ const Cloner = struct {
         ty: Type.TypeId,
         inner_value: Value,
         outer_branches_span: Ast.Span(Ast.Branch),
+        bindings: *BindingChain,
     ) Common.LowerError!?Value {
-        if (try self.selectKnownMatchValue(inner_value, outer_branches_span, true)) |value| return value;
+        if (try self.selectKnownMatchValue(inner_value, outer_branches_span, true, bindings)) |value| return value;
         return switch (inner_value) {
             .expr => |expr| try self.cloneCaseOfCaseValue(ty, expr, outer_branches_span),
             else => null,
@@ -8713,6 +8439,7 @@ const Cloner = struct {
         ty: Type.TypeId,
         callable: CallableValue,
         args_span: Ast.Span(Ast.ExprId),
+        bindings: *BindingChain,
     ) Common.LowerError!Value {
         var callable_call_size: usize = 0;
         for (callable.captures) |capture| callable_call_size +|= self.knownConstructorSize(capture.value);
@@ -8760,7 +8487,6 @@ const Cloner = struct {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
 
-        const pending_start = self.pending.items.len;
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
 
@@ -8770,24 +8496,20 @@ const Cloner = struct {
             const id = self.pass.program.captureIdOfLocal(source_capture.local);
             const capture_value = callableCaptureValueForId(callable.captures, id) orelse
                 Common.invariant("callable value had no value for a source capture slot");
-            prepared_captures[index] = try self.makeReusableForMatchWindowed(capture_value);
+            prepared_captures[index] = try self.makeReusableForMatch(capture_value, bindings);
             try self.subst.put(self.pass.program, source_capture.local, prepared_captures[index]);
         }
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr);
+            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr, bindings);
         }
-
-        var unsafe_count: usize = 0;
-        for (prepared_captures) |capture_value| unsafe_count += self.unsafeLeafCount(capture_value);
-        for (arg_values) |arg_value| unsafe_count += self.unsafeLeafCount(arg_value);
 
         const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
         defer self.pass.allocator.free(prepared_args);
-        for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
-            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count);
+        for (arg_values, 0..) |arg_value, index| {
+            prepared_args[index] = try self.valueForInlineLocal(arg_value, bindings);
         }
 
         try self.inline_stack.append(self.pass.allocator, .{ .fn_id = callable.fn_id, .known_size = callable_call_size });
@@ -8800,7 +8522,7 @@ const Cloner = struct {
             try self.subst.put(self.pass.program, source_arg.local, arg_value);
         }
 
-        return try self.resolvePending(pending_start, try self.cloneExprValue(body));
+        return try self.cloneExprValueInto(body, bindings);
     }
 
     fn inlineDirectCallValue(
@@ -8809,6 +8531,7 @@ const Cloner = struct {
         args_span: Ast.Span(Ast.ExprId),
         captures_span: Ast.Span(Ast.CaptureOperand),
         original_expr: Ast.ExprId,
+        bindings: *BindingChain,
     ) Common.LowerError!Value {
         const direct_call_size = self.argsKnownConstructorSize(args_span) +| self.captureOperandsKnownConstructorSize(captures_span);
         if (direct_call_size == known_constructor_size_cap) {
@@ -8835,7 +8558,6 @@ const Cloner = struct {
         defer self.pass.allocator.free(args);
         if (source_args.len != args.len) Common.invariant("direct call arity differed from lifted function arity");
 
-        const pending_start = self.pending.items.len;
         const change_start = self.subst.watermark();
         defer self.subst.restore(change_start);
 
@@ -8855,19 +8577,15 @@ const Cloner = struct {
         for (operands, 0..) |operand, index| {
             capture_values[index] = .{
                 .id = operand.id,
-                .value = try self.cloneInlineValueBoundingCycles(operand.value),
+                .value = try self.cloneInlineValueBoundingCycles(operand.value, bindings),
             };
         }
 
         const arg_values = try self.pass.allocator.alloc(Value, args.len);
         defer self.pass.allocator.free(arg_values);
         for (args, 0..) |arg_expr, index| {
-            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr);
+            arg_values[index] = try self.cloneInlineValueBoundingCycles(arg_expr, bindings);
         }
-
-        var unsafe_count: usize = 0;
-        for (capture_values) |capture_value| unsafe_count += self.unsafeLeafCount(capture_value.value);
-        for (arg_values) |arg_value| unsafe_count += self.unsafeLeafCount(arg_value);
 
         const prepared_captures = try self.pass.allocator.alloc(Value, captures.len);
         defer self.pass.allocator.free(prepared_captures);
@@ -8875,13 +8593,13 @@ const Cloner = struct {
             const id = self.pass.program.captureIdOfLocal(capture.local);
             const capture_value = callableCaptureValueForId(capture_values, id) orelse
                 Common.invariant("direct call had no value for a source capture slot");
-            prepared_captures[index] = try self.valueForInlineLocal(capture.local, capture_value, body, unsafe_count);
+            prepared_captures[index] = try self.valueForInlineLocal(capture_value, bindings);
         }
 
         const prepared_args = try self.pass.allocator.alloc(Value, arg_values.len);
         defer self.pass.allocator.free(prepared_args);
-        for (source_args, arg_values, 0..) |source_arg, arg_value, index| {
-            prepared_args[index] = try self.valueForInlineLocal(source_arg.local, arg_value, body, unsafe_count);
+        for (arg_values, 0..) |arg_value, index| {
+            prepared_args[index] = try self.valueForInlineLocal(arg_value, bindings);
         }
 
         try self.inline_stack.append(self.pass.allocator, .{ .fn_id = callee, .known_size = direct_call_size });
@@ -8897,7 +8615,7 @@ const Cloner = struct {
             try self.subst.put(self.pass.program, source_arg.local, arg_value);
         }
 
-        return try self.resolvePending(pending_start, try self.cloneExprValue(body));
+        return try self.cloneExprValueInto(body, bindings);
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
@@ -9389,11 +9107,12 @@ const Cloner = struct {
     }
 
     /// Clone one statement. A binding statement whose value's opaque leaves
-    /// can all be named dissolves instead: the caller drains the pending
-    /// bindings at this statement's position — the same computations in the
-    /// same order — and the bound name keeps its structured value for the
-    /// rest of the block. Returns null for a dissolved statement.
-    fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!?Ast.StmtId {
+    /// can all be named dissolves instead: the returned binding chain is
+    /// placed by the caller at this statement's position — the same
+    /// computations in the same order — and the bound name keeps its
+    /// structured value for the rest of the block. `stmt` is null when the
+    /// source binding dissolved completely.
+    fn cloneStmt(self: *Cloner, stmt_id: Ast.StmtId) Common.LowerError!ClonedStmt {
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
@@ -9404,7 +9123,8 @@ const Cloner = struct {
         if (!stmt_region.isEmpty()) self.current_region = stmt_region;
 
         const stmt = self.pass.program.getStmt(stmt_id);
-        return try self.addStmt(switch (stmt) {
+        var bindings: BindingChain = .{};
+        const cloned: ?Ast.Stmt = switch (stmt) {
             .uninitialized => |pat| blk: {
                 break :blk .{ .uninitialized = try self.clonePat(pat, .bind_runtime) };
             },
@@ -9417,7 +9137,7 @@ const Cloner = struct {
                     null;
                 if (recursive_pat) |pat| try self.markActiveRecursiveValuePat(pat);
                 defer if (recursive_pat) |pat| self.unmarkActiveRecursiveValuePat(pat);
-                const value = try self.cloneExprValue(let_.value);
+                const value = try self.cloneExprValueInto(let_.value, &bindings);
                 const value_expr = try self.materialize(value);
                 if (try self.bindPatToReusableValue(let_.pat, value) == .match) {
                     break :blk .{ .let_ = .{
@@ -9436,11 +9156,11 @@ const Cloner = struct {
                     // The drained bindings sit exactly where the statement
                     // sat, so no evaluation moves and no gate is needed.
                     const change_before = self.subst.watermark();
-                    const pending_before = self.pending.items.len;
-                    const reusable = try self.makeReusableForMatch(value);
-                    if (try self.bindPatToFlowValue(let_.pat, reusable)) return null;
+                    const bindings_before = bindings.mark();
+                    const reusable = try self.makeReusableForMatch(value, &bindings);
+                    if (try self.bindPatToFlowValue(let_.pat, reusable)) break :blk null;
                     self.subst.restore(change_before);
-                    self.pending.shrinkRetainingCapacity(pending_before);
+                    bindings.rewind(bindings_before);
                 }
                 break :blk .{ .let_ = .{
                     .pat = recursive_pat orelse try self.clonePat(let_.pat, .bind_runtime),
@@ -9457,7 +9177,11 @@ const Cloner = struct {
                 .target = ret.target,
             } },
             .crash => |msg| .{ .crash = msg },
-        });
+        };
+        return .{
+            .bindings = bindings,
+            .stmt = if (cloned) |actual| try self.addStmt(actual) else null,
+        };
     }
 
     fn cloneExprSpan(self: *Cloner, span: Ast.Span(Ast.ExprId)) Common.LowerError!Ast.Span(Ast.ExprId) {
@@ -9923,34 +9647,6 @@ const Cloner = struct {
     }
 
     fn addExpr(self: *Cloner, expr: Ast.Expr) Allocator.Error!Ast.ExprId {
-        // Track emissions that carry an observable effect (host effects enter
-        // through calls; low-level ops are data operations apart from the
-        // crash op and the process-seed read). Pending bindings created after
-        // such an emission must not move ahead of it.
-        switch (expr.data) {
-            .call_proc => |call| {
-                const effect_free = switch (call.callee) {
-                    .lifted => |fn_id| blk: {
-                        const raw = @intFromEnum(fn_id);
-                        break :blk raw < self.pass.fn_effect_free.len and self.pass.fn_effect_free[raw];
-                    },
-                    .func => false,
-                };
-                if (!effect_free) self.effect_marks += 1;
-            },
-            .call_value,
-            .crash,
-            .dbg,
-            .expect,
-            .expect_err,
-            .comptime_exhaustiveness_failed,
-            => self.effect_marks += 1,
-            .low_level => |call| switch (call.op) {
-                .crash, .dict_pseudo_seed => self.effect_marks += 1,
-                else => {},
-            },
-            else => {},
-        }
         const saved_loc = self.pass.program.current_loc;
         defer self.pass.program.current_loc = saved_loc;
         const saved_region = self.pass.program.current_region;
@@ -9961,14 +9657,6 @@ const Cloner = struct {
     }
 
     fn addStmt(self: *Cloner, stmt: Ast.Stmt) Allocator.Error!Ast.StmtId {
-        // Statement-position effects never pass through `addExpr`, so they
-        // advance the effect marks here: an emission window that spanned such
-        // a statement without counting it would let `pendingChainDelegates`
-        // hoist an effectful binding across it.
-        switch (stmt) {
-            .expect, .dbg, .crash => self.effect_marks += 1,
-            .uninitialized, .let_, .expr, .return_ => {},
-        }
         const saved_loc = self.pass.program.current_loc;
         defer self.pass.program.current_loc = saved_loc;
         const saved_region = self.pass.program.current_region;
@@ -9991,6 +9679,7 @@ const BodyLocalScope = struct {
     allocator: Allocator,
     fn_index: usize,
     bound: std.AutoHashMap(Ast.LocalId, u32),
+    joins: std.AutoHashMap(Ast.JoinPointId, u32),
 
     fn checkUse(self: *BodyLocalScope, local: Ast.LocalId) void {
         if (self.bound.contains(local)) return;
@@ -10231,14 +9920,29 @@ const BodyLocalScope = struct {
             .break_ => |maybe| if (maybe) |value| try self.walkExpr(value),
             .continue_ => |continue_| try self.walkExprSpan(continue_.values),
             .join_point => |join_point| {
+                const join_entry = try self.joins.getOrPut(join_point.id);
+                if (join_entry.found_existing) {
+                    Common.invariant("rewritten body redeclared an active join point id");
+                }
+                join_entry.value_ptr.* = join_point.params.len;
                 var added: std.ArrayList(Ast.LocalId) = .empty;
                 defer added.deinit(self.allocator);
                 try self.bindTypedLocals(join_point.params, &added);
                 try self.walkExpr(join_point.body);
                 self.unbindAll(added.items);
                 try self.walkExpr(join_point.remainder);
+                if (!self.joins.remove(join_point.id)) {
+                    Common.invariant("rewritten body lost an active join point during validation");
+                }
             },
-            .jump => |jump| try self.walkExprSpan(jump.args),
+            .jump => |jump| {
+                const arity = self.joins.get(jump.target) orelse
+                    Common.invariant("rewritten body jumped to a join point outside lexical scope");
+                if (arity != jump.args.len) {
+                    Common.invariant("rewritten body jump arity differed from its join point parameters");
+                }
+                try self.walkExprSpan(jump.args);
+            },
         }
     }
 };
@@ -11181,391 +10885,6 @@ fn localUseCountInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id:
     };
 }
 
-const LocalUseScan = struct {
-    seen_effect: bool = false,
-    found_before_effect: bool = false,
-    found_after_effect: bool = false,
-};
-
-/// Whether evaluating an expression can produce an observable effect. Host
-/// effects enter through procedure calls, so a call carries an effect unless
-/// its target's whole body is effect-free; low-level ops are data operations
-/// apart from the crash op and the process-seed read. Divergence through
-/// checked arithmetic is not an effect: within one straight-line region a
-/// crash commutes with pure evaluation.
-/// `allow_control` distinguishes the two users: classifying a whole function
-/// body tolerates control transfers (they stay inside the function), while a
-/// value being discarded or moved must not carry one.
-fn exprHasNoObservableEffect(program: *const Ast.Program, fn_effect_free: []const bool, expr_id: Ast.ExprId, allow_control: bool) bool {
-    const expr = program.getExpr(expr_id);
-    return switch (expr.data) {
-        .@"unreachable",
-        .local,
-        .unit,
-        .int_lit,
-        .frac_f32_lit,
-        .frac_f64_lit,
-        .dec_lit,
-        .str_lit,
-        .bytes_lit,
-        .uninitialized,
-        .uninitialized_payload,
-        .def_ref,
-        .fn_def,
-        => true,
-        .fn_ref => |fn_ref| captureOperandSpanHasNoObservableEffect(program, fn_effect_free, fn_ref.captures, allow_control),
-        .list,
-        .tuple,
-        => |items| exprSpanHasNoObservableEffect(program, fn_effect_free, items, allow_control),
-        .record => |fields| blk: {
-            const field_exprs = program.fieldExprSpan(fields);
-            for (0..field_exprs.len) |index| {
-                const field = GuardedList.at(field_exprs, index);
-                if (!exprHasNoObservableEffect(program, fn_effect_free, field.value, allow_control)) break :blk false;
-            }
-            break :blk true;
-        },
-        .tag => |tag| exprSpanHasNoObservableEffect(program, fn_effect_free, tag.payloads, allow_control),
-        .static_data_candidate => true,
-        .nominal => |child| exprHasNoObservableEffect(program, fn_effect_free, child, allow_control),
-        .field_access => |field| exprHasNoObservableEffect(program, fn_effect_free, field.receiver, allow_control),
-        .tuple_access => |access| exprHasNoObservableEffect(program, fn_effect_free, access.tuple, allow_control),
-        .structural_eq => |eq| exprHasNoObservableEffect(program, fn_effect_free, eq.lhs, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, eq.rhs, allow_control),
-        .structural_hash => |h| exprHasNoObservableEffect(program, fn_effect_free, h.value, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, h.hasher, allow_control),
-        .low_level => |call| switch (call.op) {
-            .crash, .dict_pseudo_seed => false,
-            else => exprSpanHasNoObservableEffect(program, fn_effect_free, call.args, allow_control),
-        },
-        .call_proc => |call| blk: {
-            const callee = switch (call.callee) {
-                .lifted => |fn_id| fn_id,
-                .func => break :blk false,
-            };
-            const raw = @intFromEnum(callee);
-            if (raw >= fn_effect_free.len or !fn_effect_free[raw]) break :blk false;
-            break :blk exprSpanHasNoObservableEffect(program, fn_effect_free, call.args, allow_control) and
-                captureOperandSpanHasNoObservableEffect(program, fn_effect_free, call.captures, allow_control);
-        },
-        .let_ => |let_| exprHasNoObservableEffect(program, fn_effect_free, let_.value, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, let_.rest, allow_control),
-        .if_ => |if_| blk: {
-            const branches = program.ifBranchSpan(if_.branches);
-            for (0..branches.len) |index| {
-                const branch = GuardedList.at(branches, index);
-                if (!exprHasNoObservableEffect(program, fn_effect_free, branch.cond, allow_control)) break :blk false;
-                if (!exprHasNoObservableEffect(program, fn_effect_free, branch.body, allow_control)) break :blk false;
-            }
-            break :blk exprHasNoObservableEffect(program, fn_effect_free, if_.final_else, allow_control);
-        },
-        .match_ => |match| blk: {
-            if (!exprHasNoObservableEffect(program, fn_effect_free, match.scrutinee, allow_control)) break :blk false;
-            const branches = program.branchSpan(match.branches);
-            for (0..branches.len) |index| {
-                const branch = GuardedList.at(branches, index);
-                if (branch.guard) |guard| {
-                    if (!exprHasNoObservableEffect(program, fn_effect_free, guard, allow_control)) break :blk false;
-                }
-                if (!exprHasNoObservableEffect(program, fn_effect_free, branch.body, allow_control)) break :blk false;
-            }
-            break :blk true;
-        },
-        .block => |block| blk: {
-            const statements = program.stmtSpan(block.statements);
-            for (0..statements.len) |index| {
-                const stmt_id = GuardedList.at(statements, index);
-                const no_effect = switch (program.getStmt(stmt_id)) {
-                    .let_ => |let_| exprHasNoObservableEffect(program, fn_effect_free, let_.value, allow_control),
-                    .expr => |stmt_expr| exprHasNoObservableEffect(program, fn_effect_free, stmt_expr, allow_control),
-                    .uninitialized => true,
-                    .return_ => |ret| allow_control and exprHasNoObservableEffect(program, fn_effect_free, ret.value, allow_control),
-                    .expect, .dbg, .crash => false,
-                };
-                if (!no_effect) break :blk false;
-            }
-            break :blk exprHasNoObservableEffect(program, fn_effect_free, block.final_expr, allow_control);
-        },
-        // A loop contains its own back edges, so its body may transfer
-        // control regardless of the caller's tolerance.
-        .loop_ => |loop| exprSpanHasNoObservableEffect(program, fn_effect_free, loop.initial_values, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, loop.body, true),
-        .break_ => |maybe| allow_control and
-            (if (maybe) |value| exprHasNoObservableEffect(program, fn_effect_free, value, allow_control) else true),
-        .continue_ => |continue_| allow_control and exprSpanHasNoObservableEffect(program, fn_effect_free, continue_.values, allow_control),
-        .join_point => |join_point| exprHasNoObservableEffect(program, fn_effect_free, join_point.body, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, join_point.remainder, allow_control),
-        .jump => |jump| exprSpanHasNoObservableEffect(program, fn_effect_free, jump.args, allow_control),
-        .if_initialized_payload => |payload_switch| exprHasNoObservableEffect(program, fn_effect_free, payload_switch.cond, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, payload_switch.initialized, allow_control) and
-            exprHasNoObservableEffect(program, fn_effect_free, payload_switch.uninitialized, allow_control),
-        .comptime_branch_taken => |taken| exprHasNoObservableEffect(program, fn_effect_free, taken.body, allow_control),
-        .return_ => |ret| allow_control and exprHasNoObservableEffect(program, fn_effect_free, ret.value, allow_control),
-        .lambda,
-        .call_value,
-        .crash,
-        .dbg,
-        .expect,
-        .expect_err,
-        .comptime_exhaustiveness_failed,
-        .try_sequence,
-        .try_record_sequence,
-        => false,
-    };
-}
-
-fn exprSpanHasNoObservableEffect(program: *const Ast.Program, fn_effect_free: []const bool, span: Ast.Span(Ast.ExprId), allow_control: bool) bool {
-    const exprs = program.exprSpan(span);
-    for (0..exprs.len) |index| {
-        const expr = GuardedList.at(exprs, index);
-        if (!exprHasNoObservableEffect(program, fn_effect_free, expr, allow_control)) return false;
-    }
-    return true;
-}
-
-fn captureOperandSpanHasNoObservableEffect(program: *const Ast.Program, fn_effect_free: []const bool, span: Ast.Span(Ast.CaptureOperand), allow_control: bool) bool {
-    const operands = program.captureOperandSpan(span);
-    for (0..operands.len) |index| {
-        const operand = GuardedList.at(operands, index);
-        if (!exprHasNoObservableEffect(program, fn_effect_free, operand.value, allow_control)) return false;
-    }
-    return true;
-}
-
-fn localUseBeforeEffect(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId) bool {
-    var scan: LocalUseScan = .{};
-    scanLocalUseInExpr(program, local, expr_id, &scan);
-    return scan.found_before_effect and !scan.found_after_effect;
-}
-
-fn scanLocalUseInExpr(program: *const Ast.Program, local: Ast.LocalId, expr_id: Ast.ExprId, scan: *LocalUseScan) void {
-    const expr = program.getExpr(expr_id);
-    switch (expr.data) {
-        .@"unreachable" => {},
-        .local => |seen| {
-            if (seen == local) {
-                if (scan.seen_effect) {
-                    scan.found_after_effect = true;
-                } else {
-                    scan.found_before_effect = true;
-                }
-            }
-        },
-        .unit,
-        .int_lit,
-        .frac_f32_lit,
-        .frac_f64_lit,
-        .dec_lit,
-        .str_lit,
-        .bytes_lit,
-        .uninitialized,
-        .uninitialized_payload,
-        => {},
-        .fn_ref => |fn_ref| scanLocalUseInCaptureOperandSpan(program, local, fn_ref.captures, scan),
-        .crash, .comptime_exhaustiveness_failed => scan.seen_effect = true,
-        .list,
-        .tuple,
-        => |items| scanLocalUseInExprSpan(program, local, items, scan),
-        .record => |fields| {
-            const field_exprs = program.fieldExprSpan(fields);
-            for (0..field_exprs.len) |index| {
-                const field = GuardedList.at(field_exprs, index);
-                scanLocalUseInExpr(program, local, field.value, scan);
-            }
-        },
-        .tag => |tag| scanLocalUseInExprSpan(program, local, tag.payloads, scan),
-        .static_data_candidate => |candidate| scanLocalUseInExpr(program, local, candidate.runtime_expr, scan),
-        .nominal => |child| scanLocalUseInExpr(program, local, child, scan),
-        .return_ => |ret| {
-            scanLocalUseInExpr(program, local, ret.value, scan);
-            scan.seen_effect = true;
-        },
-        .dbg,
-        .expect,
-        => |child| {
-            scanLocalUseInExpr(program, local, child, scan);
-            scan.seen_effect = true;
-        },
-        .expect_err => |expect_err| {
-            scanLocalUseInExpr(program, local, expect_err.msg, scan);
-            scan.seen_effect = true;
-        },
-        .comptime_branch_taken => |taken| scanLocalUseInExpr(program, local, taken.body, scan),
-        .let_ => |let_| {
-            scanLocalUseInExpr(program, local, let_.value, scan);
-            scanLocalUseInExpr(program, local, let_.rest, scan);
-        },
-        .lambda,
-        .def_ref,
-        .fn_def,
-        => {},
-        .call_value => |call| {
-            scanLocalUseInExpr(program, local, call.callee, scan);
-            scanLocalUseInExprSpan(program, local, call.args, scan);
-            scan.seen_effect = true;
-        },
-        .call_proc => |call| {
-            scanLocalUseInExprSpan(program, local, call.args, scan);
-            scanLocalUseInCaptureOperandSpan(program, local, call.captures, scan);
-            scan.seen_effect = true;
-        },
-        .low_level => |call| {
-            scanLocalUseInExprSpan(program, local, call.args, scan);
-            scan.seen_effect = true;
-        },
-        .field_access => |field| scanLocalUseInExpr(program, local, field.receiver, scan),
-        .tuple_access => |access| scanLocalUseInExpr(program, local, access.tuple, scan),
-        .structural_eq => |eq| {
-            scanLocalUseInExpr(program, local, eq.lhs, scan);
-            scanLocalUseInExpr(program, local, eq.rhs, scan);
-            scan.seen_effect = true;
-        },
-        .structural_hash => |h| {
-            scanLocalUseInExpr(program, local, h.value, scan);
-            scanLocalUseInExpr(program, local, h.hasher, scan);
-            scan.seen_effect = true;
-        },
-        .match_ => |match| {
-            scanLocalUseInExpr(program, local, match.scrutinee, scan);
-            const branches = program.branchSpan(match.branches);
-            for (0..branches.len) |index| {
-                const branch = GuardedList.at(branches, index);
-                var branch_scan = scan.*;
-                if (branch.guard) |guard| scanLocalUseInExpr(program, local, guard, &branch_scan);
-                scanLocalUseInExpr(program, local, branch.body, &branch_scan);
-                scan.found_before_effect = scan.found_before_effect or branch_scan.found_before_effect;
-                scan.found_after_effect = scan.found_after_effect or branch_scan.found_after_effect;
-                scan.seen_effect = scan.seen_effect or branch_scan.seen_effect;
-            }
-        },
-        .if_ => |if_| {
-            const branches = program.ifBranchSpan(if_.branches);
-            for (0..branches.len) |index| {
-                const branch = GuardedList.at(branches, index);
-                scanLocalUseInExpr(program, local, branch.cond, scan);
-                var branch_scan = scan.*;
-                scanLocalUseInExpr(program, local, branch.body, &branch_scan);
-                scan.found_before_effect = scan.found_before_effect or branch_scan.found_before_effect;
-                scan.found_after_effect = scan.found_after_effect or branch_scan.found_after_effect;
-                scan.seen_effect = scan.seen_effect or branch_scan.seen_effect;
-            }
-            scanLocalUseInExpr(program, local, if_.final_else, scan);
-        },
-        .block => |block| {
-            const statements = program.stmtSpan(block.statements);
-            for (0..statements.len) |index| {
-                const stmt = GuardedList.at(statements, index);
-                scanLocalUseInStmt(program, local, stmt, scan);
-            }
-            scanLocalUseInExpr(program, local, block.final_expr, scan);
-        },
-        .loop_ => |loop| {
-            scanLocalUseInExprSpan(program, local, loop.initial_values, scan);
-            scanLocalUseInExpr(program, local, loop.body, scan);
-        },
-        .break_ => |maybe| {
-            if (maybe) |value| scanLocalUseInExpr(program, local, value, scan);
-            scan.seen_effect = true;
-        },
-        .continue_ => |continue_| {
-            scanLocalUseInExprSpan(program, local, continue_.values, scan);
-            scan.seen_effect = true;
-        },
-        .join_point => |join_point| {
-            var body_scan = scan.*;
-            scanLocalUseInExpr(program, local, join_point.body, &body_scan);
-            var remainder_scan = scan.*;
-            scanLocalUseInExpr(program, local, join_point.remainder, &remainder_scan);
-            scan.found_before_effect = scan.found_before_effect or body_scan.found_before_effect or remainder_scan.found_before_effect;
-            scan.found_after_effect = scan.found_after_effect or body_scan.found_after_effect or remainder_scan.found_after_effect;
-            scan.seen_effect = scan.seen_effect or body_scan.seen_effect or remainder_scan.seen_effect;
-        },
-        .jump => |jump| {
-            scanLocalUseInExprSpan(program, local, jump.args, scan);
-            scan.seen_effect = true;
-        },
-        .if_initialized_payload => |payload_switch| {
-            scanLocalUseInExpr(program, local, payload_switch.cond, scan);
-
-            var initialized_scan = scan.*;
-            if (payload_switch.payload == local) {
-                if (initialized_scan.seen_effect) {
-                    initialized_scan.found_after_effect = true;
-                } else {
-                    initialized_scan.found_before_effect = true;
-                }
-            }
-            scanLocalUseInExpr(program, local, payload_switch.initialized, &initialized_scan);
-
-            var uninitialized_scan = scan.*;
-            scanLocalUseInExpr(program, local, payload_switch.uninitialized, &uninitialized_scan);
-
-            scan.found_before_effect = scan.found_before_effect or initialized_scan.found_before_effect or uninitialized_scan.found_before_effect;
-            scan.found_after_effect = scan.found_after_effect or initialized_scan.found_after_effect or uninitialized_scan.found_after_effect;
-            scan.seen_effect = scan.seen_effect or initialized_scan.seen_effect or uninitialized_scan.seen_effect;
-        },
-        .try_sequence => |sequence| {
-            scanLocalUseInExpr(program, local, sequence.try_expr, scan);
-            if (sequence.ok_local != local) {
-                scanLocalUseInExpr(program, local, sequence.ok_body, scan);
-            }
-            scan.seen_effect = true;
-        },
-        .try_record_sequence => |sequence| {
-            scanLocalUseInExpr(program, local, sequence.try_expr, scan);
-            if (sequence.value_local != local and sequence.rest_local != local) {
-                scanLocalUseInExpr(program, local, sequence.ok_body, scan);
-            }
-            scan.seen_effect = true;
-        },
-    }
-}
-
-fn scanLocalUseInExprSpan(
-    program: *const Ast.Program,
-    local: Ast.LocalId,
-    span: Ast.Span(Ast.ExprId),
-    scan: *LocalUseScan,
-) void {
-    const exprs = program.exprSpan(span);
-    for (0..exprs.len) |index| {
-        const expr = GuardedList.at(exprs, index);
-        scanLocalUseInExpr(program, local, expr, scan);
-    }
-}
-
-fn scanLocalUseInCaptureOperandSpan(
-    program: *const Ast.Program,
-    local: Ast.LocalId,
-    span: Ast.Span(Ast.CaptureOperand),
-    scan: *LocalUseScan,
-) void {
-    const operands = program.captureOperandSpan(span);
-    for (0..GuardedList.borrowLen(operands)) |index| {
-        const operand = GuardedList.at(operands, index);
-        scanLocalUseInExpr(program, local, operand.value, scan);
-    }
-}
-
-fn scanLocalUseInStmt(program: *const Ast.Program, local: Ast.LocalId, stmt_id: Ast.StmtId, scan: *LocalUseScan) void {
-    switch (program.getStmt(stmt_id)) {
-        .uninitialized => {},
-        .let_ => |let_| scanLocalUseInExpr(program, local, let_.value, scan),
-        .expr => |expr| scanLocalUseInExpr(program, local, expr, scan),
-        .expect,
-        .dbg,
-        => |expr| {
-            scanLocalUseInExpr(program, local, expr, scan);
-            scan.seen_effect = true;
-        },
-        .return_ => |ret| {
-            scanLocalUseInExpr(program, local, ret.value, scan);
-            scan.seen_effect = true;
-        },
-        .crash => scan.seen_effect = true,
-    }
-}
-
 fn canReadFieldsFromExpr(program: *const Ast.Program, expr_id: Ast.ExprId) bool {
     return switch (program.getExpr(expr_id).data) {
         .local,
@@ -11973,10 +11292,8 @@ test "call-pattern scans direct call and function reference capture operands" {
 
     try std.testing.expect(exprContainsReturn(&program, fn_ref));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, fn_ref));
-    try std.testing.expect(localUseBeforeEffect(&program, local, fn_ref));
     try std.testing.expect(exprContainsReturn(&program, call_proc));
     try std.testing.expectEqual(@as(usize, 1), localUseCountInExpr(&program, local, call_proc));
-    try std.testing.expect(localUseBeforeEffect(&program, local, call_proc));
 }
 
 test "issue 10313 value-aware analysis does not append lifted IR" {
@@ -12108,10 +11425,12 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
+    var bindings: BindingChain = .{};
     const value = try cloner.callableValueFromRef(fn_ty, .{
         .fn_id = outer_fn,
         .captures = outer_operands,
-    });
+    }, &bindings);
+    try std.testing.expect(bindings.isEmpty());
     const callable = switch (value) {
         .callable => |callable| callable,
         else => return error.TestUnexpectedResult,
@@ -12403,14 +11722,15 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
         .{ .pat = list_pat, .body = body },
         .{ .pat = foo_pat, .body = body },
     });
-    try std.testing.expectEqual(@as(?Value, null), try cloner.simplifyKnownMatchValue(foo_value, undecidable_branches));
+    var bindings: BindingChain = .{};
+    try std.testing.expectEqual(@as(?Value, null), try cloner.simplifyKnownMatchValue(foo_value, undecidable_branches, &bindings));
 
     // A definite match after definite no-matches folds.
     const folding_branches = try program.addBranchSpan(&.{
         .{ .pat = bar_pat, .body = body },
         .{ .pat = foo_pat, .body = body },
     });
-    try std.testing.expect((try cloner.simplifyKnownMatchValue(foo_value, folding_branches)) != null);
+    try std.testing.expect((try cloner.simplifyKnownMatchValue(foo_value, folding_branches, &bindings)) != null);
 
     // Every branch a definite no-match violates checker exhaustiveness. In
     // Debug, the invariant panics; probe that abort from a fork on POSIX.
@@ -12426,7 +11746,7 @@ test "known match fold aborts on undecidable branches and trips the invariant wh
                 _ = std.c.dup2(dev_null, 2);
                 _ = std.c.close(dev_null);
             }
-            _ = cloner.simplifyKnownMatchValue(foo_value, excluded_branches) catch std.c._exit(2);
+            _ = cloner.simplifyKnownMatchValue(foo_value, excluded_branches, &bindings) catch std.c._exit(2);
             // Reaching this line means the invariant did not fire.
             std.c._exit(0);
         }
