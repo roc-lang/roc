@@ -14172,6 +14172,37 @@ fn methodVarFromOriginalEnv(
     return .{ .var_ = method_var, .dispatcher_name = dispatcher_name };
 }
 
+fn derivedMethodValidationVar(
+    self: *Self,
+    original_env: *const ModuleEnv,
+    is_this_module: bool,
+    binding: ModuleEnv.MethodBinding,
+    dispatcher_name: Ident.Idx,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    if (!is_this_module) {
+        return (try self.methodVarFromOriginalEnv(
+            original_env,
+            false,
+            binding.type_node_idx,
+            dispatcher_name,
+            env,
+            region,
+        )).var_;
+    }
+
+    // Derived-shape validation can discover an annotated local method before
+    // its body has been checked. Its declared scheme is the explicit type
+    // available at that edge; the in-flight definition var is not.
+    const def_var: Var = ModuleEnv.varFrom(binding.type_node_idx);
+    const scheme_var = self.predeclaredSchemeVar(binding.def_idx) orelse def_var;
+    if (self.types.resolveVar(scheme_var).desc.rank == .generalized) {
+        return try self.instantiateVar(scheme_var, env, .use_last_var);
+    }
+    return scheme_var;
+}
+
 fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ident.Idx {
     const def = module_env.store.getDef(def_idx);
     const pattern = module_env.store.getPattern(def.pattern);
@@ -23427,16 +23458,14 @@ fn validateDerivedParseNominal(
         return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.parser_for, constraint, env);
     };
 
-    const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
-    const method_var = if (method_lookup.is_this_module) blk: {
-        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
-        }
-        break :blk method_type_var;
-    } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-    };
+    const method_var = try self.derivedMethodValidationVar(
+        method_lookup.env,
+        method_lookup.is_this_module,
+        method_lookup.binding,
+        nominal.ident.ident_idx,
+        env,
+        region,
+    );
 
     const child_err_var = try self.fresh(env, region);
     const expected_ret = try self.freshParseResultTryVar(nominal_var, state_var, child_err_var, env, region);
@@ -23856,16 +23885,14 @@ fn validateDerivedEncodeNominal(
         return try self.reportDerivedParseMissingMethod(nominal_var, self.cir.idents.encoder_for, constraint, env);
     };
 
-    const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
-    const method_var = if (method_lookup.is_this_module) blk: {
-        if (self.types.resolveVar(method_type_var).desc.rank == .generalized) {
-            break :blk try self.instantiateVar(method_type_var, env, .use_last_var);
-        }
-        break :blk method_type_var;
-    } else blk: {
-        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
-        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-    };
+    const method_var = try self.derivedMethodValidationVar(
+        method_lookup.env,
+        method_lookup.is_this_module,
+        method_lookup.binding,
+        nominal.ident.ident_idx,
+        env,
+        region,
+    );
 
     const expected_ret = try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region);
     const expected_runtime_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ nominal_var, state_var }, expected_ret), env, region);
