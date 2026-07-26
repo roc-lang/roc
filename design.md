@@ -2433,6 +2433,16 @@ allocation-free. Per-chain minting removes the recursive layout edge in every
 mode. SpecConstr improves optimized loop and call shape so later lowering and
 LLVM see scalar state and direct operations.
 
+Value-aware call-pattern discovery may inline ordinary calls only while its
+per-function generic-inline work budget remains. The budget is 16 call
+attempts. Exhaustion declines further generic inlining and keeps the residual
+call, which can miss an optimization but cannot change source behavior.
+Inlining performed for an explicit structural demand uses the separate
+shape-demand path; recursive call cycles remain bounded by the active inline
+stack. Each discovery walk owns a short-lived arena, and only accepted call
+patterns are copied into pass-wide storage, so discarded analysis graphs do
+not accumulate across functions.
+
 SpecConstr preserves shared control explicitly. When a rewrite would move one
 continuation under multiple `match` or `if` arms, it introduces typed lifted
 join points and replaces each arm result with a jump. It must never copy
