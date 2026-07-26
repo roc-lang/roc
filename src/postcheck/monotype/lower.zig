@@ -32582,7 +32582,7 @@ const BodyContext = struct {
             if (!allow_missing) return false;
             return try self.parseFieldTypeIsSupported(info.ok_ty, false);
         }
-        if (self.tryJsonInfo(ty)) |info| {
+        if (self.tryNullInfo(ty)) |info| {
             return try self.parseFieldTypeIsSupported(info.ok_payload_ty, false);
         }
         if ((try self.customParserLookup(ty)) != null) return true;
@@ -32627,7 +32627,7 @@ const BodyContext = struct {
 
     fn encodeFieldTypeIsSupported(self: *BodyContext, ty: Type.TypeId, encoding_ty: Type.TypeId) Allocator.Error!bool {
         if (self.encodeScalarMethodName(ty) != null) return true;
-        if (self.tryJsonInfo(ty)) |info| {
+        if (self.tryNullInfo(ty)) |info| {
             return try self.encodeFieldTypeIsSupported(info.ok_payload_ty, encoding_ty);
         }
         if ((try self.customEncoderForLookup(ty)) != null) return true;
@@ -33077,7 +33077,6 @@ const BodyContext = struct {
         const field_label = try self.builder.program.names.internRecordFieldLabel("field");
         const name_label = try self.builder.program.names.internRecordFieldLabel("name");
         const str_node = try self.graph.newNode(.{ .primitive = .str });
-        const rest_payload = try self.graphClosedRecord(&.{.{ .name = rest_name, .ty = state_node }});
         const field_payload = try self.graphClosedRecord(&.{
             .{ .name = field_label, .ty = field_handle_node },
             .{ .name = rest_name, .ty = state_node },
@@ -33087,7 +33086,7 @@ const BodyContext = struct {
             .{ .name = rest_name, .ty = state_node },
         });
         const tag_texts = [_][]const u8{ "Continue", "Done", "Field", "TryField", "TryFieldCaseless" };
-        const payloads = [_]NodeId{ rest_payload, rest_payload, field_payload, try_field_payload, try_field_payload };
+        const payloads = [_]NodeId{ state_node, state_node, field_payload, try_field_payload, try_field_payload };
         const tags = try self.graph.arena().alloc(InstTag, tag_texts.len);
         for (tag_texts, payloads, tags) |text, payload, *tag| {
             const name = try self.builder.program.names.internTagLabel(text);
@@ -34397,7 +34396,7 @@ const BodyContext = struct {
         if (try self.missingTryInfo(ty)) |info| {
             return try self.parserShapeNeedsRequiredFieldError(info.ok_ty, visited);
         }
-        if (self.tryJsonInfo(ty)) |info| {
+        if (self.tryNullInfo(ty)) |info| {
             return try self.parserShapeNeedsRequiredFieldError(info.ok_payload_ty, visited);
         }
         if ((try self.customParserLookup(ty)) != null) return false;

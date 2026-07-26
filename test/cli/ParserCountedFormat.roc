@@ -100,6 +100,11 @@ Counted := [Default].{
 	parse_key_u64 : Counted, State -> Try({ value : U64, rest : State }, [Bad, ..])
 	parse_key_u64 = |encoding, state| Counted.parse_u64(encoding, state)
 
+	## This format encodes no tag unions of its own, but a derived Dict parser
+	## reaches the method through the dict's own representation.
+	parse_tag_union : Counted, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [Bad, ..])
+	parse_tag_union = |_, _, _| Err(Bad)
+
 	invalid_value : Counted, State -> [Bad, ..]
 	invalid_value = |_, _| Bad
 }
