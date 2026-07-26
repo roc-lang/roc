@@ -6374,8 +6374,9 @@ const Builder = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        const plan_args = plan.argsSlice(fn_view.static_dispatch_plans);
-        const callable_node = try fn_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, &fn_ctx, expr.ty, plan_args, ty);
+        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
+        const plan_args = callable_plan.operands;
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
@@ -6499,8 +6500,9 @@ const Builder = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        const plan_args = plan.argsSlice(fn_view.static_dispatch_plans);
-        const callable_node = try fn_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, &fn_ctx, expr.ty, plan_args, ty);
+        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
+        const plan_args = callable_plan.operands;
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.program.types.span(fn_data.args));
@@ -10389,6 +10391,14 @@ const BodyContext = struct {
     /// restored from the constant lower their bodies against this chain
     /// (their plans' `constraint(k)` refs index the constant's scheme).
     restore_evidence: EvidenceChain,
+    /// Exact dispatch sites whose constraint evidence resolves to a checked
+    /// error or unreachable value in this specialization. CheckedModule
+    /// dependency propagation turns these dispatch crash bits into the
+    /// complete expression and statement divergence columns consumed below.
+    specialization_dispatch_crashes: ?[]bool = null,
+    owns_specialization_dispatch_crashes: bool = false,
+    specialization_dispatch_divergence: ?checked.DispatchDivergence = null,
+    borrowed_specialization_dispatch_divergence: ?*const checked.DispatchDivergence = null,
     /// While recursively restoring a stored constant, the concrete type of the
     /// whole restored value. Nested stored closures use this to instantiate the
     /// owner callable's return when synthesizing the constant scheme's evidence.
@@ -10841,6 +10851,10 @@ const BodyContext = struct {
     }
 
     fn deinit(self: *BodyContext) void {
+        if (self.specialization_dispatch_divergence) |*divergence| divergence.deinit(self.allocator);
+        if (self.owns_specialization_dispatch_crashes) {
+            self.allocator.free(self.specialization_dispatch_crashes.?);
+        }
         self.parser_defs.deinit();
         self.encoder_defs.deinit();
         self.hash_defs.deinit();
@@ -12100,6 +12114,9 @@ const BodyContext = struct {
         child.runtime_demand_guard_frames = self.runtime_demand_guard_frames;
         child.function_entry_demand_guards = self.function_entry_demand_guards;
         child.restored_local_proc_scope = self.restored_local_proc_scope;
+        child.specialization_dispatch_crashes = self.specialization_dispatch_crashes;
+        child.owns_specialization_dispatch_crashes = false;
+        child.borrowed_specialization_dispatch_divergence = self.specializationDispatchDivergence();
 
         var binder_iter = self.binders.iterator();
         while (binder_iter.next()) |entry| {
@@ -13539,6 +13556,7 @@ const BodyContext = struct {
         const scopes = self.view.templates.dispatch_ref_scopes[span.start .. span.start + span.len];
         const kinds = self.view.templates.dispatch_relation_kinds[span.start .. span.start + span.len];
         if (refs.len != scopes.len or refs.len != kinds.len) Common.invariant("checked template dispatch refs and relation metadata differed in length");
+        var added_crash = false;
         for (refs, scopes, kinds) |plan_id, scope_ref, relation_kind| {
             if (scope_id) |wanted_scope| {
                 const ref_scope = switch (scope_ref) {
@@ -13550,16 +13568,65 @@ const BodyContext = struct {
                 .root => {},
                 .generalized => continue,
             }
-            if (relation_kind == .conversion) continue;
             const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
+                .callable => |value| value,
+                .crash => {
+                    added_crash = (try self.recordSpecializationDispatchCrash(plan.expr)) or added_crash;
+                    continue;
+                },
+            };
+            if (relation_kind == .conversion) continue;
             const expr_ty = self.view.bodies.expr(plan.expr).ty;
-            _ = try self.dispatchResultTypeNodeInPhase(
+            _ = try self.callableDispatchResultTypeNodeInPhase(
                 expr_ty,
-                plan_id,
+                callable_plan,
                 null,
                 .template_relation_replay,
             );
         }
+        if (added_crash) try self.refreshSpecializationDispatchDivergence();
+    }
+
+    fn recordSpecializationDispatchCrash(
+        self: *BodyContext,
+        expr: checked.CheckedExprId,
+    ) Allocator.Error!bool {
+        if (!self.owns_specialization_dispatch_crashes) {
+            const previous = self.specialization_dispatch_crashes orelse &.{};
+            const crashes = try self.allocator.alloc(bool, self.view.bodies.exprCount());
+            @memset(crashes, false);
+            if (previous.len != 0) {
+                if (previous.len != crashes.len) {
+                    Common.invariant("specialization dispatch crash array length differed from checked body expression count");
+                }
+                @memcpy(crashes, previous);
+            }
+            self.specialization_dispatch_crashes = crashes;
+            self.owns_specialization_dispatch_crashes = true;
+        }
+        const crashes = self.specialization_dispatch_crashes.?;
+        const raw = @intFromEnum(expr);
+        if (raw >= crashes.len) Common.invariant("specialization dispatch crash referenced a missing checked expression");
+        if (crashes[raw]) return false;
+        crashes[raw] = true;
+        return true;
+    }
+
+    fn refreshSpecializationDispatchDivergence(self: *BodyContext) Allocator.Error!void {
+        if (self.specialization_dispatch_divergence) |*divergence| divergence.deinit(self.allocator);
+        self.specialization_dispatch_divergence = try checked.dispatchDivergenceForEvidence(
+            self.allocator,
+            self.view.bodies,
+            self.view.static_dispatch_plans,
+            self.specialization_dispatch_crashes.?,
+        );
+        self.borrowed_specialization_dispatch_divergence = null;
+    }
+
+    fn specializationDispatchDivergence(self: *const BodyContext) ?*const checked.DispatchDivergence {
+        if (self.specialization_dispatch_divergence) |*divergence| return divergence;
+        return self.borrowed_specialization_dispatch_divergence;
     }
 
     fn replayStoredEvidenceRelations(self: *BodyContext, chain: EvidenceChain) Allocator.Error!void {
@@ -21520,39 +21587,33 @@ const BodyContext = struct {
         return try functionRequestNode(self.graph, fn_node, request_args, request_ret);
     }
 
-    fn instantiateDispatchPlanCallNodeFromCaller(
+    fn instantiateCallableDispatchPlanCallNodeFromCaller(
         self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        dispatcher: static_dispatch.StaticDispatchDispatcher,
-        dispatcher_ty: checked.CheckedTypeId,
+        callable_plan: CallableDispatchPlan,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        operands: []const static_dispatch.StaticDispatchOperand,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!NodeId {
-        return try self.instantiateDispatchPlanCallNodeFromCallerAtNode(
-            source_fn_ty,
-            dispatcher,
-            dispatcher_ty,
+        return try self.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
             caller,
             checked_ret_ty,
-            operands,
             if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
             .expression_lowering,
         );
     }
 
-    fn instantiateDispatchPlanCallNodeFromCallerAtNode(
+    fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
         self: *BodyContext,
-        source_fn_ty: checked.CheckedTypeId,
-        dispatcher: static_dispatch.StaticDispatchDispatcher,
-        dispatcher_ty: checked.CheckedTypeId,
+        callable_plan: CallableDispatchPlan,
         caller: *BodyContext,
         checked_ret_ty: checked.CheckedTypeId,
-        operands: []const static_dispatch.StaticDispatchOperand,
         expected_ret_node: ?NodeId,
         phase: DispatchInstantiationPhase,
     ) Allocator.Error!NodeId {
+        const plan = callable_plan.plan;
+        const operands = callable_plan.operands;
+        const source_fn_ty = plan.callable_ty;
         const function = self.checkedFunctionType(source_fn_ty);
         if (function.args.len != operands.len) {
             Common.invariant("checked dispatch plan arity differs from its function type");
@@ -21565,10 +21626,10 @@ const BodyContext = struct {
         if (fn_graph.args.len != operands.len) {
             Common.invariant("checked dispatch plan graph arity differed from its operand span");
         }
-        switch (dispatcher) {
+        switch (plan.dispatcher) {
             .arg => |index| {
                 if (index >= fn_graph.args.len) Common.invariant("dispatch plan dispatcher argument index was outside the callable graph");
-                const dispatcher_node = try caller.instNode(dispatcher_ty);
+                const dispatcher_node = try caller.instNode(plan.dispatcher_ty);
                 try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node);
             },
             .type_only => {},
@@ -24613,8 +24674,9 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        const plan_args = plan.argsSlice(fn_view.static_dispatch_plans);
-        const callable_node = try fn_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, &fn_ctx, expr.ty, plan_args, ty);
+        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
+        const plan_args = callable_plan.operands;
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.builder.functionShape(callable_mono_ty, "stored parser constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(fn_data.args));
@@ -24729,14 +24791,12 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        const plan_args = plan.argsSlice(fn_view.static_dispatch_plans);
-        const callable_node = try fn_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
-            plan.callable_ty,
-            plan.dispatcher,
-            plan.dispatcher_ty,
+        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
+        const plan_args = callable_plan.operands;
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
             &fn_ctx,
             expr.ty,
-            plan_args,
             request_fn_node,
             .expression_lowering,
         );
@@ -24883,8 +24943,9 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        const plan_args = plan.argsSlice(fn_view.static_dispatch_plans);
-        const callable_node = try fn_ctx.instantiateDispatchPlanCallNodeFromCaller(plan.callable_ty, plan.dispatcher, plan.dispatcher_ty, &fn_ctx, expr.ty, plan_args, ty);
+        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
+        const plan_args = callable_plan.operands;
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.builder.functionShape(callable_mono_ty, "stored encoder_for constructor had a non-function type");
         const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.builder.program.types.span(fn_data.args));
@@ -25016,14 +25077,12 @@ const BodyContext = struct {
 
         const expr = fn_view.bodies.expr(runtime.expr);
         const plan = dispatchPlanForRuntimeExpr(fn_view, runtime.expr);
-        const plan_args = plan.argsSlice(fn_view.static_dispatch_plans);
-        const callable_node = try fn_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
-            plan.callable_ty,
-            plan.dispatcher,
-            plan.dispatcher_ty,
+        const callable_plan = fn_ctx.requireStoredRuntimeCallableDispatchPlan(plan);
+        const plan_args = callable_plan.operands;
+        const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
             &fn_ctx,
             expr.ty,
-            plan_args,
             request_fn_node,
             .expression_lowering,
         );
@@ -25232,6 +25291,10 @@ const BodyContext = struct {
         checked_expr: checked.CheckedExprId,
         expected_node: NodeId,
     ) Allocator.Error!void {
+        // Divergent expressions are bottom: they never produce a value to
+        // relate to the request. In particular, checking may replace a failed
+        // callee with `runtime_error` while its dead call type contains `.err`.
+        if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return;
         const expr = self.view.bodies.expr(checked_expr);
         switch (expr.data) {
             .lookup_local => |lookup| try self.relateLookupExprAtNode(checked_expr, lookup.resolved, expected_node),
@@ -26975,7 +27038,15 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
-        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
+        const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
+            .callable => |value| value,
+            .crash => |reason| {
+                const message = dispatchCrashMessage(reason);
+                const crash_cell = expected_ret_cell orelse DraftTypeCell{ .sealed = try self.unitType() };
+                return try self.addExprWithTypeCell(crash_cell, .{ .crash = try self.addStringLiteral(message) });
+            },
+        };
+        const plan_args = callable_plan.operands;
         const expected_ret_ty: ?Type.TypeId = if (expected_ret_cell) |cell| switch (cell) {
             .sealed => |ty| ty,
             .graph_node => null,
@@ -26990,34 +27061,29 @@ const BodyContext = struct {
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
 
-        var callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
-            plan.callable_ty,
-            plan.dispatcher,
-            plan.dispatcher_ty,
+        var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
             self,
             checked_ret_ty,
-            plan_args,
             expected_ret_node,
             .expression_lowering,
         );
-        if (self.planUnexecutable(plan) == null) {
-            const resolution = self.evidenceResolution(plan) orelse
-                Common.invariant("runtime method call had no StaticDispatchResolution evidence");
-            switch (resolution) {
-                .target => |initial_lookup| {
-                    const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
-                    try relateFunctionRequestInterface(self.graph, target_node, callable_node);
-                    if (try self.generatedIteratorMethodRequestNode(
-                        initial_lookup,
-                        target_node,
-                        callable_node,
-                        plan_args,
-                    )) |private_node| {
-                        callable_node = private_node;
-                    }
-                },
-                .structural => {},
-            }
+        const resolution = self.evidenceResolution(plan) orelse
+            Common.invariant("runtime method call had no StaticDispatchResolution evidence");
+        switch (resolution) {
+            .target => |initial_lookup| {
+                const target_node = try self.methodTargetNodeFromPlan(initial_lookup, &call_ctx, plan.callable_ty);
+                try relateFunctionRequestInterface(self.graph, target_node, callable_node);
+                if (try self.generatedIteratorMethodRequestNode(
+                    initial_lookup,
+                    target_node,
+                    callable_node,
+                    plan_args,
+                )) |private_node| {
+                    callable_node = private_node;
+                }
+            },
+            .structural => {},
         }
         const callable_graph = switch (self.graph.content(callable_node)) {
             .func => |function| function,
@@ -27025,39 +27091,37 @@ const BodyContext = struct {
         };
         var pre_lowered = std.ArrayList(PreLoweredOperand).empty;
         defer pre_lowered.deinit(self.allocator);
-        if (self.planUnexecutable(plan) == null) {
-            for (plan_args, 0..) |operand, index| switch (operand) {
-                .checked_expr => |expr| {
-                    try self.relateExprAtNode(expr, callable_graph.args[index]);
-                },
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {},
-            };
-            for (plan_args, 0..) |operand, index| switch (operand) {
-                .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, callable_graph.args[index]),
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {},
-            };
-            if (try self.lowerDispatchWithUninhabitedArgument(
-                plan_args,
-                callable_graph.args,
-                expected_ret_cell orelse DraftTypeCell.fromGraphNode(callable_graph.ret),
-            )) |uninhabited| return uninhabited;
-            for (plan_args, 0..) |operand, index| switch (operand) {
-                .checked_expr => |expr| {
-                    const lowered = try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(callable_graph.args[index]));
-                    try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
-                },
-                .generated_interpolation_iter,
-                .generated_numeral,
-                .generated_quote,
-                => {},
-            };
-        }
+        for (plan_args, 0..) |operand, index| switch (operand) {
+            .checked_expr => |expr| {
+                try self.relateExprAtNode(expr, callable_graph.args[index]);
+            },
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
+        for (plan_args, 0..) |operand, index| switch (operand) {
+            .checked_expr => |expr| try self.ensureNestedCallableAtNode(expr, callable_graph.args[index]),
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
+        if (try self.lowerDispatchWithUninhabitedArgument(
+            plan_args,
+            callable_graph.args,
+            expected_ret_cell orelse DraftTypeCell.fromGraphNode(callable_graph.ret),
+        )) |uninhabited| return uninhabited;
+        for (plan_args, 0..) |operand, index| switch (operand) {
+            .checked_expr => |expr| {
+                const lowered = try self.lowerExprAtTypeCell(expr, DraftTypeCell.fromGraphNode(callable_graph.args[index]));
+                try pre_lowered.append(self.allocator, .{ .index = index, .expr = lowered });
+            },
+            .generated_interpolation_iter,
+            .generated_numeral,
+            .generated_quote,
+            => {},
+        };
         const plan_ret_node = callable_graph.ret;
         // `dispatchTarget` raises the "dispatch plan had no method owner" invariant
         // when the receiver never grounded to a concrete owner and the result mode
@@ -27068,18 +27132,6 @@ const BodyContext = struct {
         // `checked_error` for reported missing methods); both lower to an
         // explicit crash. A genuinely reachable ownerless dispatch was
         // rejected at check time.
-        if (self.planUnexecutable(plan)) |reason| {
-            const message = switch (reason) {
-                // The dispatcher is a value no specialization edge can supply,
-                // so the dispatch can never execute.
-                .unreachable_value => "dispatch on a value that can never exist",
-                // Checking reported the missing method; executing the site
-                // anyway (roc run with errors) crashes here.
-                .checked_error => "method dispatch failed to check",
-            };
-            const crash_cell = expected_ret_cell orelse DraftTypeCell.fromGraphNode(plan_ret_node);
-            return try self.addExprWithTypeCell(crash_cell, .{ .crash = try self.addStringLiteral(message) });
-        }
         const resolved = switch (self.evidenceResolution(plan) orelse
             Common.invariant("CheckedStaticDispatchCallPlan had no MethodTarget or StructuralDerivation")) {
             .target => |lookup| lookup,
@@ -27876,7 +27928,25 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const plan_id = maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        return switch (self.dispatchRuntimePlan(plan)) {
+            .callable => |callable_plan| try self.callableDispatchResultTypeNodeInPhase(
+                checked_ret_ty,
+                callable_plan,
+                expected_ret_node,
+                phase,
+            ),
+            .crash => expected_ret_node orelse try self.activeNodeFromType(try self.unitType()),
+        };
+    }
 
+    fn callableDispatchResultTypeNodeInPhase(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        callable_plan: CallableDispatchPlan,
+        expected_ret_node: ?NodeId,
+        phase: DispatchInstantiationPhase,
+    ) Allocator.Error!NodeId {
+        const plan = callable_plan.plan;
         var call_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         defer call_ctx.deinit();
@@ -27885,35 +27955,30 @@ const BodyContext = struct {
         call_ctx.source_region_override = self.source_region_override;
         call_ctx.current_entry_root = self.current_entry_root;
 
-        const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
-        var callable_node = try call_ctx.instantiateDispatchPlanCallNodeFromCallerAtNode(
-            plan.callable_ty,
-            plan.dispatcher,
-            plan.dispatcher_ty,
+        const plan_args = callable_plan.operands;
+        var callable_node = try call_ctx.instantiateCallableDispatchPlanCallNodeFromCallerAtNode(
+            callable_plan,
             self,
             checked_ret_ty,
-            plan_args,
             expected_ret_node,
             phase,
         );
-        if (self.planUnexecutable(plan) == null) {
-            const resolution = self.evidenceResolution(plan) orelse
-                Common.invariant("runtime method result had no StaticDispatchResolution evidence");
-            switch (resolution) {
-                .target => |lookup| {
-                    const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
-                    try relateFunctionRequestInterface(self.graph, target_node, callable_node);
-                    if (try self.generatedIteratorMethodRequestNode(
-                        lookup,
-                        target_node,
-                        callable_node,
-                        plan_args,
-                    )) |private_node| {
-                        callable_node = private_node;
-                    }
-                },
-                .structural => {},
-            }
+        const resolution = self.evidenceResolution(plan) orelse
+            Common.invariant("runtime method result had no StaticDispatchResolution evidence");
+        switch (resolution) {
+            .target => |lookup| {
+                const target_node = try self.methodTargetNodeFromPlan(lookup, &call_ctx, plan.callable_ty);
+                try relateFunctionRequestInterface(self.graph, target_node, callable_node);
+                if (try self.generatedIteratorMethodRequestNode(
+                    lookup,
+                    target_node,
+                    callable_node,
+                    plan_args,
+                )) |private_node| {
+                    callable_node = private_node;
+                }
+            },
+            .structural => {},
         }
         return switch (self.graph.content(callable_node)) {
             .func => |function| function.ret,
@@ -28249,13 +28314,65 @@ const BodyContext = struct {
         }
     }
 
-    const UnexecutableDispatch = enum { unreachable_value, checked_error };
+    const DispatchCrashReason = enum { unreachable_value, checked_error };
 
-    /// Whether checking decided this dispatch can never execute: its
+    fn dispatchCrashMessage(reason: DispatchCrashReason) []const u8 {
+        return switch (reason) {
+            .unreachable_value => "dispatch on a value that can never exist",
+            .checked_error => "method dispatch failed to check",
+        };
+    }
+
+    /// A checked dispatch whose resolution names a callable target or structural
+    /// derivation. Callable, dispatcher, and operand type instantiation accepts
+    /// this wrapper instead of a raw plan, so checked-error data cannot reach
+    /// those operations without first passing the evidence gate below.
+    const CallableDispatchPlan = struct {
+        plan: static_dispatch.StaticDispatchCallPlan,
+        operands: []const static_dispatch.StaticDispatchOperand,
+    };
+
+    const DispatchRuntimePlan = union(enum) {
+        callable: CallableDispatchPlan,
+        crash: DispatchCrashReason,
+    };
+
+    fn dispatchRuntimePlan(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) DispatchRuntimePlan {
+        if (self.dispatchCrashReason(plan)) |reason| return .{ .crash = reason };
+        return .{ .callable = .{
+            .plan = plan,
+            .operands = plan.argsSlice(self.view.static_dispatch_plans),
+        } };
+    }
+
+    /// A stored generated parser/encoder runtime exists only after compile-time
+    /// evaluation successfully consumed its constructor dispatch. ConstStore
+    /// intentionally stores no evidence vector for these generated runtimes;
+    /// their explicit runtime function tag is the producer-owned proof that a
+    /// checked constraint plan is callable. Rejected plan-level resolutions can
+    /// never provide that proof.
+    fn requireStoredRuntimeCallableDispatchPlan(
+        self: *BodyContext,
+        plan: static_dispatch.StaticDispatchCallPlan,
+    ) CallableDispatchPlan {
+        switch (plan.resolution) {
+            .checked_error, .unreachable_dispatch => Common.invariant("stored generated runtime had a rejected dispatch plan"),
+            .direct, .constraint, .structural => {},
+        }
+        return .{
+            .plan = plan,
+            .operands = plan.argsSlice(self.view.static_dispatch_plans),
+        };
+    }
+
+    /// Whether checking decided this dispatch has no runtime call: its
     /// dispatcher is a value no edge can supply (unreachable), or checking
     /// rejected the requirement (a reported missing method). Both lower to an
     /// explicit crash.
-    fn planUnexecutable(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?UnexecutableDispatch {
+    fn dispatchCrashReason(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?DispatchCrashReason {
         return switch (plan.resolution) {
             .unreachable_dispatch => .unreachable_value,
             .checked_error => .checked_error,
@@ -28263,7 +28380,7 @@ const BodyContext = struct {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
                 .target, .structural => null,
-            } else Common.invariant("dispatch executability evidence was absent from its lexical chain"),
+            } else Common.invariant("dispatch runtime evidence was absent from its lexical chain"),
             .direct, .structural => null,
         };
     }
@@ -36683,6 +36800,10 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const plan_id = maybe_plan orelse Common.invariant("divergent checked dispatch expression did not contain its checked plan");
         const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        switch (self.dispatchRuntimePlan(plan)) {
+            .callable => {},
+            .crash => |reason| return .{ .crash = try self.addStringLiteral(dispatchCrashMessage(reason)) },
+        }
         for (plan.argsSlice(self.view.static_dispatch_plans)) |operand| switch (operand) {
             .checked_expr => |expr| if (self.checkedExprDivergesInLoweredRuntime(expr)) {
                 return try self.lowerDivergentExprForEffectDataAtType(expr, ty);
@@ -36804,10 +36925,26 @@ const BodyContext = struct {
     }
 
     fn checkedStatementDivergesInLoweredRuntime(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
+        if (self.specializationDispatchDivergence()) |divergence| {
+            const raw = @intFromEnum(statement_id);
+            if (raw >= divergence.statements.len) Common.invariant("specialization divergence referenced a missing checked statement");
+            return switch (self.checkedInlineExpectMode()) {
+                .run => divergence.statements[raw],
+                .omit => divergence.statements_without_inline_expects[raw],
+            };
+        }
         return self.view.bodies.statementDiverges(statement_id, self.checkedInlineExpectMode());
     }
 
     fn checkedExprDivergesInLoweredRuntime(self: *BodyContext, expr_id: checked.CheckedExprId) bool {
+        if (self.specializationDispatchDivergence()) |divergence| {
+            const raw = @intFromEnum(expr_id);
+            if (raw >= divergence.exprs.len) Common.invariant("specialization divergence referenced a missing checked expression");
+            return switch (self.checkedInlineExpectMode()) {
+                .run => divergence.exprs[raw],
+                .omit => divergence.exprs_without_inline_expects[raw],
+            };
+        }
         return self.view.bodies.exprDiverges(expr_id, self.checkedInlineExpectMode());
     }
 
@@ -37947,13 +38084,13 @@ const BodyContext = struct {
         expr: checked.CheckedExprId,
         source_region: base.Region,
     ) Allocator.Error!LoweredPatternStatement {
-        // The initializer is explicit checked bottom. It never produces a value
-        // to bind, so emitting a pattern would incorrectly require a monotype
-        // for its deliberately erroneous source type.
-        if (self.view.bodies.expr(expr).data == .runtime_error) {
+        // A divergent initializer never produces a value to bind, so emitting a
+        // pattern or reading the initializer's dead checked type would invent a
+        // relation for a value that cannot exist.
+        if (self.checkedExprDivergesInLoweredRuntime(expr)) {
             const unit_ty = try self.unitType();
             return .{
-                .stmt = .{ .expr = try self.lowerExprAtType(expr, unit_ty) },
+                .stmt = .{ .expr = try self.lowerDivergentExprAtType(expr, unit_ty) },
                 .termination = .none,
             };
         }

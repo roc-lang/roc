@@ -375,9 +375,10 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
 
     const dispatch_instantiation = sourceSliceBetween(
         lower_source,
-        "fn instantiateDispatchPlanCallNodeFromCallerAtNode(",
+        "fn instantiateCallableDispatchPlanCallNodeFromCallerAtNode(",
         "fn relateFormalToOperand(",
     );
+    try expectContains(dispatch_instantiation, "callable_plan: CallableDispatchPlan");
     try expectContains(dispatch_instantiation, "try relateRequestComponent(self.graph, fn_graph.args[index], dispatcher_node)");
 
     const entry_wrapper = sourceSliceBetween(
@@ -465,7 +466,7 @@ test "Monotype expanded record-rest statements retain graph provenance" {
     try expectNotContains(record_rest, "lowerPatternAtType(");
 }
 
-test "Monotype divergent results and unexecutable dispatches retain graph cells" {
+test "Monotype gates divergent relations and crash dispatches before type instantiation" {
     const lower_source = @embedFile("monotype/lower.zig");
     const divergent_call = sourceSliceBetween(
         lower_source,
@@ -476,14 +477,23 @@ test "Monotype divergent results and unexecutable dispatches retain graph cells"
     try expectNotContains(divergent_call, "lowerTypeView");
     try expectNotContains(divergent_call, "activeTypeFromNode");
 
-    const unexecutable_dispatch = sourceSliceBetween(
+    const crash_dispatch = sourceSliceBetween(
         lower_source,
-        "if (self.planUnexecutable(plan)) |reason|",
-        "const resolved = switch (self.evidenceResolution(plan)",
+        "fn lowerDispatchExprAtType(",
+        "const expected_ret_ty:",
     );
-    try expectContains(unexecutable_dispatch, "DraftTypeCell.fromGraphNode(plan_ret_node)");
-    try expectContains(unexecutable_dispatch, "addExprWithTypeCell(crash_cell");
-    try expectNotContains(unexecutable_dispatch, "activeTypeFromNode");
+    try expectContains(crash_dispatch, ".crash => |reason|");
+    try expectContains(crash_dispatch, "expected_ret_cell orelse DraftTypeCell{ .sealed = try self.unitType() }");
+    try expectContains(crash_dispatch, "addExprWithTypeCell(crash_cell");
+    try expectNotContains(crash_dispatch, "plan.callable_ty");
+
+    const relation_gate = sourceSliceBetween(
+        lower_source,
+        "fn relateExprAtNode(",
+        "fn relateTagExprAtNode(",
+    );
+    try expectContains(relation_gate, "if (self.checkedExprDivergesInLoweredRuntime(checked_expr)) return;");
+    try expectNotContains(relation_gate, "checkedTypeContainsError");
 }
 
 test "Monotype const type lookup remains graph-native" {
