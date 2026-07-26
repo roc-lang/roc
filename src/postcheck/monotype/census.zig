@@ -21,6 +21,162 @@ pub const enabled = builtin.mode == .Debug and
 
 const Counter = std.atomic.Value(u64);
 
+/// Every constraint-replay site in Monotype body lowering (reunify.md sections
+/// 9, 13 Slice 7): one member per `graph.unify` call the flip deletes, named by
+/// the function it sits in and the relation it states. The identifiers are
+/// stable, so a corpus table reads per site rather than only in total. The
+/// question each site answers is whether its two sides are ALREADY the same type
+/// under directed translation — a site that is, is a call the flip can simply
+/// delete; a site that is not, is a place the flip must supply the information
+/// the unify carried.
+pub const UnifySite = enum {
+    /// `lowerTemplateWithMonoFor`: the requesting graph adopts the callee's
+    /// sealed function type.
+    template_requester_adopts_solved,
+    /// `unifyRequestWithLocalHit`: the requested type joins the record view that
+    /// matched, and then that record's solved type.
+    request_local_hit_match,
+    request_local_hit_solved,
+    /// `lowerNestedFunctionRequest`: the nested function's checked root joins the
+    /// requester's view of the requested Monotype.
+    nested_root_to_request_view,
+    /// `constrainTypeToMono` / `constrainTypeToCell` / `constrainCheckedTypeRelations`.
+    constrain_checked_to_mono,
+    constrain_checked_to_cell,
+    constrain_checked_to_checked,
+    /// `instNode`: the placeholder standing for a checked address joins the
+    /// content built for it. Node construction, not a relation between two
+    /// independently derived types.
+    inst_node_placeholder_to_content,
+    /// `instNominalBackingNode`: the placeholder standing for a nominal's backing
+    /// joins the instantiated declaration backing. Node construction.
+    inst_nominal_backing_placeholder_to_content,
+    /// `lowerFunctionBody`: the declared return type joins the body's type.
+    body_return_to_body_type,
+    /// `instantiateCallTypeFromCallerAtType`, per argument and per return.
+    call_arg_generated_evidence_snapshot,
+    call_arg_generated_opaque_evidence,
+    call_arg_formal_to_actual,
+    call_arg_formal_to_evidence,
+    call_arg_formal_to_actual_without_evidence,
+    call_ret_generated_override_callee,
+    call_ret_generated_override_caller,
+    call_ret_callee_to_caller_expected,
+    call_ret_callee_to_expected,
+    call_ret_callee_to_caller,
+    /// `instantiateDispatchPlanCallTypeFromCaller`, per operand and per return.
+    dispatch_call_arg_generated_evidence_snapshot,
+    dispatch_call_arg_generated_opaque_evidence,
+    dispatch_call_arg_formal_to_actual,
+    dispatch_call_arg_formal_to_evidence,
+    dispatch_call_arg_formal_to_actual_without_evidence,
+    dispatch_call_ret_generated_override_callee,
+    dispatch_call_ret_generated_override_caller,
+    dispatch_call_ret_callee_to_caller_expected,
+    dispatch_call_ret_callee_to_expected,
+    dispatch_call_ret_callee_to_caller,
+    /// `instantiateDispatchPlanCallNodeFromCaller`.
+    dispatch_node_ret_callee_to_caller,
+    dispatch_node_ret_callee_to_expected,
+    /// `relateFormalToOperand`.
+    formal_operand_generated_evidence_snapshot,
+    formal_operand_generated_opaque_evidence,
+    formal_operand_to_actual,
+    formal_operand_to_evidence,
+    formal_operand_to_actual_without_evidence,
+    /// `instantiateNumeralPlanCallType`.
+    numeral_caller_ret_to_target,
+    numeral_callee_ret_to_target,
+    /// `instantiateTargetCallTypePreservingSourceArgsAndRet`.
+    target_call_ret_to_mono,
+    /// `instantiateTargetCallNodeFromMonoArgs`.
+    target_node_formal_to_mono_arg,
+    target_node_ret_to_mono,
+    /// `instantiateTargetCallTypeFromMonoArgsPreservingArgs`.
+    target_preserving_mono_arg_to_formal,
+    target_preserving_ret_to_mono,
+    /// `instantiateTargetCallTypeFromMonoArgAtIndexAndRet`.
+    target_indexed_formal_to_mono_arg,
+    target_indexed_ret_to_mono,
+    /// `instantiateTargetCallNodeFromMonoArgAtIndex`.
+    target_indexed_node_formal_to_mono_arg,
+    /// `fieldAccessTypeNode`.
+    field_access_to_checked,
+    field_access_to_expected,
+    /// `instantiateIteratorPlanCallTypeFromCaller`.
+    iterator_call_formal_to_actual,
+    iterator_call_formal_to_evidence,
+    iterator_call_formal_to_loop_state,
+    iterator_call_ret_to_expected,
+};
+
+/// What one execution of a constraint-replay site contributed.
+pub const UnifySiteOutcome = enum {
+    /// Both sides were already the same type by directed translation, so the
+    /// unify decided nothing the flip has to reproduce.
+    redundant,
+    /// The two sides differed, so the unify carried information the directed
+    /// translation of its operands did not already hold. Every one of these is a
+    /// place the flip cannot simply delete the call.
+    informative,
+    /// At least one side had no directed answer at this execution;
+    /// `UnifySiteBlocker` says which.
+    unmeasurable,
+    /// Not a relation between two independently derived types at all: the
+    /// graph's own node-building step, which the flip deletes together with the
+    /// node it builds.
+    construction,
+};
+
+/// What an `informative` execution's two sides actually disagree about — the
+/// question "what does this unify contribute that directed translation lacks?"
+/// answered per execution rather than per total.
+pub const UnifySiteInformation = enum {
+    /// At least one side carries iterator or generated-evidence representation
+    /// content, so what the unify moves is a representation decision that
+    /// reunify.md section 10's closure engine owns.
+    representation,
+    /// One side is the empty tag union — the stored form an unbound residual
+    /// variable materializes to — where the other carries content, and the first
+    /// checked variable that side reaches IS a generalized binder of a checked
+    /// scheme. What the unify moved is that scheme's binder value, which
+    /// reunify.md section 9's directed instantiation takes from the checker's
+    /// recorded substitution instead of deriving by matching.
+    scheme_binder_unbound,
+    /// The same empty-tag-union materialization where the free variable is not a
+    /// checked scheme's binder, so no recorded substitution names a value for
+    /// that position.
+    unbound_residual,
+    /// Two different content heads.
+    head_tag,
+    /// One head with two different row or argument widths.
+    row_width,
+    /// Two named heads whose declared identity differs.
+    named_identity,
+    /// A difference the bounded parallel walk did not localize into one of the
+    /// classes above.
+    unclassified,
+};
+
+/// Why one execution came out `unmeasurable`.
+pub const UnifySiteBlocker = enum {
+    /// No specialization binding environment was active for the operand's
+    /// module, so a checked operand carrying binders has no value to take.
+    no_environment,
+    /// The operand's checked type left the directed translator's subset.
+    operand_untranslatable,
+    /// The site hands the graph a node with no checked address and no immutable
+    /// type behind it, so nothing names what the directed side would compute.
+    operand_undescribed,
+};
+
+/// How many constraint-replay sites reunify.md's Slice 7 flip has to account
+/// for. Every one is declared in `UnifySite`.
+pub const unify_site_count = @typeInfo(UnifySite).@"enum".fields.len;
+const unify_outcome_count = @typeInfo(UnifySiteOutcome).@"enum".fields.len;
+const unify_blocker_count = @typeInfo(UnifySiteBlocker).@"enum".fields.len;
+const unify_information_count = @typeInfo(UnifySiteInformation).@"enum".fields.len;
+
 /// One atomic u64 per classification question. Each field name is the text
 /// the dump writes on its line, so a corpus run reads the names directly.
 pub const Census = struct {
@@ -536,17 +692,67 @@ pub const Census = struct {
     rehearsal_seal_positions: Counter = Counter.init(0),
     rehearsal_relations_applied: Counter = Counter.init(0),
     rehearsal_seal_descriptor_moved: Counter = Counter.init(0),
+    // reunify.md sections 9 and 13 Slice 7: the constraint-replay totals over
+    // every `UnifySite`. `unify_site_informative` is the number that decides how
+    // much of body lowering's unification the flip must replace rather than
+    // delete; the per-site table in the dump says exactly where those sit.
+    unify_site_redundant: Counter = Counter.init(0),
+    unify_site_informative: Counter = Counter.init(0),
+    unify_site_unmeasurable: Counter = Counter.init(0),
+    unify_site_construction: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the
 /// pipeline dumps it once lowering finishes.
 pub var global: Census = .{};
 
+/// Per constraint-replay site, how its executions classified.
+pub var unify_site_outcomes = [_][unify_outcome_count]Counter{
+    [_]Counter{Counter.init(0)} ** unify_outcome_count,
+} ** unify_site_count;
+
+/// Per constraint-replay site, why its unmeasurable executions were blocked.
+pub var unify_site_blockers = [_][unify_blocker_count]Counter{
+    [_]Counter{Counter.init(0)} ** unify_blocker_count,
+} ** unify_site_count;
+
+/// Per constraint-replay site, what its informative executions disagreed about.
+pub var unify_site_information = [_][unify_information_count]Counter{
+    [_]Counter{Counter.init(0)} ** unify_information_count,
+} ** unify_site_count;
+
 /// Add one to the named counter. Inert outside Debug builds. `name` is a
 /// field of `Census`, checked at compile time.
 pub inline fn bump(comptime name: []const u8) void {
     if (!enabled) return;
     _ = @field(global, name).fetchAdd(1, .monotonic);
+}
+
+/// Record how one execution of one constraint-replay site classified, both in
+/// that site's own row and in the corresponding total. Inert outside Debug.
+pub fn bumpUnifySite(site: UnifySite, outcome: UnifySiteOutcome) void {
+    if (comptime !enabled) return;
+    _ = unify_site_outcomes[@intFromEnum(site)][@intFromEnum(outcome)].fetchAdd(1, .monotonic);
+    switch (outcome) {
+        .redundant => bump("unify_site_redundant"),
+        .informative => bump("unify_site_informative"),
+        .unmeasurable => bump("unify_site_unmeasurable"),
+        .construction => bump("unify_site_construction"),
+    }
+}
+
+/// Record why one unmeasurable execution of one constraint-replay site had no
+/// directed answer. Inert outside Debug.
+pub fn bumpUnifySiteBlocker(site: UnifySite, blocker: UnifySiteBlocker) void {
+    if (comptime !enabled) return;
+    _ = unify_site_blockers[@intFromEnum(site)][@intFromEnum(blocker)].fetchAdd(1, .monotonic);
+}
+
+/// Record what one informative execution of one constraint-replay site
+/// disagreed about. Inert outside Debug.
+pub fn bumpUnifySiteInformation(site: UnifySite, information: UnifySiteInformation) void {
+    if (comptime !enabled) return;
+    _ = unify_site_information[@intFromEnum(site)][@intFromEnum(information)].fetchAdd(1, .monotonic);
 }
 
 /// Render every counter as a `name value` line. Inert outside Debug builds.
@@ -558,6 +764,38 @@ pub fn dumpText(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
         inline for (@typeInfo(Census).@"struct".fields) |field| {
             const value = @field(global, field.name).load(.monotonic);
             const line = try std.fmt.allocPrint(allocator, "{s} {d}\n", .{ field.name, value });
+            defer allocator.free(line);
+            try out.appendSlice(allocator, line);
+        }
+        // One row per constraint-replay site, including sites the corpus never
+        // reached: an unexecuted site is a finding of its own, so the table
+        // states every declared site rather than only the ones that ran.
+        for (unify_site_outcomes, unify_site_blockers, unify_site_information, 0..) |outcomes, blockers, information, index| {
+            const site: UnifySite = @enumFromInt(index);
+            const line = try std.fmt.allocPrint(
+                allocator,
+                "unify_site name={s} redundant={d} informative={d} unmeasurable={d} construction={d}" ++
+                    " no_environment={d} operand_untranslatable={d} operand_undescribed={d}" ++
+                    " representation={d} scheme_binder_unbound={d} unbound_residual={d}" ++
+                    " head_tag={d} row_width={d} named_identity={d} unclassified={d}\n",
+                .{
+                    @tagName(site),
+                    outcomes[@intFromEnum(UnifySiteOutcome.redundant)].load(.monotonic),
+                    outcomes[@intFromEnum(UnifySiteOutcome.informative)].load(.monotonic),
+                    outcomes[@intFromEnum(UnifySiteOutcome.unmeasurable)].load(.monotonic),
+                    outcomes[@intFromEnum(UnifySiteOutcome.construction)].load(.monotonic),
+                    blockers[@intFromEnum(UnifySiteBlocker.no_environment)].load(.monotonic),
+                    blockers[@intFromEnum(UnifySiteBlocker.operand_untranslatable)].load(.monotonic),
+                    blockers[@intFromEnum(UnifySiteBlocker.operand_undescribed)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.representation)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.scheme_binder_unbound)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.unbound_residual)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.head_tag)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.row_width)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.named_identity)].load(.monotonic),
+                    information[@intFromEnum(UnifySiteInformation.unclassified)].load(.monotonic),
+                },
+            );
             defer allocator.free(line);
             try out.appendSlice(allocator, line);
         }

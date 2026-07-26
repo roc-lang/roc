@@ -78,6 +78,18 @@ pub const CheckedAddress = struct {
     type_id: u32,
 };
 
+/// One side of a body-lowering constraint-replay site, described in the terms
+/// directed translation reads (reunify.md sections 9, 13 Slice 7): a checked
+/// position the site instantiates into the graph, or an immutable type the site
+/// imports into it. A side the site builds as a bare graph node is `undescribed`
+/// — the directed pipeline has no expression for it at that call, and saying so
+/// is part of the measurement rather than an omission from it.
+pub const UnifyOperand = union(enum) {
+    checked: CheckedAddress,
+    sealed: Type.TypeId,
+    undescribed,
+};
+
 /// reunify.md section 9.6's declared compiler-generated instantiation rules.
 ///
 /// A compiler-generated call edge has no checked use site, so no
@@ -630,6 +642,16 @@ const Occurrences = struct {
     }
 };
 
+/// One worked example of a constraint-replay site whose two sides directed
+/// translation did not already make equal: what the pair disagreed about, both
+/// outermost shapes, and where the parallel walk first localized the difference.
+const UnifyDetail = struct {
+    information: census.UnifySiteInformation,
+    left: HeadShape,
+    right: HeadShape,
+    difference: Difference,
+};
+
 /// One recorded mismatch, dumped with the census counters. The head shapes are
 /// carried so a difference can be classified without re-running: two different
 /// content tags say the emission took a different shape, while one tag with a
@@ -1003,6 +1025,9 @@ pub const Rehearsal = struct {
     slot_descriptors: std.AutoHashMapUnmanaged(u32, policy.NamedDescriptor),
     details: std.ArrayList(MismatchDetail),
     unresolved_details: std.ArrayList(UnresolvedDetail),
+    /// One worked example per constraint-replay site that came out informative,
+    /// so its classification is read against a concrete disagreeing pair.
+    unify_details: [census.unify_site_count]?UnifyDetail,
     disabled: bool,
 
     /// Build a rehearsal when it is compiled in and enabled, otherwise null.
@@ -1047,6 +1072,7 @@ pub const Rehearsal = struct {
             .slot_descriptors = .empty,
             .details = .empty,
             .unresolved_details = .empty,
+            .unify_details = @splat(null),
             .disabled = false,
         };
         // The graph commits every seal through the store's content-deduplicating
@@ -2454,6 +2480,212 @@ pub const Rehearsal = struct {
         return frame;
     }
 
+    /// The innermost active environment whose binders name ids in `module_bytes`,
+    /// asked without recording anything. The redundancy measurement below asks
+    /// the same question `callerFrameFor` does, and must leave that function's
+    /// counters exactly where the rehearsal put them.
+    fn frameForModule(self: *Rehearsal, module_bytes: [32]u8) ?*const Frame {
+        if (self.frames.items.len == 0) return null;
+        const frame = &self.frames.items[self.frames.items.len - 1];
+        if (!frame.env_ready) return null;
+        if (!std.mem.eql(u8, &frame.env_module_bytes, &module_bytes)) return null;
+        return frame;
+    }
+
+    /// One resolved operand: the type the directed side computes for it, the
+    /// store that type lives in, and both digests — the stored form, and the
+    /// unfolded form that says two recursive types are one type under a
+    /// different rooting (reunify.md section 8.3).
+    const ResolvedOperand = struct {
+        store: *const Type.Store,
+        ty: Type.TypeId,
+        stored: names.TypeDigest,
+        unfolded: names.TypeDigest,
+        /// The checked position and environment the type came from, for an
+        /// operand the site named as a checked type. An imported immutable type
+        /// has none: nothing in the checked stores stands behind it here.
+        source: ?CheckedSource,
+    };
+
+    /// The checked position one operand was translated from, kept so a residual
+    /// materialization can be traced back to the variable that produced it.
+    const CheckedSource = struct {
+        view: checked.CheckedTypeStoreView,
+        checked_ty: checked.CheckedTypeId,
+        env: ?*const direct_translate.BindingEnvironment,
+    };
+
+    /// Measure whether one constraint-replay site's two sides are ALREADY the
+    /// same type under directed translation, and record the answer in that site's
+    /// row of the census table (reunify.md sections 9, 13 Slice 7). The site's own
+    /// unification still runs and still decides lowering; this reads nothing from
+    /// the graph and selects nothing.
+    pub fn measureUnifySite(
+        self: *Rehearsal,
+        site: census.UnifySite,
+        left: UnifyOperand,
+        right: UnifyOperand,
+    ) void {
+        if (comptime !census.enabled) return;
+        if (self.disabled) return;
+        var blocker: census.UnifySiteBlocker = .operand_undescribed;
+        const resolved_left = self.resolveOperand(left, &blocker) orelse {
+            census.bumpUnifySite(site, .unmeasurable);
+            census.bumpUnifySiteBlocker(site, blocker);
+            return;
+        };
+        const resolved_right = self.resolveOperand(right, &blocker) orelse {
+            census.bumpUnifySite(site, .unmeasurable);
+            census.bumpUnifySiteBlocker(site, blocker);
+            return;
+        };
+        if (std.mem.eql(u8, &resolved_left.stored.bytes, &resolved_right.stored.bytes) or
+            std.mem.eql(u8, &resolved_left.unfolded.bytes, &resolved_right.unfolded.bytes))
+        {
+            census.bumpUnifySite(site, .redundant);
+            return;
+        }
+        census.bumpUnifySite(site, .informative);
+        self.classifyInformativeSite(site, resolved_left, resolved_right);
+    }
+
+    /// Name what an informative site's two sides disagree about, and keep one
+    /// worked example per site so the classification is readable against a
+    /// concrete pair rather than only as a count.
+    fn classifyInformativeSite(
+        self: *Rehearsal,
+        site: census.UnifySite,
+        left: ResolvedOperand,
+        right: ResolvedOperand,
+    ) void {
+        const difference = firstDifference(left.store, left.ty, right.store, right.ty, self.program_names, 0);
+        const information: census.UnifySiteInformation = information: {
+            if (self.carriesRepresentation(left.store, left.ty) or
+                self.carriesRepresentation(right.store, right.ty))
+            {
+                break :information .representation;
+            }
+            if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
+                break :information self.residualClass(left);
+            }
+            if (difference.right.isEmptyTagUnionHead() and !difference.left.isEmptyTagUnionHead()) {
+                break :information self.residualClass(right);
+            }
+            if (difference.left.tag != difference.right.tag) break :information .head_tag;
+            if (difference.left.entries != difference.right.entries) break :information .row_width;
+            if (difference.named_field != .not_named and difference.named_field != .equal) {
+                break :information .named_identity;
+            }
+            break :information .unclassified;
+        };
+        census.bumpUnifySiteInformation(site, information);
+        // Two sides that are logically equal but stored under different rootings
+        // were already accepted as redundant, so a difference reaching here is a
+        // content difference and the detail is worth keeping.
+        const slot = &self.unify_details[@intFromEnum(site)];
+        if (slot.* != null) return;
+        slot.* = .{
+            .information = information,
+            .left = HeadShape.of(left.store, left.ty),
+            .right = HeadShape.of(right.store, right.ty),
+            .difference = difference,
+        };
+    }
+
+    /// Record that a site builds one graph node out of a placeholder and its
+    /// content rather than relating two independently derived types, so the table
+    /// keeps the node construction the flip deletes outright apart from the
+    /// constraints it has to account for.
+    pub fn noteUnifyConstruction(self: *Rehearsal, site: census.UnifySite) void {
+        if (comptime !census.enabled) return;
+        if (self.disabled) return;
+        census.bumpUnifySite(site, .construction);
+    }
+
+    /// Which residual class one operand's empty-tag-union materialization falls
+    /// in: `scheme_binder_unbound` when the first checked variable that operand
+    /// reaches and this environment does not bind is a generalized binder of a
+    /// checked scheme — the value reunify.md section 9's directed instantiation
+    /// takes from the checker's recorded substitution — and `unbound_residual`
+    /// when no recorded substitution names a value for it.
+    fn residualClass(self: *Rehearsal, operand: ResolvedOperand) census.UnifySiteInformation {
+        const source = operand.source orelse return .unbound_residual;
+        const free = self.firstFreeVariable(source.view, source.checked_ty, source.env) orelse
+            return .unbound_residual;
+        for (source.view.schemes) |scheme| {
+            for (scheme.generalizedVars(source.view)) |binder| {
+                if (binder == free) return .scheme_binder_unbound;
+            }
+        }
+        return .unbound_residual;
+    }
+
+    /// The directed side's answer for one operand, or null with the reason it
+    /// has none. A checked operand translates under the innermost active
+    /// environment when that environment's module is the operand's, and as a
+    /// ground type otherwise — exactly the rule `comparePosition` uses.
+    fn resolveOperand(
+        self: *Rehearsal,
+        operand: UnifyOperand,
+        blocker: *census.UnifySiteBlocker,
+    ) ?ResolvedOperand {
+        switch (operand) {
+            .undescribed => {
+                blocker.* = .operand_undescribed;
+                return null;
+            },
+            .sealed => |ty| return .{
+                .store = self.program_types,
+                .ty = ty,
+                .stored = self.program_types.typeDigest(self.program_names, ty),
+                .unfolded = self.program_types.unfoldedDigest(self.program_names, ty),
+                .source = null,
+            },
+            .checked => |address| {
+                const cursor = self.lookup.cursor(address.module_bytes) orelse {
+                    blocker.* = .operand_untranslatable;
+                    return null;
+                };
+                const frame = self.frameForModule(address.module_bytes);
+                const env: ?*const direct_translate.BindingEnvironment =
+                    if (frame) |active| active.environment() else null;
+                const owner_node = if (frame) |active|
+                    active.owner_node
+                else
+                    checked.checked_residual_disposition_module_body_owner;
+                const checked_ty: checked.CheckedTypeId = @enumFromInt(address.type_id);
+                var reason: direct_translate.SkipReason = undefined;
+                const emitted = self.translator.translateUnderEnvironment(
+                    cursor,
+                    env,
+                    owner_node,
+                    checked_ty,
+                    &reason,
+                ) catch |err| switch (err) {
+                    error.Skip => {
+                        blocker.* = switch (reason) {
+                            .binder_not_found => .no_environment,
+                            else => .operand_untranslatable,
+                        };
+                        return null;
+                    },
+                    else => {
+                        self.fail();
+                        blocker.* = .operand_untranslatable;
+                        return null;
+                    },
+                };
+                return .{
+                    .store = &self.store,
+                    .ty = emitted,
+                    .stored = self.store.typeDigest(self.program_names, emitted),
+                    .unfolded = self.store.unfoldedDigest(self.program_names, emitted),
+                    .source = .{ .view = cursor.view, .checked_ty = checked_ty, .env = env },
+                };
+            },
+        }
+    }
+
     /// Why one use expression named no usable instantiation site.
     const SiteError = error{
         /// No recorded site names this use expression.
@@ -3073,10 +3305,52 @@ pub const Rehearsal = struct {
         census.appendToFile(raw_path, text.items);
     }
 
+    /// One line per constraint-replay site that came out informative in this
+    /// compilation, naming what its two sides disagreed about.
+    fn dumpUnifyDetails(self: *Rehearsal) void {
+        if (comptime !census.enabled) return;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(self.allocator);
+        for (self.unify_details, 0..) |maybe_detail, index| {
+            const detail = maybe_detail orelse continue;
+            const site: census.UnifySite = @enumFromInt(index);
+            const line = std.fmt.allocPrint(
+                self.allocator,
+                "rehearsal_unify_detail site={s} information={s} left={s}:{d}/{d} right={s}:{d}/{d} differs_at_depth={d} {s}:{d}/{d}vs{s}:{d}/{d} named_field={s} recursive={d}/{d}\n",
+                .{
+                    @tagName(site),
+                    @tagName(detail.information),
+                    @tagName(detail.left.tag),
+                    detail.left.children,
+                    detail.left.entries,
+                    @tagName(detail.right.tag),
+                    detail.right.children,
+                    detail.right.entries,
+                    detail.difference.depth,
+                    @tagName(detail.difference.left.tag),
+                    detail.difference.left.children,
+                    detail.difference.left.entries,
+                    @tagName(detail.difference.right.tag),
+                    detail.difference.right.children,
+                    detail.difference.right.entries,
+                    @tagName(detail.difference.named_field),
+                    @intFromBool(detail.difference.left_recursive),
+                    @intFromBool(detail.difference.right_recursive),
+                },
+            ) catch return;
+            defer self.allocator.free(line);
+            text.appendSlice(self.allocator, line) catch return;
+        }
+        if (text.items.len == 0) return;
+        census.appendToFile(raw_path, text.items);
+    }
+
     fn dumpDetails(self: *Rehearsal) void {
         if (comptime !census.enabled) return;
         self.dumpGeneratedRules();
         self.dumpUnresolved();
+        self.dumpUnifyDetails();
         if (self.details.items.len == 0) return;
         const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
         var text: std.ArrayList(u8) = .empty;

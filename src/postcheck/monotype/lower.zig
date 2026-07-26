@@ -1715,6 +1715,15 @@ const Builder = struct {
                 Common.invariant("deferred Monotype specialization lost its requester function type node");
             const requester_fn_ty = if (body_uses_generated_evidence) body_fn_ty else live_fn_ty;
             const solved_requester_fn_ty = try graph.sealType(requester_fn_ty);
+            // The requester's side is the node its graph imported when the
+            // request was deferred; the deferred record carries the node, not
+            // the type it was imported from, so nothing here names what the
+            // directed side would compute for it.
+            self.measureUnifySite(
+                .template_requester_adopts_solved,
+                .undescribed,
+                .{ .sealed = solved_requester_fn_ty },
+            );
             try requester_graph.unify(
                 live_requester_fn_node,
                 try requester_graph.importMono(solved_requester_fn_ty),
@@ -1831,6 +1840,20 @@ const Builder = struct {
         };
     }
 
+    /// Measure, before the constraint runs, whether directed translation already
+    /// makes a builder-level constraint-replay site's two sides one type
+    /// (reunify.md section 13 Slice 7). Measurement only.
+    fn measureUnifySite(
+        self: *Builder,
+        site: census.UnifySite,
+        left: spec_rehearsal.UnifyOperand,
+        right: spec_rehearsal.UnifyOperand,
+    ) void {
+        if (comptime !census.enabled) return;
+        const rehearsal = self.rehearsal orelse return;
+        rehearsal.measureUnifySite(site, left, right);
+    }
+
     /// Unify a requester's type with the record view that matched and, once
     /// the record is ready, with its solved type, so the requester adopts the
     /// specialization's evidence.
@@ -1841,9 +1864,11 @@ const Builder = struct {
         hit: specialize.LocalHit,
     ) Allocator.Error!void {
         if (hit.match_ty != fn_ty) {
+            self.measureUnifySite(.request_local_hit_match, .{ .sealed = fn_ty }, .{ .sealed = hit.match_ty });
             try graph.unify(try graph.importMono(fn_ty), try graph.importMono(hit.match_ty));
         }
         if (hit.status == .ready and hit.solved_fn_ty != fn_ty) {
+            self.measureUnifySite(.request_local_hit_solved, .{ .sealed = fn_ty }, .{ .sealed = hit.solved_fn_ty });
             try graph.unify(try graph.importMono(fn_ty), try graph.importMono(hit.solved_fn_ty));
         }
         try self.drainRequesterGraph(graph);
@@ -3670,6 +3695,11 @@ const Builder = struct {
             !self.unsolved_monos.contains(fn_template.mono_fn_ty) and try request.ctx.functionHasGeneratedOpaqueEvidence(fn_template.mono_fn_ty);
         if (!body_uses_generated_evidence) {
             if (request.ctx.graph.monoViewNode(fn_template.mono_fn_ty)) |request_node| {
+                request.ctx.measureUnifySite(
+                    .nested_root_to_request_view,
+                    request.ctx.checkedUnifyOperand(fn_template.source_fn_ty),
+                    .{ .sealed = fn_template.mono_fn_ty },
+                );
                 try request.ctx.graph.unify(root_node, request_node);
             } else if (!self.unsolved_monos.contains(fn_template.mono_fn_ty)) {
                 try request.ctx.graph.registerNodeType(fn_template.mono_fn_ty, root_node);
@@ -8963,6 +8993,48 @@ const BodyContext = struct {
     /// Constrain a checked type to a Monotype: instantiate the checked type
     /// into the graph and unify with the (linked or imported) Monotype node.
     /// Pending view refills drain once the outermost constraint returns.
+    /// Describe a checked position of THIS instantiation context as one side of a
+    /// constraint-replay measurement (reunify.md sections 9, 13 Slice 7).
+    fn checkedUnifyOperand(self: *BodyContext, checked_ty: checked.CheckedTypeId) spec_rehearsal.UnifyOperand {
+        return .{ .checked = .{
+            .module_bytes = self.view.key.bytes,
+            .type_id = @intFromEnum(checked_ty),
+        } };
+    }
+
+    /// Describe a draft type cell as one side of a constraint-replay
+    /// measurement: a sealed cell names its immutable type, while a cell holding
+    /// a graph node names nothing the directed side computes.
+    fn cellUnifyOperand(cell: DraftTypeCell) spec_rehearsal.UnifyOperand {
+        return switch (cell) {
+            .graph_node => .undescribed,
+            .sealed => |ty| .{ .sealed = ty },
+        };
+    }
+
+    /// Measure, before the constraint runs, whether directed translation already
+    /// makes this site's two sides one type (reunify.md section 13 Slice 7).
+    /// Measurement only: the constraint that follows still decides lowering, and
+    /// the answer recorded here can never select it.
+    fn measureUnifySite(
+        self: *BodyContext,
+        site: census.UnifySite,
+        left: spec_rehearsal.UnifyOperand,
+        right: spec_rehearsal.UnifyOperand,
+    ) void {
+        if (comptime !census.enabled) return;
+        const rehearsal = self.builder.rehearsal orelse return;
+        rehearsal.measureUnifySite(site, left, right);
+    }
+
+    /// Record that a site builds one graph node rather than relating two
+    /// independently derived types.
+    fn noteUnifyConstruction(self: *BodyContext, site: census.UnifySite) void {
+        if (comptime !census.enabled) return;
+        const rehearsal = self.builder.rehearsal orelse return;
+        rehearsal.noteUnifyConstruction(site);
+    }
+
     fn constrainTypeToMono(
         self: *BodyContext,
         checked_ty: checked.CheckedTypeId,
@@ -8970,7 +9042,13 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
-        try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(try self.publicOpaqueUnificationType(mono_ty)));
+        const public_ty = try self.publicOpaqueUnificationType(mono_ty);
+        self.measureUnifySite(
+            .constrain_checked_to_mono,
+            self.checkedUnifyOperand(checked_ty),
+            .{ .sealed = public_ty },
+        );
+        try self.graph.unify(try self.instNode(checked_ty), try self.graph.importMono(public_ty));
     }
 
     fn constrainTypeToCell(
@@ -8980,6 +9058,11 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
+        self.measureUnifySite(
+            .constrain_checked_to_cell,
+            self.checkedUnifyOperand(checked_ty),
+            cellUnifyOperand(cell),
+        );
         try self.graph.unify(try self.instNode(checked_ty), try cell.toGraphNode(self.graph));
     }
 
@@ -8996,6 +9079,11 @@ const BodyContext = struct {
         }
         self.builder.constrain_depth += 1;
         defer self.builder.constrain_depth -= 1;
+        self.measureUnifySite(
+            .constrain_checked_to_checked,
+            self.checkedUnifyOperand(left_ty),
+            right_ctx.checkedUnifyOperand(right_ty),
+        );
         try self.graph.unify(try self.instNode(left_ty), try right_ctx.instNode(right_ty));
     }
 
@@ -9057,8 +9145,16 @@ const BodyContext = struct {
         return try self.sealTypeNode(try self.lowerTypeNode(checked_ty));
     }
 
-    fn lowerTypeView(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.activeTypeFromCell(try self.lowerTypeCell(checked_ty));
+    /// The Monotype this specialization gives a checked type: the single seam
+    /// every body-lowering consumer that only wants to READ a type goes through
+    /// (reunify.md sections 9, 13 Slice 7). It is graph-backed here — instantiate
+    /// the checked type into this specialization's graph and read the node — and
+    /// that is the whole of its contract to callers: given a checked type and the
+    /// active specialization, hand back the type at that position. Consumers that
+    /// need a graph node to constrain, or a draft cell to carry, still ask for one
+    /// through `lowerTypeNode` / `lowerTypeCell`.
+    fn typeForChecked(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
+        return try self.activeTypeFromNode(try self.instNode(checked_ty));
     }
 
     fn graphFunctionNode(
@@ -9138,6 +9234,7 @@ const BodyContext = struct {
         }
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
+        self.noteUnifyConstruction(.inst_node_placeholder_to_content);
         try self.graph.unify(placeholder, built);
         return placeholder;
     }
@@ -9360,6 +9457,7 @@ const BodyContext = struct {
             source_ctx.current_fn_key = self.current_fn_key;
             break :backing try source_ctx.instNominalDeclarationBackingNodeInCurrentView(source.declaration, args);
         };
+        self.noteUnifyConstruction(.inst_nominal_backing_placeholder_to_content);
         try self.graph.unify(placeholder, backing);
         return placeholder;
     }
@@ -9665,6 +9763,7 @@ const BodyContext = struct {
         }
 
         const body_ty = try self.exprType(body);
+        self.measureUnifySite(.body_return_to_body_type, .{ .sealed = ret_ty }, .{ .sealed = body_ty });
         try self.graph.unify(try self.graph.importMono(ret_ty), try self.graph.importMono(body_ty));
         const solved_ret_ty = if (try self.builder.monoTypeHasGeneratedOpaqueEvidence(ret_ty))
             ret_ty
@@ -9742,18 +9841,18 @@ const BodyContext = struct {
     fn lowerExprType(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error!Type.TypeId {
         const expr = self.view.bodies.expr(expr_id);
         return switch (expr.data) {
-            .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.lowerTypeView(expr.ty),
-            .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
-            .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.lowerTypeView(expr.ty),
+            .call => |call| (try self.callResultMonoType(expr.ty, call, null)) orelse try self.typeForChecked(expr.ty),
+            .dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.typeForChecked(expr.ty),
+            .interpolation => |interpolation| (try self.dispatchResultMonoType(expr.ty, interpolation.plan, null)) orelse try self.typeForChecked(expr.ty),
+            .type_dispatch_call => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.typeForChecked(expr.ty),
+            .method_eq => |plan| (try self.dispatchResultMonoType(expr.ty, plan, null)) orelse try self.typeForChecked(expr.ty),
             .lookup_local => |lookup| try self.lookupExprMonoType(expr.ty, lookup.resolved),
             .lookup_external => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lookup_required => |resolved| try self.lookupExprMonoType(expr.ty, resolved),
             .lambda => |lambda| try self.lambdaFunctionType(lambda),
             .closure => |closure| try self.closureFunctionType(closure),
             .field_access => |field| try self.activeTypeFromNode(try self.fieldAccessTypeNode(expr.ty, field.receiver, field.field_name, null)),
-            else => try self.lowerTypeView(expr.ty),
+            else => try self.typeForChecked(expr.ty),
         };
     }
 
@@ -9933,7 +10032,7 @@ const BodyContext = struct {
         const template = self.view.const_templates.get(entry.const_ref);
         const hoisted_ty = switch (template.state) {
             .stored_const => |stored| try self.storedConstRootMonoType(self.view, stored, entry.checked_type),
-            .eval_template => try self.lowerTypeView(entry.checked_type),
+            .eval_template => try self.typeForChecked(entry.checked_type),
             .reserved => Common.invariant("reserved hoisted const template reached Monotype type selection"),
         };
         try self.constrainTypeToMono(checked_ty, hoisted_ty);
@@ -10190,7 +10289,7 @@ const BodyContext = struct {
             .tag_union_parse => blk: {
                 if (args.len != 2 or arg_tys.len != 2) Common.invariant("ParseTagUnionSpec.parse reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
-                break :blk try self.lowerTypeView(checked_ret_ty);
+                break :blk try self.typeForChecked(checked_ret_ty);
             },
             .fields_rename_fields => blk: {
                 if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.rename_fields reached Monotype with an unexpected arity");
@@ -10198,17 +10297,17 @@ const BodyContext = struct {
                     break :blk try self.sealedGeneratedOpaqueEvidenceType(arg_tys[0]);
                 }
                 if (expected_ret_ty) |expected| break :blk expected;
-                break :blk try self.lowerTypeView(checked_ret_ty);
+                break :blk try self.typeForChecked(checked_ret_ty);
             },
             .fields_shortest_name, .fields_longest_name, .fields_iter, .field_name => blk: {
                 if (args.len != 1 or arg_tys.len != 1) Common.invariant("field metadata intrinsic reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
-                break :blk try self.lowerTypeView(checked_ret_ty);
+                break :blk try self.typeForChecked(checked_ret_ty);
             },
             .fields_for_size => blk: {
                 if (args.len != 2 or arg_tys.len != 2) Common.invariant("FieldNames.for_size reached Monotype with an unexpected arity");
                 if (expected_ret_ty) |expected| break :blk expected;
-                break :blk try self.lowerTypeView(checked_ret_ty);
+                break :blk try self.typeForChecked(checked_ret_ty);
             },
         };
 
@@ -12355,7 +12454,7 @@ const BodyContext = struct {
             hashU32(&hasher, @intFromEnum(capture.capture_id));
             hashU32(&hasher, capture.scope_depth);
             const binder = checkedCaptureBinder(self.view, capture.pattern);
-            const capture_ty = try self.lowerTypeView(checkedBinderType(self.view, binder));
+            const capture_ty = try self.typeForChecked(checkedBinderType(self.view, binder));
             self.updateTypeDigest(&hasher, capture_ty);
         }
         return .{ .bytes = hasher.finalResult() };
@@ -17168,7 +17267,7 @@ const BodyContext = struct {
         operand: checked.CheckedExprId,
         expected_ret_ty: ?Type.TypeId,
     ) Allocator.Error!LoweredCall {
-        const ret_ty = expected_ret_ty orelse try self.lowerTypeView(checked_ret_ty);
+        const ret_ty = expected_ret_ty orelse try self.typeForChecked(checked_ret_ty);
         if (expected_ret_ty != null) try self.constrainTypeToMono(checked_ret_ty, ret_ty);
         return .{
             .ret_ty = try self.lowerTypeCell(checked_ret_ty),
@@ -17202,14 +17301,41 @@ const BodyContext = struct {
                     const evidence_snapshot = try self.graph.sealType(evidence_ty);
                     saw_generated_opaque_evidence = true;
                     generated_arg_overrides[index] = evidence_snapshot;
-                    try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_snapshot)), formal_node);
+                    const public_ty = try self.publicOpaqueUnificationType(evidence_snapshot);
+                    self.measureUnifySite(
+                        .call_arg_generated_evidence_snapshot,
+                        .{ .sealed = public_ty },
+                        self.checkedUnifyOperand(formal_ty),
+                    );
+                    try self.graph.unify(try self.graph.importMono(public_ty), formal_node);
                 } else if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) {
-                    try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_ty)), formal_node);
+                    const public_ty = try self.publicOpaqueUnificationType(evidence_ty);
+                    self.measureUnifySite(
+                        .call_arg_generated_opaque_evidence,
+                        .{ .sealed = public_ty },
+                        self.checkedUnifyOperand(formal_ty),
+                    );
+                    try self.graph.unify(try self.graph.importMono(public_ty), formal_node);
                 } else {
+                    self.measureUnifySite(
+                        .call_arg_formal_to_actual,
+                        self.checkedUnifyOperand(formal_ty),
+                        caller.checkedUnifyOperand(arg_ty),
+                    );
                     try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                    self.measureUnifySite(
+                        .call_arg_formal_to_evidence,
+                        self.checkedUnifyOperand(formal_ty),
+                        .{ .sealed = evidence_ty },
+                    );
                     try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                 }
             } else {
+                self.measureUnifySite(
+                    .call_arg_formal_to_actual_without_evidence,
+                    self.checkedUnifyOperand(formal_ty),
+                    caller.checkedUnifyOperand(arg_ty),
+                );
                 try self.graph.unify(formal_node, try caller.instNode(arg_ty));
             }
         }
@@ -17225,13 +17351,39 @@ const BodyContext = struct {
             if (self.isGeneratedSpecializationEvidenceType(expected)) {
                 saw_generated_opaque_evidence = true;
                 generated_ret_override = try self.graph.sealType(expected);
-                try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(try self.publicOpaqueUnificationType(generated_ret_override.?)));
-                try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(try self.publicOpaqueUnificationType(generated_ret_override.?)));
+                const public_ty = try self.publicOpaqueUnificationType(generated_ret_override.?);
+                self.measureUnifySite(
+                    .call_ret_generated_override_callee,
+                    self.checkedUnifyOperand(function.ret),
+                    .{ .sealed = public_ty },
+                );
+                try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(public_ty));
+                self.measureUnifySite(
+                    .call_ret_generated_override_caller,
+                    caller.checkedUnifyOperand(checked_ret_ty),
+                    .{ .sealed = public_ty },
+                );
+                try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(public_ty));
             } else {
+                self.measureUnifySite(
+                    .call_ret_callee_to_caller_expected,
+                    self.checkedUnifyOperand(function.ret),
+                    caller.checkedUnifyOperand(checked_ret_ty),
+                );
                 try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
+                self.measureUnifySite(
+                    .call_ret_callee_to_expected,
+                    self.checkedUnifyOperand(function.ret),
+                    .{ .sealed = expected },
+                );
                 try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
             }
         } else {
+            self.measureUnifySite(
+                .call_ret_callee_to_caller,
+                self.checkedUnifyOperand(function.ret),
+                caller.checkedUnifyOperand(checked_ret_ty),
+            );
             try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
         }
         if (saw_generated_opaque_evidence) {
@@ -17241,13 +17393,13 @@ const BodyContext = struct {
                 args[index] = if (override) |ty|
                     ty
                 else
-                    try self.activeTypeFromNode(try self.instNode(formal_ty));
+                    try self.typeForChecked(formal_ty);
             }
             // As in `instantiateDispatchPlanCallTypeFromCaller`: seal only the
             // generated-evidence positions; the other parameters and the return
             // stay active so a callee that constructs its (iterator-shaped)
             // result can still extend the result type's callable slots.
-            const generated_fn_ty = try self.builder.program.types.internFunc(&self.builder.program.names, args, generated_ret_override orelse try self.activeTypeFromNode(try self.instNode(function.ret)));
+            const generated_fn_ty = try self.builder.program.types.internFunc(&self.builder.program.names, args, generated_ret_override orelse try self.typeForChecked(function.ret));
             return generated_fn_ty;
         }
         return try self.activeTypeFromNode(fn_node);
@@ -17281,14 +17433,41 @@ const BodyContext = struct {
                             const evidence_snapshot = try self.graph.sealType(evidence_ty);
                             saw_generated_opaque_evidence = true;
                             generated_arg_overrides[index] = evidence_snapshot;
-                            try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_snapshot)), formal_node);
+                            const public_ty = try self.publicOpaqueUnificationType(evidence_snapshot);
+                            self.measureUnifySite(
+                                .dispatch_call_arg_generated_evidence_snapshot,
+                                .{ .sealed = public_ty },
+                                self.checkedUnifyOperand(formal_ty),
+                            );
+                            try self.graph.unify(try self.graph.importMono(public_ty), formal_node);
                         } else if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) {
-                            try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_ty)), formal_node);
+                            const public_ty = try self.publicOpaqueUnificationType(evidence_ty);
+                            self.measureUnifySite(
+                                .dispatch_call_arg_generated_opaque_evidence,
+                                .{ .sealed = public_ty },
+                                self.checkedUnifyOperand(formal_ty),
+                            );
+                            try self.graph.unify(try self.graph.importMono(public_ty), formal_node);
                         } else {
+                            self.measureUnifySite(
+                                .dispatch_call_arg_formal_to_actual,
+                                self.checkedUnifyOperand(formal_ty),
+                                caller.checkedUnifyOperand(arg_ty),
+                            );
                             try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                            self.measureUnifySite(
+                                .dispatch_call_arg_formal_to_evidence,
+                                self.checkedUnifyOperand(formal_ty),
+                                .{ .sealed = evidence_ty },
+                            );
                             try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                         }
                     } else {
+                        self.measureUnifySite(
+                            .dispatch_call_arg_formal_to_actual_without_evidence,
+                            self.checkedUnifyOperand(formal_ty),
+                            caller.checkedUnifyOperand(arg_ty),
+                        );
                         try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                     }
                 },
@@ -17302,13 +17481,39 @@ const BodyContext = struct {
             if (self.isGeneratedSpecializationEvidenceType(expected)) {
                 saw_generated_opaque_evidence = true;
                 generated_ret_override = try self.graph.sealType(expected);
-                try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(try self.publicOpaqueUnificationType(generated_ret_override.?)));
-                try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(try self.publicOpaqueUnificationType(generated_ret_override.?)));
+                const public_ty = try self.publicOpaqueUnificationType(generated_ret_override.?);
+                self.measureUnifySite(
+                    .dispatch_call_ret_generated_override_callee,
+                    self.checkedUnifyOperand(function.ret),
+                    .{ .sealed = public_ty },
+                );
+                try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(public_ty));
+                self.measureUnifySite(
+                    .dispatch_call_ret_generated_override_caller,
+                    caller.checkedUnifyOperand(checked_ret_ty),
+                    .{ .sealed = public_ty },
+                );
+                try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(public_ty));
             } else {
+                self.measureUnifySite(
+                    .dispatch_call_ret_callee_to_caller_expected,
+                    self.checkedUnifyOperand(function.ret),
+                    caller.checkedUnifyOperand(checked_ret_ty),
+                );
                 try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
+                self.measureUnifySite(
+                    .dispatch_call_ret_callee_to_expected,
+                    self.checkedUnifyOperand(function.ret),
+                    .{ .sealed = expected },
+                );
                 try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
             }
         } else {
+            self.measureUnifySite(
+                .dispatch_call_ret_callee_to_caller,
+                self.checkedUnifyOperand(function.ret),
+                caller.checkedUnifyOperand(checked_ret_ty),
+            );
             try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
         }
         if (saw_generated_opaque_evidence) {
@@ -17318,7 +17523,7 @@ const BodyContext = struct {
                 args[index] = if (override) |ty|
                     ty
                 else
-                    try self.activeTypeFromNode(try self.instNode(formal_ty));
+                    try self.typeForChecked(formal_ty);
             }
             // Only the generated-evidence positions are sealed snapshots (they
             // key the specialization). The remaining parameters and the return
@@ -17327,7 +17532,7 @@ const BodyContext = struct {
             // that constructs its result (a step closure flowing into a
             // returned iterator's backing) could never extend them, leaving a
             // zero-sized callable layout for a value that carries members.
-            return try self.builder.program.types.internFunc(&self.builder.program.names, args, generated_ret_override orelse try self.activeTypeFromNode(try self.instNode(function.ret)));
+            return try self.builder.program.types.internFunc(&self.builder.program.names, args, generated_ret_override orelse try self.typeForChecked(function.ret));
         }
         return try self.activeTypeFromNode(fn_node);
     }
@@ -17348,8 +17553,18 @@ const BodyContext = struct {
         for (function.args, operands) |formal_ty, operand| {
             try self.relateFormalToOperand(formal_ty, caller, operand);
         }
+        self.measureUnifySite(
+            .dispatch_node_ret_callee_to_caller,
+            self.checkedUnifyOperand(function.ret),
+            caller.checkedUnifyOperand(checked_ret_ty),
+        );
         try self.graph.unify(try self.instNode(function.ret), try caller.instNode(checked_ret_ty));
         if (expected_ret_ty) |expected| {
+            self.measureUnifySite(
+                .dispatch_node_ret_callee_to_expected,
+                self.checkedUnifyOperand(function.ret),
+                .{ .sealed = expected },
+            );
             try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
         return fn_node;
@@ -17368,14 +17583,41 @@ const BodyContext = struct {
                 if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
                     if (self.isGeneratedSpecializationEvidenceType(evidence_ty)) {
                         const evidence_snapshot = try self.graph.sealType(evidence_ty);
-                        try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_snapshot)), formal_node);
+                        const public_ty = try self.publicOpaqueUnificationType(evidence_snapshot);
+                        self.measureUnifySite(
+                            .formal_operand_generated_evidence_snapshot,
+                            .{ .sealed = public_ty },
+                            self.checkedUnifyOperand(formal_ty),
+                        );
+                        try self.graph.unify(try self.graph.importMono(public_ty), formal_node);
                     } else if (self.isGeneratedOpaqueEvidenceType(evidence_ty)) {
-                        try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(evidence_ty)), formal_node);
+                        const public_ty = try self.publicOpaqueUnificationType(evidence_ty);
+                        self.measureUnifySite(
+                            .formal_operand_generated_opaque_evidence,
+                            .{ .sealed = public_ty },
+                            self.checkedUnifyOperand(formal_ty),
+                        );
+                        try self.graph.unify(try self.graph.importMono(public_ty), formal_node);
                     } else {
+                        self.measureUnifySite(
+                            .formal_operand_to_actual,
+                            self.checkedUnifyOperand(formal_ty),
+                            caller.checkedUnifyOperand(arg_ty),
+                        );
                         try self.graph.unify(formal_node, try caller.instNode(arg_ty));
+                        self.measureUnifySite(
+                            .formal_operand_to_evidence,
+                            self.checkedUnifyOperand(formal_ty),
+                            .{ .sealed = evidence_ty },
+                        );
                         try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                     }
                 } else {
+                    self.measureUnifySite(
+                        .formal_operand_to_actual_without_evidence,
+                        self.checkedUnifyOperand(formal_ty),
+                        caller.checkedUnifyOperand(arg_ty),
+                    );
                     try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                 }
             },
@@ -17401,7 +17643,17 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         // The numeral expression's checked type is the converted value type;
         // the plan's checked structure relates it to the Try-shaped return.
+        self.measureUnifySite(
+            .numeral_caller_ret_to_target,
+            caller.checkedUnifyOperand(checked_ret_ty),
+            .{ .sealed = target_ty },
+        );
         try self.graph.unify(try caller.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
+        self.measureUnifySite(
+            .numeral_callee_ret_to_target,
+            self.checkedUnifyOperand(checked_ret_ty),
+            .{ .sealed = target_ty },
+        );
         try self.graph.unify(try self.instNode(checked_ret_ty), try self.graph.importMono(target_ty));
         for (function.args, operands) |formal_ty, operand| {
             try self.relateFormalToOperand(formal_ty, caller, operand);
@@ -17416,6 +17668,11 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const function = self.checkedFunctionType(source_fn_ty);
         const fn_node = try self.instNode(source_fn_ty);
+        self.measureUnifySite(
+            .target_call_ret_to_mono,
+            self.checkedUnifyOperand(function.ret),
+            .{ .sealed = ret_ty },
+        );
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
         return try self.activeTypeFromNode(fn_node);
     }
@@ -17442,8 +17699,18 @@ const BodyContext = struct {
         }
         const fn_node = try self.instNode(source_fn_ty);
         for (function.args, arg_tys) |formal_ty, arg_ty| {
+            self.measureUnifySite(
+                .target_node_formal_to_mono_arg,
+                self.checkedUnifyOperand(formal_ty),
+                .{ .sealed = arg_ty },
+            );
             try self.graph.unify(try self.instNode(formal_ty), try self.graph.importMono(arg_ty));
         }
+        self.measureUnifySite(
+            .target_node_ret_to_mono,
+            self.checkedUnifyOperand(function.ret),
+            .{ .sealed = ret_ty },
+        );
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
         return fn_node;
     }
@@ -17459,8 +17726,19 @@ const BodyContext = struct {
             Common.invariant("checked synthetic dispatch target arity differs from its function type");
         }
         for (function.args, arg_tys) |formal_ty, arg_ty| {
-            try self.graph.unify(try self.graph.importMono(try self.publicOpaqueUnificationType(arg_ty)), try self.instNode(formal_ty));
+            const public_ty = try self.publicOpaqueUnificationType(arg_ty);
+            self.measureUnifySite(
+                .target_preserving_mono_arg_to_formal,
+                .{ .sealed = public_ty },
+                self.checkedUnifyOperand(formal_ty),
+            );
+            try self.graph.unify(try self.graph.importMono(public_ty), try self.instNode(formal_ty));
         }
+        self.measureUnifySite(
+            .target_preserving_ret_to_mono,
+            self.checkedUnifyOperand(function.ret),
+            .{ .sealed = ret_ty },
+        );
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
         return try self.activeTypeFromNode(try self.graphFunctionNodeFromMono(arg_tys, ret_ty));
     }
@@ -17477,7 +17755,17 @@ const BodyContext = struct {
             Common.invariant("checked synthetic dispatch target argument index was outside its function type");
         }
         const fn_node = try self.instNode(source_fn_ty);
+        self.measureUnifySite(
+            .target_indexed_formal_to_mono_arg,
+            self.checkedUnifyOperand(function.args[arg_index]),
+            .{ .sealed = arg_ty },
+        );
         try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
+        self.measureUnifySite(
+            .target_indexed_ret_to_mono,
+            self.checkedUnifyOperand(function.ret),
+            .{ .sealed = ret_ty },
+        );
         try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(ret_ty));
         return try self.activeTypeFromNode(fn_node);
     }
@@ -17493,6 +17781,11 @@ const BodyContext = struct {
             Common.invariant("checked synthetic dispatch target argument index was outside its function type");
         }
         const fn_node = try self.instNode(source_fn_ty);
+        self.measureUnifySite(
+            .target_indexed_node_formal_to_mono_arg,
+            self.checkedUnifyOperand(function.args[arg_index]),
+            .{ .sealed = arg_ty },
+        );
         try self.graph.unify(try self.instNode(function.args[arg_index]), try self.graph.importMono(arg_ty));
         return fn_node;
     }
@@ -17519,7 +17812,7 @@ const BodyContext = struct {
             try self.constrainTypeToMono(expr.ty, ty);
             return ty;
         }
-        return try self.lowerTypeView(expr.ty);
+        return try self.typeForChecked(expr.ty);
     }
 
     fn lookupExprMonoType(
@@ -17575,7 +17868,7 @@ const BodyContext = struct {
             .platform_required_declaration,
             .platform_required_proc,
             .promoted_top_level_proc,
-            => try self.lowerTypeView(checked_ty),
+            => try self.typeForChecked(checked_ty),
         };
     }
 
@@ -17591,8 +17884,17 @@ const BodyContext = struct {
             receiver_node,
             try self.builder.recordFieldName(self.view, field_name),
         );
+        // The field side is a field-read node the graph derives from the
+        // receiver's node, so nothing at this call names the checked position or
+        // the immutable type the directed side would compute for it.
+        self.measureUnifySite(
+            .field_access_to_checked,
+            .undescribed,
+            self.checkedUnifyOperand(checked_ty),
+        );
         try self.graph.unify(field_node, try self.instNode(checked_ty));
         if (expected_ty) |expected| {
+            self.measureUnifySite(.field_access_to_expected, .undescribed, .{ .sealed = expected });
             try self.graph.unify(field_node, try self.graph.importMono(expected));
         }
         return field_node;
@@ -17929,7 +18231,7 @@ const BodyContext = struct {
             try self.constrainTypeToMono(binder_ty, try self.publicOpaqueUnificationType(local_ty));
             try self.constrainTypeToMono(binder_ty, try self.publicOpaqueUnificationType(ty));
             try self.constrainTypeToMono(checked_ty, try self.publicOpaqueUnificationType(ty));
-            const live_ty = try self.lowerTypeView(binder_ty);
+            const live_ty = try self.typeForChecked(binder_ty);
             const use_ty = if (self.sameType(ty, local_ty))
                 local_ty
             else if (try self.generatedLocalUseType(local_ty, ty)) |generated_use_ty|
@@ -18049,7 +18351,7 @@ const BodyContext = struct {
         const template = store_view.const_templates.get(const_use.const_ref);
         return switch (template.state) {
             .stored_const => |stored| try self.storedConstRootMonoType(store_view, stored, requested_ty),
-            .eval_template => try self.lowerTypeView(requested_ty),
+            .eval_template => try self.typeForChecked(requested_ty),
             .reserved => Common.invariant("reserved checked const template reached Monotype type selection"),
         };
     }
@@ -19942,7 +20244,7 @@ const BodyContext = struct {
 
         for (captures) |capture| {
             const binder = checkedCaptureBinder(self.view, capture.pattern);
-            const ty = try self.lowerTypeView(checkedBinderType(self.view, binder));
+            const ty = try self.typeForChecked(checkedBinderType(self.view, binder));
             const local = (try self.currentBinderLocalAtType(binder, ty)) orelse continue;
             const value = try self.addExpr(.{
                 .ty = ty,
@@ -20056,7 +20358,7 @@ const BodyContext = struct {
                         .index = index,
                         .expr = lowered,
                     };
-                    callable_mono_ty = try call_ctx.activeTypeFromNode(try call_ctx.instNode(plan.callable_ty));
+                    callable_mono_ty = try call_ctx.typeForChecked(plan.callable_ty);
                     plan_fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch plan had a non-function type");
                     const refreshed_args = self.builder.program.types.span(plan_fn_data.args);
                     if (refreshed_args.len != plan_arg_tys.len) {
@@ -21705,7 +22007,7 @@ const BodyContext = struct {
         if (!self.sameType(initial_callable_mono_ty, composed_callable_ty)) {
             try call_ctx.constrainTypeToMono(plan.callable_ty, composed_callable_ty);
         }
-        const callable_mono_ty = try call_ctx.activeTypeFromNode(try call_ctx.instNode(plan.callable_ty));
+        const callable_mono_ty = try call_ctx.typeForChecked(plan.callable_ty);
         const ret_ty = self.builder.functionShape(callable_mono_ty, "checked structural parser target had a non-function type").ret;
         if (!self.sameType(initial_ret_ty, ret_ty)) {
             Common.invariant("structural parser composed return type did not refill the dispatch return type");
@@ -24015,7 +24317,7 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         eq: anytype,
     ) Allocator.Error!DraftExprId {
-        const ret_ty = try self.lowerTypeView(checked_ret_ty);
+        const ret_ty = try self.typeForChecked(checked_ret_ty);
         return try self.lowerDirectStructuralEqAtType(eq, ret_ty);
     }
 
@@ -24048,7 +24350,7 @@ const BodyContext = struct {
             return try self.constrainStructuralEqualityOperandType(rhs_ty, eq.lhs, lhs_checked_ty, conflict_message);
         }
 
-        return try self.lowerTypeView(lhs_checked_ty);
+        return try self.typeForChecked(lhs_checked_ty);
     }
 
     /// Resolves the Monotype an equality operand evaluates to, when that operand is a
@@ -24485,7 +24787,7 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         h: anytype,
     ) Allocator.Error!DraftExprId {
-        const ret_ty = try self.lowerTypeView(checked_ret_ty);
+        const ret_ty = try self.typeForChecked(checked_ret_ty);
         return try self.lowerDirectStructuralHashAtType(h, ret_ty);
     }
 
@@ -26014,7 +26316,7 @@ const BodyContext = struct {
                 if (!statements.diverges) {
                     const final_stmt = try self.lowerDiscardedExprStatement(
                         block.final_expr,
-                        try self.lowerTypeView(checked_body.ty),
+                        try self.typeForChecked(checked_body.ty),
                     );
                     try statements.append(self.allocator, final_stmt);
                 }
@@ -26024,7 +26326,7 @@ const BodyContext = struct {
                 } } });
             },
             else => {
-                const stmt = try self.lowerDiscardedExprStatement(body, try self.lowerTypeView(checked_body.ty));
+                const stmt = try self.lowerDiscardedExprStatement(body, try self.typeForChecked(checked_body.ty));
                 return try self.addExpr(.{ .ty = state_ty, .data = .{ .block = .{
                     .statements = try self.addStmtSpan(&[_]DraftStmtId{stmt}),
                     .final_expr = try self.stateOnlyTupleExpr(state_ty, merge_binders),
@@ -26643,7 +26945,7 @@ const BodyContext = struct {
         const step_expected_ty = if (self.isGeneratedIteratorEvidenceType(iterator_ty))
             try self.generatedIteratorStepReturnType(iterator_ty)
         else
-            try self.lowerTypeView(plan.step_ty);
+            try self.typeForChecked(plan.step_ty);
         const iterator_local = try self.addLocal(self.builder.symbols.fresh(), iterator_ty);
         const iterator_param = BodyTypedLocal{ .local = iterator_local, .ty = iterator_ty };
 
@@ -26891,18 +27193,38 @@ const BodyContext = struct {
             switch (operand) {
                 .checked_expr => |checked_arg| {
                     const arg_ty = caller.view.bodies.expr(checked_arg).ty;
+                    self.measureUnifySite(
+                        .iterator_call_formal_to_actual,
+                        self.checkedUnifyOperand(formal_ty),
+                        caller.checkedUnifyOperand(arg_ty),
+                    );
                     try self.graph.unify(formal_node, try caller.instNode(arg_ty));
                     if (try caller.callArgumentMonoType(checked_arg, null)) |evidence_ty| {
+                        self.measureUnifySite(
+                            .iterator_call_formal_to_evidence,
+                            self.checkedUnifyOperand(formal_ty),
+                            .{ .sealed = evidence_ty },
+                        );
                         try self.graph.unify(formal_node, try self.graph.importMono(evidence_ty));
                     }
                 },
                 .loop_iterator_state => {
                     const iterator = loop_iterator orelse Common.invariant("iterator .next dispatch reached Monotype without a loop iterator local");
+                    self.measureUnifySite(
+                        .iterator_call_formal_to_loop_state,
+                        self.checkedUnifyOperand(formal_ty),
+                        .{ .sealed = iterator.ty },
+                    );
                     try self.graph.unify(formal_node, try self.graph.importMono(iterator.ty));
                 },
             }
         }
         if (expected_ret_ty) |expected| {
+            self.measureUnifySite(
+                .iterator_call_ret_to_expected,
+                self.checkedUnifyOperand(function.ret),
+                .{ .sealed = expected },
+            );
             try self.graph.unify(try self.instNode(function.ret), try self.graph.importMono(expected));
         }
         return try self.activeTypeFromNode(fn_node);
@@ -27497,8 +27819,8 @@ const BodyContext = struct {
         const one_payload = one_payload_ty orelse Common.invariant("iterator step type was missing One");
         const skip_payload = skip_payload_ty orelse Common.invariant("iterator step type was missing Skip");
 
-        const one_payload_mono = try self.lowerTypeView(one_payload);
-        const skip_payload_mono = try self.lowerTypeView(skip_payload);
+        const one_payload_mono = try self.typeForChecked(one_payload);
+        const skip_payload_mono = try self.typeForChecked(skip_payload);
 
         return .{
             .step_ty = step_ty,
