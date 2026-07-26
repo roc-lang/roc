@@ -4452,10 +4452,14 @@ pub fn canonicalizeFile(
     );
     defer graph.deinit();
 
+    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, self.env.gpa);
+    errdefer demand_dependencies.deinit(self.env.gpa);
     const eval_order = try DependencyGraph.computeSCCs(&graph, self.env.gpa);
     try self.poisonRecursiveNonFunctionDefs(&eval_order);
     const eval_order_ptr = try self.env.gpa.create(DependencyGraph.EvaluationOrder);
     eval_order_ptr.* = eval_order;
+    self.env.setTopLevelDemandDependencies(demand_dependencies);
+    demand_dependencies = .{};
     self.env.evaluation_order = eval_order_ptr;
 
     self.env.finalizeMethodTables();

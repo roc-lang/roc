@@ -403,11 +403,10 @@ const RootCompletionState = struct {
         const dependency = self.module.compile_time_roots.root(dependency_root_id);
         const is_strict = switch (dependent.source) {
             .def => |dependent_def| switch (dependency.source) {
-                .def => |dependency_def| blk: {
-                    const evaluation_order = self.module.moduleEnvConst().evaluation_order orelse
-                        finalizationInvariant("checked module had no top-level demand dependencies");
-                    break :blk evaluation_order.hasDependency(dependent_def, dependency_def);
-                },
+                .def => |dependency_def| self.module.moduleEnvConst().hasTopLevelDemandDependency(
+                    dependent_def,
+                    dependency_def,
+                ),
                 else => true,
             },
             else => true,

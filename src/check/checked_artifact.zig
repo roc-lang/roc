@@ -28,7 +28,7 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
-const EvaluationOrder = can.DependencyGraph.EvaluationOrder;
+const TopLevelDemandDependency = can.DependencyGraph.Dependency;
 const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
@@ -1089,13 +1089,15 @@ pub const RootRequestTable = struct {
         const runtime_requests = try collectRuntimeRootRequests(allocator, all_requests);
         errdefer allocator.free(runtime_requests);
 
+        if (!module.moduleEnvConst().topLevelDemandDependenciesReady()) {
+            checkedArtifactInvariant("checked module had no top-level demand dependencies", .{});
+        }
         const compile_time_requests = try collectCompileTimeRootRequests(
             allocator,
             all_requests,
             module.moduleIndex(),
             artifact_key,
-            module.evaluationOrder() orelse
-                checkedArtifactInvariant("checked module had no top-level demand dependencies", .{}),
+            module.moduleEnvConst().topLevelDemandDependencies(),
             compile_time_roots,
             procedure_templates,
             resolved_value_refs,
@@ -1161,7 +1163,7 @@ fn collectCompileTimeRootRequests(
     requests: []const RootRequest,
     module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
-    evaluation_order: *const EvaluationOrder,
+    top_level_demand_dependencies: []const TopLevelDemandDependency,
     compile_time_roots: *const CompileTimeRootTable,
     procedure_templates: *const CheckedProcedureTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -1187,7 +1189,7 @@ fn collectCompileTimeRootRequests(
         allocator,
         module_idx,
         artifact_key,
-        evaluation_order,
+        top_level_demand_dependencies,
         compile_time_roots,
         procedure_templates,
         resolved_value_refs,
@@ -1206,7 +1208,7 @@ const CompileTimeRequestScheduler = struct {
     allocator: Allocator,
     module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
-    evaluation_order: *const EvaluationOrder,
+    top_level_demand_dependencies: []const TopLevelDemandDependency,
     compile_time_roots: *const CompileTimeRootTable,
     procedure_templates: *const CheckedProcedureTemplateTable,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -1229,7 +1231,7 @@ const CompileTimeRequestScheduler = struct {
         allocator: Allocator,
         module_idx: u32,
         artifact_key: CheckedModuleArtifactKey,
-        evaluation_order: *const EvaluationOrder,
+        top_level_demand_dependencies: []const TopLevelDemandDependency,
         compile_time_roots: *const CompileTimeRootTable,
         procedure_templates: *const CheckedProcedureTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
@@ -1274,7 +1276,7 @@ const CompileTimeRequestScheduler = struct {
             .allocator = allocator,
             .module_idx = module_idx,
             .artifact_key = artifact_key,
-            .evaluation_order = evaluation_order,
+            .top_level_demand_dependencies = top_level_demand_dependencies,
             .compile_time_roots = compile_time_roots,
             .procedure_templates = procedure_templates,
             .resolved_value_refs = resolved_value_refs,
@@ -1534,7 +1536,11 @@ const CompileTimeRequestScheduler = struct {
         const dependency = self.compile_time_roots.root(dependency_root);
         return switch (dependent.source) {
             .def => |dependent_def| switch (dependency.source) {
-                .def => |dependency_def| self.evaluation_order.hasDependency(dependent_def, dependency_def),
+                .def => |dependency_def| can.DependencyGraph.hasDependency(
+                    self.top_level_demand_dependencies,
+                    dependent_def,
+                    dependency_def,
+                ),
                 else => true,
             },
             else => true,
