@@ -388,8 +388,33 @@ const RootCompletionState = struct {
         const_use: checked.ConstUseTemplate,
     ) bool {
         const root_id = self.rootForConstRef(const_use.const_ref) orelse return true;
-        if (self.current_root_id != null and root_id == self.current_root_id.?) return true;
-        return !self.requested_roots[@intFromEnum(root_id)] or self.isDone(root_id);
+        return self.rootDependencyComplete(root_id);
+    }
+
+    fn rootDependencyComplete(
+        self: *const RootCompletionState,
+        dependency_root_id: checked.ComptimeRootId,
+    ) bool {
+        const dependent_root_id = self.current_root_id orelse
+            finalizationInvariant("compile-time dependency checked outside a root request");
+        if (dependency_root_id == dependent_root_id) return true;
+
+        const dependent = self.module.compile_time_roots.root(dependent_root_id);
+        const dependency = self.module.compile_time_roots.root(dependency_root_id);
+        const is_strict = switch (dependent.source) {
+            .def => |dependent_def| switch (dependency.source) {
+                .def => |dependency_def| blk: {
+                    const evaluation_order = self.module.moduleEnvConst().evaluation_order orelse
+                        finalizationInvariant("checked module had no top-level demand dependencies");
+                    break :blk evaluation_order.hasDependency(dependent_def, dependency_def);
+                },
+                else => true,
+            },
+            else => true,
+        };
+        if (!is_strict) return true;
+
+        return !self.requested_roots[@intFromEnum(dependency_root_id)] or self.isDone(dependency_root_id);
     }
 
     fn rootForConstRef(
@@ -441,8 +466,7 @@ const RootCompletionState = struct {
             .direct_template => |direct| self.callableTemplateDependenciesComplete(direct.template),
             .callable_eval_template => |template_id| blk: {
                 const template = self.module.callable_eval_templates.get(template_id);
-                if (self.current_root_id != null and template.root == self.current_root_id.?) break :blk true;
-                break :blk !self.requested_roots[@intFromEnum(template.root)] or self.isDone(template.root);
+                break :blk self.rootDependencyComplete(template.root);
             },
         };
     }

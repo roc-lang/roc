@@ -1052,7 +1052,7 @@ test "Monotype returns consume the active specialization return cell" {
     const lower_return = sourceSliceBetween(
         lower_source,
         "fn lowerReturn(",
-        "fn lowerComptimeRootExprAtType(",
+        "fn lowerComptimeRootExprAtCell(",
     );
     try expectContains(lower_source, "self.current_return_target = .{ .lambda = lambda_id, .cell = ret_cell }");
     try expectContains(lower_return, "ret.lambda != target.lambda");
