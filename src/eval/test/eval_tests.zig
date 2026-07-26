@@ -1085,6 +1085,32 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "Url(\"https://example.com\")" },
     },
     .{
+        .name = "inspect: generalized interpolation supports custom and builtin specializations",
+        .source_kind = .module,
+        .source =
+        \\Wrapped := [Wrapped(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrapped
+        \\    from_interpolation = |first, rest| {
+        \\        Wrapped.Wrapped(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment)))
+        \\    }
+        \\}
+        \\
+        \\wrapped_identity : Wrapped -> Wrapped
+        \\wrapped_identity = |wrapped| wrapped
+        \\
+        \\str_identity : Str -> Str
+        \\str_identity = |str| str
+        \\
+        \\go = |f| {
+        \\    world = "world"
+        \\    f("hello ${world}")
+        \\}
+        \\
+        \\main = (go(wrapped_identity), go(str_identity))
+        ,
+        .expected = .{ .inspect_str = "(Wrapped(\"hello world\"), \"hello world\")" },
+    },
+    .{
         .name = "inspect: Try interpolation forwards to custom result type",
         .source_kind = .module,
         .source =

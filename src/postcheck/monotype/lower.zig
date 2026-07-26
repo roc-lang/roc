@@ -13962,7 +13962,11 @@ const BodyContext = struct {
             // demanded; enclosing constructors must wait for it rather than
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
-                const expr_ty = try self.resolvedTypeViewForNode(try self.lowerExprTypeNode(expr_id));
+                const expr_node = try self.lowerExprTypeNode(expr_id);
+                if (!try self.graph.typeIsResolved(expr_node)) {
+                    try self.graph.materializeLiteralDefault(expr_node);
+                }
+                const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
             },
             .str => |segments| {
@@ -14373,7 +14377,7 @@ const BodyContext = struct {
             },
             .str_from_quote => |quote| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, quote.plan, ty);
+                return try self.lowerQuoteExpr(expr.ty, quote, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .bytes_lit = try self.lowerStringLiteral(str) },
@@ -27306,6 +27310,32 @@ const BodyContext = struct {
             break :blk BodyExprData{ .crash = msg };
         };
         return try self.addExpr(.{ .ty = target_ty, .data = data });
+    }
+
+    /// Specialize a checked quote conversion without guessing its target at
+    /// the checked boundary. Primitive Str receives the literal directly;
+    /// every custom target follows the explicit from_quote dispatch plan.
+    fn lowerQuoteExpr(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        quote: checked.CheckedQuoteData,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        switch (self.builder.shapeContent(target_ty)) {
+            .primitive => |primitive| {
+                if (primitive != .str) {
+                    // Checking reports this literal-conversion mismatch. Keep
+                    // error-path lowering total, matching raw strings and
+                    // unrepresentable numerals, so diagnostics can complete.
+                    return try self.addExpr(.{
+                        .ty = target_ty,
+                        .data = .{ .crash = try self.addStringLiteral("invalid string literal") },
+                    });
+                }
+                return try self.lowerQuoteValue(quote.literal, target_ty);
+            },
+            else => return try self.lowerNumeralCall(checked_ret_ty, quote.plan, target_ty),
+        }
     }
 
     /// A numeric literal's scalar constant at a builtin numeric primitive —

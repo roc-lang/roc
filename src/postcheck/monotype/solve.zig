@@ -1404,6 +1404,27 @@ pub const InstGraph = struct {
         return true;
     }
 
+    /// Materialize the checked literal default recorded on an otherwise-open
+    /// instantiation node. Literal lowering calls this only when runtime demand
+    /// reaches an unpinned literal leaf; custom specializations have already
+    /// related the node to their concrete target before that point.
+    pub fn materializeLiteralDefault(self: *InstGraph, raw_node: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        const node = self.find(raw_node);
+        const variable = switch (self.nodes.items[@intFromEnum(node)]) {
+            .unresolved => |unresolved| unresolved,
+            else => Common.invariant("literal default materialization received a non-variable node"),
+        };
+        const phase = variable.numeric_default_phase orelse
+            Common.invariant("unresolved literal leaf had no checked default phase");
+        const target = checked.literal_defaulting.defaultTargetForPhase(phase) orelse
+            Common.invariant("checking-finalized literal variable reached Monotype unresolved");
+        try self.setContent(node, switch (target) {
+            .dec => .{ .primitive = .dec },
+            .str => .{ .primitive = .str },
+        });
+    }
+
     /// Whether evidence finalization has explicit producer provenance for every
     /// node in this live type. Numeric and row defaults are direct closure
     /// evidence. A plain checked variable is provisionally sealable as the
