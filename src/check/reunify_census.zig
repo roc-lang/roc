@@ -139,6 +139,7 @@ var annotation_scheme_owner_diverged = std.atomic.Value(u64).init(0);
 var disposition_contextual = std.atomic.Value(u64).init(0);
 var disposition_uninhabited = std.atomic.Value(u64).init(0);
 var residual_undisposed = std.atomic.Value(u64).init(0);
+var disposition_adopted_from_dispatch = std.atomic.Value(u64).init(0);
 
 // Slice 2 boundary verifier (reunify.md 7.5). The verifier hard-asserts the
 // structural invariants; these count the two checks left measured because a later
@@ -462,11 +463,13 @@ pub fn recordAnnotationSchemeOwner(aliased: bool) void {
 }
 
 /// Which residual-variable disposition outcome a census record counts (reunify.md
-/// 7.4, Slice 2 phase one): `contextual` (adopts an enclosing use edge's concrete
-/// type), `uninhabited` (defaults to the uninhabited leaf, matching today's
-/// empty-tag-union materialization), or `undisposed` (variable-shaped but not a
-/// plain unconstrained residual, so left unclassified).
-pub const DispositionCensus = enum { contextual, uninhabited, undisposed };
+/// 7.4): `contextual` (adopts an enclosing use edge's concrete type),
+/// `uninhabited` (defaults to the uninhabited leaf, matching today's
+/// empty-tag-union materialization), `undisposed` (variable-shaped but not a
+/// plain unconstrained residual, so left unclassified), or
+/// `adopted_from_dispatch` (an `uninhabited` disposition a resolved dispatch
+/// target's own signature later replaced with `contextual`).
+pub const DispositionCensus = enum { contextual, uninhabited, undisposed, adopted_from_dispatch };
 
 /// Record one residual-variable disposition decision (reunify.md 7.4, Slice 2 phase
 /// one) into the matching census counter.
@@ -476,6 +479,7 @@ pub fn recordResidualDisposition(kind: DispositionCensus) void {
         .contextual => _ = disposition_contextual.fetchAdd(1, .monotonic),
         .uninhabited => _ = disposition_uninhabited.fetchAdd(1, .monotonic),
         .undisposed => _ = residual_undisposed.fetchAdd(1, .monotonic),
+        .adopted_from_dispatch => _ = disposition_adopted_from_dispatch.fetchAdd(1, .monotonic),
     }
 }
 
@@ -677,6 +681,7 @@ pub fn dumpAppend() void {
     sink.print("disposition_contextual={d}\n", .{disposition_contextual.load(.monotonic)});
     sink.print("disposition_uninhabited={d}\n", .{disposition_uninhabited.load(.monotonic)});
     sink.print("residual_undisposed={d}\n", .{residual_undisposed.load(.monotonic)});
+    sink.print("disposition_adopted_from_dispatch={d}\n", .{disposition_adopted_from_dispatch.load(.monotonic)});
     sink.print("site_actuals_len_matches_binders={d}\n", .{site_actuals_len_matches_binders.load(.monotonic)});
     sink.print("site_actuals_len_diverges_from_binders={d}\n", .{site_actuals_len_diverges_from_binders.load(.monotonic)});
     sink.print("scheme_root_ground={d}\n", .{scheme_root_ground.load(.monotonic)});

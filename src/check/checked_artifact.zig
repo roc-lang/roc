@@ -2692,6 +2692,13 @@ pub const checked_residual_disposition_no_target: u32 = std.math.maxInt(u32);
 /// disposed in this module-level body context rather than a per-definition one;
 /// the per-definition refinement is a later slice's work. Distinct from every real
 /// CIR owner node.
+///
+/// Scope, which every consumer reads by: an entry under a real owner node holds
+/// in that scheme's body alone; an entry under this sentinel holds in every body
+/// of the module. A residual disposed here belongs to no scheme's type, so it is
+/// one fixed position of one module and every emission of it adopts the same
+/// disposition. A scheme-scoped entry for the same variable is the more specific
+/// statement and takes precedence over this one.
 pub const checked_residual_disposition_module_body_owner: u32 = std.math.maxInt(u32);
 
 /// One residual-variable disposition, scoped to a body context (reunify.md 7.4,
@@ -18739,6 +18746,17 @@ fn platformRequiredPayloadForDeclaration(
     };
 }
 
+/// One position a resolved dispatch target's own signature names for the site's
+/// callable (reunify.md 7.4, 15.1): the checked variable the site's callable
+/// carries at that position, and the type the target carries at the same one.
+/// The pair is the resolution's own output — the substitution
+/// `instantiateResolvedDispatchTargetCallable` applies to specialize the
+/// callable — not a positional guess about what would make the call work.
+const ResolvedDispatchOperandPin = struct {
+    residual: CheckedTypeId,
+    target: CheckedTypeId,
+};
+
 fn specializeResolvedStaticDispatchPlanCallables(
     allocator: Allocator,
     names: *canonical.CanonicalNameStore,
@@ -18748,6 +18766,9 @@ fn specializeResolvedStaticDispatchPlanCallables(
     available_artifacts: []const ImportedModuleView,
     plans: *static_dispatch.StaticDispatchPlanTable,
 ) Allocator.Error!void {
+    var pins = std.ArrayList(ResolvedDispatchOperandPin).empty;
+    defer pins.deinit(allocator);
+
     for (plans.plans) |*plan| {
         const node_id = switch (plan.resolution) {
             .direct => |node_id| node_id,
@@ -18769,6 +18790,7 @@ fn specializeResolvedStaticDispatchPlanCallables(
             store,
             target_callable,
             plan.callable_ty,
+            &pins,
         );
     }
     for (plans.iterator_for_plans) |*iterator_plan| {
@@ -18791,11 +18813,76 @@ fn specializeResolvedStaticDispatchPlanCallables(
                         store,
                         target_callable,
                         call.callable_ty,
+                        &pins,
                     );
                 },
                 .constraint, .structural, .checked_error, .unreachable_dispatch => {},
             }
         }
+    }
+
+    try adoptResolvedDispatchOperandDispositions(allocator, store, pins.items);
+}
+
+/// Replace the `uninhabited` disposition of every residual a resolved dispatch
+/// target's own signature names with `contextual(that type)` (reunify.md 7.4,
+/// 15.1).
+///
+/// A dispatch on a var no specialization edge can pin resolves against the
+/// checked defaulting owner, so its target is fixed for the whole module and the
+/// target's signature — not the position's index — says what each operand of the
+/// site's callable is. `publishResidualDispositions` runs before resolution and
+/// therefore records `uninhabited` for such an operand: nothing had yet named a
+/// type for it, and the empty-tag-union leaf is what an unnamed residual
+/// materializes as. This pass carries the resolution's own answer back onto that
+/// disposition so the position states the type it adopts instead of claiming no
+/// value reaches it.
+///
+/// Only a fully concrete target is adopted, which is by construction fully
+/// disposed and neither contextual nor inward-referring, so 7.4's structural
+/// rules on a contextual target hold. Two resolutions naming different types for
+/// one residual leave it `uninhabited`, and a residual that is a scheme binder
+/// or already carries a default has no `uninhabited` entry to replace.
+fn adoptResolvedDispatchOperandDispositions(
+    allocator: Allocator,
+    store: *CheckedTypeStore,
+    pins: []const ResolvedDispatchOperandPin,
+) Allocator.Error!void {
+    if (pins.len == 0) return;
+    if (store.residual_dispositions.items.len == 0) return;
+
+    var adopted = std.AutoHashMap(CheckedTypeId, CheckedTypeId).init(allocator);
+    defer adopted.deinit();
+    var conflicted = std.AutoHashMap(CheckedTypeId, void).init(allocator);
+    defer conflicted.deinit();
+    var concrete = std.AutoHashMap(CheckedTypeId, bool).init(allocator);
+    defer concrete.deinit();
+
+    for (pins) |pin| {
+        if (pin.residual == pin.target) continue;
+        if (conflicted.contains(pin.residual)) continue;
+        const known = try concrete.getOrPut(pin.target);
+        if (!known.found_existing) {
+            known.value_ptr.* = !try store.checkedTypeContainsIdentityVariables(allocator, pin.target);
+        }
+        if (!known.value_ptr.*) continue;
+        const entry = try adopted.getOrPut(pin.residual);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = pin.target;
+            continue;
+        }
+        if (entry.value_ptr.* == pin.target) continue;
+        _ = adopted.remove(pin.residual);
+        try conflicted.put(pin.residual, {});
+    }
+
+    const census_on = reunify_census.active();
+    for (store.residual_dispositions.items) |*disposition| {
+        if (disposition.kind != .uninhabited) continue;
+        const target = adopted.get(disposition.typeId()) orelse continue;
+        disposition.kind = .contextual;
+        disposition.target = @intFromEnum(target);
+        if (census_on) reunify_census.recordResidualDisposition(.adopted_from_dispatch);
     }
 }
 
@@ -18835,6 +18922,7 @@ fn instantiateResolvedDispatchTargetCallable(
     store: *CheckedTypeStore,
     target_callable: CheckedTypeId,
     plan_callable: CheckedTypeId,
+    pins: *std.ArrayList(ResolvedDispatchOperandPin),
 ) Allocator.Error!CheckedTypeId {
     const target_fn = checkedFunctionPayload(store, target_callable, "resolved dispatch target callable");
     const plan_fn = checkedFunctionPayload(store, plan_callable, "resolved dispatch plan callable");
@@ -18914,6 +19002,14 @@ fn instantiateResolvedDispatchTargetCallable(
         &plan_actuals,
         &active,
     );
+
+    // The plan-side substitution is what the resolved target's own signature
+    // says each still-variable position of this call's callable is (reunify.md
+    // 7.4): carry it out so the disposition pass can state it at the position
+    // itself, not only inside the specialized callable.
+    for (plan_formals.items, plan_actuals.items) |formal, actual| {
+        try pins.append(allocator, .{ .residual = formal, .target = actual });
+    }
 
     clone_active.clearRetainingCapacity();
     return try store.cloneCheckedTypeRootSubstituting(
@@ -25829,7 +25925,12 @@ pub const CheckedModuleArtifact = struct {
     // `checked_fn_scheme_id`, the dense owning scheme id a consumer resolves the
     // template's scheme by, and a scheme's `captured_binders` range now covers the
     // enclosing binders its body reaches rather than only those its root reaches.
-    const serialized_layout_version: u32 = 35;
+    // v36 (reunify.md 7.4, 15.1): a residual whose `uninhabited` disposition a
+    // resolved dispatch target's own signature contradicts is now recorded
+    // `contextual` at that signature's type. The struct shape is unchanged; the
+    // bump forces re-bake of the baked builtin artifact whose disposition content
+    // the layout fingerprint alone cannot observe.
+    const serialized_layout_version: u32 = 36;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -30377,6 +30478,75 @@ test "ConstTemplateTable serialize/deserialize round-trip (ArrayList-backed)" {
     try artifact_serialize.expectSlicesByteEqual(ConstTemplate, store.templates.items, rt.loaded.templates.items);
 }
 
+test "a resolved dispatch target's own signature replaces the uninhabited disposition it contradicts" {
+    const gpa = std.testing.allocator;
+
+    var store = CheckedTypeStore{};
+    defer store.deinit(gpa);
+
+    const residual: CheckedTypeId = @enumFromInt(@as(u32, @intCast(store.payloads.items.len)));
+    const other_residual: CheckedTypeId = @enumFromInt(@intFromEnum(residual) + 1);
+    const concrete: CheckedTypeId = @enumFromInt(@intFromEnum(residual) + 2);
+    const also_concrete: CheckedTypeId = @enumFromInt(@intFromEnum(residual) + 3);
+    const open: CheckedTypeId = @enumFromInt(@intFromEnum(residual) + 4);
+
+    for ([_]CheckedTypeId{ residual, other_residual }) |id| {
+        const flex = try store.commitPayload(gpa, .{ .flex = .{} });
+        try store.roots.append(gpa, .{ .id = id, .key = .{ .bytes = [_]u8{@intCast(@intFromEnum(id))} ** 32 } });
+        try store.payloads.append(gpa, flex);
+    }
+    for ([_]CheckedTypeId{ concrete, also_concrete }) |id| {
+        const empty = try store.commitPayload(gpa, .empty_record);
+        try store.roots.append(gpa, .{ .id = id, .key = .{ .bytes = [_]u8{@intCast(@intFromEnum(id))} ** 32 } });
+        try store.payloads.append(gpa, empty);
+    }
+    {
+        // A target that still reaches a variable is not a type the position can
+        // adopt, so it is left alone.
+        const args = try gpa.dupe(CheckedTypeId, &.{residual});
+        const tuple = try store.commitPayload(gpa, .{ .tuple = args });
+        try store.roots.append(gpa, .{ .id = open, .key = .{ .bytes = [_]u8{0x2C} ** 32 } });
+        try store.payloads.append(gpa, tuple);
+    }
+
+    try store.appendResidualDisposition(gpa, .{
+        .scheme_owner_node = checked_residual_disposition_module_body_owner,
+        .type_id = @intFromEnum(residual),
+        .kind = .uninhabited,
+    });
+    try store.appendResidualDisposition(gpa, .{
+        .scheme_owner_node = 12,
+        .type_id = @intFromEnum(other_residual),
+        .kind = .uninhabited,
+    });
+
+    // One resolution names a concrete type for `residual`; two resolutions
+    // disagree about `other_residual`, and a third names a target that is not
+    // fully concrete. Only the first is adopted.
+    try adoptResolvedDispatchOperandDispositions(gpa, &store, &.{
+        .{ .residual = residual, .target = concrete },
+        .{ .residual = residual, .target = concrete },
+        .{ .residual = other_residual, .target = concrete },
+        .{ .residual = other_residual, .target = also_concrete },
+    });
+
+    try std.testing.expectEqual(CheckedResidualDispositionKind.contextual, store.residual_dispositions.items[0].kind);
+    try std.testing.expectEqual(
+        @as(?CheckedTypeId, concrete),
+        store.residual_dispositions.items[0].contextualTarget(),
+    );
+    try std.testing.expectEqual(CheckedResidualDispositionKind.uninhabited, store.residual_dispositions.items[1].kind);
+
+    // A target that reaches a variable never replaces a disposition, and a
+    // residual with no recorded disposition gains none.
+    try adoptResolvedDispatchOperandDispositions(gpa, &store, &.{
+        .{ .residual = other_residual, .target = open },
+        .{ .residual = concrete, .target = also_concrete },
+    });
+    try std.testing.expectEqual(@as(usize, 2), store.residual_dispositions.items.len);
+    try std.testing.expectEqual(CheckedResidualDispositionKind.uninhabited, store.residual_dispositions.items[1].kind);
+}
+
 test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, ranges" {
     const gpa = std.testing.allocator;
     const CW = collections.CompactWriter;
@@ -30516,6 +30686,15 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try store.appendSchemeOwnerScheme(gpa, .{ .owner_node = 987, .scheme = 0 });
     try store.appendResidualDisposition(gpa, .{ .scheme_owner_node = 987, .type_id = @intFromEnum(a), .kind = .uninhabited });
     try store.appendResidualDisposition(gpa, .{ .scheme_owner_node = 987, .type_id = @intFromEnum(b), .kind = .contextual, .target = @intFromEnum(c) });
+    // The module-wide scope a resolved dispatch target's adoption writes under
+    // (reunify.md 7.4) round-trips with its own owner sentinel, so one variable
+    // carries a scheme-scoped and a module-wide disposition at once.
+    try store.appendResidualDisposition(gpa, .{
+        .scheme_owner_node = checked_residual_disposition_module_body_owner,
+        .type_id = @intFromEnum(b),
+        .kind = .contextual,
+        .target = @intFromEnum(d),
+    });
 
     // A consuming-side imported-scheme table entry (reunify.md 7.1, Slice 6):
     // projected local root `a` with binders [a, b], keyed by defining module
@@ -30638,7 +30817,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqual(@as(usize, 1), loaded.scheme_ids_by_owner.items.len);
     try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), loaded.schemeIdForOwnerNode(987));
     try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), loaded.schemeIdForOwnerNode(111));
-    try std.testing.expectEqual(@as(usize, 2), loaded.residual_dispositions.items.len);
+    try std.testing.expectEqual(@as(usize, 3), loaded.residual_dispositions.items.len);
     {
         const uninhabited = loaded.residual_dispositions.items[0];
         try std.testing.expectEqual(CheckedResidualDispositionKind.uninhabited, uninhabited.kind);
@@ -30648,6 +30827,16 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         try std.testing.expectEqual(CheckedResidualDispositionKind.contextual, contextual.kind);
         try std.testing.expectEqual(b, contextual.typeId());
         try std.testing.expectEqual(@as(?CheckedTypeId, c), contextual.contextualTarget());
+        // The adopted module-wide entry keeps its own scope and carries the
+        // resolved target's type.
+        const adopted = loaded.residual_dispositions.items[2];
+        try std.testing.expectEqual(
+            checked_residual_disposition_module_body_owner,
+            adopted.scheme_owner_node,
+        );
+        try std.testing.expectEqual(CheckedResidualDispositionKind.contextual, adopted.kind);
+        try std.testing.expectEqual(b, adopted.typeId());
+        try std.testing.expectEqual(@as(?CheckedTypeId, d), adopted.contextualTarget());
     }
     try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), loaded.view().schemeIdForOwnerNode(987));
 
@@ -30958,8 +31147,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x43, 0x3E, 0x06, 0xA8, 0x11, 0x6F, 0xB3, 0x48, 0xD4, 0x5F, 0x96, 0x95, 0x40, 0x32, 0x92, 0xB6,
-        0x05, 0x7B, 0x74, 0x86, 0x42, 0x42, 0x22, 0x57, 0x4D, 0x21, 0x5D, 0x54, 0xB8, 0xB8, 0x04, 0xFA,
+        0xBB, 0x71, 0x06, 0xF7, 0x24, 0x53, 0xF6, 0xF8, 0x72, 0x79, 0x5E, 0x48, 0x3E, 0xE3, 0x37, 0xFF,
+        0x59, 0x52, 0x96, 0x64, 0xD7, 0x65, 0x2E, 0xB3, 0x04, 0x33, 0x2F, 0x13, 0x53, 0xFB, 0x48, 0xE2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

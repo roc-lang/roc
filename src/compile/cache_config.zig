@@ -71,7 +71,10 @@ pub const Constants = struct {
     /// 42: an instantiation site whose use instantiated an annotated definition's
     ///     annotation pre-declaration is published under that definition's own
     ///     scheme owner node, so one definition has one scheme owner identity.
-    pub const CACHE_VERSION = 42;
+    /// 43: a residual whose `uninhabited` disposition a resolved dispatch target's
+    ///     own signature contradicts is published `contextual` at that signature's
+    ///     type instead.
+    pub const CACHE_VERSION = 43;
 };
 
 /// Configuration for the Roc cache system.

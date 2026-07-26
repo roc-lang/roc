@@ -426,6 +426,7 @@ pub const Census = struct {
     rehearsal_generated_rule_caller_module_absent: Counter = Counter.init(0),
     rehearsal_generated_rule_scheme_captures: Counter = Counter.init(0),
     rehearsal_generated_rule_receiver_untranslatable: Counter = Counter.init(0),
+    rehearsal_generated_rule_receiver_path_absent: Counter = Counter.init(0),
     rehearsal_generated_rule_receiver_not_named: Counter = Counter.init(0),
     rehearsal_generated_rule_receiver_arity_differs: Counter = Counter.init(0),
     rehearsal_generated_rule_argument_untranslatable: Counter = Counter.init(0),

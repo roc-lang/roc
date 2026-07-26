@@ -867,6 +867,25 @@ const Walk = struct {
         };
     }
 
+    /// The disposition this walk's body context reads for `checked_ty`
+    /// (reunify.md section 7.4). Dispositions are scoped by
+    /// `(scheme owner, CheckedTypeId)`: the entry under this walk's own scheme
+    /// owner is the more specific statement and wins, and the module-body entry
+    /// — which the checked side records for a residual belonging to no scheme's
+    /// type, and therefore holding in every body of the module — is read when
+    /// the scheme owner records none.
+    fn dispositionFor(self: *Walk, checked_ty: checked.CheckedTypeId) ?checked.CheckedResidualDisposition {
+        var module_wide: ?checked.CheckedResidualDisposition = null;
+        for (self.cursor.view.residualDispositions()) |disposition| {
+            if (disposition.type_id != @intFromEnum(checked_ty)) continue;
+            if (disposition.scheme_owner_node == self.scheme_owner_node) return disposition;
+            if (disposition.scheme_owner_node == checked.checked_residual_disposition_module_body_owner) {
+                module_wide = disposition;
+            }
+        }
+        return module_wide;
+    }
+
     /// A residual variable: consult its recorded disposition (reunify.md section
     /// 7.4), then apply the checked default. This matches `materializeUnresolved`
     /// exactly: a numeric default yields the defaulted primitive, a row default
@@ -874,14 +893,11 @@ const Walk = struct {
     /// undefaulted residual yields the empty tag union — the same stored shape
     /// the graph materializes for an unresolved variable today.
     fn variable(self: *Walk, checked_ty: checked.CheckedTypeId, v: checked.CheckedTypeVariable) WalkError!TypeId {
-        for (self.cursor.view.residualDispositions()) |disposition| {
-            if (disposition.scheme_owner_node != self.scheme_owner_node) continue;
-            if (disposition.type_id != @intFromEnum(checked_ty)) continue;
+        if (self.dispositionFor(checked_ty)) |disposition| {
             switch (disposition.kind) {
                 .uninhabited => return try self.build_store.internTagUnion(self.owner.target_names, &.{}),
                 .contextual => {
-                    const target = disposition.contextualTarget() orelse break;
-                    return try self.node(target);
+                    if (disposition.contextualTarget()) |target| return try self.node(target);
                 },
             }
         }

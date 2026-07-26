@@ -3614,7 +3614,11 @@ requesting body's binding, not as the receiver's checked payload: a
 lives in that binding, while a receiver that is already a named checked type
 reaches the same argument list either way. `List` and `Box` emit their element
 as the structural shape rather than a named node, so their single argument is
-read from that shape.
+read from that shape. A rule whose generating site dispatches below the type it
+names carries a declared path of at most a handful of steps alongside that
+type, applied in order to its emission; the path is part of the rule's
+declaration, so a step that does not land refuses the binding rather than
+searching the emission for a shape that would fit.
 
 The rules whose generating sites hold a checked receiver:
 
@@ -3644,19 +3648,24 @@ The rules whose generating sites hold a checked receiver:
   list in order. Witness: as for `iterator_dispatch_receiver`, over the plan's
   own checked callable type.
 - `structural_derivation_component` — `is_eq`/`to_hash` on a component the
-  structural-derivation ladder reached. The ladder descends a Monotype and
-  carries the checked type of the same position beside it, stepping into record
-  fields by name, tuple elements and tag payloads by position; its entry
-  positions are the dispatch plan's checked dispatcher type and, for the
+  structural-derivation ladder reached. This rule's receiver is a checked type
+  plus a declared emitted path: the ladder descends a Monotype from an entry
+  position — the dispatch plan's checked dispatcher type, or, for the
   structural-equality intrinsic wrapper, that wrapper's own checked function
-  type. Mapping: the callee scheme's binder `i` takes argument `i` of the
-  component's checked type. Witness: the callee scheme root instantiated under
-  the binding must carry the emitted receiver at the argument position the
-  derivation dispatches on, which is argument zero for both derivations — the
-  ladder builds its callable from the component type it reached, so no checked
-  callable names it. A checked nominal names no instantiated backing type of its
-  own, so a component reached by expanding a nominal's backing hands over no
-  receiver and stays unbound.
+  type — and appends one declared step per layer, naming a record field by its
+  interned label, a tuple element and a tag payload by position, and a named
+  type's backing. The path applies to the emission of the entry type, so a
+  position no checked id stands for is named exactly rather than searched for:
+  a checked nominal names no instantiated backing type of its own, and a
+  receiver whose checked type is the constrained variable itself has no checked
+  fields to descend, yet both positions are declared. Mapping: the callee
+  scheme's binder `i` takes argument `i` of the component the path lands on. A
+  position deeper than a declared path holds hands over no receiver and stays
+  unbound. Witness: the callee scheme root instantiated under the binding must
+  carry the emitted receiver at the argument position the derivation dispatches
+  on, which is argument zero for both derivations — the ladder builds its
+  callable from the component type it reached, so no checked callable names
+  it.
 
 The rules that are declared but unbound, each with the datum its generating
 site does not hold:

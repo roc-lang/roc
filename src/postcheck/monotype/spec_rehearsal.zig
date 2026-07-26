@@ -141,14 +141,17 @@ pub const GeneratedInstantiationRule = enum {
     /// `is_eq`/`to_hash` on a component the structural-derivation ladder reached.
     ///
     /// Binder mapping (exact, total): the callee's scheme binder `i` takes
-    /// argument `i` of the component's own checked type, emitted under the
-    /// requesting body's environment. The ladder descends a Monotype and carries
-    /// the checked type of the same position beside it, stepping into record
-    /// fields by name, tuple elements and tag payloads by position, and a
-    /// nominal's backing; a component whose checked side does not reach the same
-    /// position hands over no receiver and stays unbound. A component whose
-    /// argument count differs from the callee scheme's binder count is outside
-    /// the rule and binds nothing.
+    /// argument `i` of the component the ladder is at, reached by the rule's
+    /// declared emitted path (`GeneratedReceiver`) from the checked type the
+    /// ladder entered at, emitted under the requesting body's environment. The
+    /// ladder descends a Monotype and appends one declared step per layer —
+    /// record field by interned name, tuple element and tag payload by
+    /// position, and a nominal's backing — so a position the checked side names
+    /// no id for (a nominal's backing, or a field of a receiver whose checked
+    /// type is the constrained variable itself) is still named exactly. A
+    /// position deeper than a declared path reaches hands over no receiver and
+    /// stays unbound. A component whose argument count differs from the callee
+    /// scheme's binder count is outside the rule and binds nothing.
     ///
     /// Witness: the callee scheme root emitted under the binding must carry the
     /// emitted receiver at the argument position the derivation dispatches on,
@@ -236,8 +239,68 @@ pub const GeneratedEdge = struct {
 /// structural witness the rule accepts its binding under.
 pub const GeneratedSource = struct {
     module_bytes: [32]u8,
-    receiver: checked.CheckedTypeId,
+    receiver: GeneratedReceiver,
     witness: GeneratedWitness,
+};
+
+/// How many declared steps one rule's emitted path carries. A generated
+/// component call sits a handful of aggregate layers below the checked type its
+/// walk entered at; a position deeper than this cannot be declared exactly, so
+/// its request hands over no receiver (reunify.md section 9.6).
+pub const max_emitted_path_steps: usize = 8;
+
+/// One declared step from an emitted type to one of its components (reunify.md
+/// section 9.6). The step names the component the way the emitted node names it,
+/// so a position no checked id stands for — a nominal's backing, or a field of a
+/// receiver whose checked type is the constrained variable itself — is still
+/// declared exactly rather than searched for.
+pub const EmittedPathStep = union(enum) {
+    /// The backing of a named type. A checked nominal names no instantiated
+    /// backing type of its own, so this step exists only against the emission.
+    nominal_backing,
+    /// The record field carrying this interned label.
+    record_field: names.RecordFieldNameId,
+    /// The tuple element at this position.
+    tuple_element: u32,
+    /// One payload of the tag carrying this interned name.
+    tag_payload: TagPayloadStep,
+};
+
+/// The tag and payload position one `tag_payload` step names.
+pub const TagPayloadStep = struct {
+    name: names.TagNameId,
+    index: u32,
+};
+
+/// A declared path of at most `max_emitted_path_steps` steps, applied in order to
+/// the emission of a rule's checked receiver type (reunify.md section 9.6).
+pub const EmittedPath = struct {
+    steps: [max_emitted_path_steps]EmittedPathStep = undefined,
+    count: usize = 0,
+
+    /// This path with one more declared step, or null when the position is
+    /// deeper than a declared path reaches.
+    pub fn appending(self: EmittedPath, step: EmittedPathStep) ?EmittedPath {
+        if (self.count == max_emitted_path_steps) return null;
+        var extended = self;
+        extended.steps[self.count] = step;
+        extended.count = self.count + 1;
+        return extended;
+    }
+
+    /// The declared steps, in the order they apply.
+    pub fn declaredSteps(self: *const EmittedPath) []const EmittedPathStep {
+        return self.steps[0..self.count];
+    }
+};
+
+/// Where one declared rule's receiver is: a checked type the generating site
+/// names, plus the declared path from that type's emission to the position the
+/// site dispatched at (reunify.md section 9.6). An empty path means the site
+/// dispatched on the named type itself.
+pub const GeneratedReceiver = struct {
+    checked_ty: checked.CheckedTypeId,
+    path: EmittedPath = .{},
 };
 
 /// The exact structural witness one declared rule accepts a binding under
@@ -1731,9 +1794,14 @@ pub const Rehearsal = struct {
         else
             .unresolved_request_context;
 
-        const receiver = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver) orelse {
+        const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse {
             outcome.receiver_unusable += 1;
             census.bump("rehearsal_generated_rule_receiver_untranslatable");
+            return false;
+        };
+        const receiver = followEmittedPath(&self.store, receiver_root, &source.receiver.path) orelse {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_receiver_path_absent");
             return false;
         };
         const argument_count = receiverArgumentCount(&self.store, receiver) orelse {
@@ -1762,7 +1830,7 @@ pub const Rehearsal = struct {
                 noteResidualOrigin(frame, self.classifyResidualActual(
                     caller,
                     caller_owner_node,
-                    source.receiver,
+                    source.receiver.checked_ty,
                     caller_env,
                     caller_origin,
                 ));
@@ -3069,6 +3137,60 @@ fn receiverArgumentCount(store: *const Type.Store, receiver: Type.TypeId) ?usize
     };
 }
 
+/// Apply a rule's declared emitted path to the emission of its checked receiver
+/// type, or null when the emission carries no such position (reunify.md section
+/// 9.6). Each step reads exactly the component its declaration names — no step
+/// searches for a shape that would fit, and a path that does not land is a
+/// binding the rule refuses rather than one it approximates.
+fn followEmittedPath(store: *const Type.Store, root: Type.TypeId, path: *const EmittedPath) ?Type.TypeId {
+    var current = root;
+    for (path.declaredSteps()) |step| {
+        current = switch (step) {
+            .nominal_backing => switch (store.get(current)) {
+                .named => |named| (named.backing orelse return null).ty,
+                else => return null,
+            },
+            .record_field => |label| switch (store.get(current)) {
+                .record => |fields| blk: {
+                    const entries = store.fieldSpan(fields);
+                    var found: ?Type.TypeId = null;
+                    for (0..GuardedList.borrowLen(entries)) |index| {
+                        const field = GuardedList.at(entries, index);
+                        if (field.name != label) continue;
+                        found = field.ty;
+                    }
+                    break :blk found orelse return null;
+                },
+                else => return null,
+            },
+            .tuple_element => |index| switch (store.get(current)) {
+                .tuple => |items| blk: {
+                    const entries = store.span(items);
+                    if (index >= GuardedList.borrowLen(entries)) return null;
+                    break :blk GuardedList.at(entries, index);
+                },
+                else => return null,
+            },
+            .tag_payload => |payload| switch (store.get(current)) {
+                .tag_union => |tags| blk: {
+                    const entries = store.tagSpan(tags);
+                    var found: ?Type.TypeId = null;
+                    for (0..GuardedList.borrowLen(entries)) |index| {
+                        const tag = GuardedList.at(entries, index);
+                        if (tag.name != payload.name) continue;
+                        const payloads = store.span(tag.payloads);
+                        if (payload.index >= GuardedList.borrowLen(payloads)) return null;
+                        found = GuardedList.at(payloads, payload.index);
+                    }
+                    break :blk found orelse return null;
+                },
+                else => return null,
+            },
+        };
+    }
+    return current;
+}
+
 /// The emitted receiver's argument at `index`, or null when the emission carries
 /// no such position.
 fn receiverArgumentAt(store: *const Type.Store, receiver: Type.TypeId, index: usize) ?Type.TypeId {
@@ -3202,6 +3324,48 @@ const ReceiverFixture = struct {
         return try self.store.add(.{ .list = elem });
     }
 
+    /// A named type whose backing is `backing`, which is the shape a declared
+    /// `nominal_backing` step descends into.
+    fn addNamedWithBacking(
+        self: *ReceiverFixture,
+        name_text: []const u8,
+        args: []const Type.TypeId,
+        backing: Type.TypeId,
+    ) Allocator.Error!Type.TypeId {
+        const type_name = try self.program_names.internTypeName(name_text);
+        const module = try self.program_names.internModuleIdentity(&self.module_hash);
+        const span = try self.store.addSpan(args);
+        const checked_id: checked.CheckedTypeId = @enumFromInt(self.next_checked_id);
+        self.next_checked_id += 1;
+        return try self.store.add(.{ .named = .{
+            .named_type = .{ .module = .{}, .ty = checked_id },
+            .def = .{ .module = module, .type_name = type_name },
+            .kind = .nominal,
+            .args = span,
+            .backing = .{ .ty = backing, .use = .inspectable },
+        } });
+    }
+
+    fn fieldName(self: *ReceiverFixture, text: []const u8) Allocator.Error!names.RecordFieldNameId {
+        return try self.program_names.internRecordFieldLabel(text);
+    }
+
+    fn tagName(self: *ReceiverFixture, text: []const u8) Allocator.Error!names.TagNameId {
+        return try self.program_names.internTagLabel(text);
+    }
+
+    fn addRecord(self: *ReceiverFixture, fields: []const Type.Field) Allocator.Error!Type.TypeId {
+        return try self.store.add(.{ .record = try self.store.addRecordFields(&self.program_names, fields) });
+    }
+
+    fn addTuple(self: *ReceiverFixture, items: []const Type.TypeId) Allocator.Error!Type.TypeId {
+        return try self.store.add(.{ .tuple = try self.store.addSpan(items) });
+    }
+
+    fn addTagUnion(self: *ReceiverFixture, tags: []const Type.Tag) Allocator.Error!Type.TypeId {
+        return try self.store.add(.{ .tag_union = try self.store.addTagVariants(&self.program_names, tags) });
+    }
+
     fn addFunction(
         self: *ReceiverFixture,
         args: []const Type.TypeId,
@@ -3286,6 +3450,109 @@ test "the receiver-position witness reads the callee scheme root's dispatch argu
     try testing.expectEqual(@as(?Type.TypeId, set), functionArgumentAt(&fixture.store, root, 1));
     try testing.expectEqual(@as(?Type.TypeId, null), functionArgumentAt(&fixture.store, root, 2));
     try testing.expectEqual(@as(?Type.TypeId, null), functionArgumentAt(&fixture.store, set, 0));
+}
+
+test "a declared emitted path lands on the component each of its steps names" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const key = try fixture.addPrimitive(.str);
+    const value = try fixture.addPrimitive(.u64);
+    const dict = try fixture.addNamed("Dict", &.{ key, value });
+    const other = try fixture.addPrimitive(.bool);
+
+    // `Dict.empty().insert({ owes: d }, "found")` reaches the dict through a
+    // record field of a receiver whose checked type is the constrained variable
+    // `k` itself, so the field is named by the declared step, not by a checked
+    // id.
+    const owes = try fixture.fieldName("owes");
+    const also = try fixture.fieldName("also");
+    const record = try fixture.addRecord(&.{
+        .{ .name = owes, .ty = dict },
+        .{ .name = also, .ty = other },
+    });
+    const record_path = (EmittedPath{}).appending(.{ .record_field = owes }) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(?Type.TypeId, dict), followEmittedPath(&fixture.store, record, &record_path));
+
+    // A tuple element and a tag payload are named by position.
+    const tuple = try fixture.addTuple(&.{ other, dict });
+    const tuple_path = (EmittedPath{}).appending(.{ .tuple_element = 1 }) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(?Type.TypeId, dict), followEmittedPath(&fixture.store, tuple, &tuple_path));
+
+    const held = try fixture.tagName("Held");
+    const tag_union = try fixture.addTagUnion(&.{.{
+        .name = held,
+        .checked_name = held,
+        .payloads = try fixture.store.addSpan(&.{ other, dict }),
+    }});
+    const tag_path = (EmittedPath{}).appending(.{ .tag_payload = .{ .name = held, .index = 1 } }) orelse
+        return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(?Type.TypeId, dict), followEmittedPath(&fixture.store, tag_union, &tag_path));
+
+    // A named type's backing, which no checked id stands for, and a path of
+    // several steps applied in order.
+    const wrapper = try fixture.addNamedWithBacking("Wrapper", &.{}, record);
+    const backing_path = (EmittedPath{}).appending(.nominal_backing) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(?Type.TypeId, record), followEmittedPath(&fixture.store, wrapper, &backing_path));
+    const nested = backing_path.appending(.{ .record_field = owes }) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(?Type.TypeId, dict), followEmittedPath(&fixture.store, wrapper, &nested));
+
+    // An empty path is the named type itself.
+    const empty = EmittedPath{};
+    try testing.expectEqual(@as(?Type.TypeId, dict), followEmittedPath(&fixture.store, dict, &empty));
+}
+
+test "a declared emitted path that does not land binds nothing" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const item = try fixture.addPrimitive(.u64);
+    const present = try fixture.fieldName("present");
+    const absent = try fixture.fieldName("absent");
+    const record = try fixture.addRecord(&.{.{ .name = present, .ty = item }});
+
+    // A field the emission does not carry, a step against the wrong shape, a
+    // position past a tuple's end, and a backing a named type does not have all
+    // refuse rather than approximating.
+    const missing_field = (EmittedPath{}).appending(.{ .record_field = absent }) orelse return error.TestUnexpectedResult;
+    try testing.expect(followEmittedPath(&fixture.store, record, &missing_field) == null);
+
+    const tuple_step = (EmittedPath{}).appending(.{ .tuple_element = 0 }) orelse return error.TestUnexpectedResult;
+    try testing.expect(followEmittedPath(&fixture.store, record, &tuple_step) == null);
+
+    const tuple = try fixture.addTuple(&.{item});
+    const past_end = (EmittedPath{}).appending(.{ .tuple_element = 1 }) orelse return error.TestUnexpectedResult;
+    try testing.expect(followEmittedPath(&fixture.store, tuple, &past_end) == null);
+
+    const backing_step = (EmittedPath{}).appending(.nominal_backing) orelse return error.TestUnexpectedResult;
+    const opaque_named = try fixture.addNamed("Handle", &.{});
+    try testing.expect(followEmittedPath(&fixture.store, opaque_named, &backing_step) == null);
+
+    const held = try fixture.tagName("Held");
+    const other_tag = try fixture.tagName("Other");
+    const tag_union = try fixture.addTagUnion(&.{.{
+        .name = held,
+        .checked_name = held,
+        .payloads = try fixture.store.addSpan(&.{item}),
+    }});
+    const missing_tag = (EmittedPath{}).appending(.{ .tag_payload = .{ .name = other_tag, .index = 0 } }) orelse
+        return error.TestUnexpectedResult;
+    try testing.expect(followEmittedPath(&fixture.store, tag_union, &missing_tag) == null);
+    const past_payloads = (EmittedPath{}).appending(.{ .tag_payload = .{ .name = held, .index = 1 } }) orelse
+        return error.TestUnexpectedResult;
+    try testing.expect(followEmittedPath(&fixture.store, tag_union, &past_payloads) == null);
+}
+
+test "a position deeper than a declared path holds is not declared at all" {
+    var path = EmittedPath{};
+    var step: u32 = 0;
+    while (step < max_emitted_path_steps) : (step += 1) {
+        path = path.appending(.{ .tuple_element = step }) orelse return error.TestUnexpectedResult;
+    }
+    try testing.expectEqual(max_emitted_path_steps, path.declaredSteps().len);
+    // One layer past the declared depth: the site hands over no receiver rather
+    // than a truncated path that would land somewhere else.
+    try testing.expect(path.appending(.nominal_backing) == null);
 }
 
 test "only the declared rules that carry a checked receiver bind from one" {

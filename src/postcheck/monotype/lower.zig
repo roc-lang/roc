@@ -9564,7 +9564,7 @@ const BodyContext = struct {
         const body = try self.lowerDerivationExpansion(EqDeriver, arg_tys[0], .{ .lhs = lhs_expr, .rhs = rhs_expr }, .{
             .method_name = "is_eq",
             .result_ty = ret_ty,
-            .checked_ty = self.checkedFunctionArgumentType(checked_fn_root, 0),
+            .receiver = derivationReceiver(self.checkedFunctionArgumentType(checked_fn_root, 0)),
         });
         return .{
             .args = try self.addTypedLocalSpan(&.{ typed_lhs, typed_rhs }),
@@ -21360,7 +21360,7 @@ const BodyContext = struct {
                 .rule = .constraint_dispatch_receiver,
                 .source = .{
                     .module_bytes = self.view.key.bytes,
-                    .receiver = plan.dispatcher_ty,
+                    .receiver = .{ .checked_ty = plan.dispatcher_ty },
                     .witness = .{ .callable = plan.callable_ty },
                 },
             },
@@ -24115,7 +24115,7 @@ const BodyContext = struct {
         return try self.lowerDerivation(EqDeriver, ty, .{ .lhs = lhs, .rhs = rhs }, .{
             .method_name = method_name,
             .result_ty = bool_ty,
-            .checked_ty = checked_ty,
+            .receiver = derivationReceiver(checked_ty),
         });
     }
 
@@ -24133,7 +24133,7 @@ const BodyContext = struct {
         return try self.lowerDerivation(HashDeriver, value_ty, .{ .value = value, .hasher = hasher }, .{
             .method_name = "to_hash",
             .result_ty = hasher_ty,
-            .checked_ty = checked_value_ty,
+            .receiver = derivationReceiver(checked_value_ty),
         });
     }
 
@@ -24169,28 +24169,45 @@ const BodyContext = struct {
     const DerivationCtx = struct {
         method_name: []const u8,
         result_ty: Type.TypeId,
-        /// The checked type of the position the walk is at, when this module's
-        /// checked store names the same position (reunify.md section 9.6). A
-        /// component call reads it to name the receiver its declared rule binds
-        /// from; a position the checked walk cannot follow carries null and its
-        /// call hands over no receiver.
-        checked_ty: ?checked.CheckedTypeId = null,
+        /// Where the position the walk is at sits, as reunify.md section 9.6's
+        /// declared receiver: the checked type the ladder entered at plus the
+        /// declared path of layers it has descended since. A component call
+        /// reads it to name the receiver its declared rule binds from; a walk
+        /// that entered with no checked type, or descended past what a declared
+        /// path holds, carries null and its call hands over no receiver.
+        receiver: ?spec_rehearsal.GeneratedReceiver = null,
 
-        /// The same derivation at a component position whose checked type is
-        /// `component`.
-        fn at(self: DerivationCtx, component: ?checked.CheckedTypeId) DerivationCtx {
+        /// The same derivation one declared layer down.
+        fn descending(self: DerivationCtx, step: spec_rehearsal.EmittedPathStep) DerivationCtx {
+            const held = self.receiver orelse return self.withoutReceiver();
+            const path = held.path.appending(step) orelse return self.withoutReceiver();
             return .{
                 .method_name = self.method_name,
                 .result_ty = self.result_ty,
-                .checked_ty = component,
+                .receiver = .{ .checked_ty = held.checked_ty, .path = path },
+            };
+        }
+
+        /// The same derivation at a position no declared receiver names.
+        fn withoutReceiver(self: DerivationCtx) DerivationCtx {
+            return .{
+                .method_name = self.method_name,
+                .result_ty = self.result_ty,
+                .receiver = null,
             };
         }
     };
 
-    /// How many alias layers the checked side of the derivation walk is read
-    /// through before it must be the shape the Monotype side reached, and how
-    /// many extension links a row is followed through. Both nest a handful deep
-    /// at most; these only bound input.
+    /// The declared receiver a derivation entered at, or null when the caller
+    /// names no checked type for the value being derived.
+    fn derivationReceiver(checked_ty: ?checked.CheckedTypeId) ?spec_rehearsal.GeneratedReceiver {
+        const entered = checked_ty orelse return null;
+        return .{ .checked_ty = entered };
+    }
+
+    /// How many alias layers the checked side of a derivation entry point is
+    /// read through before it must be the shape the Monotype side reached.
+    /// Aliases nest a handful deep at most; this only bounds input.
     const max_checked_component_depth: u32 = 32;
 
     /// The checked payload at `checked_ty` with transparent aliases erased, or
@@ -24210,35 +24227,6 @@ const BodyContext = struct {
         return null;
     }
 
-    /// The checked type of the record field the Monotype walk descended into,
-    /// found by the field's own name through the checked row and its extension
-    /// links, or null when the checked side names no such field.
-    fn checkedRecordFieldType(
-        self: *BodyContext,
-        checked_ty: ?checked.CheckedTypeId,
-        field_name: names.RecordFieldNameId,
-    ) Allocator.Error!?checked.CheckedTypeId {
-        var current = checked_ty orelse return null;
-        var depth: u32 = 0;
-        while (depth < max_checked_component_depth) : (depth += 1) {
-            const payload = self.checkedDerivationPayload(current) orelse return null;
-            const fields = switch (payload) {
-                .record => |record| record.fields,
-                .record_unbound => |unbound| unbound,
-                else => return null,
-            };
-            for (fields) |field| {
-                const label = try self.builder.recordFieldName(self.view, field.name);
-                if (label == field_name) return field.ty;
-            }
-            current = switch (payload) {
-                .record => |record| record.ext,
-                else => return null,
-            };
-        }
-        return null;
-    }
-
     /// The checked type of a checked function's argument at `index`, or null
     /// when the checked side is not a function that long.
     fn checkedFunctionArgumentType(
@@ -24251,49 +24239,6 @@ const BodyContext = struct {
             .function => |fn_ty| if (index < fn_ty.args.len) fn_ty.args[index] else null,
             else => null,
         };
-    }
-
-    /// The checked type of the tuple element at `index`, or null when the
-    /// checked side is not a tuple that long.
-    fn checkedTupleElementType(
-        self: *BodyContext,
-        checked_ty: ?checked.CheckedTypeId,
-        index: usize,
-    ) ?checked.CheckedTypeId {
-        const current = checked_ty orelse return null;
-        const payload = self.checkedDerivationPayload(current) orelse return null;
-        return switch (payload) {
-            .tuple => |elems| if (index < elems.len) elems[index] else null,
-            else => null,
-        };
-    }
-
-    /// The checked type of one payload of the tag the Monotype walk descended
-    /// into, found by the tag's own name through the checked row and its
-    /// extension links, or null when the checked side names no such payload.
-    fn checkedTagPayloadType(
-        self: *BodyContext,
-        checked_ty: ?checked.CheckedTypeId,
-        tag_name: names.TagNameId,
-        index: usize,
-    ) Allocator.Error!?checked.CheckedTypeId {
-        var current = checked_ty orelse return null;
-        var depth: u32 = 0;
-        while (depth < max_checked_component_depth) : (depth += 1) {
-            const payload = self.checkedDerivationPayload(current) orelse return null;
-            const tag_union = switch (payload) {
-                .tag_union => |tag_union| tag_union,
-                else => return null,
-            };
-            for (tag_union.tags) |tag| {
-                const label = try self.builder.tagName(self.view, tag.name);
-                if (label != tag_name) continue;
-                const args = tag.argsSlice(self.view.types);
-                return if (index < args.len) args[index] else null;
-            }
-            current = tag_union.ext;
-        }
-        return null;
     }
 
     fn lowerDerivation(
@@ -24416,12 +24361,13 @@ const BodyContext = struct {
         const args = D.callArgs(operand);
         // Debug/probe-only: the component call has no checked use site, so it
         // cites reunify.md section 9.6's derivation rule and hands over the
-        // checked type of the position the walk is at. The derivation dispatches
-        // on argument zero for both derivations, which is the position the
-        // rule's witness compares.
+        // checked type the walk entered at plus the declared path of layers it
+        // descended to reach this position. The derivation dispatches on
+        // argument zero for both derivations, which is the position the rule's
+        // witness compares.
         const edge: MethodCallEdge = .{ .generated = .{
             .rule = .structural_derivation_component,
-            .source = if (ctx.checked_ty) |receiver| .{
+            .source = if (ctx.receiver) |receiver| .{
                 .module_bytes = self.view.key.bytes,
                 .receiver = receiver,
                 .witness = .{ .receiver_at_argument = 0 },
@@ -24497,7 +24443,7 @@ const BodyContext = struct {
         while (i < fields_copy.len) : (i += 1) {
             const field = fields_copy[if (D.forward) i else fields_copy.len - 1 - i];
             const component = try D.componentForField(self, operand, state, field);
-            const component_ctx = ctx.at(try self.checkedRecordFieldType(ctx.checked_ty, field.name));
+            const component_ctx = ctx.descending(.{ .record_field = field.name });
             const result = try self.lowerDerivation(D, field.ty, component, component_ctx);
             state = try D.combine(self, state, result, ctx);
         }
@@ -24520,7 +24466,7 @@ const BodyContext = struct {
             const index = if (D.forward) i else items_copy.len - 1 - i;
             const item_ty = items_copy[index];
             const component = try D.componentForTuple(self, operand, state, item_ty, index);
-            const component_ctx = ctx.at(self.checkedTupleElementType(ctx.checked_ty, index));
+            const component_ctx = ctx.descending(.{ .tuple_element = @intCast(index) });
             const result = try self.lowerDerivation(D, item_ty, component, component_ctx);
             state = try D.combine(self, state, result, ctx);
         }
@@ -26884,7 +26830,7 @@ const BodyContext = struct {
                         .rule = .iterator_dispatch_receiver,
                         .source = .{
                             .module_bytes = self.view.key.bytes,
-                            .receiver = plan.dispatcher_ty,
+                            .receiver = .{ .checked_ty = plan.dispatcher_ty },
                             .witness = .{ .callable = plan.callable_ty },
                         },
                     } },
@@ -28280,21 +28226,23 @@ const EqDeriver = struct {
     /// layout; other backings are unwrapped and compared in their shared backing
     /// representation.
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+        // A checked nominal names no instantiated backing type of its own, so
+        // the backing position is named by one declared step down from the
+        // nominal's own receiver (reunify.md section 9.6).
+        const backing_ctx = ctx.descending(.nominal_backing);
         switch (self.builder.program.types.get(backing_ty)) {
-            .record => |fields| return try self.derivationRecord(EqDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
-            .tuple => |items| return try self.derivationTuple(EqDeriver, self.builder.program.types.span(items), operand, ctx),
+            .record => |fields| return try self.derivationRecord(EqDeriver, self.builder.program.types.fieldSpan(fields), operand, backing_ctx),
+            .tuple => |items| return try self.derivationTuple(EqDeriver, self.builder.program.types.span(items), operand, backing_ctx),
             else => {},
         }
 
         const lhs_inner = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
         const rhs_inner = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
 
-        // A checked nominal names no backing type of its own, so the backing
-        // position carries no checked receiver.
         const compare = try self.lowerDerivation(EqDeriver, backing_ty, .{
             .lhs = try self.localExpr(lhs_inner, backing_ty),
             .rhs = try self.localExpr(rhs_inner, backing_ty),
-        }, ctx.at(null));
+        }, backing_ctx);
 
         const lhs_pat = try self.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.bindPat(lhs_inner, backing_ty) } });
         const rhs_pat = try self.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.bindPat(rhs_inner, backing_ty) } });
@@ -28382,7 +28330,7 @@ const EqDeriver = struct {
         var i = payloads.len;
         while (i > 0) {
             i -= 1;
-            const payload_ctx = ctx.at(try self.checkedTagPayloadType(ctx.checked_ty, tag.name, i));
+            const payload_ctx = ctx.descending(.{ .tag_payload = .{ .name = tag.name, .index = @intCast(i) } });
             const payload_eq = try self.lowerDerivation(EqDeriver, payloads[i], .{ .lhs = lhs_exprs[i], .rhs = rhs_exprs[i] }, payload_ctx);
             body = try self.ifExpr(payload_eq, body, try self.boolLiteral(false, ctx.result_ty), ctx.result_ty);
         }
@@ -28499,19 +28447,21 @@ const HashDeriver = struct {
     }
 
     fn named(self: *BodyContext, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: Operand, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+        // A checked nominal names no instantiated backing type of its own, so
+        // the backing position is named by one declared step down from the
+        // nominal's own receiver (reunify.md section 9.6).
+        const backing_ctx = ctx.descending(.nominal_backing);
         switch (self.builder.program.types.get(backing_ty)) {
-            .record => |fields| return try self.derivationRecord(HashDeriver, self.builder.program.types.fieldSpan(fields), operand, ctx),
-            .tuple => |items| return try self.derivationTuple(HashDeriver, self.builder.program.types.span(items), operand, ctx),
+            .record => |fields| return try self.derivationRecord(HashDeriver, self.builder.program.types.fieldSpan(fields), operand, backing_ctx),
+            .tuple => |items| return try self.derivationTuple(HashDeriver, self.builder.program.types.span(items), operand, backing_ctx),
             else => {},
         }
 
         const inner = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-        // A checked nominal names no backing type of its own, so the backing
-        // position carries no checked receiver.
         const hashed = try self.lowerDerivation(HashDeriver, backing_ty, .{
             .value = try self.localExpr(inner, backing_ty),
             .hasher = operand.hasher,
-        }, ctx.at(null));
+        }, backing_ctx);
         const pat = try self.addPat(.{ .ty = named_ty, .data = .{ .nominal = try self.bindPat(inner, backing_ty) } });
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .let_ = .{
             .bind = pat,
@@ -28566,7 +28516,7 @@ const HashDeriver = struct {
         // First write the discriminant index, then thread each payload's hash.
         var acc = try self.hasherWriteU64(hasher, variant_index, ctx.result_ty);
         for (payloads, 0..) |payload_ty, i| {
-            const payload_ctx = ctx.at(try self.checkedTagPayloadType(ctx.checked_ty, tag.name, i));
+            const payload_ctx = ctx.descending(.{ .tag_payload = .{ .name = tag.name, .index = @intCast(i) } });
             acc = try self.lowerDerivation(HashDeriver, payload_ty, .{ .value = payload_exprs[i], .hasher = acc }, payload_ctx);
         }
 
