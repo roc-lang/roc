@@ -13962,7 +13962,11 @@ const BodyContext = struct {
             // demanded; enclosing constructors must wait for it rather than
             // requesting an active view of their still-unresolved payload.
             .numeral, .str_from_quote => {
-                const expr_ty = try self.resolvedTypeViewForNode(try self.lowerExprTypeNode(expr_id));
+                const expr_node = try self.lowerExprTypeNode(expr_id);
+                if (!try self.graph.typeIsResolved(expr_node)) {
+                    try self.graph.materializeLiteralDefault(expr_node);
+                }
+                const expr_ty = try self.resolvedTypeViewForNode(expr_node);
                 return try self.lowerExprWithType(expr_id, expr_ty);
             },
             .str => |segments| {
@@ -27320,7 +27324,13 @@ const BodyContext = struct {
         switch (self.builder.shapeContent(target_ty)) {
             .primitive => |primitive| {
                 if (primitive != .str) {
-                    Common.invariant("checked quote conversion specialized to a non-Str primitive");
+                    // Checking reports this literal-conversion mismatch. Keep
+                    // error-path lowering total, matching raw strings and
+                    // unrepresentable numerals, so diagnostics can complete.
+                    return try self.addExpr(.{
+                        .ty = target_ty,
+                        .data = .{ .crash = try self.addStringLiteral("invalid string literal") },
+                    });
                 }
                 return try self.lowerQuoteValue(quote.literal, target_ty);
             },
