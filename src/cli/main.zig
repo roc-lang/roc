@@ -6096,7 +6096,7 @@ pub fn buildLirImageWithBuildEnv(
 
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
-        shm_allocator,
+        ctx.gpa,
         .lir_image,
         roc_file_path,
         source_dir_override,
@@ -6108,16 +6108,19 @@ pub fn buildLirImageWithBuildEnv(
         reporter,
     );
     defer lowered_result.deinitWatchInputs();
+    defer lowered_result.lowered.deinit();
 
     const lowered = &lowered_result.lowered;
-    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
-    try lir.LirImage.fillHeaderInSharedMemory(
-        image_header,
+    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+    defer ctx.gpa.free(platform_entrypoints);
+    const copied = try lir.LirImage.copyProgramIntoBuffer(
+        shm_allocator,
         shm.base_ptr,
-        shm.getUsedSize(),
+        shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         platform_entrypoints,
     );
+    try copied.fillHeader(image_header, shm.getUsedSize());
 
     shm.updateHeader();
     return sharedMemoryResult(
@@ -9454,8 +9457,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
     reporter.begin("Specializing");
-    const lowered = try lowerCheckedSourceToLir(
-        shm_allocator,
+    var lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
         ctx.gpa,
         root_artifact,
         imported_artifacts,
@@ -9465,17 +9468,20 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!void {
         base.target.TargetUsize.native,
         false,
     );
+    defer lowered.deinit();
     reporter.end();
 
     reporter.begin("Code Generation");
-    const platform_entrypoints = try lowered.platformEntrypoints(shm_allocator);
-    try lir.LirImage.fillHeaderInSharedMemory(
-        image_header,
+    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
+    defer ctx.gpa.free(platform_entrypoints);
+    const copied = try lir.LirImage.copyProgramIntoBuffer(
+        shm_allocator,
         shm.base_ptr,
-        shm.getUsedSize(),
+        shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         platform_entrypoints,
     );
+    try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
 
     const lir_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);

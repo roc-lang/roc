@@ -444,12 +444,12 @@ pub const tests = [_]TestCase{
         .name = "low_level - F32 rounding to integers",
         .source =
         \\{
-        \\F32.round_to_i32(3.4) == 3
-        \\    and F32.round_to_i32(-3.6) == -4
-        \\    and F32.round_to_i32(2.5) == 3
-        \\    and F32.round_to_i32(-2.5) == -3
-        \\    and F32.floor_to_i32(-3.2) == -4
-        \\    and F32.ceiling_to_u32(3.2) == 4
+        \\F32.round_to_i32_try(3.4) == Ok(3)
+        \\    and F32.round_to_i32_try(-3.6) == Ok(-4)
+        \\    and F32.round_to_i32_try(2.5) == Ok(3)
+        \\    and F32.round_to_i32_try(-2.5) == Ok(-3)
+        \\    and F32.floor_to_i32_try(-3.2) == Ok(-4)
+        \\    and F32.ceiling_to_u32_try(3.2) == Ok(4)
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
@@ -458,12 +458,12 @@ pub const tests = [_]TestCase{
         .name = "low_level - F64 rounding to integers",
         .source =
         \\{
-        \\F64.round_to_i32(3.4) == 3
-        \\    and F64.round_to_i32(-3.6) == -4
-        \\    and F64.round_to_i32(2.5) == 3
-        \\    and F64.round_to_i32(-2.5) == -3
-        \\    and F64.floor_to_i32(-3.2) == -4
-        \\    and F64.ceiling_to_u32(3.2) == 4
+        \\F64.round_to_i32_try(3.4) == Ok(3)
+        \\    and F64.round_to_i32_try(-3.6) == Ok(-4)
+        \\    and F64.round_to_i32_try(2.5) == Ok(3)
+        \\    and F64.round_to_i32_try(-2.5) == Ok(-3)
+        \\    and F64.floor_to_i32_try(-3.2) == Ok(-4)
+        \\    and F64.ceiling_to_u32_try(3.2) == Ok(4)
         \\}
         ,
         .expected = .{ .inspect_str = "True" },
@@ -504,57 +504,57 @@ pub const tests = [_]TestCase{
     // backend must pass the float `val` through its CallBuilder so the
     // following integer args land in the right registers on Windows x64).
     .{
-        .name = "low_level - F32 floor_to_i32 returns signed value",
+        .name = "low_level - F32 floor_to_i32_try returns signed value",
         .source =
-        \\F32.floor_to_i32(-3.2)
+        \\F32.floor_to_i32_try(-3.2)
         ,
-        .expected = .{ .inspect_str = "-4" },
+        .expected = .{ .inspect_str = "Ok(-4)" },
     },
     .{
-        .name = "low_level - F32 ceiling_to_u32 returns unsigned value",
+        .name = "low_level - F32 ceiling_to_u32_try returns unsigned value",
         .source =
-        \\F32.ceiling_to_u32(3.2)
+        \\F32.ceiling_to_u32_try(3.2)
         ,
-        .expected = .{ .inspect_str = "4" },
+        .expected = .{ .inspect_str = "Ok(4)" },
     },
     .{
-        .name = "low_level - F32 round_to_i32 returns signed value",
+        .name = "low_level - F32 round_to_i32_try returns signed value",
         .source =
-        \\F32.round_to_i32(2.5)
+        \\F32.round_to_i32_try(2.5)
         ,
-        .expected = .{ .inspect_str = "3" },
+        .expected = .{ .inspect_str = "Ok(3)" },
     },
     .{
-        .name = "low_level - F64 floor_to_i32 returns signed value",
+        .name = "low_level - F64 floor_to_i32_try returns signed value",
         .source =
-        \\F64.floor_to_i32(-3.2)
+        \\F64.floor_to_i32_try(-3.2)
         ,
-        .expected = .{ .inspect_str = "-4" },
+        .expected = .{ .inspect_str = "Ok(-4)" },
     },
     .{
-        .name = "low_level - F64 ceiling_to_u32 returns unsigned value",
+        .name = "low_level - F64 ceiling_to_u32_try returns unsigned value",
         .source =
-        \\F64.ceiling_to_u32(3.2)
+        \\F64.ceiling_to_u32_try(3.2)
         ,
-        .expected = .{ .inspect_str = "4" },
+        .expected = .{ .inspect_str = "Ok(4)" },
     },
     .{
-        .name = "low_level - F64 round_to_i32 returns signed value",
+        .name = "low_level - F64 round_to_i32_try returns signed value",
         .source =
-        \\F64.round_to_i32(2.5)
+        \\F64.round_to_i32_try(2.5)
         ,
-        .expected = .{ .inspect_str = "3" },
+        .expected = .{ .inspect_str = "Ok(3)" },
     },
     .{
         .name = "low_level - Dec rounding to integers",
         .source =
         \\{
-        \\Dec.round_to_i32(3.4) == 3
-        \\    and Dec.round_to_i32(-3.6) == -4
-        \\    and Dec.round_to_i32(2.5) == 3
-        \\    and Dec.round_to_i32(-2.5) == -3
-        \\    and Dec.floor_to_i32(-3.2) == -4
-        \\    and Dec.ceiling_to_u32(3.2) == 4
+        \\Dec.round_to_i32_try(3.4) == Ok(3)
+        \\    and Dec.round_to_i32_try(-3.6) == Ok(-4)
+        \\    and Dec.round_to_i32_try(2.5) == Ok(3)
+        \\    and Dec.round_to_i32_try(-2.5) == Ok(-3)
+        \\    and Dec.floor_to_i32_try(-3.2) == Ok(-4)
+        \\    and Dec.ceiling_to_u32_try(3.2) == Ok(4)
         \\}
         ,
         .expected = .{ .inspect_str = "True" },

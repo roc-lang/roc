@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
@@ -71,6 +72,15 @@ pub const SCC = struct {
     pub const Idx = enum(u32) { _ };
 };
 
+/// One exact edge from the dependency analysis that produced an evaluation
+/// order. Edges point from dependent to dependency.
+pub const Dependency = struct {
+    dependent: CIR.Def.Idx,
+    dependency: CIR.Def.Idx,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// The computed evaluation order for all definitions in a module.
 /// SCCs are arranged in topological order (dependencies come before dependents).
 pub const EvaluationOrder = struct {
@@ -110,6 +120,76 @@ pub const EvaluationOrder = struct {
         self.allocator.free(self.sccs);
     }
 };
+
+/// Collect the graph's exact edges in deterministic order for downstream
+/// consumers that need the strict top-level demand relation.
+pub fn collectDependencies(
+    graph: *const DependencyGraph,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error!Dependency.SafeList {
+    var dependencies = try Dependency.SafeList.initCapacity(allocator, graph.nodes.len);
+    errdefer dependencies.deinit(allocator);
+
+    for (graph.nodes) |dependent| {
+        for (graph.getDependencies(dependent)) |dependency| {
+            _ = try dependencies.append(allocator, .{
+                .dependent = dependent,
+                .dependency = dependency,
+            });
+        }
+    }
+
+    const DependencySort = struct {
+        fn lessThan(_: void, a: Dependency, b: Dependency) bool {
+            const a_dependent = @intFromEnum(a.dependent);
+            const b_dependent = @intFromEnum(b.dependent);
+            if (a_dependent != b_dependent) return a_dependent < b_dependent;
+            return @intFromEnum(a.dependency) < @intFromEnum(b.dependency);
+        }
+    };
+    std.mem.sort(Dependency, dependencies.items.items, {}, DependencySort.lessThan);
+
+    var unique_len: usize = 0;
+    for (dependencies.items.items) |dependency| {
+        if (unique_len != 0) {
+            const previous = dependencies.items.items[unique_len - 1];
+            if (previous.dependent == dependency.dependent and previous.dependency == dependency.dependency) continue;
+        }
+        dependencies.items.items[unique_len] = dependency;
+        unique_len += 1;
+    }
+    dependencies.items.items.len = unique_len;
+
+    return dependencies;
+}
+
+/// Whether a sorted exact dependency set contains one edge.
+pub fn hasDependency(
+    dependencies: []const Dependency,
+    dependent: CIR.Def.Idx,
+    dependency: CIR.Def.Idx,
+) bool {
+    const dependent_raw = @intFromEnum(dependent);
+    const dependency_raw = @intFromEnum(dependency);
+    var low: usize = 0;
+    var high: usize = dependencies.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate = dependencies[mid];
+        const candidate_dependent = @intFromEnum(candidate.dependent);
+        const candidate_dependency = @intFromEnum(candidate.dependency);
+        if (candidate_dependent < dependent_raw or
+            (candidate_dependent == dependent_raw and candidate_dependency < dependency_raw))
+        {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    if (low == dependencies.len) return false;
+    const candidate = dependencies[low];
+    return candidate.dependent == dependent and candidate.dependency == dependency;
+}
 
 const DemandSummary = struct {
     deps: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
@@ -808,8 +888,14 @@ pub fn computeSCCs(
     // When we follow edges from A to B (A depends on B), B finishes first,
     // so B's SCC is added before A's SCC.
 
+    const sccs = try state.sccs.toOwnedSlice(allocator);
+    errdefer {
+        for (sccs) |scc| allocator.free(scc.defs);
+        allocator.free(sccs);
+    }
+
     return EvaluationOrder{
-        .sccs = try state.sccs.toOwnedSlice(allocator),
+        .sccs = sccs,
         .allocator = allocator,
     };
 }
@@ -1233,8 +1319,14 @@ pub fn computeCheckOrder(
     // Tarjan produced an acyclic condensation, so Kahn must emit every group.
     std.debug.assert(ordered_sccs.items.len == group_count);
 
+    const sccs = try ordered_sccs.toOwnedSlice(allocator);
+    errdefer {
+        for (sccs) |scc| allocator.free(scc.defs);
+        allocator.free(sccs);
+    }
+
     return EvaluationOrder{
-        .sccs = try ordered_sccs.toOwnedSlice(allocator),
+        .sccs = sccs,
         .allocator = allocator,
     };
 }

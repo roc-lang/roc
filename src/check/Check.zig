@@ -22,6 +22,7 @@ const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 const ExhaustivenessContext = @import("exhaustiveness_context.zig");
 const hoist_roots = @import("hoist_roots.zig");
+const dispatch_evidence = @import("dispatch_evidence.zig");
 
 const MkSafeList = collections.SafeList;
 
@@ -440,6 +441,13 @@ instantiation_source_expr: ?CIR.Expr.Idx = null,
 /// recorded against that node's `dispatch_target` evidence slot (see
 /// `recordSchemeUse`).
 evidence_target_site: ?EvidenceTargetSite = null,
+/// One exact selected method instantiation per raw static-dispatch constraint
+/// edge. The checker may revisit a deferred constraint, but that is another
+/// observation of the same edge, not a new target instantiation. Entries are
+/// append-only within a probe scope so rollback can remove every memo whose
+/// method var was created by the rolled-back type-store work.
+dispatch_target_instantiations: std.ArrayListUnmanaged(DispatchTargetInstantiation) = .empty,
+dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// One-shot attribution for the outer scheme instantiation performed when a
 /// containing value stores a generalized expression-position function. It is
 /// consumed at `instantiateVarHelp` entry so any instantiations triggered
@@ -681,6 +689,18 @@ const AmbiguityVerdict = struct {
 const EvidenceTargetSite = struct {
     node_idx: u32,
     constraint_fn_var: Var,
+};
+
+/// The concrete method target and local method var selected for one logical
+/// static-dispatch edge. The environment, full method binding, and method name
+/// are the checker's exact target identity; `method_var` is the sole
+/// copy/instantiation unified with that edge's raw function var.
+const DispatchTargetInstantiation = struct {
+    constraint_fn_var: Var,
+    target_env: *const ModuleEnv,
+    target_binding: ModuleEnv.MethodBinding,
+    method_name: Ident.Idx,
+    method_var: Var,
 };
 
 fn isLiteralStaticDispatchOrigin(origin: StaticDispatchConstraint.Origin) bool {
@@ -1612,6 +1632,8 @@ pub fn deinit(self: *Self) void {
     self.instantiation_dispatchers.deinit(self.gpa);
     self.ambiguity_candidates.deinit(self.gpa);
     self.ambiguity_verdicts.deinit(self.gpa);
+    self.dispatch_target_instantiations.deinit(self.gpa);
+    self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
@@ -3375,6 +3397,19 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
     return self.runUnify(a, b, env, .{ .context = ctx });
 }
 
+fn unifyNominalConstructorBacking(
+    self: *Self,
+    expected_backing: Var,
+    actual_backing: Var,
+    env: *Env,
+    ctx: problem.Context.NominalConstructorContext,
+) std.mem.Allocator.Error!unifier.Result {
+    return self.runUnify(expected_backing, actual_backing, env, .{
+        .context = .{ .nominal_constructor = ctx },
+        .root_relation = .nominal_constructor_backing,
+    });
+}
+
 /// Check if a variable contains an infinite type after solving a binding.
 /// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
 ///
@@ -3864,10 +3899,27 @@ fn instantiateVarHelp(
         }
     }
 
-    // Persist this constrained-scheme instantiation as static-dispatch
-    // evidence: publication resolves the fresh vars once checking settles to
-    // decide how each of the scheme's dispatch constraints was satisfied here.
-    if (self.scratch_evidence_pairs.items.len > 0) {
+    // Persist every constrained-scheme edge, including an edge that reused
+    // already-shared vars and therefore copied no constrained vars. The
+    // checked-module producer still needs the scheme root for that use.
+    const value_use_source: ?CIR.Expr.Idx = if (nested_function_use == null and self.evidence_target_site == null)
+        if (self.instantiation_source_expr) |source_expr| switch (self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag) {
+            .expr_var,
+            .expr_external_lookup,
+            .expr_required_lookup,
+            .expr_field_access,
+            => source_expr,
+            else => null,
+        } else null
+    else
+        null;
+    std.mem.sort(ModuleEnv.SchemeUsePair, self.scratch_evidence_pairs.items, {}, struct {
+        fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
+            return a.old_var < b.old_var;
+        }
+    }.lessThan);
+    const needs_evidence = try self.schemeHasEvidenceParams(var_to_instantiate);
+    if (self.scratch_evidence_pairs.items.len > 0 or needs_evidence) {
         if (nested_function_use) |source_expr| {
             try self.cir.recordSchemeUse(
                 @intFromEnum(source_expr),
@@ -3884,29 +3936,17 @@ fn instantiateVarHelp(
                 var_to_instantiate,
                 self.scratch_evidence_pairs.items,
             );
-        } else if (self.instantiation_source_expr) |source_expr| {
-            // Only value uses of definitions instantiate schemes whose
-            // constraints later need per-site evidence here; the explicit
-            // nested-function construction edge is handled above. Other
-            // in-expression instantiations (nominal constructors, Try copies,
-            // iterator declarations, …) never become specialization edges.
-            switch (self.cir.store.nodes.get(@enumFromInt(@intFromEnum(source_expr))).tag) {
-                .expr_var,
-                .expr_external_lookup,
-                .expr_required_lookup,
-                .expr_field_access,
-                => try self.cir.recordSchemeUse(
-                    @intFromEnum(source_expr),
-                    .value_use,
-                    0,
-                    var_to_instantiate,
-                    self.scratch_evidence_pairs.items,
-                ),
-                else => {},
-            }
+        } else if (value_use_source) |source_expr| {
+            try self.cir.recordSchemeUse(
+                @intFromEnum(source_expr),
+                .value_use,
+                0,
+                var_to_instantiate,
+                self.scratch_evidence_pairs.items,
+            );
         }
-        self.scratch_evidence_pairs.clearRetainingCapacity();
     }
+    self.scratch_evidence_pairs.clearRetainingCapacity();
 
     // Add the var to the right rank
     try env.var_pool.addVarToRank(instantiated_var, instantiator.current_rank);
@@ -3916,6 +3956,15 @@ fn instantiateVarHelp(
 
     // Return the instantiated var
     return instantiated_var;
+}
+
+fn schemeHasEvidenceParams(self: *Self, root: Var) std.mem.Allocator.Error!bool {
+    var scratch: dispatch_evidence.Scratch = .{};
+    defer scratch.deinit(self.gpa);
+    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
+    defer params.deinit(self.gpa);
+    try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, root, &scratch, &params);
+    return params.items.len != 0;
 }
 
 fn recordSharedSchemeUse(
@@ -4293,7 +4342,12 @@ fn mkIterVar(self: *Self, item_var: Var, env: *Env, region: Region) Allocator.Er
     return iter_var;
 }
 
-fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) Allocator.Error!Content {
+const IteratorStepBuild = struct {
+    content: Content,
+    topology: ModuleEnv.IteratorStepTopology,
+};
+
+fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) Allocator.Error!IteratorStepBuild {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -4330,7 +4384,18 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
         try self.types.mkTag(skip_ident, &.{skip_payload_record}),
     };
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
-    return try self.types.mkTagUnion(&tags, ext_var);
+    return .{
+        .content = try self.types.mkTagUnion(&tags, ext_var),
+        .topology = .{
+            .done_tag_ident = @bitCast(done_ident),
+            .one_tag_ident = @bitCast(one_ident),
+            .skip_tag_ident = @bitCast(skip_ident),
+            .item_field_ident = @bitCast(item_ident),
+            .rest_field_ident = @bitCast(rest_ident),
+            .one_payload_var = @intFromEnum(payload_record),
+            .skip_payload_var = @intFromEnum(skip_payload_record),
+        },
+    };
 }
 
 /// Create a nominal number type content (e.g., U8, I32, Dec)
@@ -13217,7 +13282,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             try self.setVarRank(rest_var, env);
 
             const step_content = try self.mkIteratorStepContent(pair_var, rest_var, env);
-            const step_ret_var = try self.freshFromContent(step_content, env, expr_region);
+            const step_ret_var = try self.freshFromContent(step_content.content, env, expr_region);
             const empty_args = try self.types.appendVars(&.{});
             const step_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
                 .args = empty_args,
@@ -14332,10 +14397,9 @@ fn closePayloadVarToEmpty(
     self: *Self,
     payload_var: Var,
 ) Allocator.Error!void {
-    const empty_content = Content{ .structure = .empty_tag_union };
     const resolved = self.types.resolveVar(payload_var);
     if (payloadVarCanResolveToEmpty(resolved.desc.content)) {
-        try self.types.setVarContent(resolved.var_, empty_content);
+        try self.types.setVarToEmptyTagUnionDefault(resolved.var_);
     }
 }
 
@@ -16390,7 +16454,8 @@ fn checkIteratorForLoop(
         iterable_region,
     );
 
-    const step_var = try self.freshFromContent(try self.mkIteratorStepContent(item_var, iterator_var, env), env, loop_region);
+    const step = try self.mkIteratorStepContent(item_var, iterator_var, env);
+    const step_var = try self.freshFromContent(step.content, env, loop_region);
     const next_method = try @constCast(self.cir).insertIdent(base.Ident.for_text("next"));
     const next_fn_var = try self.mkSyntheticReceiverDispatchConstraint(
         iterator_var,
@@ -16401,7 +16466,14 @@ fn checkIteratorForLoop(
         loop_region,
     );
 
-    try self.cir.recordForLoopDispatchPlan(loop_node, ModuleEnv.nodeIdxFrom(pattern), ModuleEnv.nodeIdxFrom(iterable), iter_fn_var, next_fn_var);
+    try self.cir.recordForLoopDispatchPlan(
+        loop_node,
+        ModuleEnv.nodeIdxFrom(pattern),
+        ModuleEnv.nodeIdxFrom(iterable),
+        iter_fn_var,
+        next_fn_var,
+        step.topology,
+    );
 
     does_fx = try self.checkExpr(body, env, child_expected.suppressHoistSelection()) or does_fx;
     return does_fx;
@@ -17020,9 +17092,12 @@ fn checkNominalTypeUsage(
         //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
         // Convert CIR.Expr.NominalBackingType to Context.NominalConstructorContext.BackingType
         const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
-        const result = try self.unifyInContext(nominal_backing_var, actual_backing_var, env, .{
-            .nominal_constructor = .{ .backing_type = context_backing_type },
-        });
+        const result = try self.unifyNominalConstructorBacking(
+            nominal_backing_var,
+            actual_backing_var,
+            env,
+            .{ .backing_type = context_backing_type },
+        );
 
         // Handle the result of unification
         switch (result) {
@@ -17163,6 +17238,7 @@ const Probe = struct {
     pending_tuple_accesses_len: usize,
     scheme_uses_len: usize,
     scheme_use_pairs_len: usize,
+    dispatch_target_instantiations_len: usize,
 
     fn rollback(self: *Probe) void {
         self.check.types.rollbackToSavepoint(&self.savepoint);
@@ -17179,6 +17255,11 @@ const Probe = struct {
         // vars the savepoint rollback just discarded.
         self.check.cir.scheme_uses.items.shrinkRetainingCapacity(self.scheme_uses_len);
         self.check.cir.scheme_use_pairs.items.shrinkRetainingCapacity(self.scheme_use_pairs_len);
+        while (self.check.dispatch_target_instantiations.items.len > self.dispatch_target_instantiations_len) {
+            const removed = self.check.dispatch_target_instantiations.pop().?;
+            const did_remove = self.check.dispatch_target_instantiation_by_fn_var.remove(removed.constraint_fn_var);
+            std.debug.assert(did_remove);
+        }
     }
 
     /// Close the probe scope KEEPING everything it did: the type-store
@@ -17198,6 +17279,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
     const pending_tuple_accesses_len = self.pending_tuple_accesses.items.len;
     const scheme_uses_len = self.cir.scheme_uses.items.items.len;
     const scheme_use_pairs_len = self.cir.scheme_use_pairs.items.items.len;
+    const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     return .{
         .check = self,
         .regions_len = regions_len,
@@ -17207,6 +17289,7 @@ fn beginProbe(self: *Self) std.mem.Allocator.Error!Probe {
         .pending_tuple_accesses_len = pending_tuple_accesses_len,
         .scheme_uses_len = scheme_uses_len,
         .scheme_use_pairs_len = scheme_use_pairs_len,
+        .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .savepoint = try self.types.createSavepoint(),
     };
 }
@@ -18820,6 +18903,107 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
 /// non-terminating cycle, reported as an infinite type instead of hanging.
 const max_deferred_dispatch_iterations: usize = 1 << 14;
 
+/// Return the one local method var selected for this raw dispatch edge.
+/// Deferred-constraint fixpoints may observe an edge more than once; the first
+/// observation performs the target copy/instantiation and records its nested
+/// evidence, while later observations reuse that exact var. A different binding
+/// for the same raw edge would make checked dispatch provenance contradictory.
+fn dispatchTargetMethodVar(
+    self: *Self,
+    constraint: StaticDispatchConstraint,
+    method_lookup: StaticDispatchMethodBinding,
+    cycle_method_expr_var: ?Var,
+    predeclared_scheme_for_method: ?Var,
+    env: *Env,
+    region: Region,
+) Allocator.Error!Var {
+    if (self.dispatch_target_instantiation_by_fn_var.get(constraint.fn_var)) |raw_index| {
+        const existing = self.dispatch_target_instantiations.items[raw_index];
+        if (existing.target_env != method_lookup.env or
+            !std.meta.eql(existing.target_binding, method_lookup.binding) or
+            !existing.method_name.eql(constraint.fn_name))
+        {
+            std.debug.panic("one static-dispatch edge selected two different method bindings", .{});
+        }
+        return existing.method_var;
+    }
+
+    try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
+    try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
+
+    const previous_evidence_target_site = self.evidence_target_site;
+    self.evidence_target_site = .{
+        .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+        .constraint_fn_var = constraint.fn_var,
+    };
+    defer self.evidence_target_site = previous_evidence_target_site;
+
+    const method_type_var: Var = ModuleEnv.varFrom(method_lookup.binding.type_node_idx);
+    const records_before = self.cir.scheme_uses.items.items.len;
+    const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
+        break :blk expr_var_for_method;
+    } else if (method_lookup.is_this_module) blk: {
+        const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
+        if (self.types.resolveVar(local_method_type_var).desc.rank == .generalized) {
+            break :blk try self.instantiateVar(local_method_type_var, env, .use_last_var);
+        }
+        break :blk local_method_type_var;
+    } else blk: {
+        const copied_var = try self.copyVar(method_type_var, method_lookup.env, region);
+        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
+    };
+
+    // A target that reused an in-flight cycle var performed no instantiation,
+    // but its checked scheme still owns the nested evidence contract. Publish
+    // an explicit zero-pair edge so checked-artifact construction receives the
+    // exact selected scheme root instead of attempting to infer it later.
+    const record_scheme_root = cycle_method_expr_var orelse method_type_var;
+    var target_requires_record = cycle_method_expr_var != null or self.localProcedureMethodBinding(method_lookup);
+    if (!target_requires_record and method_lookup.is_this_module) {
+        // Same-module targets can own body-introduced evidence params (for
+        // example pathless literal conversions) that are not visible from the
+        // surface method type alone.
+        target_requires_record = true;
+    }
+    if (target_requires_record and
+        self.cir.scheme_uses.items.items.len == records_before)
+    {
+        try self.cir.recordSchemeUse(
+            self.evidence_target_site.?.node_idx,
+            .dispatch_target,
+            @intFromEnum(constraint.fn_var),
+            record_scheme_root,
+            &.{},
+        );
+    }
+
+    const raw_index: u32 = @intCast(self.dispatch_target_instantiations.items.len);
+    self.dispatch_target_instantiations.appendAssumeCapacity(.{
+        .constraint_fn_var = constraint.fn_var,
+        .target_env = method_lookup.env,
+        .target_binding = method_lookup.binding,
+        .method_name = constraint.fn_name,
+        .method_var = method_var,
+    });
+    self.dispatch_target_instantiation_by_fn_var.putAssumeCapacityNoClobber(constraint.fn_var, raw_index);
+    return method_var;
+}
+
+fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchMethodBinding) bool {
+    if (!method_lookup.is_this_module) return false;
+    const raw_node = @intFromEnum(method_lookup.binding.type_node_idx);
+    if (raw_node >= self.cir.store.nodes.len()) return false;
+    if (self.cir.store.nodes.get(@enumFromInt(raw_node)).tag != .statement_decl) return false;
+    const decl = switch (self.cir.store.getStatement(@enumFromInt(raw_node))) {
+        .s_decl => |decl| decl,
+        else => return false,
+    };
+    return switch (self.cir.store.getExpr(decl.expr)) {
+        .e_lambda, .e_closure => true,
+        else => false,
+    };
+}
+
 fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pass: bool) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -19168,7 +19352,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                     const method_is_this_module = method_lookup.is_this_module;
                     const method_binding = method_lookup.binding;
                     const def_idx = method_binding.def_idx;
-                    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = method_env.store.getDef(def_idx);
                     // Track whether we just processed or referenced a cycle participant.
                     var cycle_method_expr_var: ?Var = null;
@@ -19228,42 +19411,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    // Copy the actual method from the dest module env to this module env.
-                    // Instantiating the chosen method target's scheme while this
-                    // key is set records the instantiation as `dispatch_target`
-                    // evidence for the constraint being discharged.
-                    self.evidence_target_site = .{
-                        .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
-                        .constraint_fn_var = constraint.fn_var,
-                    };
-                    const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
-                        // Cycle participant or recursive self-dispatch: use the
-                        // fresh flex var instead of def_var to avoid rank lowering.
-                        try self.recordSharedSchemeUse(
-                            self.evidence_target_site.?.node_idx,
-                            .dispatch_target,
-                            @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
-                            expr_var_for_method,
-                        );
-                        break :blk expr_var_for_method;
-                    } else if (method_is_this_module) blk: {
-                        const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
-                        if (self.types.resolveVar(local_method_type_var).desc.rank == .generalized) {
-                            break :blk try self.instantiateVar(local_method_type_var, env, .use_last_var);
-                        }
-                        try self.recordSharedSchemeUse(
-                            self.evidence_target_site.?.node_idx,
-                            .dispatch_target,
-                            @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
-                            local_method_type_var,
-                        );
-                        break :blk local_method_type_var;
-                    } else blk: {
-                        // Copy the method from the other module's type store
-                        const copied_var = try self.copyVar(method_type_var, method_env, region);
-                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-                    };
-                    self.evidence_target_site = null;
+                    const method_var = try self.dispatchTargetMethodVar(
+                        constraint,
+                        method_lookup,
+                        cycle_method_expr_var,
+                        predeclared_scheme_for_method,
+                        env,
+                        region,
+                    );
 
                     // Unwrap the constraint type
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
@@ -19516,7 +19671,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         self.rewriteEqBinopAsMethodEq(constraint);
                     }
 
-                    const method_type_var: Var = ModuleEnv.varFrom(method_binding.type_node_idx);
                     const def = method_env.store.getDef(def_idx);
                     var cycle_method_expr_var: ?Var = null;
                     var predeclared_scheme_for_method: ?Var = null;
@@ -19562,38 +19716,14 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env, is_numeric_default_pas
                         }
                     }
 
-                    // See the nominal branch above: while this key is set, the
-                    // chosen method target's scheme instantiation is recorded as
-                    // `dispatch_target` evidence for this constraint.
-                    self.evidence_target_site = .{
-                        .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
-                        .constraint_fn_var = constraint.fn_var,
-                    };
-                    const method_var = if (cycle_method_expr_var) |expr_var_for_method| blk: {
-                        try self.recordSharedSchemeUse(
-                            self.evidence_target_site.?.node_idx,
-                            .dispatch_target,
-                            @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
-                            expr_var_for_method,
-                        );
-                        break :blk expr_var_for_method;
-                    } else if (method_is_this_module) blk: {
-                        const local_method_type_var = predeclared_scheme_for_method orelse method_type_var;
-                        if (self.types.resolveVar(local_method_type_var).desc.rank == .generalized) {
-                            break :blk try self.instantiateVar(local_method_type_var, env, .use_last_var);
-                        }
-                        try self.recordSharedSchemeUse(
-                            self.evidence_target_site.?.node_idx,
-                            .dispatch_target,
-                            @intFromEnum(self.evidence_target_site.?.constraint_fn_var),
-                            local_method_type_var,
-                        );
-                        break :blk local_method_type_var;
-                    } else blk: {
-                        const copied_var = try self.copyVar(method_type_var, method_env, region);
-                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-                    };
-                    self.evidence_target_site = null;
+                    const method_var = try self.dispatchTargetMethodVar(
+                        constraint,
+                        method_lookup,
+                        cycle_method_expr_var,
+                        predeclared_scheme_for_method,
+                        env,
+                        region,
+                    );
 
                     const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
                         _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{

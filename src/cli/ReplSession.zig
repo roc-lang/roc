@@ -613,21 +613,6 @@ const DefinitionValidation = struct {
     error_message: ?[]u8,
 };
 
-fn parsedResourcesHaveDiagnostics(parsed: *const eval.test_helpers.ParsedResources) Allocator.Error!bool {
-    if (parsed.checker.problems.problems.items.len > 0) return true;
-    const main_diagnostics = try parsed.module_env.getDiagnostics();
-    defer parsed.module_env.gpa.free(main_diagnostics);
-    if (main_diagnostics.len > 0) return true;
-
-    for (parsed.extra_modules) |*module| {
-        if (module.checker.problems.problems.items.len > 0) return true;
-        const diagnostics = try module.module_env.getDiagnostics();
-        defer module.module_env.gpa.free(diagnostics);
-        if (diagnostics.len > 0) return true;
-    }
-    return false;
-}
-
 fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
@@ -651,7 +636,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     )) |parsed_value| {
         var parsed = parsed_value;
         defer parsed.deinit(self.allocator);
-        if (try parsedResourcesHaveDiagnostics(&parsed)) {
+        if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
             const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return .{ .valid = false, .error_message = null },
@@ -712,11 +697,12 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     defer compiled.deinit(self.allocator);
 
     // Checked publication deliberately succeeds in the presence of user
-    // diagnostics so build/run/test can execute independent roots. A REPL
-    // expression is a single interactive transaction: report its diagnostics
-    // and leave the session definitions intact instead of executing the
-    // explicit runtime-error node and aborting the remaining batch input.
-    if (try parsedResourcesHaveDiagnostics(&compiled.resources)) {
+    // errors so build/run/test can execute independent roots. A REPL
+    // expression is a single interactive transaction: report its errors and
+    // leave the session definitions intact instead of executing the explicit
+    // runtime-error node and aborting the remaining batch input. Warnings
+    // (e.g. an unused loop binder) never block evaluation.
+    if (try eval.test_helpers.parsedResourcesHaveErrorDiagnostics(self.allocator, &compiled.resources)) {
         return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) };
     }
 
@@ -1494,9 +1480,23 @@ test "Repl - Str.is_empty" {
     try expectAllNative("Str.is_empty(\"a\")", "False");
 }
 
-test "Repl - lambda renders as <function>" {
+test "Repl - lambda with defaulted literal renders as <function>" {
     try expectAllNative("|x| x + 1", "<function>");
+}
+
+test "Repl - unconstrained lambda function value renders as <function>" {
     try expectAllNative("|x, y| x + y", "<function>");
+}
+
+test "Repl - recursive function preserves an unconstrained empty list" {
+    const steps = &[_][2][]const u8{
+        .{
+            "loop = |items, n| if n == 0.U64 { items } else { loop(items, n - 1.U64) }",
+            "assigned `loop`",
+        },
+        .{ "loop([], 1.U64)", "[]" },
+    };
+    try expectStateful(.interpreter, steps);
 }
 
 test "Repl - Str.to_utf8 bytes" {

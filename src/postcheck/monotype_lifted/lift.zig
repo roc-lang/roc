@@ -25,6 +25,8 @@ pub fn run(
     var types = owned.types;
     owned.types = @import("../monotype/type.zig").Store.init(allocator);
     var imported_fns = owned.imported_fns.takeArrayList();
+    var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
+    var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
     var exprs = owned.exprs.takeArrayList();
     var pats = owned.pats.takeArrayList();
     var stmts = owned.stmts.takeArrayList();
@@ -35,8 +37,7 @@ pub fn run(
     var stmt_ids = owned.stmt_ids.takeArrayList();
     var field_exprs = owned.field_exprs.takeArrayList();
     var fn_def_captures = owned.fn_def_captures.takeArrayList();
-    var const_evidence_pool = owned.const_evidence_pool.takeArrayList();
-    var const_evidence_chain_pool = owned.const_evidence_chain_pool.takeArrayList();
+    var capture_operands = owned.capture_operands.takeArrayList();
     var record_destructs = owned.record_destructs.takeArrayList();
     var str_pattern_steps = owned.str_pattern_steps.takeArrayList();
     var branches = owned.branches.takeArrayList();
@@ -59,6 +60,8 @@ pub fn run(
         name_store,
         types,
         imported_fns,
+        const_fn_evidence,
+        const_fn_evidence_frames,
         exprs,
         pats,
         stmts,
@@ -69,6 +72,7 @@ pub fn run(
         stmt_ids,
         field_exprs,
         fn_def_captures,
+        capture_operands,
         record_destructs,
         str_pattern_steps,
         branches,
@@ -88,6 +92,8 @@ pub fn run(
     name_store = undefined;
     types = undefined;
     imported_fns = undefined;
+    const_fn_evidence = undefined;
+    const_fn_evidence_frames = undefined;
     exprs = undefined;
     pats = undefined;
     stmts = undefined;
@@ -98,6 +104,7 @@ pub fn run(
     stmt_ids = undefined;
     field_exprs = undefined;
     fn_def_captures = undefined;
+    capture_operands = undefined;
     record_destructs = undefined;
     str_pattern_steps = undefined;
     branches = undefined;
@@ -114,10 +121,6 @@ pub fn run(
     comptime_sites = undefined;
     program.runtime_schema_requests = Ast.ProgramList(Ast.RuntimeSchemaRequest, "runtime_schema_requests").fromArrayList(runtime_schema_requests);
     runtime_schema_requests = undefined;
-    program.const_evidence_pool = Ast.ProgramList(@import("check").ConstStore.ConstEvidence, "const_evidence_pool").fromArrayList(const_evidence_pool);
-    const_evidence_pool = undefined;
-    program.const_evidence_chain_pool = Ast.ProgramList(@import("check").ConstStore.ConstRange, "const_evidence_chain_pool").fromArrayList(const_evidence_chain_pool);
-    const_evidence_chain_pool = undefined;
     errdefer program.deinit();
 
     const source_view = movedMonoView(&owned, &program);
@@ -145,6 +148,8 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .specs = source_view.specs,
         .imported_fns = source_view.imported_fns,
         .fns = source_view.fns,
+        .const_fn_evidence = moved_view.const_fn_evidence,
+        .const_fn_evidence_frames = moved_view.const_fn_evidence_frames,
         .defs = source_view.defs,
         .nested_defs = source_view.nested_defs,
         .exprs = moved_view.exprs,
@@ -157,8 +162,6 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .stmt_ids = moved_view.stmt_ids,
         .field_exprs = moved_view.field_exprs,
         .fn_def_captures = moved_view.fn_def_captures,
-        .const_evidence_pool = moved_view.const_evidence_pool,
-        .const_evidence_chain_pool = moved_view.const_evidence_chain_pool,
         .capture_operands = moved_view.capture_operands,
         .record_destructs = moved_view.record_destructs,
         .str_pattern_steps = moved_view.str_pattern_steps,
@@ -327,9 +330,8 @@ fn checkOperandSpan(program: *const Ast.Program, fn_id: Ast.FnId, operand_span: 
         // give the operand value and its slot distinct interned TypeIds for the
         // same type.
         const value_ty = program.getExpr(operand.value).ty;
-        if (!try program.types.typeEql(&program.names, value_ty, slot.ty)) {
+        if (!try program.types.typeEql(&program.names, value_ty, slot.ty))
             return "operand value type differed from its capture slot type";
-        }
     }
     return null;
 }
@@ -489,9 +491,14 @@ const Lifter = struct {
             },
             .hosted => .hosted,
         };
+        const source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null;
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
-            .source = if (def.fn_id) |source_fn_id| self.defSource(source_fn_id, def.fn_def) else null,
+            .source = source,
+            .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
+                .independent_roots => null,
+                .exact_graph => source.?.mono_fn_ty,
+            } else null,
             .args = def.args,
             .captures = .empty(),
             .body = body,
@@ -503,9 +510,14 @@ const Lifter = struct {
     fn lowerNestedDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.NestedDef) Allocator.Error!void {
         try self.rewriteExpr(def.body);
         const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@intFromEnum(fn_id)].items);
+        const source = self.nestedSource(def.fn_id, def.fn_def);
         self.output.setFn(fn_id, .{
             .symbol = def.symbol,
-            .source = self.nestedSource(def.fn_id, def.fn_def),
+            .source = source,
+            .signature = switch (self.source.fnSignatureRelation(def.fn_id)) {
+                .independent_roots => null,
+                .exact_graph => source.mono_fn_ty,
+            },
             .args = def.args,
             .captures = capture_span,
             .body = .{ .roc = def.body },
@@ -581,6 +593,7 @@ const Lifter = struct {
 
         const expr = self.output.getExpr(expr_id);
         switch (expr.data) {
+            .@"unreachable",
             .local,
             .unit,
             .int_lit,
@@ -678,6 +691,7 @@ const Lifter = struct {
                 self.output.setExprData(expr_id, .{ .call_proc = .{
                     .callee = rewritten.callee,
                     .args = call.args,
+                    .iterator_procedure = call.iterator_procedure,
                     .captures = rewritten.captures,
                     .is_cold = call.is_cold,
                 } });
@@ -764,9 +778,14 @@ const Lifter = struct {
 
         try self.rewriteExpr(lambda.body);
         const capture_span = try self.output.addTypedLocalSpan(captures.items.items);
+        const source = self.source.fnSource(lambda.fn_id);
         self.output.setFn(fn_id, .{
             .symbol = self.symbols.fresh(),
-            .source = self.source.fnSource(lambda.fn_id),
+            .source = source,
+            .signature = switch (self.source.fnSignatureRelation(lambda.fn_id)) {
+                .independent_roots => null,
+                .exact_graph => source.mono_fn_ty,
+            },
             .args = lambda.args,
             .captures = capture_span,
             .body = .{ .roc = lambda.body },
@@ -863,7 +882,7 @@ const Lifter = struct {
         for (0..slots.len) |index| {
             const slot = GuardedList.at(slots, index);
             const id = slotCaptureId(self.output, slot);
-            const value = explicitCaptureValueForId(self.output, explicit, id) orelse
+            const value = explicitCaptureValueForSlot(self.output, explicit, slot) orelse
                 try self.output.addExpr(.{ .ty = slot.ty, .data = .{ .local = slot.local } });
             operands[index] = .{ .id = id, .value = value };
         }
@@ -987,11 +1006,11 @@ fn rebuildCaptureOperandSpan(
                 else => break :blk candidate,
             };
             if (program.getLocal(candidate_local).capture_id != id) break :blk candidate;
-            const active = bound.bindingFor(program, candidate_local) orelse break :blk candidate;
+            const active = (try bound.bindingFor(program, candidate_local)) orelse break :blk candidate;
             if (active == candidate_local) break :blk candidate;
             break :blk try program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
         } else blk: {
-            const active = bound.bindingFor(program, slot.local) orelse slot.local;
+            const active = (try bound.bindingFor(program, slot.local)) orelse slot.local;
             break :blk try program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
         };
         operands[index] = .{ .id = id, .value = value };
@@ -1054,19 +1073,26 @@ fn sortCaptureSlots(program: *const Ast.Program, items: []Ast.TypedLocal) void {
 
 /// Find the operand value supplied for `id` among explicit pre-lift capture
 /// operands, keyed by the CaptureId of each operand's local.
-fn explicitCaptureValueForId(program: *const Ast.Program, explicit: anytype, id: checked.CaptureId) ?Ast.ExprId {
+fn explicitCaptureValueForSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) ?Ast.ExprId {
+    const runtime_id = slotCaptureId(program, slot);
+    const checked_id = program.getLocal(slot.local).checked_capture_id;
+    var checked_match: ?Ast.ExprId = null;
     for (0..explicit.len) |index| {
         const capture = GuardedList.at(explicit, index);
-        const capture_id = program.getLocal(capture.local).capture_id orelse
+        const local = program.getLocal(capture.local);
+        const capture_id = local.capture_id orelse
             Common.invariant("pre-lift capture operand local had no CaptureId");
-        if (capture_id == id) return capture.value;
+        if (capture_id == runtime_id) return capture.value;
+        if (checked_id != null and local.checked_capture_id == checked_id and checked_match == null) {
+            checked_match = capture.value;
+        }
     }
-    return null;
+    return checked_match;
 }
 
-/// Whether an explicit pre-lift capture operand supplies the given CaptureId.
-fn explicitProvidesCaptureId(program: *const Ast.Program, explicit: anytype, id: checked.CaptureId) bool {
-    return explicitCaptureValueForId(program, explicit, id) != null;
+/// Whether an explicit pre-lift capture operand supplies the target slot.
+fn explicitProvidesCaptureSlot(program: *const Ast.Program, explicit: anytype, slot: Ast.TypedLocal) bool {
+    return explicitCaptureValueForSlot(program, explicit, slot) != null;
 }
 
 const BoundBinder = struct {
@@ -1093,19 +1119,26 @@ const BoundSet = struct {
         self.locals.deinit();
     }
 
-    fn contains(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) bool {
-        return self.bindingFor(input, local) != null;
+    fn contains(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!bool {
+        return (try self.bindingFor(input, local)) != null;
     }
 
     fn binderIdentity(input: *const Ast.Program, local: Mono.LocalId) ?checked.PatternBinderId {
         return input.getLocal(local).binder;
     }
 
-    fn bindingFor(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) ?Mono.LocalId {
+    fn bindingFor(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!?Mono.LocalId {
         if (self.locals.contains(local)) return local;
         const identity = binderIdentity(input, local) orelse return null;
-        const entry = self.binder_heads.get(identity) orelse return null;
-        return self.binder_entries.items[entry].local;
+        const wanted_ty = input.getLocal(local).ty;
+        var maybe_entry = self.binder_heads.get(identity);
+        while (maybe_entry) |entry_index| {
+            const entry = self.binder_entries.items[entry_index];
+            const candidate_ty = input.getLocal(entry.local).ty;
+            if (try input.types.typeEql(&input.names, wanted_ty, candidate_ty)) return entry.local;
+            maybe_entry = entry.previous;
+        }
+        return null;
     }
 
     fn put(self: *BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!void {
@@ -1196,7 +1229,7 @@ const CaptureSet = struct {
     }
 
     fn addIfFree(self: *CaptureSet, local: Mono.LocalId, bound: *const BoundSet) Allocator.Error!void {
-        if (bound.contains(self.program, local) or self.seen.contains(local)) return;
+        if (try bound.contains(self.program, local) or self.seen.contains(local)) return;
         try self.seen.put(local, {});
         // Every capture slot needs a stable CaptureId. Binder-backed and
         // compile-time-synthesized locals already carry one; a local that is
@@ -1215,6 +1248,7 @@ const CaptureSet = struct {
         const expr = input.getExpr(expr_id);
         switch (expr.data) {
             .local => |local| try self.addIfFree(local, bound),
+            .@"unreachable",
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -1353,6 +1387,7 @@ const CaptureSet = struct {
                     self.program.setExprData(expr_id, .{ .call_proc = .{
                         .callee = call.callee,
                         .args = call.args,
+                        .iterator_procedure = call.iterator_procedure,
                         .captures = finalized,
                         .is_cold = call.is_cold,
                     } });
@@ -1478,8 +1513,7 @@ const CaptureSet = struct {
         const raw = @intFromEnum(fn_id);
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
         for (self.fn_captures[raw].items) |capture| {
-            const id = slotCaptureId(self.program, capture);
-            if (explicitProvidesCaptureId(self.program, explicit, id)) continue;
+            if (explicitProvidesCaptureSlot(self.program, explicit, capture)) continue;
             try self.addIfFree(capture.local, caller_bound);
         }
     }
@@ -1697,14 +1731,20 @@ const CaptureDependencyGraph = struct {
         return id;
     }
 
-    fn scopeBindingFor(self: *const CaptureDependencyGraph, scope: ?CaptureScopeId, local: Ast.LocalId) ?Ast.LocalId {
-        const binder = self.program.getLocal(local).binder;
+    fn scopeBindingFor(self: *const CaptureDependencyGraph, scope: ?CaptureScopeId, local: Ast.LocalId) Allocator.Error!?Ast.LocalId {
+        const local_data = self.program.getLocal(local);
+        const binder = local_data.binder;
         var current = scope;
         while (current) |id| {
             const entry = self.scopes.items[@intFromEnum(id)];
             if (entry.local == local) return entry.local;
             if (binder) |identity| {
-                if (self.program.getLocal(entry.local).binder == identity) return entry.local;
+                const candidate = self.program.getLocal(entry.local);
+                if (candidate.binder == identity and
+                    try self.program.types.typeEql(&self.program.names, local_data.ty, candidate.ty))
+                {
+                    return entry.local;
+                }
             }
             current = entry.parent;
         }
@@ -1820,19 +1860,32 @@ const CaptureDependencyGraph = struct {
         return null;
     }
 
-    fn edgeSupply(self: *const CaptureDependencyGraph, edge_id: CaptureEdgeId, id: checked.CaptureId) ?CaptureSupply {
+    fn edgeSupply(self: *const CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) ?CaptureSupply {
         const edge = self.edges.items[@intFromEnum(edge_id)];
-        return findSupply(edge.exact_supplies.items, id) orelse findSupply(edge.declared_supplies.items, id);
+        const runtime_id = slotCaptureId(self.program, capture);
+        if (findSupply(edge.exact_supplies.items, runtime_id)) |supply| return supply;
+        if (findSupply(edge.declared_supplies.items, runtime_id)) |supply| return supply;
+        // Producer-authored pre-lift operands declare the slot's checked
+        // capture identity; operands rebuilt after lifting declare the
+        // runtime slot id checked above. Both are exact keys for their
+        // authoring convention.
+        const checked_id = switch (edge.site) {
+            .pre_lift, .call_proc => self.program.getLocal(capture.local).checked_capture_id,
+            .fn_ref => null,
+        };
+        if (checked_id) |id| {
+            if (findSupply(edge.declared_supplies.items, id)) |supply| return supply;
+        }
+        return null;
     }
 
     fn applyCaptureToEdge(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, capture: Ast.TypedLocal) Allocator.Error!void {
-        const id = slotCaptureId(self.program, capture);
-        if (self.edgeSupply(edge_id, id)) |supply| {
+        if (self.edgeSupply(edge_id, capture)) |supply| {
             try self.queueNode(supply.node);
             return;
         }
         const edge = self.edges.items[@intFromEnum(edge_id)];
-        if (self.scopeBindingFor(edge.scope, capture.local) == null) {
+        if (try self.scopeBindingFor(edge.scope, capture.local) == null) {
             try self.addCaptureUpdate(edge.owner, capture);
         }
     }
@@ -1864,17 +1917,17 @@ const CaptureDependencyGraph = struct {
     fn resolvedOperandValue(self: *CaptureDependencyGraph, edge_id: CaptureEdgeId, slot: Ast.TypedLocal) Allocator.Error!Ast.ExprId {
         const edge = self.edges.items[@intFromEnum(edge_id)];
         const id = slotCaptureId(self.program, slot);
-        if (self.edgeSupply(edge_id, id)) |supply| {
+        if (self.edgeSupply(edge_id, slot)) |supply| {
             const candidate_local = switch (self.program.getExpr(supply.value).data) {
                 .local => |local| local,
                 else => return supply.value,
             };
             if (self.program.getLocal(candidate_local).capture_id != id) return supply.value;
-            const active = self.scopeBindingFor(edge.scope, candidate_local) orelse return supply.value;
+            const active = (try self.scopeBindingFor(edge.scope, candidate_local)) orelse return supply.value;
             if (active == candidate_local) return supply.value;
             return try self.program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
         }
-        const active = self.scopeBindingFor(edge.scope, slot.local) orelse slot.local;
+        const active = (try self.scopeBindingFor(edge.scope, slot.local)) orelse slot.local;
         return try self.program.addExpr(.{ .ty = slot.ty, .data = .{ .local = active } });
     }
 
@@ -1932,6 +1985,7 @@ const CaptureDependencyGraph = struct {
                     self.program.setExprData(expr_id, .{ .call_proc = .{
                         .callee = call.callee,
                         .args = call.args,
+                        .iterator_procedure = call.iterator_procedure,
                         .captures = try self.finalizedSpan(edge_id, expr_id),
                         .is_cold = call.is_cold,
                     } });
@@ -2032,7 +2086,7 @@ const CaptureGraphBuilder = struct {
     }
 
     fn addDirect(self: *CaptureGraphBuilder, node_id: CaptureNodeId, local: Ast.LocalId) Allocator.Error!void {
-        if (self.bound.contains(self.graph.program, local)) return;
+        if (try self.bound.contains(self.graph.program, local)) return;
         _ = self.graph.program.ensureLiftCaptureId(local);
         const local_data = self.graph.program.getLocal(local);
         try self.graph.nodes.items[@intFromEnum(node_id)].direct.append(self.graph.allocator, .{
@@ -2092,7 +2146,9 @@ const CaptureGraphBuilder = struct {
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(operand.value, child);
             const supply = CaptureSupply{ .id = operand.id, .value = operand.value, .node = child };
-            try declared.append(self.graph.allocator, supply);
+            if (!hasSupplyId(declared.items, operand.id)) {
+                try declared.append(self.graph.allocator, supply);
+            }
             switch (self.graph.program.getExpr(operand.value).data) {
                 .local => |local| if (self.graph.program.getLocal(local).capture_id) |id| {
                     if (!hasSupplyId(exact.items, id)) {
@@ -2113,13 +2169,23 @@ const CaptureGraphBuilder = struct {
         const captures = self.graph.program.fnDefCaptureSpan(span);
         for (0..captures.len) |index| {
             const capture = GuardedList.at(captures, index);
-            const id = self.graph.program.getLocal(capture.local).capture_id orelse
+            const capture_local = self.graph.program.getLocal(capture.local);
+            const runtime_id = capture_local.capture_id orelse
                 Common.invariant("pre-lift explicit capture local had no CaptureId");
+            const declared_id = capture_local.checked_capture_id orelse runtime_id;
             const child = try self.graph.addNode(self.graph.nodes.items[@intFromEnum(parent)].owner);
             try self.collectExpr(capture.value, child);
-            const supply = CaptureSupply{ .id = id, .value = capture.value, .node = child };
-            try declared.append(self.graph.allocator, supply);
-            if (!hasSupplyId(exact.items, id)) try exact.append(self.graph.allocator, supply);
+            if (!hasSupplyId(declared.items, declared_id)) {
+                try declared.append(self.graph.allocator, .{ .id = declared_id, .value = capture.value, .node = child });
+            }
+            switch (self.graph.program.getExpr(capture.value).data) {
+                .local => |local| if (self.graph.program.getLocal(local).capture_id) |value_id| {
+                    if (!hasSupplyId(exact.items, value_id)) {
+                        try exact.append(self.graph.allocator, .{ .id = value_id, .value = capture.value, .node = child });
+                    }
+                },
+                else => {},
+            }
         }
         try self.finishEdge(parent, target, .pre_lift, &exact, &declared);
     }
@@ -2157,6 +2223,7 @@ const CaptureGraphBuilder = struct {
         switch (expr.data) {
             .local => |local| try self.addDirect(node, local),
             .unit,
+            .@"unreachable",
             .int_lit,
             .frac_f32_lit,
             .frac_f64_lit,
@@ -2354,6 +2421,8 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -2364,6 +2433,7 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches
@@ -2427,6 +2497,8 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -2437,6 +2509,7 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches
@@ -2497,6 +2570,8 @@ test "capture finalization supplies the caller's active binder local" {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // imported_fns
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -2507,6 +2582,7 @@ test "capture finalization supplies the caller's active binder local" {
         .empty, // stmt_ids
         .empty, // field_exprs
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches

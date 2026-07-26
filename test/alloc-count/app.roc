@@ -31,6 +31,7 @@ run! = |input| {
 	check_large_to_utf8_allocs!(large)
 	check_drop_allocs!(large)
 	check_rejected_drop_allocs!(multibyte)
+	check_json_parse_allocs!(input)
 
     "sum: ${$sum.to_str()}, loop allocations: ${loop_allocs.to_str()}"
 }
@@ -68,6 +69,45 @@ check_drop_allocs! = |str| {
 	last_allocs = Host.alloc_count!() - last_before
 	expect last_allocs == 0
 	expect last == Ok(Str.drop_suffix(str, "t"))
+	{}
+}
+
+# Parsing a small (SSO) JSON document whose string fields are clean (no escapes)
+# performs zero allocations, whether the string field is decoded or skipped: the
+# scanner walks the Str in place and clean bodies decode as zero-copy slices.
+check_json_parse_allocs! : Str => {}
+check_json_parse_allocs! = |input| {
+	# first two bytes of the hosted input, so the document is runtime data
+	two = match Str.drop_last_bytes(input, Str.count_utf8_bytes(input) - 2) {
+		Ok(s) => s
+		Err(_) => {
+			crash "alloc-count harness invariant violated: input shorter than 2 bytes"
+		}
+	}
+	doc = Str.concat("{\"s\":\"", Str.concat(two, "\",\"a\":7}"))
+
+	decode_before = Host.alloc_count!()
+	decoded : Try({ s : Str, a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	decoded = Json.parse(doc)
+	decode_allocs = Host.alloc_count!() - decode_before
+	expect decode_allocs == 0
+	expect decoded == Ok({ s: two, a: 7 })
+
+	skip_before = Host.alloc_count!()
+	skipped : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	skipped = Json.parse(doc)
+	skip_allocs = Host.alloc_count!() - skip_before
+	expect skip_allocs == 0
+	expect skipped == Ok({ a: 7 })
+
+	# a skipped numeric field: scalar validation must not allocate either
+	num_doc = Str.concat("{\"z\":", Str.concat(Str.repeat("7", 1 + Str.count_utf8_bytes(input) % 3), ",\"a\":1}"))
+	skip_num_before = Host.alloc_count!()
+	skipped_num : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	skipped_num = Json.parse(num_doc)
+	skip_num_allocs = Host.alloc_count!() - skip_num_before
+	expect skip_num_allocs == 0
+	expect skipped_num == Ok({ a: 1 })
 	{}
 }
 

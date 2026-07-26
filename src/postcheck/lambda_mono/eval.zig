@@ -310,6 +310,7 @@ pub const Evaluator = struct {
                 return frame.get(local_id) orelse self.unsupported_("unbound local");
             },
             .unit => return .unit,
+            .@"unreachable" => return self.unsupported_("unreachable marker escaped its terminated block-final position"),
             .int_lit => |int_value| {
                 const prim = self.primitiveOf(expr.ty) orelse return self.unsupported_("int literal without primitive type");
                 const raw: i128 = switch (int_value.kind) {
@@ -442,14 +443,17 @@ pub const Evaluator = struct {
         const type_fields = self.program.types.fieldSpan(field_types);
         const out = self.alloc().alloc(Value, type_fields.len) catch return error.OutOfMemory;
         const field_exprs = self.program.fieldExprSpan(span);
-        // Evaluate in expression span order (observable through dbg), then place
-        // each value into the record type's field-span storage slot.
-        for (0..field_exprs.len) |i| {
-            const field_expr = GuardedList.at(field_exprs, i);
-            const value = try self.evalExpr(frame, field_expr.value);
-            const index = self.recordFieldIndex(type_fields, field_expr.name) orelse
-                return self.unsupported_("record field not found in record type");
-            out[index] = value;
+        // Records evaluate in type-store field order, matching solved-to-LIR
+        // lowering; source field order does not affect Roc evaluation.
+        for (0..type_fields.len) |i| {
+            const type_field = GuardedList.at(type_fields, i);
+            const value_expr = for (0..field_exprs.len) |expr_index| {
+                const field_expr = GuardedList.at(field_exprs, expr_index);
+                if (self.program.names.recordFieldLabelTextEql(type_field.name, field_expr.name)) {
+                    break field_expr.value;
+                }
+            } else return self.unsupported_("record field not found in record expression");
+            out[i] = try self.evalExpr(frame, value_expr);
         }
         return .{ .record = out };
     }

@@ -10,6 +10,8 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const roc_target = @import("roc_target");
+const object = @import("mod.zig");
+const DebugReloc = object.DebugReloc;
 
 /// Mach-O constants
 const MachO = struct {
@@ -225,13 +227,12 @@ pub const MachOWriter = struct {
     text_relocs: std.ArrayList(TextReloc),
     rodata_relocs: std.ArrayList(DataReloc),
 
-    // DWARF debug sections; address fields are stored as object-space
-    // addresses with section-based UNSIGNED relocations against __text.
+    // DWARF debug sections plus their explicit cross-section relocations.
     debug_line: std.ArrayList(u8),
     debug_abbrev: std.ArrayList(u8),
     debug_info: std.ArrayList(u8),
-    debug_line_relocs: std.ArrayList(u32),
-    debug_info_relocs: std.ArrayList(u32),
+    debug_line_relocs: std.ArrayList(DebugReloc),
+    debug_info_relocs: std.ArrayList(DebugReloc),
 
     // String table
     strtab: std.ArrayList(u8),
@@ -295,31 +296,21 @@ pub const MachOWriter = struct {
         self.strtab.deinit(self.allocator);
     }
 
-    /// Set the DWARF debug section contents. Each relocation is an offset of
-    /// an 8-byte address field whose stored value is the object-space text
-    /// address (the addend), fixed up via a section-based UNSIGNED
-    /// relocation against __text.
+    /// Set the DWARF debug section contents and their explicit cross-section
+    /// relocations.
     pub fn setDebugSections(
         self: *Self,
         debug_line: []const u8,
         debug_abbrev: []const u8,
         debug_info: []const u8,
-        line_relocs: []const @import("mod.zig").DebugReloc,
-        info_relocs: []const @import("mod.zig").DebugReloc,
+        line_relocs: []const DebugReloc,
+        info_relocs: []const DebugReloc,
     ) Allocator.Error!void {
         try self.debug_line.appendSlice(self.allocator, debug_line);
         try self.debug_abbrev.appendSlice(self.allocator, debug_abbrev);
         try self.debug_info.appendSlice(self.allocator, debug_info);
-        // __text has address zero in the object, so the stored object-space
-        // address equals the text offset itself.
-        for (line_relocs) |rel| {
-            std.mem.writeInt(u64, self.debug_line.items[rel.section_offset..][0..8], rel.addend, .little);
-            try self.debug_line_relocs.append(self.allocator, rel.section_offset);
-        }
-        for (info_relocs) |rel| {
-            std.mem.writeInt(u64, self.debug_info.items[rel.section_offset..][0..8], rel.addend, .little);
-            try self.debug_info_relocs.append(self.allocator, rel.section_offset);
-        }
+        try self.debug_line_relocs.appendSlice(self.allocator, line_relocs);
+        try self.debug_info_relocs.appendSlice(self.allocator, info_relocs);
     }
 
     /// Set code section contents
@@ -601,6 +592,18 @@ pub const MachOWriter = struct {
         var dwarf_segname: [16]u8 = std.mem.zeroes([16]u8);
         @memcpy(dwarf_segname[0..7], "__DWARF");
         const debug_addr_base: u64 = @as(u64, text_size) + rodata_size;
+        applyDebugRelocations(
+            self.debug_line.items,
+            self.debug_line_relocs.items,
+            debug_addr_base,
+            debug_line_size,
+        );
+        applyDebugRelocations(
+            self.debug_info.items,
+            self.debug_info_relocs.items,
+            debug_addr_base,
+            debug_line_size,
+        );
 
         var dbg_line_name: [16]u8 = std.mem.zeroes([16]u8);
         @memcpy(dbg_line_name[0..12], "__debug_line");
@@ -747,12 +750,26 @@ pub const MachOWriter = struct {
             .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
             .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
         };
-        for (self.debug_line_relocs.items) |offset| {
-            const reloc = RelocationInfo.init(offset, 1, false, 3, false, unsigned_reloc_type);
+        for (self.debug_line_relocs.items) |rel| {
+            const reloc = RelocationInfo.init(
+                rel.section_offset,
+                debugTargetOrdinal(rel.target),
+                false,
+                debugRelocLength(rel.width),
+                false,
+                unsigned_reloc_type,
+            );
             try output.appendSlice(self.allocator, std.mem.asBytes(&reloc));
         }
-        for (self.debug_info_relocs.items) |offset| {
-            const reloc = RelocationInfo.init(offset, 1, false, 3, false, unsigned_reloc_type);
+        for (self.debug_info_relocs.items) |rel| {
+            const reloc = RelocationInfo.init(
+                rel.section_offset,
+                debugTargetOrdinal(rel.target),
+                false,
+                debugRelocLength(rel.width),
+                false,
+                unsigned_reloc_type,
+            );
             try output.appendSlice(self.allocator, std.mem.asBytes(&reloc));
         }
 
@@ -842,6 +859,42 @@ pub const MachOWriter = struct {
         const base = section_addr + symbol.offset;
         return @as(i64, @intCast(base)) + addend;
     }
+
+    fn applyDebugRelocations(
+        section_data: []u8,
+        relocs: []const DebugReloc,
+        debug_addr_base: u64,
+        debug_line_size: u64,
+    ) void {
+        for (relocs) |rel| {
+            const target_addr: u64 = switch (rel.target) {
+                .text => 0,
+                .debug_line => debug_addr_base,
+                .debug_abbrev => debug_addr_base + debug_line_size,
+            };
+            const value = target_addr + rel.addend;
+            const offset: usize = rel.section_offset;
+            switch (rel.width) {
+                .four => std.mem.writeInt(u32, section_data[offset..][0..4], @intCast(value), .little),
+                .eight => std.mem.writeInt(u64, section_data[offset..][0..8], value, .little),
+            }
+        }
+    }
+
+    fn debugTargetOrdinal(target: object.DebugRelocTarget) u24 {
+        return switch (target) {
+            .text => 1,
+            .debug_line => 3,
+            .debug_abbrev => 4,
+        };
+    }
+
+    fn debugRelocLength(width: object.DebugRelocWidth) u2 {
+        return switch (width) {
+            .four => 2,
+            .eight => 3,
+        };
+    }
 };
 
 // Tests
@@ -888,4 +941,36 @@ test "macho with external call" {
 
     const magic = std.mem.readInt(u32, output.items[0..4], .little);
     try std.testing.expectEqual(MachO.MH_MAGIC_64, magic);
+}
+
+test "DWARF relocations encode object-space target addresses" {
+    var section_data = std.mem.zeroes([20]u8);
+    const relocs = [_]DebugReloc{
+        .{
+            .section_offset = 0,
+            .target = .debug_abbrev,
+            .width = .four,
+            .addend = 3,
+        },
+        .{
+            .section_offset = 4,
+            .target = .debug_line,
+            .width = .four,
+            .addend = 5,
+        },
+        .{
+            .section_offset = 12,
+            .target = .text,
+            .width = .eight,
+            .addend = 7,
+        },
+    };
+
+    MachOWriter.applyDebugRelocations(&section_data, &relocs, 100, 20);
+
+    try std.testing.expectEqual(@as(u32, 123), std.mem.readInt(u32, section_data[0..4], .little));
+    try std.testing.expectEqual(@as(u32, 105), std.mem.readInt(u32, section_data[4..8], .little));
+    try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, section_data[12..20], .little));
+    try std.testing.expectEqual(@as(u24, 4), MachOWriter.debugTargetOrdinal(.debug_abbrev));
+    try std.testing.expectEqual(@as(u2, 2), MachOWriter.debugRelocLength(.four));
 }

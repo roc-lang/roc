@@ -552,7 +552,7 @@ test "import validation - exposing a type module's main type by name is not a re
     }
 }
 
-test "package-qualified import identity survives a lookup before the import statement" {
+test "aliased package-qualified import resolves before the import statement" {
     var gpa_state = std.heap.DebugAllocator(.{ .safety = true, .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
     defer std.debug.assert(build_options.debugGpaOk(gpa_state.deinit()));
     const allocator = gpa_state.allocator();
@@ -583,10 +583,10 @@ test "package-qualified import identity survives a lookup before the import stat
 
     const app_source =
         \\App := [].{
-        \\    wrap = |value| Lib.make(value)
+        \\    wrap = |value| L.make(value)
         \\}
         \\
-        \\import pf.Lib
+        \\import pf.Lib as L
     ;
     var app_env = try ModuleEnv.init(allocator, app_source);
     defer app_env.deinit();

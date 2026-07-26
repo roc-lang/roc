@@ -53,7 +53,11 @@ pub const CaptureField = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
     capture_id: ?check.CheckedModule.CaptureId = null,
+    checked_capture_id: ?check.CheckedModule.CaptureId = null,
+    /// Type the function body observes when it reads this capture.
     ty: TypeId,
+    /// Type stored in the capture record field.
+    storage_ty: TypeId,
 };
 
 /// Tag-union variant type entry.
@@ -90,6 +94,7 @@ pub const Content = union(enum) {
         backing: ?struct {
             ty: TypeId,
             use: MonoType.BackingUse,
+            authority: MonoType.BackingAuthority = .checked_public,
         } = null,
         /// Declared field order for a nominal/opaque record backing; empty
         /// otherwise.
@@ -281,6 +286,7 @@ pub const Store = struct {
                 writeBytes(hasher, @tagName(named.def.iterator_representation));
                 writeBytes(hasher, @tagName(named.def.iterator_kind));
                 writeU32(hasher, named.def.iterator_depth);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
                 writeBytes(hasher, @tagName(named.kind));
                 if (named.builtin_owner) |owner| {
                     writeBytes(hasher, "builtin");
@@ -308,6 +314,7 @@ pub const Store = struct {
                     const field = GuardedList.at(field_slice, index);
                     writeU32(hasher, @intFromEnum(field.symbol));
                     self.writeTypeDigest(name_store, hasher, field.ty);
+                    self.writeTypeDigest(name_store, hasher, field.storage_ty);
                 }
             },
             .tuple => |items| {
@@ -408,6 +415,27 @@ fn writeOptionalDigest(hasher: *std.crypto.hash.sha2.Sha256, value: ?names.TypeD
     }
 }
 
+fn writeIteratorTopology(
+    hasher: *std.crypto.hash.sha2.Sha256,
+    name_store: *const names.NameStore,
+    topology: ?MonoType.IteratorTopology,
+) void {
+    const value = topology orelse {
+        writeBytes(hasher, "no-iterator-topology");
+        return;
+    };
+    writeBytes(hasher, "iterator-topology");
+    writeBytes(hasher, name_store.recordFieldLabelText(value.len_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.step_field));
+    writeBytes(hasher, name_store.tagLabelText(value.known_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.unknown_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.done_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.one_tag));
+    writeBytes(hasher, name_store.tagLabelText(value.skip_tag));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.item_field));
+    writeBytes(hasher, name_store.recordFieldLabelText(value.rest_field));
+}
+
 fn writeU32(hasher: *std.crypto.hash.sha2.Sha256, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
@@ -447,7 +475,7 @@ test "lambda mono empty spans use shared empty descriptor" {
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
     const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit }});
-    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit }});
+    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit, .storage_ty = unit }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(3), .checked_name = @enumFromInt(3), .payloads = nonempty_span }});
     const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .source = @enumFromInt(4), .target = @enumFromInt(40), .capture_ty = unit }});
     try std.testing.expect(nonempty_span.len == 1);
