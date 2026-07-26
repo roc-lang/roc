@@ -9248,13 +9248,20 @@ pub const CheckedBodyStore = struct {
         const expr_inspect_evaluation_may_be_elided = try allocator.alloc(bool, exprs.items.len);
         errdefer allocator.free(expr_inspect_evaluation_may_be_elided);
         @memset(expr_inspect_evaluation_may_be_elided, false);
+        const dispatch_crashes = try allocator.alloc(bool, exprs.items.len);
+        defer allocator.free(dispatch_crashes);
+        @memset(dispatch_crashes, false);
+        const dispatch_facts = DivergenceDispatchFacts{
+            .operands = dispatch_operands,
+            .crashes = dispatch_crashes,
+        };
 
-        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, dispatch_operands, expr_diverges, statement_diverges, .run);
+        try publishCheckedBodyDivergence(allocator, exprs.items, statements.items, dispatch_facts, expr_diverges, statement_diverges, .run);
         try publishCheckedBodyDivergence(
             allocator,
             exprs.items,
             statements.items,
-            dispatch_operands,
+            dispatch_facts,
             expr_diverges_without_inline_expects,
             statement_diverges_without_inline_expects,
             .omit,
@@ -9342,6 +9349,28 @@ pub const CheckedBodyStore = struct {
             .string_bytes = self.string_bytes.items,
             .string_ranges = self.string_ranges.items,
         };
+    }
+
+    /// Republish runtime divergence after static dispatch resolutions are
+    /// final. A checked-error or unreachable dispatch is explicit bottom, so
+    /// its divergence must propagate through the same producer-owned expression
+    /// dependencies as an ordinary `runtime_error` before Monotype consumes the
+    /// checked body.
+    fn publishResolvedDispatchDivergence(
+        self: *CheckedBodyStore,
+        allocator: Allocator,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+    ) Allocator.Error!void {
+        var divergence = try dispatchDivergenceForEvidence(allocator, self.view(), plans, &.{});
+        defer divergence.deinit(allocator);
+        for (self.stored_exprs.items, divergence.exprs, divergence.exprs_without_inline_expects) |*stored, run, omit| {
+            stored.diverges = run;
+            stored.diverges_without_inline_expects = omit;
+        }
+        for (self.stored_statements.items, divergence.statements, divergence.statements_without_inline_expects) |*stored, run, omit| {
+            stored.diverges = run;
+            stored.diverges_without_inline_expects = omit;
+        }
     }
 
     // --- Shared flat pool accessors (used by materialize functions). ---
@@ -10166,11 +10195,42 @@ fn checkedExprEvaluationMayBeElidedForInspect(
     return result;
 }
 
+const DivergenceDispatchFacts = struct {
+    operands: []const []const CheckedExprId,
+    crashes: []const bool,
+};
+
+/// Runtime divergence for one checked body under a concrete dispatch-evidence
+/// vector. The checked artifact owns dependency propagation; specialization
+/// supplies only the exact dispatch expressions whose evidence resolves to a
+/// checked error or unreachable value.
+pub const DispatchDivergence = struct {
+    exprs: []bool,
+    statements: []bool,
+    exprs_without_inline_expects: []bool,
+    statements_without_inline_expects: []bool,
+
+    pub fn deinit(self: *DispatchDivergence, allocator: Allocator) void {
+        allocator.free(self.exprs);
+        allocator.free(self.statements);
+        allocator.free(self.exprs_without_inline_expects);
+        allocator.free(self.statements_without_inline_expects);
+        self.* = undefined;
+    }
+};
+
+fn dispatchResolutionCrashes(resolution: static_dispatch.StaticDispatchResolution) bool {
+    return switch (resolution) {
+        .checked_error, .unreachable_dispatch => true,
+        .direct, .constraint, .structural => false,
+    };
+}
+
 fn publishCheckedBodyDivergence(
     allocator: Allocator,
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
-    dispatch_operands: []const []const CheckedExprId,
+    dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
     mode: InlineExpectMode,
@@ -10187,17 +10247,128 @@ fn publishCheckedBodyDivergence(
     @memset(statement_states, .fresh);
 
     for (exprs) |*expr| {
-        expr_diverges[@intFromEnum(expr.id)] = checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, expr.id, expr_states, statement_states, mode);
+        expr_diverges[@intFromEnum(expr.id)] = checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, expr.id, expr_states, statement_states, mode);
     }
     for (statements) |*statement| {
-        statement_diverges[@intFromEnum(statement.id)] = checkedStatementDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, statement.id, expr_states, statement_states, mode);
+        statement_diverges[@intFromEnum(statement.id)] = checkedStatementDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, statement.id, expr_states, statement_states, mode);
     }
+}
+
+/// Compute checked-body divergence after static dispatch plans are attached.
+/// `evidence_crashes` is either empty or one bool per checked expression; true
+/// means the specialization's explicit evidence resolves that dispatch to a
+/// checked error or unreachable value. Plan-level rejected resolutions are
+/// always included as well.
+pub fn dispatchDivergenceForEvidence(
+    allocator: Allocator,
+    bodies: CheckedBodyStoreView,
+    plans: *const static_dispatch.StaticDispatchPlanTable,
+    evidence_crashes: []const bool,
+) Allocator.Error!DispatchDivergence {
+    const expr_count = bodies.exprCount();
+    const statement_count = bodies.statementCount();
+    if (evidence_crashes.len != 0 and evidence_crashes.len != expr_count) {
+        checkedArtifactInvariant("checked dispatch evidence crash column length mismatch", .{});
+    }
+
+    const exprs = try allocator.alloc(CheckedExpr, expr_count);
+    defer allocator.free(exprs);
+    for (exprs, 0..) |*expr, raw| expr.* = bodies.expr(@enumFromInt(raw));
+
+    const statements = try allocator.alloc(CheckedStatement, statement_count);
+    defer allocator.free(statements);
+    for (statements, 0..) |*statement, raw| statement.* = bodies.statement(@enumFromInt(raw));
+
+    const dispatch_operands = try allocator.alloc([]const CheckedExprId, expr_count);
+    for (dispatch_operands) |*operands| operands.* = &.{};
+    defer {
+        for (dispatch_operands) |operands| if (operands.len > 0) allocator.free(operands);
+        allocator.free(dispatch_operands);
+    }
+    const dispatch_crashes = try allocator.alloc(bool, expr_count);
+    defer allocator.free(dispatch_crashes);
+    if (evidence_crashes.len == 0) {
+        @memset(dispatch_crashes, false);
+    } else {
+        @memcpy(dispatch_crashes, evidence_crashes);
+    }
+
+    for (plans.plans) |plan| {
+        const expr_raw = @intFromEnum(plan.expr);
+        if (expr_raw >= expr_count) {
+            checkedArtifactInvariant("static dispatch plan referenced a missing checked expression", .{});
+        }
+        dispatch_crashes[expr_raw] = dispatch_crashes[expr_raw] or dispatchResolutionCrashes(plan.resolution);
+
+        var checked_operand_count: usize = 0;
+        for (plan.argsSlice(plans)) |operand| switch (operand) {
+            .checked_expr => checked_operand_count += 1,
+            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
+        };
+        if (checked_operand_count == 0) continue;
+        if (dispatch_operands[expr_raw].len != 0) {
+            checkedArtifactInvariant("checked expression had more than one static dispatch operand vector", .{});
+        }
+        const operands = try allocator.alloc(CheckedExprId, checked_operand_count);
+        var operand_index: usize = 0;
+        for (plan.argsSlice(plans)) |operand| switch (operand) {
+            .checked_expr => |expr| {
+                operands[operand_index] = expr;
+                operand_index += 1;
+            },
+            .generated_interpolation_iter, .generated_numeral, .generated_quote => {},
+        };
+        dispatch_operands[expr_raw] = operands;
+    }
+
+    const expr_diverges = try allocator.alloc(bool, expr_count);
+    errdefer allocator.free(expr_diverges);
+    const statement_diverges = try allocator.alloc(bool, statement_count);
+    errdefer allocator.free(statement_diverges);
+    const expr_diverges_without_inline_expects = try allocator.alloc(bool, expr_count);
+    errdefer allocator.free(expr_diverges_without_inline_expects);
+    const statement_diverges_without_inline_expects = try allocator.alloc(bool, statement_count);
+    errdefer allocator.free(statement_diverges_without_inline_expects);
+    const result = DispatchDivergence{
+        .exprs = expr_diverges,
+        .statements = statement_diverges,
+        .exprs_without_inline_expects = expr_diverges_without_inline_expects,
+        .statements_without_inline_expects = statement_diverges_without_inline_expects,
+    };
+    @memset(result.exprs, false);
+    @memset(result.statements, false);
+    @memset(result.exprs_without_inline_expects, false);
+    @memset(result.statements_without_inline_expects, false);
+
+    const dispatch_facts = DivergenceDispatchFacts{
+        .operands = dispatch_operands,
+        .crashes = dispatch_crashes,
+    };
+    try publishCheckedBodyDivergence(
+        allocator,
+        exprs,
+        statements,
+        dispatch_facts,
+        result.exprs,
+        result.statements,
+        .run,
+    );
+    try publishCheckedBodyDivergence(
+        allocator,
+        exprs,
+        statements,
+        dispatch_facts,
+        result.exprs_without_inline_expects,
+        result.statements_without_inline_expects,
+        .omit,
+    );
+    return result;
 }
 
 fn checkedExprDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
-    dispatch_operands: []const []const CheckedExprId,
+    dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
     expr_id: CheckedExprId,
@@ -10212,8 +10383,16 @@ fn checkedExprDiverges(
         .active => checkedArtifactInvariant("checked expression divergence contains a cycle", .{}),
         .fresh => {},
     }
+    if (index >= dispatch_facts.crashes.len) {
+        checkedArtifactInvariant("checked divergence referenced missing dispatch crash facts", .{});
+    }
+    if (dispatch_facts.crashes[index]) {
+        expr_diverges[index] = true;
+        expr_states[index] = .done;
+        return true;
+    }
     expr_states[index] = .active;
-    const result = checkedExprDataDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, exprs[index], expr_states, statement_states, mode);
+    const result = checkedExprDataDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, exprs[index], expr_states, statement_states, mode);
     expr_diverges[index] = result;
     expr_states[index] = .done;
     return result;
@@ -10222,7 +10401,7 @@ fn checkedExprDiverges(
 fn checkedStatementDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
-    dispatch_operands: []const []const CheckedExprId,
+    dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
     statement_id: CheckedStatementId,
@@ -10238,7 +10417,7 @@ fn checkedStatementDiverges(
         .fresh => {},
     }
     statement_states[index] = .active;
-    const result = checkedStatementDataDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, statements[index].data, expr_states, statement_states, mode);
+    const result = checkedStatementDataDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, statements[index].data, expr_states, statement_states, mode);
     statement_diverges[index] = result;
     statement_states[index] = .done;
     return result;
@@ -10247,7 +10426,7 @@ fn checkedStatementDiverges(
 fn checkedExprDataDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
-    dispatch_operands: []const []const CheckedExprId,
+    dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
     expr: CheckedExpr,
@@ -10262,83 +10441,86 @@ fn checkedExprDataDiverges(
         .return_,
         .runtime_error,
         => true,
-        .str => |items| checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
-        .list => |items| checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
-        .tuple => |items| checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
+        .str => |items| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
+        .list => |items| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
+        .tuple => |items| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, items, expr_states, statement_states, mode),
         .match_ => |match| blk: {
-            if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, match.cond, expr_states, statement_states, mode)) break :blk true;
+            if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, match.cond, expr_states, statement_states, mode)) break :blk true;
             if (match.branches.len == 0) break :blk false;
             for (match.branches) |branch| {
                 if (branch.guard != null) break :blk false;
-                if (!checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, branch.value, expr_states, statement_states, mode)) break :blk false;
+                if (!checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, branch.value, expr_states, statement_states, mode)) break :blk false;
             }
             break :blk true;
         },
         .if_ => |if_| blk: {
-            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, if_.branches[0].cond, expr_states, statement_states, mode)) {
+            if (if_.branches.len > 0 and checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, if_.branches[0].cond, expr_states, statement_states, mode)) {
                 break :blk true;
             }
             for (if_.branches) |branch| {
-                if (!checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, branch.body, expr_states, statement_states, mode)) break :blk false;
+                if (!checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, branch.body, expr_states, statement_states, mode)) break :blk false;
             }
-            break :blk checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, if_.final_else, expr_states, statement_states, mode);
+            break :blk checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, if_.final_else, expr_states, statement_states, mode);
         },
         .call => |call| blk: {
-            if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, call.func, expr_states, statement_states, mode)) break :blk true;
-            break :blk checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, call.args, expr_states, statement_states, mode);
+            if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, call.func, expr_states, statement_states, mode)) break :blk true;
+            break :blk checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, call.args, expr_states, statement_states, mode);
         },
         .record => |record| blk: {
             if (record.ext) |ext| {
-                if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, ext, expr_states, statement_states, mode)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, ext, expr_states, statement_states, mode)) break :blk true;
             }
             for (record.fields) |field| {
-                if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, field.value, expr_states, statement_states, mode)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, field.value, expr_states, statement_states, mode)) break :blk true;
             }
             break :blk false;
         },
         .block => |block| blk: {
             for (block.statements) |statement| {
-                if (checkedStatementDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, statement, expr_states, statement_states, mode)) break :blk true;
+                if (checkedStatementDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, statement, expr_states, statement_states, mode)) break :blk true;
             }
-            break :blk checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, block.final_expr, expr_states, statement_states, mode);
+            break :blk checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, block.final_expr, expr_states, statement_states, mode);
         },
-        .tag => |tag| checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, tag.args, expr_states, statement_states, mode),
-        .nominal => |nominal| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, nominal.backing_expr, expr_states, statement_states, mode),
+        .tag => |tag| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, tag.args, expr_states, statement_states, mode),
+        .nominal => |nominal| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, nominal.backing_expr, expr_states, statement_states, mode),
         .closure => false,
         .lambda => false,
-        .binop => |binop| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, binop.lhs, expr_states, statement_states, mode) or
-            checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, binop.rhs, expr_states, statement_states, mode),
+        .binop => |binop| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, binop.lhs, expr_states, statement_states, mode) or
+            checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, binop.rhs, expr_states, statement_states, mode),
         .unary_minus,
         .unary_not,
         .dbg,
-        => |child| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, child, expr_states, statement_states, mode),
+        => |child| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, child, expr_states, statement_states, mode),
         .expect => |child| switch (mode) {
-            .run => checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, child, expr_states, statement_states, mode),
+            .run => checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, child, expr_states, statement_states, mode),
             .omit => false,
         },
         .expect_err => true,
-        .field_access => |field| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states, mode),
-        .structural_eq => |eq| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states, mode) or
-            checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states, mode),
-        .structural_hash => |h| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, h.value, expr_states, statement_states, mode) or
-            checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, h.hasher, expr_states, statement_states, mode),
-        .tuple_access => |access| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states, mode),
-        .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
+        .field_access => |field| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, field.receiver, expr_states, statement_states, mode),
+        .structural_eq => |eq| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, eq.lhs, expr_states, statement_states, mode) or
+            checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, eq.rhs, expr_states, statement_states, mode),
+        .structural_hash => |h| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, h.value, expr_states, statement_states, mode) or
+            checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, h.hasher, expr_states, statement_states, mode),
+        .tuple_access => |access| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, access.tuple, expr_states, statement_states, mode),
+        .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
         .hosted_lambda => false,
-        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, run.args, expr_states, statement_states, mode),
+        .run_low_level => |run| checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, run.args, expr_states, statement_states, mode),
         .dispatch_call,
         .method_eq,
         .type_dispatch_call,
         => blk: {
             const raw = @intFromEnum(expr.id);
-            if (raw >= dispatch_operands.len) checkedArtifactInvariant("checked dispatch divergence referenced a missing operand vector", .{});
-            break :blk checkedAnyExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, dispatch_operands[raw], expr_states, statement_states, mode);
+            if (raw >= dispatch_facts.operands.len or raw >= dispatch_facts.crashes.len) {
+                checkedArtifactInvariant("checked dispatch divergence referenced missing dispatch facts", .{});
+            }
+            if (dispatch_facts.crashes[raw]) break :blk true;
+            break :blk checkedAnyExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, dispatch_facts.operands[raw], expr_states, statement_states, mode);
         },
         .interpolation => |interpolation| blk: {
-            if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, interpolation.first, expr_states, statement_states, mode)) break :blk true;
+            if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, interpolation.first, expr_states, statement_states, mode)) break :blk true;
             for (interpolation.parts) |part| {
-                if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, part.value, expr_states, statement_states, mode)) break :blk true;
-                if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, part.following_segment, expr_states, statement_states, mode)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, part.value, expr_states, statement_states, mode)) break :blk true;
+                if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, part.following_segment, expr_states, statement_states, mode)) break :blk true;
             }
             break :blk false;
         },
@@ -10361,7 +10543,7 @@ fn checkedExprDataDiverges(
 fn checkedStatementDataDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
-    dispatch_operands: []const []const CheckedExprId,
+    dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
     data: CheckedStatementData,
@@ -10375,21 +10557,21 @@ fn checkedStatementDataDiverges(
         .return_,
         .runtime_error,
         => true,
-        .decl => |decl| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states, mode),
-        .var_ => |var_| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states, mode),
+        .decl => |decl| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, decl.expr, expr_states, statement_states, mode),
+        .var_ => |var_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, var_.expr, expr_states, statement_states, mode),
         .var_uninitialized => false,
-        .reassign => |reassign| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states, mode),
+        .reassign => |reassign| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, reassign.expr, expr_states, statement_states, mode),
         .dbg,
         .expr,
-        => |expr| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, expr, expr_states, statement_states, mode),
+        => |expr| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, expr, expr_states, statement_states, mode),
         .expect => |expr| switch (mode) {
-            .run => checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, expr, expr_states, statement_states, mode),
+            .run => checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, expr, expr_states, statement_states, mode),
             .omit => false,
         },
-        .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
-        .while_ => |while_| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states, mode),
+        .for_ => |for_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, for_.expr, expr_states, statement_states, mode),
+        .while_ => |while_| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, while_.cond, expr_states, statement_states, mode),
         .infinite_loop => true,
-        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states, mode),
+        .breakable_loop => |loop| checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, loop.cond, expr_states, statement_states, mode),
         .pending,
         .import_,
         .alias_decl,
@@ -10403,7 +10585,7 @@ fn checkedStatementDataDiverges(
 fn checkedAnyExprDiverges(
     exprs: []CheckedExpr,
     statements: []CheckedStatement,
-    dispatch_operands: []const []const CheckedExprId,
+    dispatch_facts: DivergenceDispatchFacts,
     expr_diverges: []bool,
     statement_diverges: []bool,
     items: []const CheckedExprId,
@@ -10412,7 +10594,7 @@ fn checkedAnyExprDiverges(
     mode: InlineExpectMode,
 ) bool {
     for (items) |item| {
-        if (checkedExprDiverges(exprs, statements, dispatch_operands, expr_diverges, statement_diverges, item, expr_states, statement_states, mode)) return true;
+        if (checkedExprDiverges(exprs, statements, dispatch_facts, expr_diverges, statement_diverges, item, expr_states, statement_states, mode)) return true;
     }
     return false;
 }
@@ -27487,6 +27669,7 @@ pub fn publishFromTypedModule(
         inputs.available_artifacts,
         &static_dispatch_plans,
     );
+    try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -29636,6 +29819,7 @@ test "checked divergence publishes both inline-expect runtime modes" {
             .parts = &.{},
             .step_fn_ty = testIndexId(CheckedTypeId, 0),
         } } },
+        .{ .id = @enumFromInt(6), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = .{ .dispatch_call = null } },
     };
     var statements = [_]CheckedStatement{.{
         .id = testIndexId(CheckedStatementId, 0),
@@ -29648,13 +29832,15 @@ test "checked divergence publishes both inline-expect runtime modes" {
     var omit_statements = [_]bool{false} ** statements.len;
 
     const divergent_operand = [_]CheckedExprId{testIndexId(CheckedExprId, 0)};
-    const dispatch_operands = [_][]const CheckedExprId{ &.{}, &.{}, &divergent_operand, &divergent_operand, &divergent_operand, &.{} };
-    try publishCheckedBodyDivergence(std.testing.allocator, &exprs, &statements, &dispatch_operands, &run_exprs, &run_statements, .run);
-    try publishCheckedBodyDivergence(std.testing.allocator, &exprs, &statements, &dispatch_operands, &omit_exprs, &omit_statements, .omit);
+    const dispatch_operands = [_][]const CheckedExprId{ &.{}, &.{}, &divergent_operand, &divergent_operand, &divergent_operand, &.{}, &.{} };
+    const dispatch_crashes = [_]bool{ false, false, false, false, false, false, true };
+    const dispatch_facts = DivergenceDispatchFacts{ .operands = &dispatch_operands, .crashes = &dispatch_crashes };
+    try publishCheckedBodyDivergence(std.testing.allocator, &exprs, &statements, dispatch_facts, &run_exprs, &run_statements, .run);
+    try publishCheckedBodyDivergence(std.testing.allocator, &exprs, &statements, dispatch_facts, &omit_exprs, &omit_statements, .omit);
 
-    try std.testing.expectEqualSlices(bool, &.{ true, true, true, true, true, true }, &run_exprs);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true, true, true, true, true }, &run_exprs);
     try std.testing.expectEqualSlices(bool, &.{true}, &run_statements);
-    try std.testing.expectEqualSlices(bool, &.{ true, false, true, true, true, true }, &omit_exprs);
+    try std.testing.expectEqualSlices(bool, &.{ true, false, true, true, true, true, true }, &omit_exprs);
     try std.testing.expectEqualSlices(bool, &.{false}, &omit_statements);
 }
 

@@ -3675,6 +3675,24 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
+`checked_error` and `unreachable_dispatch` are bottom at the dispatch expression.
+After total plan resolution, `CheckedBodyStore` computes and stores expression
+and statement divergence through its exact operand and body dependencies. When
+a `constraint(depth, k)` becomes `checked_error` or `unreachable_value` only for
+one specialization, Monotype supplies those exact dispatch expression ids to
+the same checked-body divergence computation before it replays type relations
+or lowers the body. Callable, dispatcher, operand, and result types may be
+instantiated only after this callable-or-crash gate; a rejected dispatch lowers
+directly to a crash with its contextual result cell and never contributes a type
+relation.
+
+Stored generated parser and encoder runtime functions are the one distinct
+producer proof: ConstStore emits their explicit generated-runtime function kind
+only after compile-time evaluation successfully consumed the constructor
+dispatch, and intentionally stores no evidence vector for that runtime. Their
+restoration may therefore consume the checked constraint plan's callable shape,
+but must still reject a plan-level `checked_error` or `unreachable_dispatch`.
+
 Nothing else exists. Monotype lowering never derives a method owner from type
 content, never searches a registry by method name, and never intersects
 constraints to guess a target.
