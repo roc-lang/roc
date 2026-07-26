@@ -3272,6 +3272,7 @@ pub const CheckedTypeStoreView = struct {
     constraint_pool: []const CheckedStaticDispatchConstraint = &.{},
     tag_pool: []const CheckedTag = &.{},
     scheme_ids_by_owner: []const SchemeOwnerScheme = &.{},
+    captured_binders: []const CheckedCapturedBinder = &.{},
     residual_dispositions: []const CheckedResidualDisposition = &.{},
     imported_schemes: []const CheckedImportedScheme = &.{},
     imported_scheme_binders: []const CheckedTypeId = &.{},
@@ -3301,6 +3302,13 @@ pub const CheckedTypeStoreView = struct {
     /// Slice 6).
     pub fn importedSchemeBinders(self: CheckedTypeStoreView) []const CheckedTypeId {
         return self.imported_scheme_binders;
+    }
+
+    /// The flat pool of captured `(outer scheme, binder index)` pairs this
+    /// view's schemes index into (reunify.md 7.1): a nested scheme is a closure,
+    /// so its captured range names the enclosing binders it closes over.
+    pub fn capturedBinders(self: CheckedTypeStoreView) []const CheckedCapturedBinder {
+        return self.captured_binders;
     }
 
     /// The consuming-side imported-scheme table of this view.
@@ -4339,6 +4347,7 @@ pub const CheckedTypeStore = struct {
             .constraint_pool = self.constraint_pool.items,
             .tag_pool = self.tag_pool.items,
             .scheme_ids_by_owner = self.scheme_ids_by_owner.items,
+            .captured_binders = self.captured_binders.items,
             .residual_dispositions = self.residual_dispositions.items,
             .imported_schemes = self.imported_schemes.items,
             .imported_scheme_binders = self.imported_scheme_binders.items,

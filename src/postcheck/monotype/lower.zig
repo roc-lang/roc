@@ -1620,6 +1620,7 @@ const Builder = struct {
             .graph = graph,
             .cursor = directTranslateCursor(view),
             .reserved_fn_id = if (reserved_fn_id) |fn_id| @intFromEnum(fn_id) else null,
+            .template_fn_root = template.checked_fn_root,
         });
         defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization(graph);
         var body_draft = BodyDraftStore.init(self.allocator);
@@ -10220,6 +10221,10 @@ const BodyContext = struct {
             }
 
             const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+            // Debug/probe-only: the same value-use edge identity as an ordinary
+            // lookup (reunify.md section 7.2), named before the use requests its
+            // specialization.
+            self.noteProcedureUseRequestEdge(record);
             switch (record.ref) {
                 .local_proc => |local| return try self.addExpr(.{
                     .ty = ty,
@@ -17595,6 +17600,35 @@ const BodyContext = struct {
         return call_ctx.functionReturnType(mono_fn_ty);
     }
 
+    /// Debug/probe-only: name a procedure use's requesting edge for the
+    /// rehearsal. A value use of a procedure is a scheme instantiation edge in
+    /// reunify.md section 7.2's coverage table exactly as a direct call is, and
+    /// the record's checked expression is the `use_node` half of that edge's
+    /// identity. A reference that binds no procedure requests no specialization,
+    /// so it names no edge.
+    fn noteProcedureUseRequestEdge(self: *BodyContext, record: anytype) void {
+        const rehearsal = self.builder.rehearsal orelse return;
+        switch (record.ref) {
+            .local_proc,
+            .top_level_proc,
+            .imported_proc,
+            .hosted_proc,
+            .promoted_top_level_proc,
+            .platform_required_proc,
+            => rehearsal.noteRequestEdge(self.view.key.bytes, record.expr),
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .platform_required_const,
+            .platform_required_declaration,
+            => {},
+        }
+    }
+
     fn fnTemplateForDirectCallWithMono(
         self: *BodyContext,
         target: checked.ResolvedValueId,
@@ -17872,6 +17906,11 @@ const BodyContext = struct {
         }
 
         try self.constrainTypeToMono(checked_ty, ty);
+        // Debug/probe-only: an ordinary value use of a procedure instantiates the
+        // callee's scheme exactly as a direct call does, so the checked
+        // expression it sits at names this request's edge for the rehearsal
+        // (reunify.md section 7.2's coverage table).
+        self.noteProcedureUseRequestEdge(record);
         const data: BodyExprData = switch (record.ref) {
             .local_param,
             .local_value,
@@ -21239,6 +21278,10 @@ const BodyContext = struct {
     ) Allocator.Error!BodyExprData {
         const fn_data = self.builder.functionShape(callable_mono_ty, "checked dispatch target had a non-function type");
         const args = try arg_ctx.lowerDispatchOperandsAtTypes(plan.argsSlice(self.view.static_dispatch_plans), self.builder.program.types.span(fn_data.args), pre_lowered);
+        // Debug/probe-only: a resolved dispatch target instantiates the selected
+        // callee's scheme, and the plan's checked expression is the `use_node`
+        // half of that edge's identity (reunify.md sections 7.2, 9.7).
+        if (self.builder.rehearsal) |rehearsal| rehearsal.noteRequestEdge(self.view.key.bytes, plan.expr);
         return .{ .call_proc = .{
             .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, try self.evidenceForResolvedTarget(plan.resolution)))),
             .args = args,

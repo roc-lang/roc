@@ -192,8 +192,7 @@ pub const Census = struct {
     // assumption: a root has no requesting edge (`root_edge`), a compiler-generated
     // request records none (`generated_edge`), and the rest are missing site,
     // ambiguous site, unresolved scheme, absent module, arity, an actual the
-    // checker did not reach, a nested closure scheme whose captured binders this
-    // step does not yet bind, and an actual outside the translatable subset.
+    // checker did not reach, and an actual outside the translatable subset.
     rehearsal_spec_attempted: Counter = Counter.init(0),
     rehearsal_spec_compared: Counter = Counter.init(0),
     rehearsal_env_resolved: Counter = Counter.init(0),
@@ -227,6 +226,14 @@ pub const Census = struct {
     // position reaches no free variable and the empty tag union came from
     // somewhere else.
     rehearsal_unbound_other_scheme_binder: Counter = Counter.init(0),
+    // The other-scheme-binder class split by whether that scheme's environment is
+    // on this frame's lexical chain. `on_chain` means the level is present but its
+    // own binding did not name the variable; `off_chain` means no checked
+    // relation put that scheme on the chain at all — reunify.md 7.1 derives a
+    // nested scheme's captured set from its ROOT, so a binder that only its body
+    // reaches leaves no captured pair to link through.
+    rehearsal_unbound_other_scheme_binder_on_chain: Counter = Counter.init(0),
+    rehearsal_unbound_other_scheme_binder_off_chain: Counter = Counter.init(0),
     rehearsal_unbound_disposed_contextual: Counter = Counter.init(0),
     rehearsal_unbound_disposed_uninhabited: Counter = Counter.init(0),
     rehearsal_unbound_disposed_module_body: Counter = Counter.init(0),
@@ -254,10 +261,60 @@ pub const Census = struct {
     // Whether a request carried the requesting body's own binding with it, and
     // when it did not, why: no active frame, an active frame whose own
     // environment never resolved, or one binding ids in another module.
+    // `captured_chained` counts the captures that carried more than the
+    // requesting body's own level, so the edge travels with the enclosing
+    // environments a symbolic actual resolves through (reunify.md 7.3).
     rehearsal_caller_env_captured: Counter = Counter.init(0),
+    rehearsal_caller_env_captured_chained: Counter = Counter.init(0),
     rehearsal_caller_env_no_frame: Counter = Counter.init(0),
     rehearsal_caller_env_frame_not_ready: Counter = Counter.init(0),
     rehearsal_caller_env_other_module: Counter = Counter.init(0),
+    // reunify.md 7.1/9.1: one specialization's lexical parent link, built by
+    // reading the caller's environment chain at the callee scheme's checked
+    // `(outer scheme, binder index)` captured pairs. `parent_linked`
+    // counts environments that gained at least one enclosing level;
+    // `captured_binder` counts the pairs read, `bound` those a live caller level
+    // supplied, and the rest name exactly why a pair supplied none: the checker
+    // attributed the pair to no outer scheme, its outer scheme is not in the
+    // defining store, its index is outside the outer scheme's binders, the outer
+    // scheme is not on the caller's chain, or the active level and the checked
+    // scheme disagree about which checked binder sits at that index.
+    rehearsal_env_parent_linked: Counter = Counter.init(0),
+    rehearsal_env_parent_absent: Counter = Counter.init(0),
+    rehearsal_captured_binder: Counter = Counter.init(0),
+    rehearsal_captured_binder_bound: Counter = Counter.init(0),
+    rehearsal_captured_binder_outer_unattributed: Counter = Counter.init(0),
+    rehearsal_captured_binder_outer_unresolved: Counter = Counter.init(0),
+    rehearsal_captured_binder_outer_not_active: Counter = Counter.init(0),
+    rehearsal_captured_binder_index_out_of_range: Counter = Counter.init(0),
+    rehearsal_captured_binder_identity_disagrees: Counter = Counter.init(0),
+    // The callee scheme's own module was not in the lowering input's module
+    // index, but it is the very module whose frozen store this specialization's
+    // template body is already being read through, so the scheme resolves from
+    // that cursor — the same module identity, hence the same frozen store.
+    rehearsal_defining_module_from_template_cursor: Counter = Counter.init(0),
+    // Whether the resolved edge's callee is defined by the very module this
+    // specialization's template body reads from. The `differs` class is an edge
+    // the request seam recorded that reached a different template: it names
+    // another scheme's actuals, so it is refused before it can bind anything and
+    // the specialization is resolved from its own template instead.
+    rehearsal_edge_defining_module_matches_template: Counter = Counter.init(0),
+    rehearsal_skip_edge_defining_module_differs: Counter = Counter.init(0),
+    // A specialization no requesting edge named — a root request has no
+    // requesting site and a compiler-generated one records none (reunify.md
+    // 9.6) — still has an exact environment when its own template's scheme is
+    // ground: no binders, no captures, and a root that reaches no checked
+    // variable, so the empty binding is the whole binding. `edgeless_ground`
+    // counts those; the rest name exactly why the template's scheme did not
+    // supply one, and `scheme_has_binders` is the class that genuinely needs a
+    // declared generated-edge binding before it can resolve.
+    rehearsal_env_resolved_edgeless_ground: Counter = Counter.init(0),
+    rehearsal_edgeless_scheme_root_ambiguous: Counter = Counter.init(0),
+    rehearsal_edgeless_scheme_root_unowned: Counter = Counter.init(0),
+    rehearsal_edgeless_scheme_unresolved: Counter = Counter.init(0),
+    rehearsal_edgeless_scheme_has_binders: Counter = Counter.init(0),
+    rehearsal_edgeless_scheme_captures: Counter = Counter.init(0),
+    rehearsal_edgeless_scheme_root_variable: Counter = Counter.init(0),
     rehearsal_skip_root_edge: Counter = Counter.init(0),
     rehearsal_skip_generated_edge: Counter = Counter.init(0),
     rehearsal_skip_no_site: Counter = Counter.init(0),
@@ -267,7 +324,6 @@ pub const Census = struct {
     rehearsal_skip_defining_module_absent: Counter = Counter.init(0),
     rehearsal_skip_arity_mismatch: Counter = Counter.init(0),
     rehearsal_skip_unreached_actual: Counter = Counter.init(0),
-    rehearsal_skip_captured_scheme: Counter = Counter.init(0),
     rehearsal_skip_actual_untranslatable: Counter = Counter.init(0),
     // Per compared position. `type_compared` counts one (position, sealed id)
     // pair; `type_match` counts equal stored digests. `type_mismatch_logical` is
@@ -303,6 +359,11 @@ pub const Census = struct {
     rehearsal_type_mismatch_head_tag: Counter = Counter.init(0),
     rehearsal_type_mismatch_row_width: Counter = Counter.init(0),
     rehearsal_type_mismatch_named_identity: Counter = Counter.init(0),
+    // Two recursive types that agree on every head the bounded parallel walk
+    // reaches and whose bounded unfoldings still differ: the difference sits
+    // deeper in the cycle than the walk localizes, so the pair is named as such
+    // rather than counted as a difference nobody looked at.
+    rehearsal_type_mismatch_recursive_beyond_depth: Counter = Counter.init(0),
     rehearsal_type_mismatch_unclassified: Counter = Counter.init(0),
     rehearsal_type_mismatch_representation: Counter = Counter.init(0),
     // A position whose checked source lives outside the specialization's own

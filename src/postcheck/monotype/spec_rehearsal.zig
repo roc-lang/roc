@@ -89,24 +89,58 @@ pub const RequestEdge = struct {
     caller: ?CapturedEnvironment,
 };
 
-/// A copy of one requesting body's binding environment, owned by the edge that
-/// captured it. `binders` points into frozen checked data; `bound` is owned.
+/// A copy of one requesting body's binding environment chain, owned by the edge
+/// that captured it. The chain's innermost level is the requesting body's own
+/// binding; its enclosing levels are the lexical environments that body itself
+/// resolved under (reunify.md sections 7.1, 7.3).
 pub const CapturedEnvironment = struct {
     module_bytes: [32]u8,
-    scheme: direct_translate.SchemeIdent,
     owner_node: u32,
-    binders: []const checked.CheckedTypeId,
-    bound: []direct_translate.BoundType,
+    chain: EnvironmentChain,
 
-    fn environment(self: *const CapturedEnvironment) direct_translate.BindingEnvironment {
-        return .{
-            .scheme = self.scheme,
-            .binders = self.binders,
-            .bound = self.bound,
-            .captured = &.{},
-            .parent = null,
-        };
+    fn environment(self: *const CapturedEnvironment) ?*const direct_translate.BindingEnvironment {
+        return self.chain.innermost();
     }
+};
+
+/// A self-contained copy of one lexical binding environment chain (reunify.md
+/// section 7.3). `levels` runs outermost first and each level's `parent` points
+/// at the level before it, so the last level is the innermost environment and
+/// the whole chain stays usable after the frames it was copied from are gone.
+/// `values` is the single allocation backing every level's bound and captured
+/// slices; `binders` slices alias frozen checked data and are never copied.
+const EnvironmentChain = struct {
+    levels: []direct_translate.BindingEnvironment,
+    values: []direct_translate.BoundType,
+
+    /// A chain that owns nothing and names no environment.
+    const none = EnvironmentChain{ .levels = &.{}, .values = &.{} };
+
+    /// The innermost environment of the chain, or null when the chain is empty.
+    fn innermost(self: *const EnvironmentChain) ?*const direct_translate.BindingEnvironment {
+        if (self.levels.len == 0) return null;
+        return &self.levels[self.levels.len - 1];
+    }
+
+    /// How many levels deep the chain runs, counting from the outermost.
+    fn depth(self: *const EnvironmentChain) usize {
+        return self.levels.len;
+    }
+
+    fn release(self: *EnvironmentChain, allocator: Allocator) void {
+        if (self.levels.len != 0) allocator.free(self.levels);
+        if (self.values.len != 0) allocator.free(self.values);
+        self.* = EnvironmentChain.none;
+    }
+};
+
+/// One level of a chain under construction: the scheme it binds, its binders in
+/// checked data, and the dense values for them.
+const EnvironmentLevel = struct {
+    scheme: direct_translate.SchemeIdent,
+    binders: []const checked.CheckedTypeId,
+    bound: []const direct_translate.BoundType,
+    captured: []const direct_translate.BoundType,
 };
 
 /// The per-specialization record the instantiation graph fills while lowering:
@@ -178,6 +212,11 @@ pub const SpecializationStart = struct {
     /// The reserved function id when this specialization was requested earlier
     /// and lowered from the deferred queue, so its edge is looked up by id.
     reserved_fn_id: ?u32,
+    /// The specialized template's own checked function root. It names the
+    /// template's owning scheme by checked identity, which is the environment
+    /// a specialization has even when no requesting edge named it (section 9.6's
+    /// generated edges and the root requests that have no requesting site).
+    template_fn_root: checked.CheckedTypeId,
 };
 
 /// One module's value-use instantiation sites indexed by the checked expression
@@ -188,13 +227,21 @@ const SiteIndex = struct {
     view: checked.CheckedTypeStoreView,
     by_use_expr: std.AutoHashMapUnmanaged(u32, u32),
     ambiguous: std.AutoHashMapUnmanaged(u32, void),
+    /// This module's schemes indexed by the checked root each one generalizes,
+    /// so a template names its own scheme by checked identity. Roots several
+    /// schemes share name no single owner and are marked ambiguous.
+    by_scheme_root: std.AutoHashMapUnmanaged(u32, u32),
+    ambiguous_scheme_root: std.AutoHashMapUnmanaged(u32, void),
 };
 
 /// One active specialization's environment plus the graph trace it compares
-/// against. `bound` is dense and ordered exactly like `binders` (reunify.md
-/// section 9.1); it is owned by the rehearsal and freed when the frame pops.
-/// The trace is heap-allocated so the graph's pointer to it survives the frame
-/// stack growing under a nested specialization.
+/// against. `chain` ends at this specialization's own level, whose bound values
+/// are dense and ordered exactly like `binders` (reunify.md section 9.1); the
+/// levels before it are the lexically enclosing environments the callee scheme's
+/// checked captured binders name (reunify.md sections 7.1, 7.3). The whole
+/// chain is owned by the rehearsal and freed when the frame pops. The trace is
+/// heap-allocated so the graph's pointer to it survives the frame stack growing
+/// under a nested specialization.
 const Frame = struct {
     trace: *SealTrace,
     /// The module whose ids `binders` name, and whose residual dispositions
@@ -204,7 +251,7 @@ const Frame = struct {
     scheme: direct_translate.SchemeIdent,
     owner_node: u32,
     binders: []const checked.CheckedTypeId,
-    bound: []direct_translate.BoundType,
+    chain: EnvironmentChain,
     /// The callee's scheme root emitted under this binding: the specialization's
     /// own interface type (reunify.md section 11.1).
     interface_root: ?Type.TypeId,
@@ -213,14 +260,8 @@ const Frame = struct {
     request_root: ?Type.TypeId,
     env_ready: bool,
 
-    fn environment(self: *const Frame) direct_translate.BindingEnvironment {
-        return .{
-            .scheme = self.scheme,
-            .binders = self.binders,
-            .bound = self.bound,
-            .captured = &.{},
-            .parent = null,
-        };
+    fn environment(self: *const Frame) ?*const direct_translate.BindingEnvironment {
+        return self.chain.innermost();
     }
 };
 
@@ -347,7 +388,7 @@ const Difference = struct {
 /// Whether a type reaches itself through any child path, bounded by the same
 /// depth the difference walk uses.
 fn isRecursive(store: *const Type.Store, root: Type.TypeId, ty: Type.TypeId, depth: u32) bool {
-    if (depth >= max_difference_depth) return false;
+    if (depth >= max_recursion_probe_depth) return false;
     const count = childCount(store, ty);
     var index: u32 = 0;
     while (index < count) : (index += 1) {
@@ -359,7 +400,14 @@ fn isRecursive(store: *const Type.Store, root: Type.TypeId, ty: Type.TypeId, dep
 }
 
 /// How deep the parallel difference walk descends before reporting where it is.
-const max_difference_depth: u32 = 32;
+/// Deep enough that a recursive pair which agrees on every head it reaches is a
+/// statement about the two types rather than about the bound.
+const max_difference_depth: u32 = 96;
+
+/// How deep the self-reachability probe searches before answering "not
+/// recursive". A cycle a type actually has closes within a few levels; this only
+/// bounds the search on a deep acyclic spine.
+const max_recursion_probe_depth: u32 = 32;
 
 /// Walk two types in parallel and report where they first stop agreeing. Both
 /// stores digest into the same name store, so child digests are comparable
@@ -624,6 +672,8 @@ pub const Rehearsal = struct {
         while (indexes.next()) |index| {
             index.by_use_expr.deinit(self.allocator);
             index.ambiguous.deinit(self.allocator);
+            index.by_scheme_root.deinit(self.allocator);
+            index.ambiguous_scheme_root.deinit(self.allocator);
         }
         self.site_index.deinit(self.allocator);
         self.releasePendingEdge();
@@ -648,34 +698,25 @@ pub const Rehearsal = struct {
         };
     }
 
-    /// Copy the innermost ready frame's binding when it binds ids in the
-    /// requesting module, so the edge carries the environment its symbolic
-    /// actuals resolve under.
+    /// Copy the innermost ready frame's whole environment chain when it binds ids
+    /// in the requesting module, so the edge carries every lexical level a
+    /// symbolic actual can resolve under, not only the innermost binding
+    /// (reunify.md sections 7.3, 9.1).
     fn captureCallerEnvironment(self: *Rehearsal, module_bytes: [32]u8) ?CapturedEnvironment {
         const frame = self.callerFrameFor(module_bytes) orelse return null;
         census.bump("rehearsal_caller_env_captured");
-        if (frame.bound.len == 0) {
-            return .{
-                .module_bytes = frame.env_module_bytes,
-                .scheme = frame.scheme,
-                .owner_node = frame.owner_node,
-                .binders = frame.binders,
-                .bound = &.{},
-            };
-        }
-        const bound = self.allocator.dupe(direct_translate.BoundType, frame.bound) catch return null;
+        if (frame.chain.depth() > 1) census.bump("rehearsal_caller_env_captured_chained");
+        const chain = self.copyEnvironmentChain(frame.environment(), frame.chain.depth(), null) orelse return null;
         return .{
             .module_bytes = frame.env_module_bytes,
-            .scheme = frame.scheme,
             .owner_node = frame.owner_node,
-            .binders = frame.binders,
-            .bound = bound,
+            .chain = chain,
         };
     }
 
     fn releaseEdge(self: *Rehearsal, edge: RequestEdge) void {
-        const caller = edge.caller orelse return;
-        if (caller.bound.len != 0) self.allocator.free(caller.bound);
+        var caller = edge.caller orelse return;
+        caller.chain.release(self.allocator);
     }
 
     fn releasePendingEdge(self: *Rehearsal) void {
@@ -712,7 +753,7 @@ pub const Rehearsal = struct {
             .scheme = .{ .module_bytes = start.cursor.module_bytes, .scheme = 0 },
             .owner_node = checked.checked_residual_disposition_module_body_owner,
             .binders = &.{},
-            .bound = &.{},
+            .chain = EnvironmentChain.none,
             .interface_root = null,
             .request_root = null,
             .env_ready = false,
@@ -770,33 +811,195 @@ pub const Rehearsal = struct {
     fn releaseFrame(self: *Rehearsal, frame: *Frame) void {
         frame.trace.deinit();
         self.allocator.destroy(frame.trace);
-        if (frame.bound.len != 0) self.allocator.free(frame.bound);
-        frame.bound = &.{};
+        frame.chain.release(self.allocator);
     }
 
     fn fail(self: *Rehearsal) void {
         self.disabled = true;
     }
 
-    /// Resolve one specialization's dense binding from the requesting edge's
-    /// site (reunify.md sections 7.2, 9.1). Every way the edge fails to resolve
-    /// is a named skip class, never an assumption.
+    /// Copy the outermost `keep` levels of the chain ending at `innermost`, and
+    /// append `own` as a further innermost level when one is given. The result
+    /// owns its storage and its `parent` links point inside it, so it stays valid
+    /// once the environments it was copied from are released.
+    fn copyEnvironmentChain(
+        self: *Rehearsal,
+        innermost: ?*const direct_translate.BindingEnvironment,
+        keep: usize,
+        own: ?EnvironmentLevel,
+    ) ?EnvironmentChain {
+        var order: std.ArrayList(*const direct_translate.BindingEnvironment) = .empty;
+        defer order.deinit(self.allocator);
+        var cursor = innermost;
+        while (cursor) |level| : (cursor = level.parent) {
+            order.append(self.allocator, level) catch return null;
+        }
+        if (keep > order.items.len) return null;
+
+        const total = keep + @as(usize, if (own == null) 0 else 1);
+        if (total == 0) return EnvironmentChain.none;
+
+        var value_count: usize = 0;
+        for (0..keep) |index| {
+            const level = order.items[order.items.len - 1 - index];
+            value_count += level.bound.len + level.captured.len;
+        }
+        if (own) |level| value_count += level.bound.len + level.captured.len;
+
+        const levels = self.allocator.alloc(direct_translate.BindingEnvironment, total) catch return null;
+        const values = self.allocator.alloc(direct_translate.BoundType, value_count) catch {
+            self.allocator.free(levels);
+            return null;
+        };
+        var used: usize = 0;
+        for (0..total) |index| {
+            const source: EnvironmentLevel = if (index < keep) blk: {
+                const level = order.items[order.items.len - 1 - index];
+                break :blk .{
+                    .scheme = level.scheme,
+                    .binders = level.binders,
+                    .bound = level.bound,
+                    .captured = level.captured,
+                };
+            } else own.?;
+            const bound_start = used;
+            @memcpy(values[used..][0..source.bound.len], source.bound);
+            used += source.bound.len;
+            const captured_start = used;
+            @memcpy(values[used..][0..source.captured.len], source.captured);
+            used += source.captured.len;
+            levels[index] = .{
+                .scheme = source.scheme,
+                .binders = source.binders,
+                .bound = values[bound_start .. bound_start + source.bound.len],
+                .captured = values[captured_start .. captured_start + source.captured.len],
+                .parent = if (index == 0) null else &levels[index - 1],
+            };
+        }
+        return .{ .levels = levels, .values = values };
+    }
+
+    /// Where one callee scheme's checked captured binders land in the caller's
+    /// environment chain (reunify.md sections 7.1, 9.1): the dense values for
+    /// `scheme.capturedBinders`, and how many levels of the caller's chain the
+    /// callee's own level must link to as its lexical parents.
+    const CapturedBinding = struct {
+        values: []direct_translate.BoundType,
+        parent_levels: usize,
+    };
+
+    /// Project the caller's environment onto `scheme`'s captured binders. Each
+    /// captured `(outer scheme, binder index)` pair is looked up by identity in
+    /// the caller's chain; the innermost level any pair names becomes the callee's
+    /// lexical parent, so an enclosing binder the callee's body reaches resolves
+    /// through the chain instead of materializing as a residual.
+    fn bindCaptured(
+        self: *Rehearsal,
+        defining: direct_translate.ModuleCursor,
+        scheme: checked.CheckedTypeScheme,
+        caller_env: ?*const direct_translate.BindingEnvironment,
+    ) ?CapturedBinding {
+        const captured = scheme.capturedBinders(defining.view);
+        if (captured.len == 0) return .{ .values = &.{}, .parent_levels = 0 };
+
+        var order: std.ArrayList(*const direct_translate.BindingEnvironment) = .empty;
+        defer order.deinit(self.allocator);
+        var cursor = caller_env;
+        while (cursor) |level| : (cursor = level.parent) {
+            order.append(self.allocator, level) catch return null;
+        }
+
+        const values = self.allocator.alloc(direct_translate.BoundType, captured.len) catch return null;
+        var parent_levels: usize = 0;
+        for (captured, 0..) |entry, index| {
+            census.bump("rehearsal_captured_binder");
+            // A residual with no value is the uninhabited materialization the
+            // rest of the rehearsal already measures, so an unresolved captured
+            // position stays visible as a mismatch instead of as a silent hole.
+            values[index] = direct_translate.BoundType.of(self.uninhabitedStandIn() orelse {
+                self.allocator.free(values);
+                return null;
+            });
+            const outer_id = entry.outerScheme() orelse {
+                census.bump("rehearsal_captured_binder_outer_unattributed");
+                continue;
+            };
+            const outer = defining.view.schemeById(outer_id) orelse {
+                census.bump("rehearsal_captured_binder_outer_unresolved");
+                continue;
+            };
+            const outer_binders = outer.generalizedVars(defining.view);
+            if (entry.binder_index >= outer_binders.len) {
+                census.bump("rehearsal_captured_binder_index_out_of_range");
+                continue;
+            }
+            // The chain runs innermost first, so the first level that names the
+            // outer scheme is the innermost instance of it.
+            var found: ?usize = null;
+            for (order.items, 0..) |level, position| {
+                if (level.scheme.scheme != @intFromEnum(outer_id)) continue;
+                if (!std.mem.eql(u8, &level.scheme.module_bytes, &defining.module_bytes)) continue;
+                found = position;
+                break;
+            }
+            const position = found orelse {
+                census.bump("rehearsal_captured_binder_outer_not_active");
+                continue;
+            };
+            const level = order.items[position];
+            if (entry.binder_index >= level.bound.len or entry.binder_index >= level.binders.len) {
+                census.bump("rehearsal_captured_binder_index_out_of_range");
+                continue;
+            }
+            // The checked pair and the active level must name the SAME checked
+            // binder at that index; a disagreement would mean the two binder
+            // orderings drifted and the value read would silently mis-bind.
+            if (level.binders[entry.binder_index] != outer_binders[entry.binder_index]) {
+                census.bump("rehearsal_captured_binder_identity_disagrees");
+                continue;
+            }
+            values[index] = level.bound[entry.binder_index];
+            census.bump("rehearsal_captured_binder_bound");
+            const levels_to_here = order.items.len - position;
+            if (levels_to_here > parent_levels) parent_levels = levels_to_here;
+        }
+        return .{ .values = values, .parent_levels = parent_levels };
+    }
+
+    /// The stored empty tag union, which is what an unresolved checked variable
+    /// materializes to everywhere else in this rehearsal.
+    fn uninhabitedStandIn(self: *Rehearsal) ?Type.TypeId {
+        return self.store.internTagUnion(self.program_names, &.{}) catch null;
+    }
+
+    /// Resolve one specialization's environment: from the requesting edge's site
+    /// when one named it (reunify.md sections 7.2, 9.1), and otherwise from what
+    /// the specialization's own template says. Every way the edge fails to
+    /// resolve is a named skip class, never an assumption.
     fn resolveEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
+        if (self.resolveEnvironmentFromEdge(start, frame)) return;
+        self.resolveGroundTemplateEnvironment(start, frame);
+    }
+
+    /// Resolve one specialization's dense binding from the requesting edge's
+    /// site, reporting whether the binding was resolved. Every way the edge fails
+    /// to resolve is a named skip class, never an assumption.
+    fn resolveEnvironmentFromEdge(self: *Rehearsal, start: SpecializationStart, frame: *Frame) bool {
         const edge = self.takeEdge(start.reserved_fn_id) orelse {
             if (self.frames.items.len == 0) {
                 census.bump("rehearsal_skip_root_edge");
             } else {
                 census.bump("rehearsal_skip_generated_edge");
             }
-            return;
+            return false;
         };
         defer self.releaseEdge(edge);
         const caller = self.lookup.cursor(edge.module_bytes) orelse {
             census.bump("rehearsal_skip_caller_module_absent");
-            return;
+            return false;
         };
-        const site = self.siteFor(caller, edge.use_expr) orelse return;
-        const caller_env: ?direct_translate.BindingEnvironment = if (edge.caller) |*captured|
+        const site = self.siteFor(caller, edge.use_expr) orelse return false;
+        const caller_env: ?*const direct_translate.BindingEnvironment = if (edge.caller) |*captured|
             captured.environment()
         else
             null;
@@ -806,40 +1009,48 @@ pub const Rehearsal = struct {
             checked.checked_residual_disposition_module_body_owner;
         const scheme_id = site.schemeId() orelse {
             census.bump("rehearsal_skip_scheme_unresolved");
-            return;
+            return false;
         };
         const defining_bytes = site.importedDefiningModule() orelse edge.module_bytes;
-        const defining = self.lookup.cursor(defining_bytes) orelse {
+        // The edge's callee is defined by the module whose frozen store this
+        // specialization's template body reads from, so an edge naming a
+        // different defining module did not name THIS specialization: it is a
+        // request the seam recorded that reached a different template. Binding
+        // this specialization from it would substitute another scheme's actuals,
+        // so it is refused by module identity before it can bind anything and
+        // the specialization is resolved from its own template instead.
+        if (!std.mem.eql(u8, &start.cursor.module_bytes, &defining_bytes)) {
+            census.bump("rehearsal_skip_edge_defining_module_differs");
+            return false;
+        }
+        census.bump("rehearsal_edge_defining_module_matches_template");
+        const defining = self.definingCursor(start, defining_bytes) orelse {
             census.bump("rehearsal_skip_defining_module_absent");
-            return;
+            return false;
         };
         const scheme = defining.view.schemeById(scheme_id) orelse {
             census.bump("rehearsal_skip_scheme_unresolved");
-            return;
+            return false;
         };
-        if (scheme.captured_len != 0) {
-            census.bump("rehearsal_skip_captured_scheme");
-            return;
-        }
         const binders = scheme.generalizedVars(defining.view);
         const actuals = site.actuals(caller.view);
         if (actuals.len != binders.len) {
             census.bump("rehearsal_skip_arity_mismatch");
-            return;
+            return false;
         }
 
-        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch return self.fail();
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return false;
+        };
+        defer self.allocator.free(bound);
         var filled: usize = 0;
         for (actuals) |actual| {
             if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) {
                 census.bump("rehearsal_skip_unreached_actual");
-                self.allocator.free(bound);
-                return;
+                return false;
             }
-            const translated = self.translateActual(caller, &caller_env, caller_owner_node, actual) orelse {
-                self.allocator.free(bound);
-                return;
-            };
+            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return false;
             if (HeadShape.of(&self.store, translated).isEmptyTagUnionHead()) {
                 if (caller_env == null) {
                     census.bump("rehearsal_actual_residual_without_caller_env");
@@ -858,11 +1069,34 @@ pub const Rehearsal = struct {
             filled += 1;
         }
 
+        const captured = self.bindCaptured(defining, scheme, caller_env) orelse {
+            self.fail();
+            return false;
+        };
+        defer if (captured.values.len != 0) self.allocator.free(captured.values);
+        const scheme_ident = direct_translate.SchemeIdent{
+            .module_bytes = defining_bytes,
+            .scheme = @intFromEnum(scheme_id),
+        };
+        frame.chain = self.copyEnvironmentChain(caller_env, captured.parent_levels, .{
+            .scheme = scheme_ident,
+            .binders = binders,
+            .bound = bound,
+            .captured = captured.values,
+        }) orelse {
+            self.fail();
+            return false;
+        };
+        if (captured.parent_levels == 0) {
+            census.bump("rehearsal_env_parent_absent");
+        } else {
+            census.bump("rehearsal_env_parent_linked");
+        }
+
         frame.env_module_bytes = defining_bytes;
-        frame.scheme = .{ .module_bytes = defining_bytes, .scheme = @intFromEnum(scheme_id) };
+        frame.scheme = scheme_ident;
         frame.owner_node = scheme.owner_node;
         frame.binders = binders;
-        frame.bound = bound;
         frame.env_ready = true;
         census.bump("rehearsal_env_resolved");
         if (binders.len == 0) {
@@ -873,10 +1107,84 @@ pub const Rehearsal = struct {
         // The two sides of this specialization's representation interface
         // (reunify.md section 11.1): the callee's scheme root emitted under the
         // binding, and the request context's own emission of the same edge.
-        const env = frame.environment();
-        frame.interface_root = self.emitQuietly(defining, &env, scheme.owner_node, scheme.root);
-        const request_env: ?*const direct_translate.BindingEnvironment = if (caller_env) |*value| value else null;
-        frame.request_root = self.emitQuietly(caller, request_env, caller_owner_node, site.instantiated_root);
+        frame.interface_root = self.emitQuietly(defining, frame.environment(), scheme.owner_node, scheme.root);
+        frame.request_root = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
+        return true;
+    }
+
+    /// Resolve a specialization the rehearsal saw no requesting edge for. A root
+    /// request has no requesting site at all and a compiler-generated request
+    /// records none (reunify.md section 9.6), but the specialization still has an
+    /// exact environment whenever its own template's scheme is ground: a scheme
+    /// with no binders whose root reaches no checked variable has exactly one
+    /// instantiation, so the empty binding is the whole binding and no request
+    /// could change it. The scheme is named by the checked identity of the
+    /// template's function root, never by shape; a scheme that does carry
+    /// generalized structure stays skipped, because only the edge can say what
+    /// its binders took.
+    fn resolveGroundTemplateEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
+        const index = self.siteIndexFor(start.cursor) orelse return;
+        const key = @intFromEnum(start.template_fn_root);
+        if (index.ambiguous_scheme_root.contains(key)) {
+            census.bump("rehearsal_edgeless_scheme_root_ambiguous");
+            return;
+        }
+        const scheme_raw = index.by_scheme_root.get(key) orelse {
+            census.bump("rehearsal_edgeless_scheme_root_unowned");
+            return;
+        };
+        const scheme = start.cursor.view.schemeById(@enumFromInt(scheme_raw)) orelse {
+            census.bump("rehearsal_edgeless_scheme_unresolved");
+            return;
+        };
+        if (scheme.gv_len != 0) {
+            census.bump("rehearsal_edgeless_scheme_has_binders");
+            return;
+        }
+        if (scheme.captured_len != 0) {
+            census.bump("rehearsal_edgeless_scheme_captures");
+            return;
+        }
+        if (self.schemeRootReachesVariable(start.cursor.view, scheme.root)) {
+            census.bump("rehearsal_edgeless_scheme_root_variable");
+            return;
+        }
+        const scheme_ident = direct_translate.SchemeIdent{
+            .module_bytes = start.cursor.module_bytes,
+            .scheme = scheme_raw,
+        };
+        frame.chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = scheme_ident,
+            .binders = &.{},
+            .bound = &.{},
+            .captured = &.{},
+        }) orelse return self.fail();
+        frame.env_module_bytes = start.cursor.module_bytes;
+        frame.scheme = scheme_ident;
+        frame.owner_node = scheme.owner_node;
+        frame.binders = &.{};
+        frame.env_ready = true;
+        census.bump("rehearsal_env_resolved");
+        census.bump("rehearsal_env_resolved_edgeless_ground");
+        frame.interface_root = self.emitQuietly(start.cursor, frame.environment(), scheme.owner_node, scheme.root);
+    }
+
+    /// The cursor the callee scheme's own module reads by. The lowering input
+    /// indexes the root module, its imports, and its relation modules; a
+    /// specialization whose template body is already being read through
+    /// `start.cursor` names that same module directly, which is the same module
+    /// identity and therefore the same frozen store.
+    fn definingCursor(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        defining_bytes: [32]u8,
+    ) ?direct_translate.ModuleCursor {
+        if (self.lookup.cursor(defining_bytes)) |cursor| return cursor;
+        if (std.mem.eql(u8, &start.cursor.module_bytes, &defining_bytes)) {
+            census.bump("rehearsal_defining_module_from_template_cursor");
+            return start.cursor;
+        }
+        return null;
     }
 
     /// Name why one checked actual translated to a residual materialization:
@@ -887,12 +1195,15 @@ pub const Rehearsal = struct {
         caller: direct_translate.ModuleCursor,
         owner_node: u32,
         actual: checked.CheckedTypeId,
-        caller_env: ?direct_translate.BindingEnvironment,
+        caller_env: ?*const direct_translate.BindingEnvironment,
     ) void {
-        if (caller_env) |env| {
+        if (caller_env != null) {
             var inherited = false;
-            for (env.binders) |binder| {
-                if (binder == actual) inherited = true;
+            var cursor = caller_env;
+            while (cursor) |env| : (cursor = env.parent) {
+                for (env.binders) |binder| {
+                    if (binder == actual) inherited = true;
+                }
             }
             if (inherited) {
                 census.bump("rehearsal_actual_residual_inherited");
@@ -1027,13 +1338,12 @@ pub const Rehearsal = struct {
     fn translateActual(
         self: *Rehearsal,
         caller: direct_translate.ModuleCursor,
-        env: *const ?direct_translate.BindingEnvironment,
+        env: ?*const direct_translate.BindingEnvironment,
         owner_node: u32,
         actual: checked.CheckedTypeId,
     ) ?Type.TypeId {
         var reason: direct_translate.SkipReason = undefined;
-        const env_ptr: ?*const direct_translate.BindingEnvironment = if (env.*) |*value| value else null;
-        return self.translator.translateUnderEnvironment(caller, env_ptr, owner_node, actual, &reason) catch |err| switch (err) {
+        return self.translator.translateUnderEnvironment(caller, env, owner_node, actual, &reason) catch |err| switch (err) {
             error.Skip => {
                 census.bump("rehearsal_skip_actual_untranslatable");
                 return null;
@@ -1088,13 +1398,36 @@ pub const Rehearsal = struct {
             return null;
         };
         if (gop.found_existing) return gop.value_ptr;
-        gop.value_ptr.* = .{ .view = caller.view, .by_use_expr = .empty, .ambiguous = .empty };
+        gop.value_ptr.* = .{
+            .view = caller.view,
+            .by_use_expr = .empty,
+            .ambiguous = .empty,
+            .by_scheme_root = .empty,
+            .ambiguous_scheme_root = .empty,
+        };
         const index = gop.value_ptr;
+        // A root two distinct schemes claim names neither of them, so it is
+        // marked ambiguous and a template whose function root lands there is
+        // resolved by nothing. That is what keeps this index exact: it answers
+        // only where exactly one scheme in the module generalizes that root.
+        for (caller.view.schemes) |scheme| {
+            const key = @intFromEnum(scheme.root);
+            const entry = index.by_scheme_root.getOrPut(self.allocator, key) catch {
+                self.fail();
+                return null;
+            };
+            if (entry.found_existing) {
+                if (entry.value_ptr.* == @intFromEnum(scheme.id)) continue;
+                index.ambiguous_scheme_root.put(self.allocator, key, {}) catch {
+                    self.fail();
+                    return null;
+                };
+                continue;
+            }
+            entry.value_ptr.* = @intFromEnum(scheme.id);
+        }
         const sites = caller.view.instantiationSites();
         for (sites, 0..) |site, position| {
-            // A dispatch target's edge is selected by evidence, not by the use
-            // this seam records, so it never names this request.
-            if (site.slot_kind == @intFromEnum(checked.InstantiationSiteSlotKind.dispatch_target)) continue;
             const use_expr = site.useExpr() orelse continue;
             const key = @intFromEnum(use_expr);
             const entry = index.by_use_expr.getOrPut(self.allocator, key) catch {
@@ -1149,8 +1482,7 @@ pub const Rehearsal = struct {
             return;
         };
         const in_env = std.mem.eql(u8, &address.module_bytes, &frame.env_module_bytes);
-        const env = frame.environment();
-        const env_ptr: ?*const direct_translate.BindingEnvironment = if (in_env) &env else null;
+        const env_ptr: ?*const direct_translate.BindingEnvironment = if (in_env) frame.environment() else null;
         const owner_node = if (in_env) frame.owner_node else checked.checked_residual_disposition_module_body_owner;
         if (!in_env) census.bump("rehearsal_type_outside_environment");
 
@@ -1224,12 +1556,17 @@ pub const Rehearsal = struct {
         sealed_digest: names.TypeDigest,
     ) void {
         const representation = self.sealedCarriesRepresentation(sealed) or self.emittedCarriesRepresentation(emitted);
+        const difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0);
+        // A difference outside the residual-materialization class is a finding of
+        // its own, so its detail is always dumped: the bounded budget exists to
+        // stop the residual class from filling the file, not to hide the rest.
+        var beyond_residual_class = true;
         if (representation) {
             census.bump("rehearsal_type_mismatch_representation");
         } else {
             census.bump("rehearsal_type_mismatch_logical");
-            const difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0);
             if (difference.left.isEmptyTagUnionHead() and !difference.right.isEmptyTagUnionHead()) {
+                beyond_residual_class = false;
                 census.bump("rehearsal_type_mismatch_unbound_residual");
                 if (frame.binders.len == 0) {
                     census.bump("rehearsal_unbound_residual_env_without_binders");
@@ -1243,11 +1580,15 @@ pub const Rehearsal = struct {
                 census.bump("rehearsal_type_mismatch_row_width");
             } else if (difference.named_field != .not_named and difference.named_field != .equal) {
                 census.bump("rehearsal_type_mismatch_named_identity");
+            } else if (difference.depth >= max_difference_depth and
+                difference.left_recursive and difference.right_recursive)
+            {
+                census.bump("rehearsal_type_mismatch_recursive_beyond_depth");
             } else {
                 census.bump("rehearsal_type_mismatch_unclassified");
             }
         }
-        if (self.details.items.len >= max_mismatch_details) return;
+        if (!beyond_residual_class and self.details.items.len >= max_mismatch_details) return;
         var prefix: [8]u8 = undefined;
         @memcpy(&prefix, address.module_bytes[0..8]);
         self.details.append(self.allocator, .{
@@ -1259,7 +1600,7 @@ pub const Rehearsal = struct {
             .graph_digest = sealed_digest,
             .rehearsal_head = HeadShape.of(&self.store, emitted),
             .graph_head = HeadShape.of(self.program_types, sealed),
-            .difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0),
+            .difference = difference,
         }) catch self.fail();
     }
 
@@ -1274,7 +1615,7 @@ pub const Rehearsal = struct {
         const free = self.firstFreeVariable(
             cursor.view,
             @enumFromInt(address.type_id),
-            if (in_env) frame.binders else &.{},
+            if (in_env) frame.environment() else null,
         ) orelse {
             census.bump("rehearsal_unbound_no_free_variable");
             return;
@@ -1283,6 +1624,23 @@ pub const Rehearsal = struct {
             for (scheme.generalizedVars(cursor.view)) |binder| {
                 if (binder != free) continue;
                 census.bump("rehearsal_unbound_other_scheme_binder");
+                // Whether that scheme is on this frame's lexical chain says which
+                // half is missing: a chain level that does not name the binder
+                // means the level's own binding is short, while a scheme that is
+                // nowhere on the chain means no checked relation links the two
+                // (reunify.md section 7.1's captured set covers a scheme's root).
+                var on_chain = false;
+                var level = frame.environment();
+                while (level) |env| : (level = env.parent) {
+                    if (env.scheme.scheme != @intFromEnum(scheme.id)) continue;
+                    if (!std.mem.eql(u8, &env.scheme.module_bytes, &address.module_bytes)) continue;
+                    on_chain = true;
+                }
+                if (on_chain) {
+                    census.bump("rehearsal_unbound_other_scheme_binder_on_chain");
+                } else {
+                    census.bump("rehearsal_unbound_other_scheme_binder_off_chain");
+                }
                 return;
             }
         }
@@ -1305,13 +1663,13 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_unbound_undisposed");
     }
 
-    /// The first checked variable reachable from `root` that `binders` does not
-    /// name, in the walk order the translation itself descends.
+    /// The first checked variable reachable from `root` that no level of `env`
+    /// binds, in the walk order the translation itself descends.
     fn firstFreeVariable(
         self: *Rehearsal,
         view: checked.CheckedTypeStoreView,
         root: checked.CheckedTypeId,
-        binders: []const checked.CheckedTypeId,
+        env: ?*const direct_translate.BindingEnvironment,
     ) ?checked.CheckedTypeId {
         var visited = std.AutoHashMap(checked.CheckedTypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -1322,8 +1680,11 @@ pub const Rehearsal = struct {
             const gop = visited.getOrPut(ty) catch return null;
             if (gop.found_existing) continue;
             var bound = false;
-            for (binders) |binder| {
-                if (binder == ty) bound = true;
+            var level = env;
+            while (level) |scope| : (level = scope.parent) {
+                for (scope.binders) |binder| {
+                    if (binder == ty) bound = true;
+                }
             }
             if (bound) continue;
             switch (view.payload(ty)) {
