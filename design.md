@@ -1164,6 +1164,36 @@ alias arguments, but references to the annotated value consume the annotation
 root. This is how alias spelling from annotations is preserved without making
 alias roots union-find representatives for concrete structures.
 
+## Nominal Constructor Backing Relation
+
+An explicit nominal constructor chooses the nominal wrapper itself. Its operand
+is checked against the declaration's instantiated backing through the dedicated
+`nominal_constructor_backing` root relation, not through unrestricted ordinary
+unification.
+
+At that root, the relation cannot be satisfied by implicitly lifting an already
+nominal actual value through an anonymous expected backing. For example, if
+`Wrap` has backing `{ a : U8, b : U8 }`, then `Wrap.{ ..wrap, a: 1 }` is rejected
+when the record update has already lifted to `Wrap`; the constructor requires
+its record backing, not another `Wrap`. A constructor whose declared backing is
+itself a named type may still receive that exact named type.
+
+Only the constructor's outer backing pair uses this relation. Once that pair is
+accepted, component pairs use ordinary unification, so a backing record field or
+tag payload may contain an ordinary nominal value and structural values may lift
+there according to the normal language rule. An unconstrained backing parameter
+may likewise resolve to a nominal type; that is substitution of the declaration
+parameter, not an inverse lift through a concrete structural backing.
+
+This rule is implemented inside pure unification as explicit caller-supplied
+relation data. The checker must not probe a solved operand and then mutate or
+poison the graph separately, and Monotype must not repair an invalid checked
+constructor. A rejected root relation produces the existing nominal-constructor
+type mismatch diagnostic. The rejected side is pinned by
+`test/snapshots/issue/issue_10195_nominal_record_update_rewrapped.md`; accepted
+nested-nominal and implicit-record-update controls are pinned in
+`src/check/test/type_checking_integration.zig`.
+
 ## Module Completion Boundary
 
 The compile coordinator records phase progress separately from user diagnostics.
