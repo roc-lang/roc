@@ -12,16 +12,16 @@ main! = || {
 	if F64.div_trunc_by($f64, 2.0) != -3.0 {
 		crash "wrong F64 div_trunc_by result"
 	}
-	if F32.floor_to_i32($f32) != -8 {
+	if F32.floor_to_i32_try($f32) != Ok(-8) {
 		crash "wrong F32 floor result"
 	}
-	if F64.floor_to_i32($f64) != -8 {
+	if F64.floor_to_i32_try($f64) != Ok(-8) {
 		crash "wrong F64 floor result"
 	}
-	if F32.ceiling_to_i32($f32) != -7 {
+	if F32.ceiling_to_i32_try($f32) != Ok(-7) {
 		crash "wrong F32 ceiling result"
 	}
-	if F64.ceiling_to_i32($f64) != -7 {
+	if F64.ceiling_to_i32_try($f64) != Ok(-7) {
 		crash "wrong F64 ceiling result"
 	}
 	if $u128.shl_wrap(3) != 128 {
