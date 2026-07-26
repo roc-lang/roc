@@ -6673,9 +6673,20 @@ const Lowerer = struct {
         const index = @intFromEnum(local);
         if (self.local_map[index] != null) Common.invariant("unbound local destination was already bound");
 
+        // Recursive values have an explicit slot representation selected before
+        // ordinary value lowering. A backwards-built lookup must reserve that
+        // slot now so the recursive let later initializes the same local.
+        if (self.recursive_value_locals.contains(local)) {
+            const binding = try self.bindRecursiveLocalForTyped(local, ty);
+            if (binding.forward_local != null) {
+                Common.invariant("new recursive local slot unexpectedly required a forward local");
+            }
+            return binding.slot;
+        }
+
         // LIR chains are built backwards, so the first use can reach an
         // unbound local before its producer. Preserve that use's committed
-        // recursive layout in a distinct local; direct let lowering later
+        // destination layout in a distinct local; direct let lowering later
         // writes the producer into this exact slot.
         const target_layout = self.result.store.getLocal(target).layout_idx;
         const source = try self.addLocalForLayout(target_layout);
