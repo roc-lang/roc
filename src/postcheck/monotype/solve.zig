@@ -20,6 +20,7 @@ const Type = @import("type.zig");
 const census = @import("census.zig");
 const representation_policy = @import("../representation_policy.zig");
 const representation_mirror = @import("representation_mirror.zig");
+const spec_rehearsal = @import("spec_rehearsal.zig");
 
 /// Debug-only: the census records extension nodes minted by the import path
 /// so a later row merge that distributes a remainder into one can be counted.
@@ -299,6 +300,12 @@ pub const InstGraph = struct {
     /// representation decisions into engine slots and Debug-asserts the sealed
     /// outcome; it never selects lowering behavior.
     mirror: ?*representation_mirror.RepresentationMirror = null,
+    /// Debug-only, env-gated record of which checked type each instantiated node
+    /// came from and which immutable id it sealed to (reunify.md section 11.2,
+    /// Slice 7 flip-prep). The per-specialization rehearsal owns the storage and
+    /// attaches it while this graph lowers; null on every other path, and read by
+    /// nothing inside this module.
+    trace: ?*spec_rehearsal.SealTrace = null,
 
     pub fn create(
         allocator: Allocator,
@@ -1856,6 +1863,10 @@ pub const GraphTypeFinals = struct {
                 // Stage A probe can compare the full sealed population against a
                 // directed re-translation (a no-op when no sink is connected).
                 try self.graph.types.noteCommittedSeal(shared);
+                // Debug/probe-only: attribute the seal to the node that produced
+                // it, so the per-specialization rehearsal can join it to the
+                // checked position the node was instantiated from.
+                if (self.graph.trace) |trace| trace.noteSealed(@intFromEnum(node), shared);
                 return shared;
             },
         }

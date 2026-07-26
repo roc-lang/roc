@@ -15,6 +15,7 @@ const solve = @import("solve.zig");
 const serialize = @import("serialize.zig");
 const census = @import("census.zig");
 const direct_translate = @import("direct_translate.zig");
+const spec_rehearsal = @import("spec_rehearsal.zig");
 const reunify_shadow = @import("../reunify_shadow/shadow.zig");
 
 const InstGraph = solve.InstGraph;
@@ -128,6 +129,14 @@ pub fn run(
     // sealed population (reunify.md section 9, Slice 7 Stage A). Disconnected on
     // every non-probe lowering, so seal collection stays inert.
     if (reunify_shadow.shouldRun()) program.types.committed_census = &builder.sealed_population;
+
+    // Debug-only, state-isolated per-specialization rehearsal (reunify.md
+    // sections 9/10/11, Slice 7 flip-prep step b). It runs alongside lowering
+    // because a specialization's binder environment only exists while that
+    // specialization is being lowered; it owns its own store and engine and
+    // writes nothing lowering reads.
+    builder.rehearsal = builder.createRehearsal();
+    defer if (builder.rehearsal) |rehearsal| rehearsal.destroy();
 
     for (roots.requests) |request| {
         try builder.lowerRoot(request);
@@ -709,6 +718,11 @@ const Builder = struct {
     /// Owns every materialized `SpecEvidence` tree; freed wholesale with the
     /// builder.
     evidence_arena: std.heap.ArenaAllocator,
+    /// Debug-only, env-gated per-specialization rehearsal (reunify.md sections
+    /// 9/10/11, Slice 7 flip-prep). It emits each specialization's types from
+    /// checked data alone and compares them against what this builder's graphs
+    /// seal. Null unless `ROC_REUNIFY_SHADOW` is set; it selects no behavior.
+    rehearsal: ?*spec_rehearsal.Rehearsal = null,
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
@@ -1598,9 +1612,22 @@ const Builder = struct {
         const saved_census_fn = self.census_sealing_fn;
         defer self.census_sealing_fn = saved_census_fn;
         if (census.enabled) self.census_sealing_fn = reserved_fn_id;
+        // Debug/probe-only: open this specialization's rehearsal, which resolves
+        // its binder environment from the requesting edge and records what the
+        // graph seals so the two can be compared once the body is sealed
+        // (reunify.md sections 9, 11.2; Slice 7 flip-prep step b).
+        if (self.rehearsal) |rehearsal| rehearsal.beginSpecialization(.{
+            .graph = graph,
+            .cursor = directTranslateCursor(view),
+            .reserved_fn_id = if (reserved_fn_id) |fn_id| @intFromEnum(fn_id) else null,
+        });
+        defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization(graph);
         var body_draft = BodyDraftStore.init(self.allocator);
         defer body_draft.deinit();
         var body_ctx = try BodyContext.initWithMethodScope(self.allocator, self, view, method_scope, template_ref, graph, &body_draft);
+        // Debug/probe-only: this is the context whose instantiated nodes stand
+        // for this specialization's own checked positions.
+        body_ctx.spec_root_context = true;
         body_ctx.evidence = .{ .vector = spec_evidence };
         if (spec_evidence.len < template.evidence_params.len) {
             // An entry wrapper's only caller is the root edge itself;
@@ -1673,6 +1700,10 @@ const Builder = struct {
             root_node,
             if (body_uses_generated_evidence) body_fn_ty else null,
         );
+        // Debug/probe-only: every position this specialization sealed is now
+        // final, so compare it against the rehearsal's own emission before the
+        // graph is destroyed (reunify.md Slice 7 flip-prep step b).
+        if (self.rehearsal) |rehearsal| rehearsal.compareSpecialization(graph);
         const body_ids = sealed.ids;
         const final_fn_ty = sealed.extra_ty orelse sealed.root_ty.?;
         // The definition records the body's solved view of the root type.
@@ -2742,6 +2773,26 @@ const Builder = struct {
         .declared_order = directTranslateDeclaredOrder,
     };
 
+    /// Resolve a module's content identity to the cursor the rehearsal reads it
+    /// by, or null when that module is not in the lowering input.
+    fn rehearsalCursorForModule(context: *anyopaque, module_bytes: [32]u8) ?direct_translate.ModuleCursor {
+        const self: *Builder = @ptrCast(@alignCast(context));
+        const view = self.moduleForDigestOrNull(module_bytes) orelse return null;
+        return directTranslateCursor(view);
+    }
+
+    /// Build the per-specialization rehearsal when the shadow is compiled in and
+    /// enabled (reunify.md Slice 7 flip-prep step b), otherwise null.
+    fn createRehearsal(self: *Builder) ?*spec_rehearsal.Rehearsal {
+        return spec_rehearsal.Rehearsal.maybeCreate(
+            self.allocator,
+            &self.program.types,
+            &self.program.names,
+            .{ .context = self, .vtable = &direct_translate_vtable },
+            .{ .context = self, .cursor_for_module = rehearsalCursorForModule },
+        );
+    }
+
     /// Whether a sealed Monotype type carries iterator or generated
     /// representation content anywhere, so a directed-translation mismatch on it
     /// is classified as a representation difference rather than a logical one.
@@ -3321,6 +3372,9 @@ const Builder = struct {
                 graph,
             );
             if (reserved.needs_lowering) {
+                // Debug/probe-only: carry the requesting edge with the reserved
+                // function id so the deferred body resolves the same edge.
+                if (self.rehearsal) |rehearsal| rehearsal.rememberReservedEdge(@intFromEnum(reserved.localFnId()));
                 try self.pinDeferredTemplateRequestToCheckedRoot(graph, template_ref, request_template.mono_fn_ty);
                 try graph.deferred_templates.append(self.allocator, .{
                     .fn_id = reserved.localFnId(),
@@ -3432,6 +3486,9 @@ const Builder = struct {
             source_ctx.graph,
         );
         if (reserved.needs_lowering) {
+            // Debug/probe-only: this request lowers later from the deferred
+            // queue, so its edge travels with the reserved function id.
+            if (self.rehearsal) |rehearsal| rehearsal.rememberReservedEdge(@intFromEnum(reserved.localFnId()));
             try self.pinDeferredTemplateRequestToCheckedRoot(source_ctx.graph, template_ref, request_template.mono_fn_ty);
             try source_ctx.graph.deferred_templates.append(self.allocator, .{
                 .fn_id = reserved.localFnId(),
@@ -7234,6 +7291,13 @@ const BodyContext = struct {
     /// restored from the constant lower their bodies against this chain
     /// (their plans' `constraint(k)` refs index the constant's scheme).
     restore_evidence: EvidenceChain = .{},
+    /// Debug/probe-only: true for the one context that instantiates a
+    /// specialization's own body under that specialization's binding. Many
+    /// contexts share one graph (per-call contexts, nominal-backing scopes,
+    /// type-only pins), and each instantiates checked ids under a different
+    /// binding, so only this context's nodes stand for the specialization's own
+    /// positions (reunify.md sections 9.2, 11.2).
+    spec_root_context: bool = false,
     const PatternLiteralGuard = struct {
         local: DraftLocalId,
         ty: Type.TypeId,
@@ -9021,6 +9085,19 @@ const BodyContext = struct {
         const address = self.typeAddress(checked_ty);
         if (self.scopedNode(address)) |existing| return existing;
         const placeholder = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+        // Debug/probe-only: remember which checked position this node stands for,
+        // so the per-specialization rehearsal can compare its own emission
+        // against whatever this node seals to (reunify.md Slice 7 flip-prep).
+        // Only this specialization's own root context qualifies: a nested
+        // instantiation scope or a per-call context binds the same checked id
+        // under a different binding, which this specialization's environment
+        // does not describe.
+        if (self.spec_root_context and self.decl_scopes.items.len == 0) {
+            if (self.graph.trace) |trace| trace.noteProvenance(@intFromEnum(placeholder), .{
+                .module_bytes = address.module_bytes,
+                .type_id = address.type_id,
+            });
+        }
         try self.putScopedNode(address, placeholder);
         const built = try self.instNodeContent(checked_ty);
         try self.graph.unify(placeholder, built);
@@ -17531,6 +17608,13 @@ const BodyContext = struct {
         // The value use's site evidence resolves the callee scheme's dispatch
         // requirements at this edge.
         const evidence = try self.evidenceForUseSite(self.view.resolved_refs.records[raw].expr);
+        // Debug/probe-only: name the requesting edge for the rehearsal. The
+        // instantiated function type at this use is the same checked type the
+        // edge's instantiation site recorded, so the site's dense actuals bind
+        // the callee scheme (reunify.md sections 7.2, 9.1).
+        if (self.builder.rehearsal) |rehearsal| {
+            rehearsal.noteRequestEdge(self.view.key.bytes, source_fn_ty);
+        }
         return switch (self.view.resolved_refs.records[raw].ref) {
             .local_proc => |local| .{ .local = try self.fnTemplateForLocalProcWithMono(local, source_fn_ty, source_fn_key, mono_fn_ty, evidence) },
             .top_level_proc,

@@ -235,10 +235,26 @@ pub const Translator = struct {
         skip_reason: *SkipReason,
     ) WalkError!TypeId {
         const owner_node = checked.checked_residual_disposition_module_body_owner;
-        return self.eagerWalk(cursor, null, owner_node, checked_ty, skip_reason) catch |err| switch (err) {
+        return try self.translateUnderEnvironment(cursor, null, owner_node, checked_ty, skip_reason);
+    }
+
+    /// Translate one checked root under an already-built binder environment
+    /// (reunify.md section 9.2). The caller owns `binding_env` and the storage
+    /// its bound values name; `scheme_owner_node` selects the residual
+    /// dispositions that apply to this walk. A recursive root reruns through the
+    /// store's recursive-group builder, exactly as the ground entry point does.
+    pub fn translateUnderEnvironment(
+        self: *Translator,
+        cursor: ModuleCursor,
+        binding_env: ?*const BindingEnvironment,
+        scheme_owner_node: u32,
+        checked_ty: checked.CheckedTypeId,
+        skip_reason: *SkipReason,
+    ) WalkError!TypeId {
+        return self.eagerWalk(cursor, binding_env, scheme_owner_node, checked_ty, skip_reason) catch |err| switch (err) {
             error.Skip => {
                 if (skip_reason.* == .recursive_cycle) {
-                    return try self.translateRecursiveRoot(cursor, null, owner_node, checked_ty, skip_reason);
+                    return try self.translateRecursiveRoot(cursor, binding_env, scheme_owner_node, checked_ty, skip_reason);
                 }
                 return err;
             },

@@ -3256,7 +3256,22 @@ pub const CheckedTypeStoreView = struct {
     residual_dispositions: []const CheckedResidualDisposition = &.{},
     imported_schemes: []const CheckedImportedScheme = &.{},
     imported_scheme_binders: []const CheckedTypeId = &.{},
+    instantiation_sites: []const CheckedInstantiationSite = &.{},
+    instantiation_site_actuals: []const CheckedTypeId = &.{},
     var_names: *const canonical.NameInterner = &empty_view_var_names,
+
+    /// This view's dense scheme-instantiation sites (reunify.md 7.2). A
+    /// consuming stage reads a use edge's owning scheme and positional actuals
+    /// from here instead of re-deriving them from the instantiated root.
+    pub fn instantiationSites(self: CheckedTypeStoreView) []const CheckedInstantiationSite {
+        return self.instantiation_sites;
+    }
+
+    /// The flat pool of instantiation-site positional actuals this view's sites
+    /// index into.
+    pub fn instantiationSiteActuals(self: CheckedTypeStoreView) []const CheckedTypeId {
+        return self.instantiation_site_actuals;
+    }
 
     /// The shared flat pool of `CheckedTypeId`s backing range fields.
     pub fn typeIdPool(self: CheckedTypeStoreView) []const CheckedTypeId {
@@ -4308,6 +4323,8 @@ pub const CheckedTypeStore = struct {
             .residual_dispositions = self.residual_dispositions.items,
             .imported_schemes = self.imported_schemes.items,
             .imported_scheme_binders = self.imported_scheme_binders.items,
+            .instantiation_sites = self.instantiation_sites.items,
+            .instantiation_site_actuals = self.instantiation_site_actuals.items,
             .var_names = &self.var_names,
         };
     }

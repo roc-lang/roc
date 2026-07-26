@@ -179,6 +179,81 @@ pub const Census = struct {
     final_spec_id_collisions_equivalent: Counter = Counter.init(0),
     final_spec_id_collisions_divergent: Counter = Counter.init(0),
     final_spec_id_collisions_solved_skipped: Counter = Counter.init(0),
+    // reunify.md sections 9/10/11, Slice 7 flip-prep step (b): the
+    // per-specialization rehearsal. For every specialization the graph lowers,
+    // the rehearsal resolves that specialization's dense binder environment from
+    // the requesting edge's instantiation site and emits, from checked data
+    // alone, the type at every position the graph sealed.
+    //
+    // `spec_attempted` counts specializations reached; `spec_compared` counts
+    // those whose environment resolved, and `env_resolved` is the same event seen
+    // from the environment side. The `skip_*` counters name every way an edge did
+    // not resolve, one class per cause, so an unresolved edge is never an
+    // assumption: a root has no requesting edge (`root_edge`), a compiler-generated
+    // request records none (`generated_edge`), and the rest are missing site,
+    // ambiguous site, unresolved scheme, absent module, arity, an actual the
+    // checker did not reach, a nested closure scheme whose captured binders this
+    // step does not yet bind, and an actual outside the translatable subset.
+    rehearsal_spec_attempted: Counter = Counter.init(0),
+    rehearsal_spec_compared: Counter = Counter.init(0),
+    rehearsal_env_resolved: Counter = Counter.init(0),
+    rehearsal_skip_root_edge: Counter = Counter.init(0),
+    rehearsal_skip_generated_edge: Counter = Counter.init(0),
+    rehearsal_skip_no_site: Counter = Counter.init(0),
+    rehearsal_skip_site_ambiguous: Counter = Counter.init(0),
+    rehearsal_skip_scheme_unresolved: Counter = Counter.init(0),
+    rehearsal_skip_module_absent: Counter = Counter.init(0),
+    rehearsal_skip_arity_mismatch: Counter = Counter.init(0),
+    rehearsal_skip_unreached_actual: Counter = Counter.init(0),
+    rehearsal_skip_captured_scheme: Counter = Counter.init(0),
+    rehearsal_skip_actual_untranslatable: Counter = Counter.init(0),
+    // Per compared position. `type_compared` counts one (position, sealed id)
+    // pair; `type_match` counts equal stored digests. `type_mismatch_logical` is
+    // the required-zero counter: neither side carries iterator or generated
+    // representation content, so an unequal stored form is a directed-emission
+    // bug. `type_mismatch_representation` is a difference on a position where one
+    // side does carry that content, which together with
+    // `type_skip_engine_input_needed` bounds exactly the representation content
+    // the flip's body discovery must supply.
+    rehearsal_type_compared: Counter = Counter.init(0),
+    rehearsal_type_match: Counter = Counter.init(0),
+    rehearsal_type_mismatch_logical: Counter = Counter.init(0),
+    rehearsal_type_mismatch_representation: Counter = Counter.init(0),
+    // A position whose checked source lives outside the specialization's own
+    // scheme module, so no binder of this environment is in scope there and it
+    // emits as a ground type.
+    rehearsal_type_outside_environment: Counter = Counter.init(0),
+    // One checked position that the graph sealed to more than one id within a
+    // single specialization: a second occurrence with its own representation
+    // flow, counted rather than compared against the one emitted type.
+    rehearsal_type_skip_other_occurrence: Counter = Counter.init(0),
+    rehearsal_type_skip_module_absent: Counter = Counter.init(0),
+    rehearsal_type_skip_engine_input_needed: Counter = Counter.init(0),
+    rehearsal_type_skip_open_row: Counter = Counter.init(0),
+    rehearsal_type_skip_recursive: Counter = Counter.init(0),
+    rehearsal_type_skip_pending_or_err: Counter = Counter.init(0),
+    rehearsal_type_skip_numeric_default: Counter = Counter.init(0),
+    rehearsal_type_skip_malformed_arity: Counter = Counter.init(0),
+    rehearsal_type_skip_binder_not_found: Counter = Counter.init(0),
+    rehearsal_type_skip_missing_backing: Counter = Counter.init(0),
+    // The representation side (reunify.md sections 10.2/10.6, 11.1). Every
+    // representation-bearing position the rehearsal emits gets its own slot;
+    // `interface_relate_*` is the explicit caller-to-callee representation edge
+    // between the request context's emission of the requesting edge and the
+    // callee's scheme root emitted under the binding, related through the
+    // section 10.3 closure engine (rejected when the two are not logically
+    // equal). `seal_positions` counts slots sealed at the specialization's end,
+    // `relations_applied` those a relation moved into another class, and
+    // `seal_descriptor_moved` a sealed descriptor that no longer matches the one
+    // emitted at that position — the case where emission must be re-materialized
+    // from the sealed slot instead of kept.
+    rehearsal_slots_created: Counter = Counter.init(0),
+    rehearsal_interface_relate_applied: Counter = Counter.init(0),
+    rehearsal_interface_relate_rejected: Counter = Counter.init(0),
+    rehearsal_interface_already_related: Counter = Counter.init(0),
+    rehearsal_seal_positions: Counter = Counter.init(0),
+    rehearsal_relations_applied: Counter = Counter.init(0),
+    rehearsal_seal_descriptor_moved: Counter = Counter.init(0),
 };
 
 /// The single process-wide census. A corpus run accumulates into it and the

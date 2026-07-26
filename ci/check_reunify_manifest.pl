@@ -44,6 +44,7 @@ my $RSHAD = 'src/postcheck/reunify_shadow/shadow.zig';
 my $DTRAN = 'src/postcheck/monotype/direct_translate.zig';
 my $RMIRR = 'src/postcheck/monotype/representation_mirror.zig';
 my $FSID  = 'src/postcheck/monotype/final_spec_id.zig';
+my $SREH  = 'src/postcheck/monotype/spec_rehearsal.zig';
 
 # Every category scans all .zig files under src/postcheck. `exempt` lists
 # path prefixes whose matches are intentionally outside the manifest.
@@ -259,8 +260,13 @@ my @categories = (
               counts => { $RPOL => 7, $RCLO => 2, $SOLVE => 1, $LS => 3 } },
             { label => 'chooseGeneratedEvidenceBacking', re => qr/\bchooseGeneratedEvidenceBacking\b/,
               counts => { $RPOL => 4, $RCLO => 2, $LS => 1 } },
+            # $SREH (Slice 7 flip-prep step b): the per-specialization rehearsal
+            # decides, rather than mirrors, the representation of each position
+            # it emits, so it asks the shared policy which owners select their
+            # backing by score before it builds that position's slot. It deletes
+            # with the rehearsal at the flip.
             { label => 'evidenceOwnerUsesScoreSelection', re => qr/\bevidenceOwnerUsesScoreSelection\b/,
-              counts => { $RPOL => 7, $LS => 1 } },
+              counts => { $RPOL => 7, $LS => 1, $SREH => 1 } },
             # $RMIRR (Slice 7 Stage B): the graph-driven representation-closure
             # shadow cites `applyIteratorJoin` (the graph site it mirrors) in a
             # doc comment; it deletes at the flip.
@@ -279,8 +285,13 @@ my @categories = (
             # relating same-logical positions through the section 10.3 closure
             # engine, the same seal the shadow census runs. It is representation
             # closure, not logical re-derivation, and the flip keeps it.
+            # $SREH gained one `relate(` in Slice 7 flip-prep step (b): the
+            # per-specialization rehearsal relates the request context's emission
+            # of a requesting edge to the callee's scheme root emitted under the
+            # binding, which is that specialization's representation interface
+            # edge (reunify.md 10.3, 11.1). It deletes with the rehearsal.
             { label => 'relate(', re => qr/\brelate\(/,
-              counts => { $RCLO => 17, $RSHAD => 1, $RMIRR => 1, $FSID => 1 } },
+              counts => { $RCLO => 17, $RSHAD => 1, $RMIRR => 1, $FSID => 1, $SREH => 1 } },
             { label => 'relateNominalBacking', re => qr/\brelateNominalBacking\b/,
               counts => { $RCLO => 4 } },
         ],
