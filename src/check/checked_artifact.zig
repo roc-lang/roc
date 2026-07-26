@@ -9353,8 +9353,9 @@ pub const CheckedBodyStore = struct {
     }
 
     /// Republish runtime divergence after static dispatch resolutions are
-    /// final. A checked-error or unreachable dispatch is explicit bottom, so
-    /// its divergence must propagate through the same producer-owned expression
+    /// final. Monotype emits an explicit runtime crash for a checked-error or
+    /// unreachable dispatch, so the dispatch never returns a result value. Its
+    /// divergence must propagate through the same CheckedBodyStore expression
     /// dependencies as an ordinary `runtime_error` before Monotype consumes the
     /// checked body.
     fn publishResolvedDispatchDivergence(
@@ -10205,9 +10206,9 @@ const DivergenceDispatchFacts = struct {
 };
 
 /// Runtime divergence for one checked body under a concrete dispatch-evidence
-/// vector. The checked artifact owns dependency propagation; specialization
-/// supplies only the exact dispatch expressions whose evidence resolves to a
-/// checked error or unreachable value.
+/// vector. CheckedBodyStore owns dependency propagation; specialization
+/// supplies only the exact dispatch expressions whose evidence makes Monotype
+/// emit a runtime crash instead of returning a dispatch result value.
 pub const DispatchDivergence = struct {
     exprs: []bool,
     statements: []bool,
@@ -10261,8 +10262,8 @@ fn publishCheckedBodyDivergence(
 /// Compute checked-body divergence after static dispatch plans are attached.
 /// `evidence_crashes` is either empty or one bool per checked expression; true
 /// means the specialization's explicit evidence resolves that dispatch to a
-/// checked error or unreachable value. Plan-level rejected resolutions are
-/// always included as well.
+/// checked error or unreachable value, for which Monotype emits a non-returning
+/// runtime crash. Plan-level rejected resolutions are always included as well.
 pub fn dispatchDivergenceForEvidence(
     allocator: Allocator,
     bodies: CheckedBodyStoreView,

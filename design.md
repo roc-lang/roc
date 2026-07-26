@@ -3722,16 +3722,21 @@ its plan:
   specialization edge can ever supply and no default applies: the dispatch is
   statically unreachable and lowers to an explicit crash.
 
-`checked_error` and `unreachable_dispatch` are bottom at the dispatch expression.
+`checked_error` and `unreachable_dispatch` are rejected, non-returning
+dispatches. Monotype lowers both to an ordinary Roc runtime crash instead of a
+call, so neither can return a dispatch result value. For `checked_error`, this is
+the crash observed if `roc run` continues after reporting the missing method and
+execution reaches the rejected dispatch. For `unreachable_dispatch`, the crash
+represents the path that checking proved cannot receive a dispatcher value.
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
 a `constraint(depth, k)` becomes `checked_error` or `unreachable_value` only for
 one specialization, Monotype supplies those exact dispatch expression ids to
 the same checked-body divergence computation before it replays type relations
 or lowers the body. Callable, dispatcher, operand, and result types may be
-instantiated only after this callable-or-crash gate; a rejected dispatch lowers
-directly to a crash with its contextual result cell and never contributes a type
-relation.
+instantiated only after this callable-or-crash gate. The crash branch uses the
+contextual result cell solely to represent the non-returning expression; it
+never instantiates the rejected callable's type or contributes a type relation.
 
 Stored generated parser and encoder runtime functions are the one distinct
 producer proof: ConstStore emits their explicit generated-runtime function kind
