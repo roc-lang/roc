@@ -20570,16 +20570,20 @@ fn varSupportsToHash(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return try self.varSupportsStructuralDeriveInternal(var_, .hash, &self.var_set);
 }
 
-fn varSupportsDictKey(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+fn varSupportsStringRenderedDictKey(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| try self.typeSupportsDictKey(structure),
-        .alias => |alias| try self.varSupportsDictKey(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| try self.typeSupportsStringRenderedDictKey(structure),
+        .alias => |alias| try self.varSupportsStringRenderedDictKey(self.types.getAliasBackingVar(alias)),
         .err => true,
         .flex, .rigid => false,
     };
 }
 
-fn typeSupportsDictKey(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
+/// Whether a dict key type can be rendered as a key string, which is what the
+/// `parse_key_*`/`encode_key_*` methods read and write. Composite keys are
+/// excluded here, so derived codecs reject them for every format even though
+/// `Dict` itself accepts any key that supports `is_eq` and `to_hash`.
+fn typeSupportsStringRenderedDictKey(self: *Self, flat_type: types_mod.FlatType) std.mem.Allocator.Error!bool {
     return switch (flat_type) {
         .nominal_type => |nominal| self.nominalIsBuiltinBoolType(nominal) or
             self.nominalIsBuiltinStrType(nominal) or
@@ -20590,10 +20594,10 @@ fn typeSupportsDictKey(self: *Self, flat_type: types_mod.FlatType) std.mem.Alloc
     };
 }
 
-fn varSupportsDictKeyForDerivedEncode(self: *Self, var_: Var) std.mem.Allocator.Error!DerivedSupport {
+fn varSupportsStringRenderedKeyForDerivedEncode(self: *Self, var_: Var) std.mem.Allocator.Error!DerivedSupport {
     return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |structure| derivedSupportFromBool(try self.typeSupportsDictKey(structure)),
-        .alias => |alias| try self.varSupportsDictKeyForDerivedEncode(self.types.getAliasBackingVar(alias)),
+        .structure => |structure| derivedSupportFromBool(try self.typeSupportsStringRenderedDictKey(structure)),
+        .alias => |alias| try self.varSupportsStringRenderedKeyForDerivedEncode(self.types.getAliasBackingVar(alias)),
         .err => .supported,
         .flex => .unresolved,
         .rigid => .unsupported,
@@ -20803,7 +20807,7 @@ fn nominalSupportsDerivedParseShape(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return try self.varSupportsIsEq(args.key) and
             try self.varSupportsToHash(args.key) and
-            try self.varSupportsDictKey(args.key) and
+            try self.varSupportsStringRenderedDictKey(args.key) and
             try self.varSupportsDerivedParseShape(args.value, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
@@ -20834,7 +20838,7 @@ fn nominalSupportsDerivedParseField(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return try self.varSupportsIsEq(args.key) and
             try self.varSupportsToHash(args.key) and
-            try self.varSupportsDictKey(args.key) and
+            try self.varSupportsStringRenderedDictKey(args.key) and
             try self.varSupportsDerivedParseShape(args.value, env, region);
     }
     if (self.nominalIsBuiltinTryType(nominal)) {
@@ -21002,7 +21006,7 @@ fn nominalSupportsDerivedEncodeShape(
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         return combineDerivedSupport(
-            try self.varSupportsDictKeyForDerivedEncode(args.key),
+            try self.varSupportsStringRenderedKeyForDerivedEncode(args.key),
             try self.varSupportsDerivedEncodeShape(args.value, encoding_var, env, region),
         );
     }
@@ -23103,7 +23107,7 @@ fn validateDerivedParseNominal(
     if (self.nominalDictKeyValueVars(nominal)) |args| {
         if (!try self.varSupportsIsEq(args.key)) return .unsupported;
         if (!try self.varSupportsToHash(args.key)) return .unsupported;
-        if (!try self.varSupportsDictKey(args.key)) return .unsupported;
+        if (!try self.varSupportsStringRenderedDictKey(args.key)) return .unsupported;
         switch (try self.validateDerivedParseDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
@@ -23525,7 +23529,7 @@ fn validateDerivedEncodeNominal(
         return try self.validateDerivedEncodeVar(payload_var, encoding_var, state_var, err_var, constraint, env, region, visited);
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
-        if (!try self.varSupportsDictKey(args.key)) return .unsupported;
+        if (!try self.varSupportsStringRenderedDictKey(args.key)) return .unsupported;
         switch (try self.validateDerivedEncodeDictMethods(encoding_var, state_var, err_var, constraint, env, region)) {
             .ok => {},
             .unsupported, .reported_error => |result| return result,
