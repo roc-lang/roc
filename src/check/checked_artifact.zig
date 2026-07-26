@@ -13354,8 +13354,8 @@ fn sealCheckedProcedureTemplateRefs(
     templates.dispatch_ref_scopes = try allocator.dupe(DispatchScopeRef, dispatch_ref_scope_pool.items);
     templates.dispatch_relation_kinds = try dispatch_relation_kind_pool.toOwnedSlice(allocator);
     templates.dispatch_scopes = try allocator.dupe(DispatchRefScope, collector.scopes.items);
-    publishLocalProcedureDispatchScopes(resolved_value_refs, templates.dispatch_scopes);
-    publishLocalMethodDispatchScopes(method_registry, templates.dispatch_scopes);
+    publishLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
+    publishLocalMethodDispatchScopes(method_registry, &collector.scope_by_checked_expr);
     template_iterator_refs.* = .{
         .spans = iterator_spans,
         .pool = try iterator_ref_pool.toOwnedSlice(allocator),
@@ -13377,7 +13377,7 @@ fn sealCheckedProcedureTemplateRefs(
 /// scope table rather than by evidence count.
 fn publishLocalProcedureDispatchScopes(
     resolved_value_refs: *ResolvedValueRefTable,
-    scopes: []const DispatchRefScope,
+    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (resolved_value_refs.records) |*record| {
         const local = switch (record.ref) {
@@ -13385,13 +13385,13 @@ fn publishLocalProcedureDispatchScopes(
             else => continue,
         };
 
-        local.dispatch_scope = localProcedureDispatchScope(scopes, local.expr);
+        local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
 }
 
 fn publishLocalMethodDispatchScopes(
     method_registry: *static_dispatch.MethodRegistry,
-    scopes: []const DispatchRefScope,
+    scope_by_checked_expr: *const std.AutoHashMap(CheckedExprId, DispatchScopeId),
 ) void {
     for (method_registry.entries) |*entry| {
         const local = switch (entry.target.kind) {
@@ -13399,23 +13399,8 @@ fn publishLocalMethodDispatchScopes(
             else => continue,
         };
 
-        local.dispatch_scope = localProcedureDispatchScope(scopes, local.expr);
+        local.dispatch_scope = scope_by_checked_expr.get(local.expr);
     }
-}
-
-fn localProcedureDispatchScope(
-    scopes: []const DispatchRefScope,
-    expr: CheckedExprId,
-) ?DispatchScopeId {
-    var owned_scope: ?DispatchScopeId = null;
-    for (scopes, 0..) |scope, raw_scope| {
-        if (scope.checked_expr != expr) continue;
-        if (owned_scope != null) {
-            checkedArtifactInvariant("checked local procedure owns more than one dispatch scope", .{});
-        }
-        owned_scope = @enumFromInt(@as(u32, @intCast(raw_scope)));
-    }
-    return owned_scope;
 }
 
 /// Resolve every static-dispatch plan and instantiation-site obligation to an
@@ -14132,7 +14117,7 @@ const EvidencePass = struct {
             .flex => |flex| return self.resolveVarObligation(resolved.var_, flex.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .rigid => |rigid| return self.resolveVarObligation(resolved.var_, rigid.constraints, method, structural_kind, constraint_fn_var, chain, commit_unpinned),
             .alias, .structure => {
-                if (self.methodOwnerForSourceContent(resolved.var_)) |owner| {
+                if (try self.methodOwnerForSourceContent(resolved.var_)) |owner| {
                     if (self.lookupMethodTargetAcrossViews(owner, method)) |target| {
                         return try self.resolutionForMethodTarget(target, structural_kind, constraint_fn_var);
                     }
@@ -14253,7 +14238,7 @@ const EvidencePass = struct {
     /// The method owner of a settled source var, walking alias content
     /// transparently (the source-var analog of monotype lowering's
     /// dispatch-head read of published type identity).
-    fn methodOwnerForSourceContent(self: *EvidencePass, var_: Var) ?static_dispatch.MethodOwner {
+    fn methodOwnerForSourceContent(self: *EvidencePass, var_: Var) Allocator.Error!?static_dispatch.MethodOwner {
         var current = var_;
         var remaining: u64 = self.types.len();
         while (true) {
@@ -14271,8 +14256,8 @@ const EvidencePass = struct {
                         if (categorizeBuiltinNominal(self.module, self.import_views, nominal)) |builtin_nominal| {
                             if (builtin_nominal == .try_) {
                                 const idents = self.module.identStoreConst();
-                                const module_identity_id = self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module)) catch return null;
-                                const type_name = self.names.internTypeIdent(idents, nominal.ident.ident_idx) catch return null;
+                                const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
+                                const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                                 return .{ .nominal = .{
                                     .module = module_identity_id,
                                     .type_name = type_name,
@@ -14282,8 +14267,8 @@ const EvidencePass = struct {
                             return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin_nominal) };
                         }
                         const idents = self.module.identStoreConst();
-                        const module_identity_id = self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module)) catch return null;
-                        const type_name = self.names.internTypeIdent(idents, nominal.ident.ident_idx) catch return null;
+                        const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
+                        const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                         return .{ .nominal = .{
                             .module = module_identity_id,
                             .type_name = type_name,
@@ -28338,8 +28323,10 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
         .scheme_var = @enumFromInt(50),
         .checked_expr = @enumFromInt(30),
     }};
+    var scope_by_checked_expr = try nestedProcScopeMap(std.testing.allocator, &scopes);
+    defer scope_by_checked_expr.deinit();
 
-    publishLocalProcedureDispatchScopes(&refs, &scopes);
+    publishLocalProcedureDispatchScopes(&refs, &scope_by_checked_expr);
 
     try std.testing.expectEqual(
         @as(?DispatchScopeId, testIndexId(DispatchScopeId, 0)),
