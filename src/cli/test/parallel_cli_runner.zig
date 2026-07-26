@@ -7126,6 +7126,26 @@ fn runGlueRuntimeCase(
         },
         .wasm32 => null,
     };
+
+    // Zig 0.16.0 and 0.17.0-dev.1464 mislower two natural C ABI aggregate
+    // signatures exercised by layout-probe. On x64mac, Zig splits a two-f64
+    // aggregate after FP-register exhaustion instead of rolling the whole
+    // aggregate back to the stack. On arm64musl, Zig starts a 16-byte-aligned
+    // Dec aggregate in x5 instead of rounding up to x6. CGlue and RustGlue
+    // continue to exercise both signatures on these targets.
+    if (native_target) |target| {
+        if (runtime.language == .zig and std.mem.eql(u8, runtime.platform.name, "layout-probe")) {
+            if (zigCompilerMislowersLayoutProbeAbi(target.roc_target)) {
+                return .{
+                    .status = .skip,
+                    .phase = .setup,
+                    .duration_ns = timer.read(),
+                    .message = "Zig compiler mislowers an aggregate argument in this target's natural C ABI",
+                };
+            }
+        }
+    }
+
     const roc_target_name = switch (runtime.target) {
         .native => native_target.?.roc_target,
         .wasm32 => "wasm32",
@@ -7260,6 +7280,11 @@ fn runGlueRuntimeCase(
     util.cleanupTestWorkDir(io, env.dirs.work_dir);
     const elapsed = timer.read();
     return .{ .status = .pass, .phase = .run, .duration_ns = elapsed, .run_ns = elapsed };
+}
+
+fn zigCompilerMislowersLayoutProbeAbi(roc_target_name: []const u8) bool {
+    return std.mem.eql(u8, roc_target_name, "x64mac") or
+        std.mem.eql(u8, roc_target_name, "arm64musl");
 }
 
 fn runGlueRuntimeCommand(
@@ -9131,6 +9156,16 @@ test "effectiveTimeoutMs extends default for glue suite only" {
     default_args.timeout_provided = true;
     default_args.timeout_ms = 15_000;
     try std.testing.expectEqual(@as(u64, 15_000), effectiveTimeoutMs(default_args, suites));
+}
+
+test "Zig layout-probe ABI skip is limited to affected native targets" {
+    try std.testing.expect(zigCompilerMislowersLayoutProbeAbi("x64mac"));
+    try std.testing.expect(zigCompilerMislowersLayoutProbeAbi("arm64musl"));
+
+    try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64musl"));
+    try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("arm64mac"));
+    try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64win"));
+    try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("arm64win"));
 }
 
 test "cross target builds one build-only case per matching platform spec" {
