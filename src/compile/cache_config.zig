@@ -62,7 +62,10 @@ pub const Constants = struct {
     /// 37: published instantiation sites carry an evidence-vector reference into the plan table's evidence refs.
     /// 38: residual-variable dispositions cover every function argument and nested-function position, not only scheme root and return.
     /// 39: Monotype specialization records carry a parallel FinalSpecId identity and the spec cache gained FinalSpecId component/relocation sections (spec cache FORMAT_VERSION 10).
-    pub const CACHE_VERSION = 39;
+    /// 40: published instantiation sites carry the checked expression id of their
+    ///     CIR use node, so a consumer reading a frozen artifact names an edge by
+    ///     its use rather than by the instantiated root.
+    pub const CACHE_VERSION = 40;
 };
 
 /// Configuration for the Roc cache system.

@@ -2734,6 +2734,7 @@ const Builder = struct {
         const lookup = self.nominalDeclarationFor(view, nominal) orelse return null;
         return .{
             .cursor = directTranslateCursor(lookup.view),
+            .declaration = @intFromEnum(lookup.declaration.id),
             .formal_args = lookup.declaration.formalArgs(lookup.view.types),
             .root = lookup.declaration.backing,
         };
@@ -17608,12 +17609,12 @@ const BodyContext = struct {
         // The value use's site evidence resolves the callee scheme's dispatch
         // requirements at this edge.
         const evidence = try self.evidenceForUseSite(self.view.resolved_refs.records[raw].expr);
-        // Debug/probe-only: name the requesting edge for the rehearsal. The
-        // instantiated function type at this use is the same checked type the
-        // edge's instantiation site recorded, so the site's dense actuals bind
-        // the callee scheme (reunify.md sections 7.2, 9.1).
+        // Debug/probe-only: name the requesting edge for the rehearsal. The use's
+        // checked expression is the `use_node` half of the edge identity the
+        // instantiation site records, so it names the site whose
+        // dense actuals bind the callee scheme (reunify.md sections 7.2, 9.1).
         if (self.builder.rehearsal) |rehearsal| {
-            rehearsal.noteRequestEdge(self.view.key.bytes, source_fn_ty);
+            rehearsal.noteRequestEdge(self.view.key.bytes, self.view.resolved_refs.records[raw].expr);
         }
         return switch (self.view.resolved_refs.records[raw].ref) {
             .local_proc => |local| .{ .local = try self.fnTemplateForLocalProcWithMono(local, source_fn_ty, source_fn_key, mono_fn_ty, evidence) },

@@ -74,11 +74,39 @@ pub const CheckedAddress = struct {
 };
 
 /// The requesting edge of one specialization: the module whose body made the
-/// request, and the instantiated function type recorded at that use. It names
-/// the `CheckedInstantiationSite` whose dense actuals bind the callee scheme.
+/// request, and the checked expression the request was made at. That expression
+/// is the `use_node` half of the section 7.2 edge identity, resolved to a checked
+/// id by the checker, so it names the `CheckedInstantiationSite` whose dense
+/// actuals bind the callee scheme exactly.
 pub const RequestEdge = struct {
     module_bytes: [32]u8,
-    instantiated_root: checked.CheckedTypeId,
+    use_expr: checked.CheckedExprId,
+    /// The requesting body's own binding at the moment the request was made. A
+    /// request that reserves is lowered later, from a completely different frame
+    /// stack, so the environment a symbolic actual resolves under travels with
+    /// the edge instead of being read off whatever frame happens to be active
+    /// when the request is finally lowered (reunify.md sections 7.3, 9.1).
+    caller: ?CapturedEnvironment,
+};
+
+/// A copy of one requesting body's binding environment, owned by the edge that
+/// captured it. `binders` points into frozen checked data; `bound` is owned.
+pub const CapturedEnvironment = struct {
+    module_bytes: [32]u8,
+    scheme: direct_translate.SchemeIdent,
+    owner_node: u32,
+    binders: []const checked.CheckedTypeId,
+    bound: []direct_translate.BoundType,
+
+    fn environment(self: *const CapturedEnvironment) direct_translate.BindingEnvironment {
+        return .{
+            .scheme = self.scheme,
+            .binders = self.binders,
+            .bound = self.bound,
+            .captured = &.{},
+            .parent = null,
+        };
+    }
 };
 
 /// The per-specialization record the instantiation graph fills while lowering:
@@ -152,11 +180,13 @@ pub const SpecializationStart = struct {
     reserved_fn_id: ?u32,
 };
 
-/// One module's instantiation sites indexed by the instantiated root each edge
-/// recorded, which is the checked function type a call site requests with.
+/// One module's value-use instantiation sites indexed by the checked expression
+/// each edge is used at — the `use_node` half of the section 7.2 edge identity.
+/// A checked expression carrying several value-use edges that disagree on scheme
+/// or actuals is ambiguous and names no edge.
 const SiteIndex = struct {
     view: checked.CheckedTypeStoreView,
-    by_root: std.AutoHashMapUnmanaged(u32, u32),
+    by_use_expr: std.AutoHashMapUnmanaged(u32, u32),
     ambiguous: std.AutoHashMapUnmanaged(u32, void),
 };
 
@@ -483,9 +513,13 @@ pub const Rehearsal = struct {
     logical_tokens: std.AutoHashMapUnmanaged([32]u8, u64),
     next_token: u64,
     next_producer: u32,
-    /// Slots for the emitted types of the specialization being sealed, keyed by
-    /// the rehearsal id at that position: one emitted occurrence, one slot.
-    slots: std.AutoHashMapUnmanaged(Type.TypeId, closure.RepresentationSlotId),
+    /// Every representation slot the specialization being sealed created, in
+    /// creation order. A slot belongs to one emitted OCCURRENCE — the compared
+    /// position it was built under and the position path inside it — never to a
+    /// stored type id, so two independent occurrences of one structure begin with
+    /// distinct slots and only recursion or an explicit relation joins them
+    /// (reunify.md section 9.3's occurrence-safety law).
+    slots: std.ArrayList(closure.RepresentationSlotId),
     /// The descriptor each iterator slot was created with, so sealing can see
     /// whether the closure moved it.
     slot_descriptors: std.AutoHashMapUnmanaged(u32, policy.NamedDescriptor),
@@ -557,10 +591,13 @@ pub const Rehearsal = struct {
         self.logical_tokens.deinit(self.allocator);
         var indexes = self.site_index.valueIterator();
         while (indexes.next()) |index| {
-            index.by_root.deinit(self.allocator);
+            index.by_use_expr.deinit(self.allocator);
             index.ambiguous.deinit(self.allocator);
         }
         self.site_index.deinit(self.allocator);
+        self.releasePendingEdge();
+        var held = self.edges_by_fn.valueIterator();
+        while (held.next()) |edge| self.releaseEdge(edge.*);
         self.edges_by_fn.deinit(self.allocator);
         self.engine.deinit();
         self.translator.deinit();
@@ -569,10 +606,50 @@ pub const Rehearsal = struct {
     }
 
     /// Record the edge a specialization request is being made from: the caller's
-    /// module and the instantiated function type at the use.
-    pub fn noteRequestEdge(self: *Rehearsal, module_bytes: [32]u8, instantiated_root: checked.CheckedTypeId) void {
+    /// module and the checked expression the use sits at.
+    pub fn noteRequestEdge(self: *Rehearsal, module_bytes: [32]u8, use_expr: checked.CheckedExprId) void {
         if (self.disabled) return;
-        self.pending_edge = .{ .module_bytes = module_bytes, .instantiated_root = instantiated_root };
+        self.releasePendingEdge();
+        self.pending_edge = .{
+            .module_bytes = module_bytes,
+            .use_expr = use_expr,
+            .caller = self.captureCallerEnvironment(module_bytes),
+        };
+    }
+
+    /// Copy the innermost ready frame's binding when it binds ids in the
+    /// requesting module, so the edge carries the environment its symbolic
+    /// actuals resolve under.
+    fn captureCallerEnvironment(self: *Rehearsal, module_bytes: [32]u8) ?CapturedEnvironment {
+        const frame = self.callerFrameFor(module_bytes) orelse return null;
+        if (frame.bound.len == 0) {
+            return .{
+                .module_bytes = frame.env_module_bytes,
+                .scheme = frame.scheme,
+                .owner_node = frame.owner_node,
+                .binders = frame.binders,
+                .bound = &.{},
+            };
+        }
+        const bound = self.allocator.dupe(direct_translate.BoundType, frame.bound) catch return null;
+        return .{
+            .module_bytes = frame.env_module_bytes,
+            .scheme = frame.scheme,
+            .owner_node = frame.owner_node,
+            .binders = frame.binders,
+            .bound = bound,
+        };
+    }
+
+    fn releaseEdge(self: *Rehearsal, edge: RequestEdge) void {
+        const caller = edge.caller orelse return;
+        if (caller.bound.len != 0) self.allocator.free(caller.bound);
+    }
+
+    fn releasePendingEdge(self: *Rehearsal) void {
+        const edge = self.pending_edge orelse return;
+        self.releaseEdge(edge);
+        self.pending_edge = null;
     }
 
     /// Attach the pending edge to a reserved function id, so a specialization
@@ -581,9 +658,12 @@ pub const Rehearsal = struct {
         if (self.disabled) return;
         const edge = self.pending_edge orelse return;
         self.pending_edge = null;
-        self.edges_by_fn.put(self.allocator, fn_id, edge) catch {
+        const existing = self.edges_by_fn.fetchPut(self.allocator, fn_id, edge) catch {
+            self.releaseEdge(edge);
             self.disabled = true;
+            return;
         };
+        if (existing) |previous| self.releaseEdge(previous.value);
     }
 
     /// Start one specialization: resolve its binder environment from checked
@@ -678,11 +758,20 @@ pub const Rehearsal = struct {
             }
             return;
         };
+        defer self.releaseEdge(edge);
         const caller = self.lookup.cursor(edge.module_bytes) orelse {
             census.bump("rehearsal_skip_module_absent");
             return;
         };
-        const site = self.siteFor(caller, edge.instantiated_root) orelse return;
+        const site = self.siteFor(caller, edge.use_expr) orelse return;
+        const caller_env: ?direct_translate.BindingEnvironment = if (edge.caller) |*captured|
+            captured.environment()
+        else
+            null;
+        const caller_owner_node = if (edge.caller) |captured|
+            captured.owner_node
+        else
+            checked.checked_residual_disposition_module_body_owner;
         const scheme_id = site.schemeId() orelse {
             census.bump("rehearsal_skip_scheme_unresolved");
             return;
@@ -715,7 +804,7 @@ pub const Rehearsal = struct {
                 self.allocator.free(bound);
                 return;
             }
-            const translated = self.translateActual(caller, actual) orelse {
+            const translated = self.translateActual(caller, &caller_env, caller_owner_node, actual) orelse {
                 self.allocator.free(bound);
                 return;
             };
@@ -730,19 +819,15 @@ pub const Rehearsal = struct {
         frame.bound = bound;
         frame.env_ready = true;
         census.bump("rehearsal_env_resolved");
+        if (binders.len == 0) census.bump("rehearsal_env_resolved_without_binders");
 
         // The two sides of this specialization's representation interface
         // (reunify.md section 11.1): the callee's scheme root emitted under the
         // binding, and the request context's own emission of the same edge.
         const env = frame.environment();
         frame.interface_root = self.emitQuietly(defining, &env, scheme.owner_node, scheme.root);
-        if (self.callerFrameFor(caller.module_bytes)) |active| {
-            const caller_env = active.environment();
-            frame.request_root = self.emitQuietly(caller, &caller_env, active.owner_node, edge.instantiated_root);
-        } else {
-            const owner_node = checked.checked_residual_disposition_module_body_owner;
-            frame.request_root = self.emitQuietly(caller, null, owner_node, edge.instantiated_root);
-        }
+        const request_env: ?*const direct_translate.BindingEnvironment = if (caller_env) |*value| value else null;
+        frame.request_root = self.emitQuietly(caller, request_env, caller_owner_node, site.instantiated_root);
     }
 
     /// Emit one checked root, counting rather than classifying a walk that left
@@ -770,16 +855,12 @@ pub const Rehearsal = struct {
     fn translateActual(
         self: *Rehearsal,
         caller: direct_translate.ModuleCursor,
+        env: *const ?direct_translate.BindingEnvironment,
+        owner_node: u32,
         actual: checked.CheckedTypeId,
     ) ?Type.TypeId {
         var reason: direct_translate.SkipReason = undefined;
-        const caller_frame = self.callerFrameFor(caller.module_bytes);
-        const env = if (caller_frame) |active| active.environment() else null;
-        const owner_node = if (caller_frame) |active|
-            active.owner_node
-        else
-            checked.checked_residual_disposition_module_body_owner;
-        const env_ptr: ?*const direct_translate.BindingEnvironment = if (env) |*value| value else null;
+        const env_ptr: ?*const direct_translate.BindingEnvironment = if (env.*) |*value| value else null;
         return self.translator.translateUnderEnvironment(caller, env_ptr, owner_node, actual, &reason) catch |err| switch (err) {
             error.Skip => {
                 census.bump("rehearsal_skip_actual_untranslatable");
@@ -805,15 +886,15 @@ pub const Rehearsal = struct {
     fn siteFor(
         self: *Rehearsal,
         caller: direct_translate.ModuleCursor,
-        instantiated_root: checked.CheckedTypeId,
+        use_expr: checked.CheckedExprId,
     ) ?checked.CheckedInstantiationSite {
         const index = self.siteIndexFor(caller) orelse return null;
-        const key = @intFromEnum(instantiated_root);
+        const key = @intFromEnum(use_expr);
         if (index.ambiguous.contains(key)) {
             census.bump("rehearsal_skip_site_ambiguous");
             return null;
         }
-        const site_index = index.by_root.get(key) orelse {
+        const site_index = index.by_use_expr.get(key) orelse {
             census.bump("rehearsal_skip_no_site");
             return null;
         };
@@ -826,21 +907,25 @@ pub const Rehearsal = struct {
             return null;
         };
         if (gop.found_existing) return gop.value_ptr;
-        gop.value_ptr.* = .{ .view = caller.view, .by_root = .empty, .ambiguous = .empty };
+        gop.value_ptr.* = .{ .view = caller.view, .by_use_expr = .empty, .ambiguous = .empty };
         const index = gop.value_ptr;
         const sites = caller.view.instantiationSites();
         for (sites, 0..) |site, position| {
-            const key = @intFromEnum(site.instantiated_root);
-            const entry = index.by_root.getOrPut(self.allocator, key) catch {
+            // A dispatch target's edge is selected by evidence, not by the use
+            // this seam records, so it never names this request.
+            if (site.slot_kind == @intFromEnum(checked.InstantiationSiteSlotKind.dispatch_target)) continue;
+            const use_expr = site.useExpr() orelse continue;
+            const key = @intFromEnum(use_expr);
+            const entry = index.by_use_expr.getOrPut(self.allocator, key) catch {
                 self.fail();
                 return null;
             };
             if (entry.found_existing) {
-                // Several edges legitimately record one instantiated root: a
-                // re-checked source edge, and a value use also reached through a
-                // shared-use record. They are the same instantiation when they
-                // agree on scheme and positional actuals, and only a genuine
-                // disagreement makes the root unusable as an edge name.
+                // Several edges legitimately name one use expression: a re-checked
+                // source edge, and a value use also reached through a shared-use
+                // record. They are the same instantiation when they agree on
+                // scheme and positional actuals, and only a genuine disagreement
+                // makes the expression unusable as an edge name.
                 if (!sitesAgree(caller.view, sites[entry.value_ptr.*], site)) {
                     index.ambiguous.put(self.allocator, key, {}) catch {
                         self.fail();
@@ -924,6 +1009,22 @@ pub const Rehearsal = struct {
                 matched = true;
                 continue;
             }
+            // A stored digest encodes a recursive back reference by the position
+            // on the visiting stack the walk entered the cycle at, so one rooted
+            // graph reached through two entry paths digests two ways (reunify.md
+            // section 8.3). The graph roots such a knot wherever unification
+            // happened to join two nodes, which differs between call sites of one
+            // nominal; the directed emission roots it at the nominal every time.
+            // Equal unfoldings say the two are the same type under a different
+            // rooting, which is a deliberate difference in the emitted stored
+            // form and not a content difference.
+            const emitted_unfolded = self.store.unfoldedDigest(self.program_names, emitted);
+            const sealed_unfolded = self.program_types.unfoldedDigest(self.program_names, sealed);
+            if (std.mem.eql(u8, &emitted_unfolded.bytes, &sealed_unfolded.bytes)) {
+                census.bump("rehearsal_type_equal_under_rerooting");
+                matched = true;
+                continue;
+            }
             if (matched) {
                 census.bump("rehearsal_type_skip_other_occurrence");
                 continue;
@@ -945,6 +1046,10 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_type_mismatch_representation");
         } else {
             census.bump("rehearsal_type_mismatch_logical");
+            const difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0);
+            if (difference.left.tag == .tag_union and difference.left.children == 0) {
+                census.bump("rehearsal_type_mismatch_unbound_residual");
+            }
         }
         if (self.details.items.len >= max_mismatch_details) return;
         var prefix: [8]u8 = undefined;
@@ -1025,17 +1130,20 @@ pub const Rehearsal = struct {
         return false;
     }
 
-    /// Build (memoized) the representation slot for one emitted position
-    /// (reunify.md section 10.2). Two positions that emitted the same id are the
-    /// same occurrence and share a slot; two independently emitted occurrences of
-    /// one structure get distinct slots (reunify.md section 9.3).
+    /// Build the representation slot for one emitted occurrence (reunify.md
+    /// section 10.2). The slot is created fresh at every position the walk
+    /// reaches: a stored type id names a type, not an occurrence (reunify.md
+    /// section 8.5), so keying slots by it would pre-join independent occurrences
+    /// that interning collapsed to one id and let one occurrence's representation
+    /// flow reach another with no value-flow relation between them. Two
+    /// occurrences are joined only by an explicit relation; a back reference
+    /// inside one occurrence stops at `max_slot_depth`.
     fn slotForEmitted(self: *Rehearsal, ty: Type.TypeId, depth: u32) ?closure.RepresentationSlotId {
-        if (self.slots.get(ty)) |existing| return existing;
         if (depth >= max_slot_depth) return null;
         const token = self.tokenFor(ty) orelse return null;
         const shape = self.shapeFor(ty, token, depth) orelse return null;
         const slot = self.engine.createSlot(token, self.freshProducer(), shape) catch return null;
-        self.slots.put(self.allocator, ty, slot) catch return null;
+        self.slots.append(self.allocator, slot) catch return null;
         if (shape == .iterator) {
             self.slot_descriptors.put(self.allocator, @intFromEnum(slot), shape.iterator.descriptor) catch return null;
         }
@@ -1110,9 +1218,7 @@ pub const Rehearsal = struct {
     /// one emitted at that position — otherwise the emitted type would have to be
     /// re-materialized from the sealed slot, which the counter records.
     fn sealSlots(self: *Rehearsal) void {
-        var it = self.slots.iterator();
-        while (it.next()) |entry| {
-            const slot = entry.value_ptr.*;
+        for (self.slots.items) |slot| {
             const representative = self.engine.find(slot);
             census.bump("rehearsal_seal_positions");
             if (representative != slot) census.bump("rehearsal_relations_applied");

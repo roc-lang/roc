@@ -808,8 +808,7 @@ pub const Store = struct {
     /// types, returning it if one exists. Only pre-registered types are probed,
     /// so a provisional group member never matches itself or a sibling here.
     fn findExistingRoot(self: *Store, name_store: *const names.NameStore, member: TypeId) std.mem.Allocator.Error!?TypeId {
-        const digest = self.typeDigestCached(name_store, member, null);
-        const key = InternerLookupDigest.from(digest);
+        const key = self.lookupKey(name_store, member);
         if (self.intern_buckets.?.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
                 if (try self.typeEql(name_store, existing, member)) {
@@ -828,8 +827,7 @@ pub const Store = struct {
     /// while dedup is off.
     pub fn isBucketEntry(self: *Store, name_store: *const names.NameStore, ty: TypeId) bool {
         if (self.intern_buckets == null) return false;
-        const digest = self.typeDigestCached(name_store, ty, null);
-        const key = InternerLookupDigest.from(digest);
+        const key = self.lookupKey(name_store, ty);
         if (self.intern_buckets.?.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
                 if (existing == ty) return true;
@@ -841,8 +839,7 @@ pub const Store = struct {
     /// Register `member` under its rooted digest so a future equivalent graph
     /// entered at this node deduplicates to it.
     fn registerRoot(self: *Store, name_store: *const names.NameStore, member: TypeId) std.mem.Allocator.Error!void {
-        const digest = self.typeDigestCached(name_store, member, null);
-        const key = InternerLookupDigest.from(digest);
+        const key = self.lookupKey(name_store, member);
         const gop = try self.intern_buckets.?.getOrPut(key);
         if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TypeId).empty;
         try gop.value_ptr.append(self.allocator, member);
@@ -998,8 +995,7 @@ pub const Store = struct {
         }
 
         errdefer self.restore(mark_);
-        const digest = self.typeDigestCached(name_store, candidate, null);
-        const key = InternerLookupDigest.from(digest);
+        const key = self.lookupKey(name_store, candidate);
         const buckets = &self.intern_buckets.?;
         if (buckets.getPtr(key)) |bucket| {
             for (bucket.items) |existing| {
@@ -1052,8 +1048,7 @@ pub const Store = struct {
             return candidate;
         }
 
-        const digest = self.typeDigestCached(name_store, candidate, null);
-        const key = InternerLookupDigest.from(digest);
+        const key = self.lookupKey(name_store, candidate);
         const gop = try self.intern_buckets.?.getOrPut(key);
         if (!gop.found_existing) gop.value_ptr.* = std.ArrayList(TypeId).empty;
         for (gop.value_ptr.items) |existing| {
@@ -1353,6 +1348,38 @@ pub const Store = struct {
         return self.cachedDigestInner(name_store, ty, .identity_only, &ctx, stats);
     }
 
+    /// The dedup bucket `ty` belongs to.
+    ///
+    /// A type that reaches no cycle keys on its exact stored digest. A type that
+    /// does reach one keys on its unfolding instead: the stored digest records a
+    /// back reference by the position on the visiting stack where the walk
+    /// entered the cycle, so one rooted graph reached through two different entry
+    /// paths digests two ways, while `typeEql` compares the two coinductively and
+    /// answers equal. Keying such a type on an entry-independent unfolding puts
+    /// both in one bucket and lets equality decide, which is what makes
+    /// equivalent rooted graphs intern to one id however they were built
+    /// (reunify.md section 8.3).
+    fn lookupKey(self: *Store, name_store: *const names.NameStore, ty: TypeId) InternerLookupDigest {
+        var ctx = CachedDigestContext{};
+        const digest = self.cachedDigestInner(name_store, ty, .full, &ctx, null);
+        if (!ctx.saw_cycle) return InternerLookupDigest.from(digest);
+
+        return .{ .bytes = self.unfoldedDigest(name_store, ty).bytes };
+    }
+
+    /// The digest of the infinite tree `ty` denotes, taken over a budgeted prefix
+    /// of its unfolding. It records no back reference, so two rooted graphs with
+    /// the same unfolding digest the same however each was built, while
+    /// `typeDigest` — which encodes a back reference by visiting-stack position —
+    /// does not (reunify.md section 8.3).
+    pub fn unfoldedDigest(self: *const Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var budget: u32 = unrolled_key_budget;
+        var strategy = UnrolledDigestStrategy{ .store = self, .name_store = name_store, .budget = &budget };
+        strategy.child(&hasher, ty, .full);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
     /// Exact structural equality for closed Monotype types.
     ///
     /// Equality consumes the same identity-field visitor as the digest paths.
@@ -1501,14 +1528,24 @@ pub const Store = struct {
 
         ctx.items[ctx.len] = ty;
         ctx.len += 1;
+        // A back reference is encoded by its position on the visiting stack, so
+        // a digest computed through one is meaningful only under the walk that
+        // computed it and must not be cached. The flag is therefore scoped to
+        // this subtree and folded back into the caller's, rather than read as a
+        // running total — a sibling subtree that already saw a cycle would
+        // otherwise make this one look cycle-free and cache a context-dependent
+        // digest under this type's id.
         const saw_cycle_before = ctx.saw_cycle;
+        ctx.saw_cycle = false;
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         var strategy = CachedDigestStrategy{ .store = self, .name_store = name_store, .ctx = ctx, .stats = stats };
         const direct_digest = self.writeIdentityDigest(name_store, &hasher, ty, named_mode, &strategy);
         ctx.len -= 1;
+        const subtree_saw_cycle = ctx.saw_cycle;
+        ctx.saw_cycle = saw_cycle_before or subtree_saw_cycle;
 
         const digest: names.TypeDigest = direct_digest orelse .{ .bytes = hasher.finalResult() };
-        if (ctx.saw_cycle == saw_cycle_before) {
+        if (!subtree_saw_cycle) {
             switch (named_mode) {
                 .full => {
                     self.type_digests.set(index, digest);
@@ -1566,6 +1603,47 @@ pub const Store = struct {
             return null;
         }
     };
+
+    /// Folds `child_ty` into `hasher` by unfolding the type as the infinite tree
+    /// it denotes, spending one unit of a shared budget per node and writing a
+    /// terminator once the budget runs out. It never records a back reference,
+    /// so two rooted graphs with the same unfolding hash the same however each
+    /// was constructed. This is the dedup bucket key for a cyclic type; exact
+    /// equality is still decided by `typeEql`.
+    const UnrolledDigestStrategy = struct {
+        store: *const Store,
+        name_store: *const names.NameStore,
+        budget: *u32,
+
+        fn child(
+            self: *UnrolledDigestStrategy,
+            hasher: *std.crypto.hash.sha2.Sha256,
+            child_ty: TypeId,
+            named_mode: NamedDigestMode,
+        ) void {
+            if (self.budget.* == 0) {
+                writeBytes(hasher, "unrolled-cut");
+                return;
+            }
+            self.budget.* -= 1;
+            _ = self.store.writeIdentityDigest(self.name_store, hasher, child_ty, named_mode, self);
+        }
+
+        fn transparent(
+            self: *UnrolledDigestStrategy,
+            hasher: *std.crypto.hash.sha2.Sha256,
+            child_ty: TypeId,
+            named_mode: NamedDigestMode,
+        ) ?names.TypeDigest {
+            self.child(hasher, child_ty, named_mode);
+            return null;
+        }
+    };
+
+    /// How many nodes one unrolled bucket-key walk visits before it writes its
+    /// terminator. The unfolding is walked in a fixed order, so two types with
+    /// the same unfolding spend the budget on the same nodes and hash equal.
+    const unrolled_key_budget: u32 = 512;
 
     /// Folds `child_ty` into `hasher` as a nested sub-digest: the tag
     /// `"type-digest"` followed by the child's own cached digest. Computing
@@ -3728,6 +3806,84 @@ test "monotype type interner reuses equivalent recursive roots" {
 
     try std.testing.expectEqual(first, second);
     try std.testing.expectEqual(@as(usize, 1), interner.view().types.len);
+}
+
+test "an unrolled entry into a recursive group interns to the group member" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("step");
+
+    const interner = try Interner.init(std.testing.allocator, &name_store);
+    defer interner.deinit();
+
+    const record_node = Interner.recursiveNodeId(0);
+    const func_node = Interner.recursiveNodeId(1);
+    const group_root = try interner.internRecursiveGroupRoot(&.{
+        .{ .record = &.{
+            .{ .name = field_name, .ty = .{ .node = func_node } },
+        } },
+        .{ .func = .{
+            .args = &.{},
+            .ret = .{ .node = record_node },
+        } },
+    }, record_node);
+    const before = interner.view().types.len;
+
+    // The same rooted graph reached one step further out: a plain function whose
+    // return is the group's record member unfolds to exactly the group's func
+    // member, so it must be that member and add no id (reunify.md section 8.3).
+    // Its stored digest differs from the member's — a back reference by visiting
+    // stack position depends on where the walk entered the cycle — so this only
+    // holds because a cyclic type buckets on its unfolding.
+    const unrolled_func = try interner.internFunc(&.{}, group_root);
+    const member_func = interner.get(group_root).record;
+    const member_fields = interner.fieldSpan(member_func);
+    const member = GuardedList.at(member_fields, 0).ty;
+
+    try std.testing.expectEqual(member, unrolled_func);
+    try std.testing.expectEqual(before, interner.view().types.len);
+
+    // And one step out again: a record whose field is that function.
+    const unrolled_record = try interner.internRecord(&.{.{ .name = field_name, .ty = unrolled_func }});
+    try std.testing.expectEqual(group_root, unrolled_record);
+    try std.testing.expectEqual(before, interner.view().types.len);
+}
+
+test "a cyclic digest computed beside another cycle is not cached under its id" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    const left_name = try name_store.internRecordFieldLabel("left");
+    const right_name = try name_store.internRecordFieldLabel("right");
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    store.enableInterning();
+
+    // A record whose two fields each cycle back to it. Digesting the record
+    // visits the left field's cycle first, so the right field is digested with a
+    // cycle already recorded on the walk. Its digest names a back reference by
+    // this walk's stack position, so it is meaningful only under this walk and
+    // must not be cached under the right field's own id.
+    const record_node = Store.recursiveNodeId(0);
+    const root = try store.internRecursiveGroupRoot(&name_store, &.{
+        .{ .record = &.{
+            .{ .name = left_name, .ty = .{ .node = Store.recursiveNodeId(1) } },
+            .{ .name = right_name, .ty = .{ .node = Store.recursiveNodeId(2) } },
+        } },
+        .{ .list = .{ .node = record_node } },
+        .{ .box = .{ .node = record_node } },
+    }, record_node);
+
+    const fields = store.fieldSpan(store.get(root).record);
+    const right = GuardedList.at(fields, 1).ty;
+
+    const standalone = store.typeDigestCached(&name_store, right, null);
+    _ = store.typeDigestCached(&name_store, root, null);
+    const after_enclosing_walk = store.typeDigestCached(&name_store, right, null);
+
+    try std.testing.expect(std.mem.eql(u8, &standalone.bytes, &after_enclosing_walk.bytes));
 }
 
 test "monotype type interner seals multi-node recursive group privately" {

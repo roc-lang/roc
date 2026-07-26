@@ -26,6 +26,11 @@ pub const Monotype = struct {
     /// builder at markReady (reunify.md 11.1/11.5, Slice 7 Stage C). Never a
     /// reuse or cache key; carried as inert data the Stage D cache serializes.
     pub const FinalSpecId = @import("monotype/final_spec_id.zig");
+    /// Debug-only, env-gated per-specialization rehearsal that emits each
+    /// specialization's types from checked data alone and compares them against
+    /// what the graph seals (reunify.md sections 9/10/11, Slice 7 flip-prep).
+    /// Off by default; owns its own store and never selects lowering.
+    pub const SpecRehearsal = @import("monotype/spec_rehearsal.zig");
 };
 /// Monotype IR after nested function bodies are lifted.
 pub const MonotypeLifted = struct {

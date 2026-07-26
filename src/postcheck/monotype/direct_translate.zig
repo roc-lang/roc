@@ -85,6 +85,9 @@ pub const Resolver = struct {
     /// seeds a scope with the instance's argument nodes.
     pub const NominalBacking = struct {
         cursor: ModuleCursor,
+        /// The declaration's own id in its module, which with the module
+        /// identity names the declaration a nominal instance is an instance of.
+        declaration: u32,
         formal_args: []const checked.CheckedTypeId,
         root: checked.CheckedTypeId,
     };
@@ -176,6 +179,71 @@ const ActiveNode = struct {
 /// The 32-byte content digest keying a memoized instantiation (reunify.md
 /// section 9.4).
 const InstantiationDigest = [32]u8;
+
+/// One nominal instance's identity inside a reserve-before-descend walk: the
+/// declaration it instantiates plus the stored ids its arguments translated to.
+/// This is the reunify.md section 9.4 instantiation key at a nominal
+/// declaration — checking allocates a distinct checked id for every occurrence
+/// of one nominal, so the checked address alone cannot recognize that a
+/// declaration's backing reached the very instance it is the backing of, and the
+/// knot would close one level deeper on the backing instead of on the nominal.
+const NominalInstance = struct {
+    module_bytes: [32]u8,
+    declaration: u32,
+    args: []const TypeId,
+    slot: TypeId,
+
+    fn sameInstance(self: NominalInstance, module_bytes: [32]u8, declaration: u32, args: []const TypeId) bool {
+        if (self.declaration != declaration) return false;
+        if (!std.mem.eql(u8, &self.module_bytes, &module_bytes)) return false;
+        if (self.args.len != args.len) return false;
+        for (self.args, args) |left, right| {
+            if (left != right) return false;
+        }
+        return true;
+    }
+};
+
+/// The nominal instances one reserve-fill walk has reserved a slot for. A walk
+/// builds a handful of them, so the lookup is a scan over the exact key rather
+/// than a hash of it.
+const NominalInstances = struct {
+    allocator: Allocator,
+    items: std.ArrayList(NominalInstance),
+
+    fn init(allocator: Allocator) NominalInstances {
+        return .{ .allocator = allocator, .items = .empty };
+    }
+
+    fn deinit(self: *NominalInstances) void {
+        for (self.items.items) |entry| self.allocator.free(entry.args);
+        self.items.deinit(self.allocator);
+    }
+
+    fn find(self: *const NominalInstances, module_bytes: [32]u8, declaration: u32, args: []const TypeId) ?TypeId {
+        for (self.items.items) |entry| {
+            if (entry.sameInstance(module_bytes, declaration, args)) return entry.slot;
+        }
+        return null;
+    }
+
+    fn record(
+        self: *NominalInstances,
+        module_bytes: [32]u8,
+        declaration: u32,
+        args: []const TypeId,
+        slot: TypeId,
+    ) Allocator.Error!void {
+        const owned = try self.allocator.dupe(TypeId, args);
+        errdefer self.allocator.free(owned);
+        try self.items.append(self.allocator, .{
+            .module_bytes = module_bytes,
+            .declaration = declaration,
+            .args = owned,
+            .slot = slot,
+        });
+    }
+};
 
 /// The directed translation context. It owns no type store: it emits into the
 /// caller's target store (the program's types, or a mutable snapshot of them for
@@ -281,6 +349,7 @@ pub const Translator = struct {
             .scheme_owner_node = scheme_owner_node,
             .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
             .recursion_slots = null,
+            .nominal_instances = null,
             .skip_reason = skip_reason,
         };
         defer walk.active.deinit();
@@ -328,12 +397,17 @@ pub const Translator = struct {
     /// recursive-group builder (reunify.md section 9.2). A cyclic group with no
     /// representation-bearing position is built reserve-before-descend: every
     /// compound node reserves its stored slot before its children are translated,
-    /// so a back-reference resolves to the reserved slot. When the target store
-    /// deduplicates and no binder environment is active, the group is first built
-    /// into an isolated non-interning scratch store and then re-interned into the
-    /// target so symmetric members collapse to one id; otherwise it is built in
-    /// place (the probe target does not deduplicate, and a binder environment
-    /// binds ids that live only in the target store).
+    /// so a back-reference resolves to the reserved slot. Reserve-before-descend
+    /// closes a cycle on the checked address it reached twice, which is one
+    /// address among the several the checker may hold for one type, so the raw
+    /// group can carry a member that repeats an ancestor's rooted graph. The
+    /// interner is the structural equality authority (reunify.md sections 8.2,
+    /// 8.3): the group is therefore built in an isolated scratch store and
+    /// re-interned into the target, whose recursive-group builder registers each
+    /// member's rooted key and collapses the repeats. An active binder
+    /// environment names ids in the target store, so its bound values move into
+    /// the scratch first. A target store that does not deduplicate has no
+    /// recursive-group builder to hand the component to, so it is built in place.
     fn translateRecursiveRoot(
         self: *Translator,
         cursor: ModuleCursor,
@@ -342,13 +416,17 @@ pub const Translator = struct {
         root: checked.CheckedTypeId,
         skip_reason: *SkipReason,
     ) WalkError!TypeId {
-        if (binding_env == null and self.store.internEnabled()) {
-            var scratch = MonoType.Store.init(self.allocator);
-            defer scratch.deinit();
-            const scratch_root = try self.reserveFillWalk(&scratch, cursor, binding_env, scheme_owner_node, root, skip_reason);
-            return try MonoType.reintern(self.store, self.target_names, scratch.view(), scratch_root);
+        if (!self.store.internEnabled()) {
+            return try self.reserveFillWalk(self.store, cursor, binding_env, scheme_owner_node, root, skip_reason);
         }
-        return try self.reserveFillWalk(self.store, cursor, binding_env, scheme_owner_node, root, skip_reason);
+        var scratch = MonoType.Store.init(self.allocator);
+        defer scratch.deinit();
+        scratch.enableInterning();
+        var moved = MovedEnvironment.init(self.allocator);
+        defer moved.deinit();
+        const scratch_env = try moved.move(self.store, self.target_names, &scratch, binding_env);
+        const scratch_root = try self.reserveFillWalk(&scratch, cursor, scratch_env, scheme_owner_node, root, skip_reason);
+        return try MonoType.reintern(self.store, self.target_names, scratch.view(), scratch_root);
     }
 
     /// Build `root` and its recursive component into `build_store` with
@@ -366,6 +444,8 @@ pub const Translator = struct {
     ) WalkError!TypeId {
         var slots = std.AutoHashMap(ActiveNode, TypeId).init(self.allocator);
         defer slots.deinit();
+        var instances = NominalInstances.init(self.allocator);
+        defer instances.deinit();
         var walk = Walk{
             .owner = self,
             .cursor = cursor,
@@ -374,6 +454,7 @@ pub const Translator = struct {
             .scheme_owner_node = scheme_owner_node,
             .active = std.AutoHashMap(ActiveNode, void).init(self.allocator),
             .recursion_slots = &slots,
+            .nominal_instances = &instances,
             .skip_reason = skip_reason,
         };
         defer walk.active.deinit();
@@ -463,6 +544,89 @@ pub const BindingEnvironment = struct {
     }
 };
 
+/// One binding environment chain relocated into the scratch store a recursive
+/// group is built in (reunify.md section 9.2). Every bound and captured value is
+/// re-interned into that store, so a binder substitution during the scratch
+/// build names a scratch id. Both buffers are sized exactly once, so the
+/// relocated `parent` links and value slices stay valid for the whole build.
+const MovedEnvironment = struct {
+    allocator: Allocator,
+    frames: std.ArrayList(BindingEnvironment),
+    values: std.ArrayList(BoundType),
+
+    fn init(allocator: Allocator) MovedEnvironment {
+        return .{ .allocator = allocator, .frames = .empty, .values = .empty };
+    }
+
+    fn deinit(self: *MovedEnvironment) void {
+        self.values.deinit(self.allocator);
+        self.frames.deinit(self.allocator);
+    }
+
+    /// Relocate `env` and every environment it links to, returning the innermost
+    /// relocated environment, or null when there is none.
+    fn move(
+        self: *MovedEnvironment,
+        source: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        scratch: *MonoType.Store,
+        env: ?*const BindingEnvironment,
+    ) Allocator.Error!?*const BindingEnvironment {
+        var depth: usize = 0;
+        var value_count: usize = 0;
+        var cursor = env;
+        while (cursor) |frame| : (cursor = frame.parent) {
+            depth += 1;
+            value_count += frame.bound.len + frame.captured.len;
+        }
+        if (depth == 0) return null;
+
+        try self.frames.ensureTotalCapacityPrecise(self.allocator, depth);
+        try self.values.ensureTotalCapacityPrecise(self.allocator, value_count);
+
+        const chain = try self.allocator.alloc(*const BindingEnvironment, depth);
+        defer self.allocator.free(chain);
+        var index = depth;
+        cursor = env;
+        while (cursor) |frame| : (cursor = frame.parent) {
+            index -= 1;
+            chain[index] = frame;
+        }
+
+        for (chain) |frame| {
+            const bound = try self.moveValues(source, name_store, scratch, frame.bound);
+            const captured = try self.moveValues(source, name_store, scratch, frame.captured);
+            const parent: ?*const BindingEnvironment = if (self.frames.items.len == 0)
+                null
+            else
+                &self.frames.items[self.frames.items.len - 1];
+            self.frames.appendAssumeCapacity(.{
+                .scheme = frame.scheme,
+                .binders = frame.binders,
+                .bound = bound,
+                .captured = captured,
+                .parent = parent,
+            });
+        }
+        return &self.frames.items[self.frames.items.len - 1];
+    }
+
+    fn moveValues(
+        self: *MovedEnvironment,
+        source: *const MonoType.Store,
+        name_store: *const names.NameStore,
+        scratch: *MonoType.Store,
+        values: []const BoundType,
+    ) Allocator.Error![]const BoundType {
+        const start = self.values.items.len;
+        for (values) |value| {
+            const moved = try MonoType.reintern(scratch, name_store, source.view(), value.stored);
+            self.values.appendAssumeCapacity(BoundType.of(moved));
+        }
+        return self.values.items[start..];
+    }
+};
+
 /// One directed translation walk (reunify.md section 9.2). Carries the active
 /// map for cycle detection, the reading cursor (which changes when descending a
 /// backing declaration in another module), the optional binder environment for
@@ -483,6 +647,9 @@ const Walk = struct {
     scheme_owner_node: u32,
     active: std.AutoHashMap(ActiveNode, void),
     recursion_slots: ?*std.AutoHashMap(ActiveNode, TypeId),
+    /// The nominal instances this reserve-fill walk already reserved a slot for,
+    /// keyed by declaration and translated arguments. Null in eager mode.
+    nominal_instances: ?*NominalInstances,
     skip_reason: *SkipReason,
     /// Set when a reserve-fill node left the subset. The recursive-group builder
     /// (`Store.addRecursive`) cannot carry `error.Skip` out of its fill callback,
@@ -553,6 +720,17 @@ const Walk = struct {
                 defer _ = self.active.remove(key);
                 return try self.alias(checked_ty, alias_ty);
             },
+            // A declaration-backed nominal reserves its slot under its instance
+            // identity rather than its checked address, so the backing closes its
+            // knot on the nominal itself (`nominalReserveFill`).
+            .nominal => |nominal_ty| switch (builtinDisposition(nominal_ty)) {
+                .named => {
+                    if (self.owner.resolver.nominalBacking(self.cursor, nominal_ty)) |source| {
+                        return try self.nominalReserveFill(checked_ty, nominal_ty, source);
+                    }
+                },
+                else => {},
+            },
             else => {},
         }
 
@@ -581,6 +759,76 @@ const Walk = struct {
             .checked_ty = checked_ty,
             .key = key,
             .p = p,
+        }, Ctx.fill);
+        if (self.reserve_fill_skipped) return error.Skip;
+        return built;
+    }
+
+    /// Reserve-before-descend translation of one declaration-backed nominal,
+    /// reserving its slot under its instance identity — the declaration plus its
+    /// translated arguments (`NominalInstance`) — rather than under the checked
+    /// address of this occurrence. Every occurrence of one nominal instance
+    /// inside the walk therefore resolves to one slot, so a recursive backing
+    /// closes its knot on the nominal and the group is the rooted graph the
+    /// nominal denotes (reunify.md sections 8.3, 9.4).
+    ///
+    /// Arguments translate before the slot is reserved, because they are part of
+    /// the identity it is reserved under. A checked graph cannot reach a nominal
+    /// instance from inside its own arguments — that is an infinite type in
+    /// argument position, which checking never builds — and the active guard
+    /// records such a walk as a cycle rather than descending forever.
+    fn nominalReserveFill(
+        self: *Walk,
+        checked_ty: checked.CheckedTypeId,
+        n: checked.CheckedNominalType,
+        source: Resolver.NominalBacking,
+    ) WalkError!TypeId {
+        const address = self.activeKey(checked_ty);
+        if (self.active.contains(address)) return self.skip(.recursive_cycle);
+        try self.active.put(address, {});
+        defer _ = self.active.remove(address);
+
+        var args = std.ArrayList(TypeId).empty;
+        defer args.deinit(self.owner.allocator);
+        for (n.args) |arg| {
+            try args.append(self.owner.allocator, try self.node(arg));
+        }
+
+        const instances = self.nominal_instances.?;
+        if (instances.find(source.cursor.module_bytes, source.declaration, args.items)) |reserved| return reserved;
+
+        const Ctx = struct {
+            walk: *Walk,
+            checked_ty: checked.CheckedTypeId,
+            address: ActiveNode,
+            n: checked.CheckedNominalType,
+            source: Resolver.NominalBacking,
+            args: []const TypeId,
+
+            fn fill(ctx: @This(), reserved: TypeId) Allocator.Error!MonoType.Content {
+                try ctx.walk.recursion_slots.?.put(ctx.address, reserved);
+                try ctx.walk.nominal_instances.?.record(
+                    ctx.source.cursor.module_bytes,
+                    ctx.source.declaration,
+                    ctx.args,
+                    reserved,
+                );
+                return ctx.walk.namedContent(ctx.checked_ty, ctx.n, ctx.args) catch |err| switch (err) {
+                    error.Skip => {
+                        ctx.walk.reserve_fill_skipped = true;
+                        return .zst;
+                    },
+                    else => |other| return other,
+                };
+            }
+        };
+        const built = try self.build_store.addRecursive(Ctx{
+            .walk = self,
+            .checked_ty = checked_ty,
+            .address = address,
+            .n = n,
+            .source = source,
+            .args = args.items,
         }, Ctx.fill);
         if (self.reserve_fill_skipped) return error.Skip;
         return built;
@@ -1024,8 +1272,20 @@ const Walk = struct {
         for (n.args) |arg| {
             try args.append(self.owner.allocator, try self.node(arg));
         }
+        return try self.namedContent(checked_ty, n, args.items);
+    }
 
-        const backing = try self.nominalBacking(n, args.items);
+    /// The stored named content of one nominal whose arguments are already
+    /// translated, for a slot reserved before the descent (reunify.md section
+    /// 9.2). Iterator tier and generated owner are graph-minted, not in checked
+    /// module data, so they stay at their defaults here.
+    fn namedContent(
+        self: *Walk,
+        checked_ty: checked.CheckedTypeId,
+        n: checked.CheckedNominalType,
+        args: []const TypeId,
+    ) WalkError!MonoType.Content {
+        const backing = try self.nominalBacking(n, args);
         const declared_order = try self.declaredOrder(n);
         defer self.owner.allocator.free(declared_order);
 
@@ -1034,7 +1294,7 @@ const Walk = struct {
             .def = try self.owner.typeDef(self.cursor, n.origin_module, n.name, n.source_decl),
             .kind = if (n.is_opaque) .@"opaque" else .nominal,
             .builtin_owner = self.owner.resolver.builtinOwner(self.cursor, n),
-            .args = try self.build_store.addSpan(args.items),
+            .args = try self.build_store.addSpan(args),
             .backing = backing,
             .declared_order = try self.build_store.addDeclaredFields(declared_order),
         } };
@@ -1303,6 +1563,7 @@ const RecordBackingResolver = struct {
         const self: *RecordBackingResolver = @ptrCast(@alignCast(context));
         return .{
             .cursor = self.cursor,
+            .declaration = 0,
             .formal_args = self.formal_args,
             .root = self.backing_root,
         };

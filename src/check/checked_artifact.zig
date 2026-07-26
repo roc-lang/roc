@@ -2511,6 +2511,11 @@ pub const checked_instantiation_actual_unreached: u32 = std.math.maxInt(u32);
 /// value use only carries one when its scheme has evidence params.
 pub const instantiation_site_evidence_none: u32 = std.math.maxInt(u32);
 
+/// A `CheckedInstantiationSite.use_expr` value meaning the site's CIR use node
+/// names no checked expression: a dispatch site whose node is not an expression,
+/// or a use whose expression the checked body store did not publish.
+pub const instantiation_site_use_expr_none: u32 = std.math.maxInt(u32);
+
 /// The slot discriminator a `CheckedInstantiationSite.slot_kind` holds, re-exported
 /// so a consumer classifies a site by kind without depending on the checker's
 /// use-record module (reunify.md 7.2/9.7, Slice 6).
@@ -2567,6 +2572,13 @@ pub const CheckedInstantiationSite = struct {
     /// Length of this site's evidence vector within `evidence_refs`; zero when the
     /// vector is present but empty (see `evidence_start`).
     evidence_len: u32 = 0,
+    /// This site's `use_node` as the checked expression id that names the same
+    /// use, or `instantiation_site_use_expr_none`. `use_node` is a CIR node, and
+    /// the CIR-to-checked expression map lives only in the unserialized body
+    /// store, so a consumer reading a frozen artifact can name an edge by its use
+    /// only through this resolved id (reunify.md 7.2). It is filled once the body
+    /// store exists, after the type store publishes its sites.
+    use_expr: u32 = instantiation_site_use_expr_none,
 
     /// The owning published scheme id, or null when unresolved.
     pub fn schemeId(self: CheckedInstantiationSite) ?CheckedTypeSchemeId {
@@ -2579,6 +2591,13 @@ pub const CheckedInstantiationSite = struct {
     pub fn importedDefiningModule(self: CheckedInstantiationSite) ?[32]u8 {
         if (std.meta.eql(self.defining_module_hash, ModuleEnv.scheme_use_site_local_module)) return null;
         return self.defining_module_hash;
+    }
+
+    /// The checked expression this edge is used at, or null when the site's CIR
+    /// use node names no checked expression.
+    pub fn useExpr(self: CheckedInstantiationSite) ?CheckedExprId {
+        if (self.use_expr == instantiation_site_use_expr_none) return null;
+        return @enumFromInt(self.use_expr);
     }
 
     /// The site's positional actuals within its store's `instantiation_site_actuals`.
@@ -7206,6 +7225,20 @@ fn publishInstantiationSites(
             .actuals_len = actuals_range.len,
             .defining_module_hash = record.defining_module_hash,
         });
+    }
+}
+
+/// Resolve every published instantiation site's CIR use node to the checked
+/// expression id that names the same use (reunify.md 7.2). The type store
+/// publishes its sites before the body store exists, and the CIR-to-checked
+/// expression map does not survive serialization, so the resolved id is written
+/// back onto each site once the body store is built. A dispatch site whose node
+/// is not an expression, and a use whose expression the body store did not
+/// publish, keep `instantiation_site_use_expr_none`.
+fn resolveInstantiationSiteUseExprs(store: *CheckedTypeStore, bodies: *const CheckedBodyStore) void {
+    for (store.instantiation_sites.items) |*site| {
+        const checked_expr = bodies.exprIdForSource(@enumFromInt(site.use_node)) orelse continue;
+        site.use_expr = @intFromEnum(checked_expr);
     }
 }
 
@@ -25337,7 +25370,10 @@ pub const CheckedModuleArtifact = struct {
     // `residual_dispositions` table gains argument-position entries. The struct
     // shape is unchanged; the bump forces re-bake of the baked builtin artifact
     // whose disposition content the layout fingerprint alone cannot observe.
-    const serialized_layout_version: u32 = 33;
+    // v34 (reunify.md 7.2): `CheckedInstantiationSite` gained `use_expr`, the
+    // checked expression id of its CIR use node, so a consumer reading a frozen
+    // store names an edge by its use rather than by the instantiated root.
+    const serialized_layout_version: u32 = 34;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -27906,6 +27942,7 @@ pub fn publishFromTypedModule(
     errdefer checked_body_builder.deinit(allocator);
     try checked_body_builder.reserveSyntheticExprs(allocator, syntheticExprCapacityForHoistedRoots(inputs.hoisted_roots));
     const checked_bodies = checked_body_builder.storePtr();
+    resolveInstantiationSiteUseExprs(checked_types, checked_bodies);
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
 
@@ -28582,6 +28619,7 @@ fn expectProvidedExportKind(
     var checked_body_builder = try CheckedBodyStoreBuilder.fromModule(allocator, module, &canonical_names, &checked_type_publication, &source_nodes);
     defer checked_body_builder.deinit(allocator);
     const checked_bodies = checked_body_builder.storePtr();
+    resolveInstantiationSiteUseExprs(checked_types, checked_bodies);
 
     const global_value_defs = module_env.store.sliceDefs(module_env.global_value_defs);
 
@@ -30308,8 +30346,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x74, 0x7B, 0xBB, 0xBB, 0x1E, 0x83, 0x52, 0xAF, 0x21, 0xDB, 0x9D, 0xAD, 0xD8, 0x73, 0x64, 0xDC,
-        0xBF, 0x15, 0x60, 0x7E, 0xD1, 0xC1, 0xE8, 0xFB, 0xA3, 0x81, 0x17, 0x6F, 0xED, 0xCE, 0xC9, 0x8B,
+        0xE2, 0x2D, 0xDD, 0x52, 0xE5, 0xD3, 0xB3, 0x68, 0xE2, 0xDF, 0x71, 0xFD, 0x36, 0x9B, 0x53, 0x11,
+        0x65, 0x67, 0x81, 0x45, 0xCB, 0x35, 0xBC, 0xA8, 0x37, 0x77, 0x57, 0x67, 0x58, 0x17, 0x44, 0x3F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

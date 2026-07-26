@@ -197,6 +197,13 @@ pub const Census = struct {
     rehearsal_spec_attempted: Counter = Counter.init(0),
     rehearsal_spec_compared: Counter = Counter.init(0),
     rehearsal_env_resolved: Counter = Counter.init(0),
+    // The subset of resolved environments whose scheme carries an EMPTY binder
+    // vector: the site's arity agrees (zero actuals for zero binders), so the
+    // environment resolves, but nothing is bound and every generalized position
+    // in the body emits its residual materialization instead of the actual. This
+    // is the reunify.md 7.1 scheme-binder gap seen from the consuming side, not a
+    // translation difference.
+    rehearsal_env_resolved_without_binders: Counter = Counter.init(0),
     rehearsal_skip_root_edge: Counter = Counter.init(0),
     rehearsal_skip_generated_edge: Counter = Counter.init(0),
     rehearsal_skip_no_site: Counter = Counter.init(0),
@@ -217,7 +224,22 @@ pub const Census = struct {
     // the flip's body discovery must supply.
     rehearsal_type_compared: Counter = Counter.init(0),
     rehearsal_type_match: Counter = Counter.init(0),
+    // A position whose two stored forms are the same rooted graph reached
+    // through different entry paths: their unfoldings agree, while their stored
+    // digests encode the recursive back reference at different visiting-stack
+    // positions (reunify.md section 8.3). The graph roots such a knot wherever
+    // unification joined two nodes, which differs between call sites of one
+    // nominal; the directed emission roots it at the nominal every time. The
+    // count is the population whose emitted stored form the flip deliberately
+    // re-roots, not a content difference.
+    rehearsal_type_equal_under_rerooting: Counter = Counter.init(0),
     rehearsal_type_mismatch_logical: Counter = Counter.init(0),
+    // The subset of logical mismatches whose emitted type is the empty tag union
+    // — the stored form an undisposed, undefaulted residual variable
+    // materializes to. A position that emits it where the graph sealed real
+    // content is a binder the environment did not carry, which is the same 7.1
+    // scheme-binder gap `env_resolved_without_binders` counts from the other side.
+    rehearsal_type_mismatch_unbound_residual: Counter = Counter.init(0),
     rehearsal_type_mismatch_representation: Counter = Counter.init(0),
     // A position whose checked source lives outside the specialization's own
     // scheme module, so no binder of this environment is in scope there and it
