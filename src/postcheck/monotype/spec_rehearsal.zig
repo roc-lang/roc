@@ -78,6 +78,137 @@ pub const CheckedAddress = struct {
     type_id: u32,
 };
 
+/// reunify.md section 9.6's declared compiler-generated instantiation rules.
+///
+/// A compiler-generated call edge has no checked use site, so no
+/// `CheckedInstantiationSite` records its dense actuals and nothing may be
+/// matched structurally out of the concrete callable to make one up. Each
+/// generating site therefore names the rule it emits under, and each rule states
+/// exactly where its callee scheme's binder values come from. A rule whose
+/// generating site cannot hand over that source stays declared and unbound: it
+/// names the missing datum instead of guessing one.
+///
+/// The declarations live next to the compiler-generated-edge contract in
+/// `design.md` (Static Dispatch In Monotype). Members are one per generating
+/// family, and each family's mapping is stated on its member here.
+pub const GeneratedInstantiationRule = enum {
+    /// The generated-iterator dispatch: a `for` loop's `iter` and `next` calls,
+    /// whose synthetic receiver-dispatch constraints the checker introduces with
+    /// no introducing expression, so their `dispatch_target` instantiation sites
+    /// are recorded under a use node of zero and no use expression names them.
+    ///
+    /// Binder mapping (exact, total): the callee's scheme binder `i` takes
+    /// argument `i` of the dispatch plan's own checked dispatcher type, read
+    /// alias-transparently as a named type. `Builtin.List.iter` is
+    /// `List(item) -> Iter(item)` over a `List(X)` dispatcher, and
+    /// `Builtin.Iter.next` is `Iter(item) -> [...]` over an `Iter(X)` dispatcher;
+    /// in both the dispatcher's argument list is exactly the callee's binder
+    /// list in order. A dispatcher whose argument count differs from the callee
+    /// scheme's binder count is outside the rule and binds nothing.
+    ///
+    /// Witness: the plan's own checked callable type, emitted under the
+    /// requesting body's environment, must equal the callee scheme root emitted
+    /// under the binding.
+    iterator_dispatch_receiver,
+    /// `to_inspect` on a component of the value being inspected.
+    ///
+    /// Declared-but-unbound. Missing datum: the inspect walk descends a Monotype
+    /// and calls the component method on a Monotype component; the checked type
+    /// the walk started from is not carried down, so no checked receiver names
+    /// the component. Binding it needs the inspect walk to carry the checked
+    /// type alongside the Monotype it descends.
+    inspect_component,
+    /// `is_eq`/`to_hash` on a component the structural-derivation ladder reached.
+    ///
+    /// Declared-but-unbound. Missing datum: as for `inspect_component` — the
+    /// derivation ladder is driven entirely by Monotype structure (its expansion
+    /// stack and memoized helper defs are keyed on Monotype ids), so the checked
+    /// type of the component it dispatches on does not exist at the call.
+    structural_derivation_component,
+    /// `is_eq` on the scrutinee type of a literal pattern.
+    ///
+    /// Declared-but-unbound. Missing datum: the pattern guard entry carries the
+    /// Monotype the comparison happens at, not the checked type of the
+    /// scrutinee.
+    pattern_literal_equality,
+    /// `Set.from_list`/`Set.to_list` behind a set literal.
+    ///
+    /// Declared-but-unbound. Missing datum: the literal's helper receiver types
+    /// are Monotypes the literal lowering builds from the element type it
+    /// lowered, so no checked type names them.
+    set_literal_helper,
+    /// `Dict.with_capacity`/`Dict.insert`/`Dict.to_list` behind a dict literal.
+    ///
+    /// Declared-but-unbound. Missing datum: as for `set_literal_helper`.
+    dict_literal_helper,
+    /// The encoding format's parse helpers: `parse_<scalar>`, `parse_record_field`,
+    /// `skip_record_field`, `parse_null`, `parser_for`, and the format's own
+    /// `parse_*` entry.
+    ///
+    /// Declared-but-unbound, and the receiver would not supply the binder even
+    /// if it were checked: the receiver is the encoding format nominal, which
+    /// takes no arguments, while the callee's one binder is the OPEN EXTENSION
+    /// of its error tag union (`Try(..., [InvalidJson(Str), ..])`). Missing
+    /// datum: the checked error row the call site's expected return type fixes,
+    /// which the parse walk holds only as a Monotype.
+    json_parse_helper,
+    /// The encoding format's encode helpers: `encoder_for` and the format's own
+    /// `encode_*` entry.
+    ///
+    /// Declared-but-unbound, for the same reason as `json_parse_helper`: the
+    /// callee's one binder is the never-failing error type of its `Try` result,
+    /// not an argument of the format receiver.
+    json_encode_helper,
+    /// The encoding format's `rename_field` helper.
+    ///
+    /// Declared-but-unbound. Missing datum: as for `json_parse_helper`.
+    json_record_field_name,
+    /// The encoding format's `invalid_value` helper.
+    ///
+    /// Declared-but-unbound. Missing datum: as for `json_parse_helper`.
+    json_invalid_value,
+
+    /// Whether this rule's generating sites hand over the checked data its
+    /// binder mapping reads. The declaration is authoritative: a rule that
+    /// answers false binds nothing, however much a site passes, so a generator
+    /// stays declared-but-unbound until its missing datum above is supplied.
+    pub fn declaresBinderSource(self: GeneratedInstantiationRule) bool {
+        return switch (self) {
+            .iterator_dispatch_receiver => true,
+            .inspect_component,
+            .structural_derivation_component,
+            .pattern_literal_equality,
+            .set_literal_helper,
+            .dict_literal_helper,
+            .json_parse_helper,
+            .json_encode_helper,
+            .json_record_field_name,
+            .json_invalid_value,
+            => false,
+        };
+    }
+};
+
+/// How many declared rules there are, for the per-rule outcome table.
+const generated_rule_count = @typeInfo(GeneratedInstantiationRule).@"enum".fields.len;
+
+/// One declared generated edge as its generating site names it: the rule, and
+/// the checked data that rule's binder mapping and witness read, when the site
+/// holds it (reunify.md section 9.6).
+pub const GeneratedEdge = struct {
+    rule: GeneratedInstantiationRule,
+    source: ?GeneratedSource = null,
+};
+
+/// The checked data one generating site hands over: the module whose store holds
+/// both ids, the receiver the rule's binder mapping reads, and the callable the
+/// request names, which the exact structural witness compares against.
+pub const GeneratedSource = struct {
+    module_bytes: [32]u8,
+    receiver: checked.CheckedTypeId,
+    requested: checked.CheckedTypeId,
+};
+
 /// The requesting edge of one specialization: the module whose body made the
 /// request, and the checked expression the request was made at. That expression
 /// is the `use_node` half of the section 7.2 edge identity, resolved to a checked
@@ -92,6 +223,29 @@ pub const RequestEdge = struct {
     /// the edge instead of being read off whatever frame happens to be active
     /// when the request is finally lowered (reunify.md sections 7.3, 9.1).
     caller: ?CapturedEnvironment,
+};
+
+/// One declared generated edge together with the requesting body's own binding
+/// at the moment the request was made, which the rule's receiver and witness
+/// both translate under (reunify.md sections 7.3, 9.1, 9.6).
+const GeneratedRequest = struct {
+    edge: GeneratedEdge,
+    caller: ?CapturedEnvironment,
+};
+
+/// What one open request scope names: nothing, the checked use site the request
+/// was made at, or the declared generated rule that produced it.
+const RequestScope = union(enum) {
+    none,
+    checked: RequestEdge,
+    generated: GeneratedRequest,
+};
+
+/// What a reservation claimed from its request scope, held under the reserved
+/// function id until that specialization's body lowers.
+const ClaimedRequest = union(enum) {
+    checked: RequestEdge,
+    generated: GeneratedRequest,
 };
 
 /// A copy of one requesting body's binding environment chain, owned by the edge
@@ -598,6 +752,37 @@ const NamedFieldDifference = enum {
     }
 };
 
+/// How one declared generated rule's edges resolved, counted per rule so a rule
+/// that binds and a rule that stays declared-but-unbound are never summed
+/// together (reunify.md section 9.6).
+const GeneratedOutcome = struct {
+    /// Edges this rule produced that reserved a specialization.
+    claimed: u64 = 0,
+    /// Claimed edges whose specialization's own scheme carries no binders, so
+    /// the empty binding is the whole binding and the rule supplies nothing.
+    ground: u64 = 0,
+    /// Claimed edges whose specialization's scheme carries binders and whose
+    /// rule declares no binder source: declared-but-unbound.
+    unbound: u64 = 0,
+    /// Binder-carrying edges whose rule bound an environment that the exact
+    /// structural witness accepted.
+    witness_agrees: u64 = 0,
+    /// Binder-carrying edges whose rule bound an environment the witness
+    /// rejected; the binding is released and the specialization stays
+    /// unresolved.
+    witness_differs: u64 = 0,
+    /// Binder-carrying edges whose witness could not be emitted on one side or
+    /// the other, so nothing accepted the binding.
+    witness_absent: u64 = 0,
+    /// Binder-carrying edges whose declared receiver was absent, unresolvable,
+    /// or not the nominal shape the rule names.
+    receiver_unusable: u64 = 0,
+
+    fn isEmpty(self: GeneratedOutcome) bool {
+        return std.meta.eql(self, GeneratedOutcome{});
+    }
+};
+
 /// One distinct unresolved specialization, dumped with the census counters so
 /// the population that still needs a declared binding is named rather than
 /// counted: which definition it specializes, which module owns it, how many
@@ -629,12 +814,14 @@ pub const Rehearsal = struct {
     /// use site named is only ever visible to the request that site made — a
     /// reservation claims the innermost scope's edge, and a scope that closes
     /// unclaimed drops it instead of leaving it for an unrelated later request.
-    /// An entry is null once claimed, and for a request whose use site named no
-    /// edge at all.
-    requests: std.ArrayList(?RequestEdge),
+    /// An entry is `.none` once claimed, and for a request whose use site named
+    /// no edge at all.
+    requests: std.ArrayList(RequestScope),
     /// The requesting edge of each reserved function id: the identity a request
     /// is tied to from reservation until its body lowers (reunify.md 11.3).
-    edges_by_fn: std.AutoHashMapUnmanaged(u32, RequestEdge),
+    edges_by_fn: std.AutoHashMapUnmanaged(u32, ClaimedRequest),
+    /// Per declared generated rule, how its edges resolved (reunify.md 9.6).
+    generated_outcomes: [generated_rule_count]GeneratedOutcome,
     site_index: std.AutoHashMapUnmanaged([32]u8, SiteIndex),
     /// Interned logical-identity digests to dense engine tokens. Two slots may
     /// relate only when their tokens are equal.
@@ -688,6 +875,7 @@ pub const Rehearsal = struct {
             .frames = .empty,
             .requests = .empty,
             .edges_by_fn = .empty,
+            .generated_outcomes = [_]GeneratedOutcome{.{}} ** generated_rule_count,
             .site_index = .empty,
             .logical_tokens = .empty,
             .next_token = 1,
@@ -728,11 +916,13 @@ pub const Rehearsal = struct {
         }
         self.site_index.deinit(self.allocator);
         for (self.requests.items) |open| {
-            if (open) |edge| self.releaseEdge(edge);
+            self.releaseScope(open);
         }
         self.requests.deinit(self.allocator);
         var held = self.edges_by_fn.valueIterator();
-        while (held.next()) |edge| self.releaseEdge(edge.*);
+        while (held.next()) |claim| {
+            self.releaseClaim(claim.*);
+        }
         self.edges_by_fn.deinit(self.allocator);
         self.engine.deinit();
         self.translator.deinit();
@@ -751,7 +941,7 @@ pub const Rehearsal = struct {
             .use_expr = use_expr,
             .caller = self.captureCallerEnvironment(module_bytes),
         };
-        self.requests.append(self.allocator, edge) catch {
+        self.requests.append(self.allocator, .{ .checked = edge }) catch {
             self.releaseEdge(edge);
             self.fail();
         };
@@ -762,7 +952,27 @@ pub const Rehearsal = struct {
     /// enclosing scope's edge.
     pub fn openRequestWithoutEdge(self: *Rehearsal) void {
         if (self.disabled) return;
-        self.requests.append(self.allocator, null) catch self.fail();
+        self.requests.append(self.allocator, .none) catch self.fail();
+    }
+
+    /// Open a request scope for a declared compiler-generated edge (reunify.md
+    /// section 9.6). The scope names the rule the generating site emits under
+    /// and the checked data that rule's binder mapping reads, so the
+    /// specialization this request reserves records which rule produced it and
+    /// under which requesting environment.
+    pub fn openGeneratedRequest(self: *Rehearsal, edge: GeneratedEdge) void {
+        if (self.disabled) return;
+        const request = GeneratedRequest{
+            .edge = edge,
+            .caller = if (edge.source) |source|
+                self.captureCallerEnvironment(source.module_bytes)
+            else
+                null,
+        };
+        self.requests.append(self.allocator, .{ .generated = request }) catch {
+            self.releaseGeneratedRequest(request);
+            self.fail();
+        };
     }
 
     /// Close the innermost request scope. An edge no reservation claimed
@@ -774,9 +984,14 @@ pub const Rehearsal = struct {
         if (self.disabled) return;
         if (self.requests.items.len == 0) return;
         const open = self.requests.pop() orelse return;
-        const edge = open orelse return;
-        census.bump("rehearsal_request_edge_unclaimed");
-        self.releaseEdge(edge);
+        switch (open) {
+            .none => {},
+            .generated => |request| self.releaseGeneratedRequest(request),
+            .checked => |edge| {
+                census.bump("rehearsal_request_edge_unclaimed");
+                self.releaseEdge(edge);
+            },
+        }
     }
 
     /// Bind the innermost open request's edge to the function id that request
@@ -790,24 +1005,31 @@ pub const Rehearsal = struct {
             return;
         }
         const slot = &self.requests.items[self.requests.items.len - 1];
-        const edge = slot.* orelse {
-            census.bump("rehearsal_request_edge_claim_without_edge");
-            return;
+        const claim: ClaimedRequest = switch (slot.*) {
+            .none => {
+                census.bump("rehearsal_request_edge_claim_without_edge");
+                return;
+            },
+            .checked => |edge| .{ .checked = edge },
+            .generated => |request| blk: {
+                self.generated_outcomes[@intFromEnum(request.edge.rule)].claimed += 1;
+                break :blk .{ .generated = request };
+            },
         };
-        const existing = self.edges_by_fn.fetchPut(self.allocator, fn_id, edge) catch {
-            self.releaseEdge(edge);
-            slot.* = null;
+        const existing = self.edges_by_fn.fetchPut(self.allocator, fn_id, claim) catch {
+            self.releaseClaim(claim);
+            slot.* = .none;
             self.fail();
             return;
         };
-        slot.* = null;
+        slot.* = .none;
         census.bump("rehearsal_request_edge_claimed");
         // One reserved id is requested once: a second claim would mean two
         // distinct use sites reserved the same specialization body, which is
         // recorded rather than silently overwritten.
         if (existing) |previous| {
             census.bump("rehearsal_request_edge_claim_repeated");
-            self.releaseEdge(previous.value);
+            self.releaseClaim(previous.value);
         }
     }
 
@@ -830,6 +1052,26 @@ pub const Rehearsal = struct {
     fn releaseEdge(self: *Rehearsal, edge: RequestEdge) void {
         var caller = edge.caller orelse return;
         caller.chain.release(self.allocator);
+    }
+
+    fn releaseGeneratedRequest(self: *Rehearsal, request: GeneratedRequest) void {
+        var caller = request.caller orelse return;
+        caller.chain.release(self.allocator);
+    }
+
+    fn releaseScope(self: *Rehearsal, scope: RequestScope) void {
+        switch (scope) {
+            .none => {},
+            .checked => |edge| self.releaseEdge(edge),
+            .generated => |request| self.releaseGeneratedRequest(request),
+        }
+    }
+
+    fn releaseClaim(self: *Rehearsal, claim: ClaimedRequest) void {
+        switch (claim) {
+            .checked => |edge| self.releaseEdge(edge),
+            .generated => |request| self.releaseGeneratedRequest(request),
+        }
     }
 
     /// Start one specialization: resolve its binder environment from checked
@@ -1068,13 +1310,13 @@ pub const Rehearsal = struct {
     /// Why one specialization's requesting edge supplied no binding. Carried to
     /// the edgeless path so a specialization that ends up with no environment
     /// says which half of the seam it is missing.
-    const EdgeSkip = enum {
+    const EdgeSkip = union(enum) {
         /// The request that reserved this specialization named no edge at all
         /// and no active specialization was lowering, which is a root request.
         root_request,
-        /// The request named no edge while another specialization was lowering,
-        /// which is a compiler-generated edge (reunify.md 9.6).
-        generated_request,
+        /// The request came from a compiler-generated edge (reunify.md 9.6),
+        /// carrying the declared rule when the generating site named one.
+        generated_request: ?GeneratedInstantiationRule,
         /// The edge's use expression names no recorded instantiation site.
         no_site,
         /// The edge's use expression names several sites that disagree.
@@ -1102,13 +1344,17 @@ pub const Rehearsal = struct {
     /// edge supplied none. Every way the edge fails to resolve is a named skip
     /// class, never an assumption.
     fn resolveEnvironmentFromEdge(self: *Rehearsal, start: SpecializationStart, frame: *Frame) ?EdgeSkip {
-        const edge = self.takeEdge(start.reserved_fn_id) orelse {
+        const claim = self.takeClaim(start.reserved_fn_id) orelse {
             if (self.frames.items.len == 0) {
                 census.bump("rehearsal_skip_root_edge");
                 return .root_request;
             }
             census.bump("rehearsal_skip_generated_edge");
-            return .generated_request;
+            return .{ .generated_request = null };
+        };
+        const edge = switch (claim) {
+            .checked => |checked_edge| checked_edge,
+            .generated => |request| return self.resolveEnvironmentFromGeneratedRule(start, frame, request),
         };
         defer self.releaseEdge(edge);
         const caller = self.lookup.cursor(edge.module_bytes) orelse {
@@ -1242,6 +1488,187 @@ pub const Rehearsal = struct {
         frame.interface_root = self.emitQuietly(defining, frame.environment(), scheme.owner_node, scheme.root);
         frame.request_root = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
         return null;
+    }
+
+    /// Resolve one specialization whose request came from a declared
+    /// compiler-generated edge (reunify.md section 9.6). The rule names where
+    /// its binder values come from; a rule that declares no source leaves the
+    /// specialization unresolved rather than inventing a binding from the
+    /// concrete callable. Reports why no binding was produced, or null once one
+    /// was.
+    fn resolveEnvironmentFromGeneratedRule(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        frame: *Frame,
+        request: GeneratedRequest,
+    ) ?EdgeSkip {
+        defer self.releaseGeneratedRequest(request);
+        const outcome = &self.generated_outcomes[@intFromEnum(request.edge.rule)];
+        const named: EdgeSkip = .{ .generated_request = request.edge.rule };
+        const scheme_id = start.template_scheme orelse {
+            census.bump("rehearsal_skip_generated_edge");
+            return named;
+        };
+        const scheme = start.cursor.view.schemeById(scheme_id) orelse {
+            census.bump("rehearsal_skip_generated_edge");
+            return named;
+        };
+        // A generated edge into a scheme with no binders has exactly one
+        // instantiation; the ground path already resolves those exactly.
+        if (scheme.gv_len == 0) {
+            outcome.ground += 1;
+            census.bump("rehearsal_skip_generated_edge");
+            return named;
+        }
+        const declared_source = if (request.edge.rule.declaresBinderSource()) request.edge.source else null;
+        const source = declared_source orelse {
+            outcome.unbound += 1;
+            census.bump("rehearsal_skip_generated_edge");
+            census.bump("rehearsal_generated_rule_declared_unbound");
+            return named;
+        };
+        if (self.bindGeneratedRule(start, frame, scheme_id, scheme, source, request.caller, outcome)) {
+            return null;
+        }
+        census.bump("rehearsal_skip_generated_edge");
+        return named;
+    }
+
+    /// Apply one declared rule's binder mapping and accept the binding only
+    /// under the exact structural witness the rule declares: the callee scheme
+    /// root emitted under the binding must equal the checked callable the
+    /// request names, emitted under the requesting body's own environment
+    /// (reunify.md sections 7.5, 9.6). A binding without that witness is
+    /// released and the specialization stays unresolved.
+    fn bindGeneratedRule(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        frame: *Frame,
+        scheme_id: checked.CheckedTypeSchemeId,
+        scheme: checked.CheckedTypeScheme,
+        source: GeneratedSource,
+        captured_caller: ?CapturedEnvironment,
+        outcome: *GeneratedOutcome,
+    ) bool {
+        const caller = self.lookup.cursor(source.module_bytes) orelse {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_caller_module_absent");
+            return false;
+        };
+        const binders = scheme.generalizedVars(start.cursor.view);
+        // The rule's mapping is over the callee scheme's own binders; a scheme
+        // that also captures enclosing binders is outside every declared rule.
+        if (scheme.captured_len != 0) {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_scheme_captures");
+            return false;
+        }
+        const arguments = receiverArguments(caller.view, source.receiver) orelse {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_receiver_not_named");
+            return false;
+        };
+        if (!receiverSuppliesBinders(arguments, binders)) {
+            outcome.receiver_unusable += 1;
+            census.bump("rehearsal_generated_rule_receiver_arity_differs");
+            return false;
+        }
+
+        const caller_env: ?*const direct_translate.BindingEnvironment = if (captured_caller) |*held|
+            held.environment()
+        else
+            null;
+        const caller_owner_node = if (captured_caller) |held|
+            held.owner_node
+        else
+            checked.checked_residual_disposition_module_body_owner;
+
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return false;
+        };
+        defer self.allocator.free(bound);
+        for (arguments, 0..) |argument, index| {
+            const translated = self.translateActual(caller, caller_env, caller_owner_node, argument) orelse {
+                outcome.receiver_unusable += 1;
+                census.bump("rehearsal_generated_rule_argument_untranslatable");
+                return false;
+            };
+            bound[index] = direct_translate.BoundType.of(translated);
+        }
+
+        const scheme_ident = direct_translate.SchemeIdent{
+            .module_bytes = start.cursor.module_bytes,
+            .scheme = @intFromEnum(scheme_id),
+        };
+        var chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = scheme_ident,
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse {
+            self.fail();
+            return false;
+        };
+        const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
+        const requested = self.emitQuietly(caller, caller_env, caller_owner_node, source.requested);
+        if (!self.generatedWitnessAgrees(declared, requested, outcome)) {
+            chain.release(self.allocator);
+            return false;
+        }
+
+        frame.chain = chain;
+        frame.env_module_bytes = start.cursor.module_bytes;
+        frame.scheme = scheme_ident;
+        frame.owner_node = scheme.owner_node;
+        frame.binders = binders;
+        frame.env_ready = true;
+        frame.interface_root = declared;
+        frame.request_root = requested;
+        census.bump("rehearsal_env_resolved");
+        census.bump("rehearsal_env_resolved_generated_rule");
+        noteEnvironmentScheme(scheme);
+        census.bump("rehearsal_env_parent_absent");
+        return true;
+    }
+
+    /// Whether a rule's binding produced the exact witness that accepts it,
+    /// counted per rule. Two rooted recursive graphs entered from different
+    /// paths store different digests for one type (reunify.md section 8.3), so
+    /// the unfolding decides those.
+    fn generatedWitnessAgrees(
+        self: *Rehearsal,
+        declared: ?Type.TypeId,
+        requested: ?Type.TypeId,
+        outcome: *GeneratedOutcome,
+    ) bool {
+        const left = declared orelse {
+            outcome.witness_absent += 1;
+            census.bump("rehearsal_generated_rule_witness_absent");
+            return false;
+        };
+        const right = requested orelse {
+            outcome.witness_absent += 1;
+            census.bump("rehearsal_generated_rule_witness_absent");
+            return false;
+        };
+        const left_digest = self.store.typeDigest(self.program_names, left);
+        const right_digest = self.store.typeDigest(self.program_names, right);
+        if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
+            outcome.witness_agrees += 1;
+            census.bump("rehearsal_generated_rule_witness_agrees");
+            return true;
+        }
+        const left_unfolded = self.store.unfoldedDigest(self.program_names, left);
+        const right_unfolded = self.store.unfoldedDigest(self.program_names, right);
+        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+            outcome.witness_agrees += 1;
+            census.bump("rehearsal_generated_rule_witness_agrees_under_rerooting");
+            return true;
+        }
+        outcome.witness_differs += 1;
+        census.bump("rehearsal_generated_rule_witness_differs");
+        return false;
     }
 
     /// Resolve a specialization the rehearsal saw no requesting edge for. A root
@@ -1805,9 +2232,9 @@ pub const Rehearsal = struct {
         return index;
     }
 
-    /// The edge the request that reserved `fn_id` named, or null when the
-    /// request named none.
-    fn takeEdge(self: *Rehearsal, reserved_fn_id: u32) ?RequestEdge {
+    /// What the request that reserved `fn_id` claimed, or null when the request
+    /// claimed nothing.
+    fn takeClaim(self: *Rehearsal, reserved_fn_id: u32) ?ClaimedRequest {
         const found = self.edges_by_fn.fetchRemove(reserved_fn_id) orelse return null;
         return found.value;
     }
@@ -2290,12 +2717,13 @@ pub const Rehearsal = struct {
         for (self.unresolved_details.items) |detail| {
             const line = std.fmt.allocPrint(
                 self.allocator,
-                "rehearsal_unresolved_detail name={s} module={s} binders={d} skip={s}\n",
+                "rehearsal_unresolved_detail name={s} module={s} binders={d} skip={s} rule={s}\n",
                 .{
                     &detail.name,
                     &std.fmt.bytesToHex(detail.template_module, .lower),
                     detail.binders,
                     @tagName(detail.skip),
+                    skipRuleName(detail.skip),
                 },
             ) catch return;
             defer self.allocator.free(line);
@@ -2304,8 +2732,41 @@ pub const Rehearsal = struct {
         census.appendToFile(raw_path, text.items);
     }
 
+    /// One line per declared generated rule that produced any edge, so a rule
+    /// that binds and a rule that stays declared-but-unbound are read apart
+    /// (reunify.md section 9.6).
+    fn dumpGeneratedRules(self: *Rehearsal) void {
+        if (comptime !census.enabled) return;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(self.allocator);
+        for (self.generated_outcomes, 0..) |outcome, index| {
+            if (outcome.isEmpty()) continue;
+            const rule: GeneratedInstantiationRule = @enumFromInt(index);
+            const line = std.fmt.allocPrint(
+                self.allocator,
+                "rehearsal_generated_rule rule={s} claimed={d} ground={d} unbound={d} witness_agrees={d} witness_differs={d} witness_absent={d} receiver_unusable={d}\n",
+                .{
+                    @tagName(rule),
+                    outcome.claimed,
+                    outcome.ground,
+                    outcome.unbound,
+                    outcome.witness_agrees,
+                    outcome.witness_differs,
+                    outcome.witness_absent,
+                    outcome.receiver_unusable,
+                },
+            ) catch return;
+            defer self.allocator.free(line);
+            text.appendSlice(self.allocator, line) catch return;
+        }
+        if (text.items.len == 0) return;
+        census.appendToFile(raw_path, text.items);
+    }
+
     fn dumpDetails(self: *Rehearsal) void {
         if (comptime !census.enabled) return;
+        self.dumpGeneratedRules();
         self.dumpUnresolved();
         if (self.details.items.len == 0) return;
         const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
@@ -2350,6 +2811,50 @@ pub const Rehearsal = struct {
     }
 };
 
+/// How many alias layers a declared receiver is read through before it must be
+/// a named type. Aliases nest a handful deep at most; this only bounds input.
+const max_receiver_alias_depth: u32 = 8;
+
+/// The declared receiver's positional arguments, read alias-transparently, or
+/// null when the receiver is not a named type at all. This is the only shape a
+/// declared generated rule's binder mapping reads: positions of the nominal the
+/// generating site dispatched on, never a match against the concrete callable
+/// (reunify.md sections 9.5, 9.6).
+fn receiverArguments(
+    view: checked.CheckedTypeStoreView,
+    receiver: checked.CheckedTypeId,
+) ?[]const checked.CheckedTypeId {
+    var ty = receiver;
+    var depth: u32 = 0;
+    while (depth < max_receiver_alias_depth) : (depth += 1) {
+        switch (view.payload(ty)) {
+            .nominal => |nominal| return nominal.args,
+            .alias => |alias| ty = alias.backing,
+            else => return null,
+        }
+    }
+    return null;
+}
+
+/// Whether a declared receiver's positional arguments can supply a callee
+/// scheme's binders. Every declared mapping is positional and total, so the two
+/// lists must have the same length; a receiver that is shorter or longer names a
+/// different generator than the rule declares and binds nothing.
+fn receiverSuppliesBinders(
+    arguments: []const checked.CheckedTypeId,
+    binders: []const checked.CheckedTypeId,
+) bool {
+    return arguments.len == binders.len;
+}
+
+/// The declared rule a skip names, or `none` for a skip that names no rule.
+fn skipRuleName(skip: Rehearsal.EdgeSkip) []const u8 {
+    return switch (skip) {
+        .generated_request => |rule| if (rule) |named| @tagName(named) else "none",
+        else => "none",
+    };
+}
+
 /// Whether two edges recording one instantiated root describe the same
 /// instantiation: same owning scheme (and defining module) and the same
 /// positional actuals. Two such edges name one binding, so either may be read.
@@ -2392,6 +2897,189 @@ fn descriptorsAgree(emitted: policy.NamedDescriptor, sealed: policy.NamedDescrip
 }
 
 const testing = std.testing;
+
+/// A minimal hand-built checked type store view, enough to read the receiver
+/// shapes a declared generated rule's binder mapping accepts and rejects.
+const ReceiverFixture = struct {
+    allocator: Allocator,
+    source_names: names.NameStore,
+    payloads: std.ArrayList(checked.StoredCheckedTypePayload),
+    type_id_pool: std.ArrayList(checked.CheckedTypeId),
+    module_hash: [32]u8,
+
+    fn init(allocator: Allocator) ReceiverFixture {
+        return .{
+            .allocator = allocator,
+            .source_names = names.NameStore.init(allocator),
+            .payloads = .empty,
+            .type_id_pool = .empty,
+            .module_hash = [_]u8{9} ** 32,
+        };
+    }
+
+    fn deinit(self: *ReceiverFixture) void {
+        self.type_id_pool.deinit(self.allocator);
+        self.payloads.deinit(self.allocator);
+        self.source_names.deinit();
+    }
+
+    fn add(self: *ReceiverFixture, payload: checked.StoredCheckedTypePayload) Allocator.Error!checked.CheckedTypeId {
+        const id: checked.CheckedTypeId = @enumFromInt(@as(u32, @intCast(self.payloads.items.len)));
+        try self.payloads.append(self.allocator, payload);
+        return id;
+    }
+
+    fn addFlex(self: *ReceiverFixture) Allocator.Error!checked.CheckedTypeId {
+        return try self.add(.{ .flex = .{} });
+    }
+
+    /// A named type with `args` positional arguments, which is the only receiver
+    /// shape any declared rule's mapping reads.
+    fn addNamed(
+        self: *ReceiverFixture,
+        name_text: []const u8,
+        args: []const checked.CheckedTypeId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        const name = try self.source_names.internTypeName(name_text);
+        const module = try self.source_names.internModuleIdentity(&self.module_hash);
+        const start: u32 = @intCast(self.type_id_pool.items.len);
+        try self.type_id_pool.appendSlice(self.allocator, args);
+        return try self.add(.{ .nominal = .{
+            .name = name,
+            .origin_module = module,
+            .owner_module = .{ .bytes = self.module_hash },
+            .is_opaque = false,
+            .representation = .opaque_without_backing,
+            .args = .{ .start = start, .len = @intCast(args.len) },
+        } });
+    }
+
+    fn addAlias(
+        self: *ReceiverFixture,
+        name_text: []const u8,
+        backing: checked.CheckedTypeId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        const name = try self.source_names.internTypeName(name_text);
+        const module = try self.source_names.internModuleIdentity(&self.module_hash);
+        return try self.add(.{ .alias = .{
+            .name = name,
+            .origin_module = module,
+            .owner_module = .{ .bytes = self.module_hash },
+            .backing = backing,
+        } });
+    }
+
+    fn addFunction(
+        self: *ReceiverFixture,
+        args: []const checked.CheckedTypeId,
+        ret: checked.CheckedTypeId,
+    ) Allocator.Error!checked.CheckedTypeId {
+        const start: u32 = @intCast(self.type_id_pool.items.len);
+        try self.type_id_pool.appendSlice(self.allocator, args);
+        return try self.add(.{ .function = .{
+            .kind = .pure,
+            .args = .{ .start = start, .len = @intCast(args.len) },
+            .ret = ret,
+        } });
+    }
+
+    fn view(self: *ReceiverFixture) checked.CheckedTypeStoreView {
+        return .{
+            .stored_payloads = self.payloads.items,
+            .type_id_pool = self.type_id_pool.items,
+        };
+    }
+};
+
+test "the iterator dispatch rule accepts a named receiver and reads its arguments in order" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const item = try fixture.addFlex();
+    const other = try fixture.addFlex();
+    // `Builtin.List.iter` is `List(item) -> Iter(item)`: one binder, and the
+    // dispatcher's single argument is exactly that binder's value.
+    const list = try fixture.addNamed("List", &.{item});
+    const arguments = receiverArguments(fixture.view(), list) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), arguments.len);
+    try testing.expectEqual(item, arguments[0]);
+    try testing.expect(receiverSuppliesBinders(arguments, &.{item}));
+
+    // A two-argument receiver reads both, in declaration order.
+    const dict = try fixture.addNamed("Dict", &.{ item, other });
+    const pair = receiverArguments(fixture.view(), dict) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 2), pair.len);
+    try testing.expectEqual(item, pair[0]);
+    try testing.expectEqual(other, pair[1]);
+}
+
+test "the iterator dispatch rule reads its receiver alias-transparently" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const item = try fixture.addFlex();
+    const iterator = try fixture.addNamed("Iter", &.{item});
+    const aliased = try fixture.addAlias("Stepper", iterator);
+    const twice = try fixture.addAlias("Steps", aliased);
+
+    const arguments = receiverArguments(fixture.view(), twice) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(usize, 1), arguments.len);
+    try testing.expectEqual(item, arguments[0]);
+}
+
+test "a receiver that is not a named type binds nothing" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const item = try fixture.addFlex();
+    const bare = try fixture.addFlex();
+    const function = try fixture.addFunction(&.{item}, item);
+
+    try testing.expect(receiverArguments(fixture.view(), bare) == null);
+    try testing.expect(receiverArguments(fixture.view(), function) == null);
+}
+
+test "a receiver whose argument count differs from the callee's binders binds nothing" {
+    var fixture = ReceiverFixture.init(testing.allocator);
+    defer fixture.deinit();
+
+    const key = try fixture.addFlex();
+    const value = try fixture.addFlex();
+    const dict = try fixture.addNamed("Dict", &.{ key, value });
+    const arguments = receiverArguments(fixture.view(), dict) orelse return error.TestUnexpectedResult;
+
+    // A one-binder callee cannot take a two-argument receiver's positions, and a
+    // zero-argument receiver cannot supply a one-binder callee — which is
+    // exactly why the encoding-format rules stay declared-but-unbound.
+    try testing.expect(!receiverSuppliesBinders(arguments, &.{key}));
+    const format = try fixture.addNamed("JsonEncoding", &.{});
+    const none = receiverArguments(fixture.view(), format) orelse return error.TestUnexpectedResult;
+    try testing.expect(!receiverSuppliesBinders(none, &.{key}));
+    try testing.expect(receiverSuppliesBinders(none, &.{}));
+}
+
+test "only the declared rules that carry a checked receiver bind from one" {
+    // The declared-but-unbound inventory (reunify.md section 9.6): each of these
+    // names its missing datum on its enum member and in design.md, and binds
+    // nothing until that datum reaches its generating site.
+    const unbound = [_]GeneratedInstantiationRule{
+        .inspect_component,
+        .structural_derivation_component,
+        .pattern_literal_equality,
+        .set_literal_helper,
+        .dict_literal_helper,
+        .json_parse_helper,
+        .json_encode_helper,
+        .json_record_field_name,
+        .json_invalid_value,
+    };
+    for (unbound) |rule| try testing.expect(!rule.declaresBinderSource());
+    try testing.expect(GeneratedInstantiationRule.iterator_dispatch_receiver.declaresBinderSource());
+
+    // Every declared rule is in exactly one of the two lists, so a rule added
+    // later cannot slip in without declaring which it is.
+    try testing.expectEqual(generated_rule_count, unbound.len + 1);
+}
 
 test "a seal trace joins one node's checked provenance to its sealed id" {
     var trace = SealTrace.init(testing.allocator);

@@ -3596,6 +3596,67 @@ edges. The registry only ever answers exact lookups after the owner is known
 from checked type content; no stage asks "which owners could match this
 constraint?".
 
+**Declared generated-edge instantiation rules.** A compiler-generated edge has
+no checked use site, so no checked instantiation record states what its callee
+scheme's binders took at that edge, and nothing may match the concrete callable
+structurally to invent one (reunify.md section 9.6). Each generating site
+instead names one of the rules below, and each rule states exactly where its
+binder values come from and which exact witness accepts a binding it produces.
+There is no generic generated instantiator: a generator whose mapping cannot be
+made exact and total is declared here as unbound, naming the datum it is
+missing, and binds nothing until that datum reaches its site. The inventory is
+`GeneratedInstantiationRule` in `src/postcheck/monotype/spec_rehearsal.zig`,
+with accepted and rejected tests beside it.
+
+The one rule whose generating site holds a checked receiver:
+
+- `iterator_dispatch_receiver` — a `for` loop's `iter` and `next` calls. The
+  checker introduces both as synthetic receiver-dispatch constraints with no
+  introducing expression, so their dispatch-target instantiation records land
+  under a use node of zero and no use expression names them. Mapping: the
+  callee scheme's binder `i` takes argument `i` of the dispatch plan's own
+  checked dispatcher type, read alias-transparently as a named type.
+  `Builtin.List.iter` is `List(item) -> Iter(item)` over a `List(X)` dispatcher
+  and `Builtin.Iter.next` is `Iter(item) -> [...]` over an `Iter(X)`
+  dispatcher, so in both the dispatcher's argument list is the callee's binder
+  list in order. A dispatcher whose argument count differs from the binder
+  count is outside the rule and binds nothing. Witness: the plan's own checked
+  callable type, instantiated under the requesting body's binding, must be the
+  same type as the callee scheme root instantiated under the binding the rule
+  produced.
+
+The rules that are declared but unbound, each with the datum its generating
+site does not hold:
+
+- `inspect_component` — `to_inspect` on a component. The inspect walk descends
+  a Monotype and calls the component method on a Monotype component; the
+  checked type the walk started from is not carried down.
+- `structural_derivation_component` — `is_eq`/`to_hash` on a component the
+  structural-derivation ladder reached. The ladder is driven entirely by
+  Monotype structure (its expansion stack and memoized helper defs are keyed on
+  Monotype ids), so the component it dispatches on has no checked type at the
+  call.
+- `pattern_literal_equality` — `is_eq` on a literal pattern's scrutinee. The
+  guard entry carries the Monotype the comparison happens at, not the
+  scrutinee's checked type.
+- `set_literal_helper`, `dict_literal_helper` — `Set.from_list`/`Set.to_list`
+  and `Dict.with_capacity`/`Dict.insert`/`Dict.to_list` behind a literal. The
+  helper receiver types are Monotypes the literal lowering builds from the
+  element type it lowered.
+- `json_parse_helper`, `json_encode_helper`, `json_record_field_name`,
+  `json_invalid_value` — the encoding format's helpers. Here the receiver would
+  not supply the binder even if it were checked: the receiver is the encoding
+  format's named type, which takes no arguments, while the callee's single
+  binder is the open extension of its error tag union (`Try(..., [InvalidJson(Str),
+  ..])`) or the never-failing error type of its `Try` result. The missing datum
+  is the checked error row the call site's expected return type fixes, which the
+  parse and encode walks hold only as a Monotype.
+
+Every binding a rule produces is released unless its witness holds, so no
+specialization is ever bound on an unproven mapping; the per-rule
+`witness_agrees`/`witness_differs`/`witness_absent` counts are measured rather
+than assumed.
+
 ### Iterator `for`
 
 Source `for` loops lower during Monotype construction. The output is ordinary

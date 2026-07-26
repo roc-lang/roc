@@ -9418,13 +9418,6 @@ fn findCheckedTypeRoot(roots: []const CheckedTypeRoot, key: canonical.CanonicalT
     return null;
 }
 
-fn findCheckedTypeScheme(schemes: []const CheckedTypeScheme, key: canonical.CanonicalTypeSchemeKey) ?CheckedTypeSchemeId {
-    for (schemes) |scheme| {
-        if (std.meta.eql(scheme.key.bytes, key.bytes)) return scheme.id;
-    }
-    return null;
-}
-
 /// Public `CheckedBody` declaration.
 pub const CheckedBody = struct {
     id: CheckedBodyId,

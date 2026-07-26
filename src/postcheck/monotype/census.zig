@@ -385,6 +385,30 @@ pub const Census = struct {
     rehearsal_foreign_witness_absent: Counter = Counter.init(0),
     rehearsal_foreign_witness_differs: Counter = Counter.init(0),
     rehearsal_env_resolved_foreign_scheme: Counter = Counter.init(0),
+    // reunify.md 9.6: the declared compiler-generated instantiation rules. A
+    // generated edge names the rule it was emitted under; the rule states where
+    // its callee scheme's binder values come from. `declared_unbound` counts an
+    // edge whose rule declares no binder source at all — the rule's missing
+    // datum is stated on its enum member and in design.md, never guessed from
+    // the concrete callable. The `receiver_*` counters bound the ways a
+    // declared source failed to supply the mapping, and the `witness_*`
+    // counters are what accepts a binding: the callee scheme root emitted under
+    // it must be the same type as the checked callable the request names
+    // (reunify.md 7.5). A binding whose witness is absent or disagrees is
+    // released. The per-rule split is dumped as `rehearsal_generated_rule`
+    // lines, because summing rules that bind with rules that stay unbound would
+    // hide exactly the distinction section 9.6 requires.
+    rehearsal_generated_rule_declared_unbound: Counter = Counter.init(0),
+    rehearsal_generated_rule_caller_module_absent: Counter = Counter.init(0),
+    rehearsal_generated_rule_scheme_captures: Counter = Counter.init(0),
+    rehearsal_generated_rule_receiver_not_named: Counter = Counter.init(0),
+    rehearsal_generated_rule_receiver_arity_differs: Counter = Counter.init(0),
+    rehearsal_generated_rule_argument_untranslatable: Counter = Counter.init(0),
+    rehearsal_generated_rule_witness_agrees: Counter = Counter.init(0),
+    rehearsal_generated_rule_witness_agrees_under_rerooting: Counter = Counter.init(0),
+    rehearsal_generated_rule_witness_absent: Counter = Counter.init(0),
+    rehearsal_generated_rule_witness_differs: Counter = Counter.init(0),
+    rehearsal_env_resolved_generated_rule: Counter = Counter.init(0),
     rehearsal_request_edge_claimed: Counter = Counter.init(0),
     rehearsal_request_edge_unclaimed: Counter = Counter.init(0),
     rehearsal_request_edge_claim_without_scope: Counter = Counter.init(0),

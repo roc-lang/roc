@@ -262,6 +262,18 @@ const NestedSpecEvidence = union(enum) {
     synthesize,
 };
 
+/// How one method-target call names its requesting instantiation edge.
+///
+/// `checked_use_site` means the enclosing request scope already names the
+/// checked expression this call instantiates its callee scheme at, so the edge
+/// has an ordinary `CheckedInstantiationSite`. `generated` means the call has no
+/// checked use site at all and cites one of reunify.md section 9.6's declared
+/// rules, which states where its binder values come from.
+const MethodCallEdge = union(enum) {
+    checked_use_site,
+    generated: spec_rehearsal.GeneratedEdge,
+};
+
 /// The evidence supplied to a callee specialization request.
 const SpecEvidenceVector = union(enum) {
     resolved: []const SpecEvidence,
@@ -8138,7 +8150,7 @@ const BodyContext = struct {
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const lookup = (try self.builder.componentMethodTargetByName(self.method_scope, value_ty, "to_inspect")) orelse return null;
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &.{value_ty}, str_ty);
-        const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
+        const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .inspect_component } });
 
         const args = [_]DraftExprId{value};
         return try self.addExpr(.{ .ty = str_ty, .data = .{ .call_proc = .{
@@ -13910,7 +13922,7 @@ const BodyContext = struct {
             return try self.addExpr(.{
                 .ty = ret_ty,
                 .data = .{ .call_proc = .{
-                    .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty, .synthesize))),
+                    .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, parse_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                     .args = try self.addExprSpan(&parse_args),
                 } },
             });
@@ -13953,7 +13965,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, final_spec_expr, state_expr }),
             } },
         });
@@ -14085,7 +14097,7 @@ const BodyContext = struct {
         const step_expr = try self.addExpr(.{
             .ty = step_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{
                     encoding_expr,
                     try self.localExpr(fields_local, fields_ty),
@@ -14732,7 +14744,7 @@ const BodyContext = struct {
         const skip_expr = try self.addExpr(.{
             .ty = skip_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, try self.localExpr(rest_local, state_ty) }),
             } },
         });
@@ -15822,7 +15834,7 @@ const BodyContext = struct {
         const parse_null_expr = try self.addExpr(.{
             .ty = null_try_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_null_lookup, parse_null_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(parse_null_lookup, parse_null_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
             } },
         });
@@ -15924,7 +15936,7 @@ const BodyContext = struct {
         const parser_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
             } },
         });
@@ -16848,7 +16860,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = str_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_record_field_name } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, field_expr }),
             } },
         });
@@ -20532,7 +20544,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = set_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .set_literal_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{list_expr}),
             } },
         });
@@ -20555,7 +20567,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = list_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .set_literal_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{set_expr}),
             } },
         });
@@ -20578,7 +20590,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .dict_literal_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{capacity_expr}),
             } },
         });
@@ -20606,7 +20618,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = dict_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .dict_literal_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{ dict_expr, key_expr, value_expr }),
             } },
         });
@@ -20629,7 +20641,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = list_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .dict_literal_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{dict_expr}),
             } },
         });
@@ -21257,16 +21269,18 @@ const BodyContext = struct {
         lookup: MethodLookup,
         callable_mono_ty: Type.TypeId,
         evidence_vector: SpecEvidenceVector,
+        edge: MethodCallEdge,
     ) Allocator.Error!Ast.FnSlot {
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
         // Debug/probe-only: a compiler-generated edge names no checked use site
-        // (reunify.md section 9.6), so it opens a request scope that names none.
-        // The reservation it makes therefore reads no edge at all instead of the
-        // edge of whichever use site enclosed it.
-        const generated = std.meta.activeTag(evidence_vector) == .synthesize;
+        // (reunify.md section 9.6), so it opens a request scope naming the
+        // declared rule it is generated under instead. The reservation it makes
+        // therefore reads that rule instead of the edge of whichever use site
+        // enclosed it.
+        const generated = edge == .generated;
         if (generated) {
-            if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestWithoutEdge();
+            if (self.builder.rehearsal) |rehearsal| rehearsal.openGeneratedRequest(edge.generated);
         }
         defer if (generated) self.closeRequestEdge();
         return switch (lookup.target.kind) {
@@ -21323,7 +21337,7 @@ const BodyContext = struct {
         if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr);
         defer self.closeRequestEdge();
         return .{ .call_proc = .{
-            .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, try self.evidenceForResolvedTarget(plan.resolution)))),
+            .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, try self.evidenceForResolvedTarget(plan.resolution), .checked_use_site))),
             .args = args,
         } };
     }
@@ -23199,7 +23213,7 @@ const BodyContext = struct {
         const encoder_expr = try self.addExpr(.{
             .ty = runtime_fn_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_encode_helper } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{encoding_expr}),
             } },
         });
@@ -23234,7 +23248,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_encode_helper } }))),
                 .args = try self.addExprSpan(arg_exprs),
             } },
         });
@@ -23262,7 +23276,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = ret_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_parse_helper } }))),
                 .args = try self.addExprSpan(arg_exprs),
             } },
         });
@@ -23957,7 +23971,7 @@ const BodyContext = struct {
         return try self.addExpr(.{
             .ty = err_ty,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .json_invalid_value } }))),
                 .args = try self.addExprSpan(&[_]DraftExprId{ encoding_expr, state_expr }),
                 .is_cold = true,
             } },
@@ -24240,7 +24254,7 @@ const BodyContext = struct {
         const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, ctx.result_ty);
         const args = D.callArgs(operand);
         return try self.addExpr(.{ .ty = ctx.result_ty, .data = .{ .call_proc = .{
-            .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize))),
+            .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .structural_derivation_component } }))),
             .args = try self.addExprSpan(&args),
         } } });
     }
@@ -26678,10 +26692,27 @@ const BodyContext = struct {
             args[i] = try self.lowerIteratorOperandAtType(operand, loop_iterator, GuardedList.at(arg_tys, i));
         }
 
+        // Debug/probe-only: the iterator dispatch's own synthetic constraint is
+        // introduced with no expression, so its checked instantiation site is
+        // recorded under a use node of zero and no use expression names it. The
+        // edge therefore cites reunify.md section 9.6's iterator rule, handing
+        // over the plan's own checked dispatcher and callable types.
         return try self.addExpr(.{
             .ty = fn_data.ret,
             .data = .{ .call_proc = .{
-                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, target_mono_ty, try self.evidenceForResolvedTarget(plan.resolution)))),
+                .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(
+                    lookup,
+                    target_mono_ty,
+                    try self.evidenceForResolvedTarget(plan.resolution),
+                    .{ .generated = .{
+                        .rule = .iterator_dispatch_receiver,
+                        .source = .{
+                            .module_bytes = self.view.key.bytes,
+                            .receiver = plan.dispatcher_ty,
+                            .requested = plan.callable_ty,
+                        },
+                    } },
+                ))),
                 .args = try self.addExprSpan(args),
             } },
         });
@@ -27852,7 +27883,7 @@ const BodyContext = struct {
                     const bool_ty = try self.builder.lowerType(lookup.view, target_fn.ret);
                     const arg_tys = [_]Type.TypeId{ entry.ty, entry.ty };
                     const callable_mono_ty = try self.methodTargetMonoTypeFromArgs(lookup, &arg_tys, bool_ty);
-                    const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize);
+                    const callee = try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, .synthesize, .{ .generated = .{ .rule = .pattern_literal_equality } });
                     return try self.addExpr(.{ .ty = bool_ty, .data = .{ .call_proc = .{
                         .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(callee)),
                         .args = try self.addExprSpan(&.{ scrutinee, expected }),
