@@ -274,3 +274,32 @@ expect {
 
 	result == Ok([[1, 2], [3]])
 }
+
+expect {
+	result : Try({}, [Bad, MissingRequiredField(Str)])
+	result = parse("R 0")
+
+	match result {
+		Ok(_) => True
+		Err(_) => False
+	}
+}
+
+## A set is parsed as a counted list and then deduplicated.
+expect {
+	result : Try(Set(U64), [Bad, MissingRequiredField(Str)])
+	result = parse("L 3 5 6 5")
+
+	match result {
+		Ok(set) => Set.len(set) == 2 and Set.contains(set, 5) and Set.contains(set, 6)
+		Err(_) => False
+	}
+}
+
+## A counted list of fixed-arity tuples mixes both sequence protocols.
+expect {
+	result : Try(List((U64, Str)), [Bad, MissingRequiredField(Str)])
+	result = parse("L 2 T 2 1 a T 2 2 b")
+
+	result == Ok([(1, "a"), (2, "b")])
+}

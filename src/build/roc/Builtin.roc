@@ -27,12 +27,14 @@ Builtin :: [].{
 	#     parse_list_start : encoding, state
 	#         -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
 	#
-	# Counted means the driver reads exactly len entries back to back, with no
-	# further protocol calls between them, and preallocates. A length-prefixed
-	# binary format returns Counted and needs no state of its own to track
-	# where it is. A format that is both length-prefixed and separated must
-	# return Uncounted and count in its own state, which keeps the counted path
-	# free of per-entry calls.
+	# Counted means the driver reads exactly len entries and preallocates,
+	# calling nothing between one entry and the next. It still calls whatever
+	# reads an entry itself: parse_record_field for a record's name, and
+	# parse_dict_after_key for whatever sits between a key and its value. A
+	# length-prefixed binary format returns Counted and needs no state of its
+	# own to track where it is. A format that is both length-prefixed and
+	# separated must return Uncounted and count in its own state, which keeps
+	# the counted path free of between-entry calls.
 	#
 	# Uncounted drives an event loop instead. For lists:
 	#

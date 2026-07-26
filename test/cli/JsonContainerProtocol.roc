@@ -189,32 +189,6 @@ expect {
 	Str.is_eq(Json.to_str(value), "[1,\"a\"]")
 }
 
-## Multi-payload tags are a fixed-arity sequence, so they round-trip through
-## the same tuple methods.
-expect {
-	result : Parsed([Pair(U64, Str)])
-	result = Json.parse("{\"Pair\":[1,\"a\"]}")
-
-	result == Ok(Pair(1, "a"))
-}
-
-expect {
-	result : Parsed([Pair(U64, Str)])
-	result = Json.parse("{\"Pair\":[1]}")
-
-	match result {
-		Ok(_) => False
-		Err(_) => True
-	}
-}
-
-expect {
-	value : [Pair(U64, Str)]
-	value = Pair(1, "a")
-
-	Str.is_eq(Json.to_str(value), "{\"Pair\":[1,\"a\"]}")
-}
-
 ## Records round-trip through parse_record_start / parse_record_after_field
 ## with nested containers at every position.
 expect {

@@ -20946,6 +20946,9 @@ const BodyContext = struct {
         return try self.lowLevelExpr(.num_bitwise_or, &.{ current, bit }, presence_ty);
     }
 
+    /// The `parse_record_field` event row. `freshParseRecordFieldEventVar` in
+    /// check/Check.zig and `graphParseRecordEvent` below build the same row in
+    /// their own representations; all three must agree.
     fn parseRecordFieldEventType(
         self: *BodyContext,
         state_ty: Type.TypeId,
@@ -21006,6 +21009,7 @@ const BodyContext = struct {
     /// The event a variable-length container's `parse_*_start` returns: either
     /// the format declared the entry count up front (`Counted`) or the driver
     /// must ask after every entry whether more follow (`Uncounted`).
+    /// `freshParseCountedStartEventVar` in check/Check.zig builds the same row.
     fn parseCountedStartEventType(
         self: *BodyContext,
         state_ty: Type.TypeId,
@@ -33068,6 +33072,9 @@ const BodyContext = struct {
         } });
     }
 
+    /// The `parse_record_field` event row at the checked-evidence boundary.
+    /// Mirrors `parseRecordFieldEventType` above and
+    /// `freshParseRecordFieldEventVar` in check/Check.zig.
     fn graphParseRecordEvent(
         self: *BodyContext,
         state_node: NodeId,

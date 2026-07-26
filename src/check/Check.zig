@@ -21978,6 +21978,11 @@ fn freshParseResultOkVar(
     } } }, env, region);
 }
 
+/// The `parse_record_field` event row. The same row is built in two other
+/// representations that must agree with this one: `parseRecordFieldEventType`
+/// (monotype) and `graphParseRecordEvent` (checked-evidence graph), both in
+/// postcheck/monotype/lower.zig. A change here needs the same change there, or
+/// resolving a format's method against the row fails to unify.
 fn freshParseRecordFieldEventVar(
     self: *Self,
     shape_var: Var,
@@ -22029,7 +22034,8 @@ fn freshParseRecordFieldEventVar(
 
 /// The event a variable-length container's `parse_*_start` returns: either the
 /// format declared the entry count up front (`Counted`) or the driver must ask
-/// after every entry whether more follow (`Uncounted`).
+/// after every entry whether more follow (`Uncounted`). `parseCountedStartEventType`
+/// in postcheck/monotype/lower.zig builds the same row.
 fn freshParseCountedStartEventVar(
     self: *Self,
     state_var: Var,
