@@ -32925,6 +32925,30 @@ const BodyContext = struct {
         return true;
     }
 
+    /// The one shape a derived codec reads out of a builtin keyed container:
+    /// a dict's value, or a set's element. Null for anything else.
+    ///
+    /// A dict's key is read by the `parse_key_*`/`encode_key_*` methods rather
+    /// than by a derived shape codec, so it is deliberately not included.
+    fn graphBuiltinContainerShapeNode(self: *BodyContext, node: NodeId) ?NodeId {
+        const named = switch (self.graph.content(node)) {
+            .named => |named| named,
+            else => return null,
+        };
+        const owner = named.builtin_owner orelse return null;
+        return switch (owner) {
+            .dict => blk: {
+                if (named.args.len != 2) Common.invariant("builtin Dict node had an unexpected arity");
+                break :blk named.args[1];
+            },
+            .set => blk: {
+                if (named.args.len != 1) Common.invariant("builtin Set node had an unexpected arity");
+                break :blk named.args[0];
+            },
+            else => null,
+        };
+    }
+
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) bool {
         const named = switch (self.graph.content(node)) {
             .named => |named| named,
@@ -34148,6 +34172,20 @@ const BodyContext = struct {
                 else => {},
             },
             else => {},
+        }
+
+        // A dict's and a set's own backings are private representation that no
+        // codec reads. Walking into one prepares calls over internals that are
+        // never parsed or encoded, so the walk uses the element shape the codec
+        // actually reaches instead.
+        if (self.graphBuiltinContainerShapeNode(shape_node)) |value_node| {
+            return try self.prepareCustomCodecCallsAtNode(
+                boundary_expr,
+                kind,
+                value_node,
+                boundary_callable_node,
+                seen,
+            );
         }
 
         var added = false;

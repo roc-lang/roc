@@ -57,6 +57,48 @@ expect {
 	Str.is_eq(Json.to_str(value), "{\"Pair\":[1,\"a\"]}")
 }
 
+## A tag union inside a dict is reached through the dict's key and value
+## shapes, never through the dict's own private representation.
+expect {
+	result : Parsed(Dict([Red, Green], U64))
+	result = Json.parse("{\"Red\":1,\"Green\":2}")
+
+	match result {
+		Ok(d) => Dict.get(d, Red) == Ok(1) and Dict.get(d, Green) == Ok(2)
+		Err(_) => False
+	}
+}
+
+expect {
+	result : Parsed(Dict([Red, Green], U64))
+	result = Json.parse("{\"Purple\":1}")
+
+	match result {
+		Ok(_) => False
+		Err(_) => True
+	}
+}
+
+expect {
+	result : Parsed(Dict(Str, Tagged))
+	result = Json.parse("{\"a\":{\"One\":7}}")
+
+	match result {
+		Ok(d) => Dict.get(d, "a") == Ok(One(7))
+		Err(_) => False
+	}
+}
+
+expect {
+	result : Parsed(Set(Tagged))
+	result = Json.parse("[{\"One\":7}]")
+
+	match result {
+		Ok(s) => Set.len(s) == 1
+		Err(_) => False
+	}
+}
+
 ## Bool keys go through parse_key_bool / encode_key_bool rather than being
 ## routed through Str by the driver.
 expect {

@@ -22226,20 +22226,10 @@ fn parseSpecDeclForNumKind(num_kind: CIR.NumKind) BuiltinParseSpecDecl {
     };
 }
 
-fn invalidValueMethodName(self: *Self) Allocator.Error!Ident.Idx {
-    return try @constCast(self.cir).insertIdent(base.Ident.for_text("invalid_value"));
-}
-
-fn dictMethodName(self: *Self, comptime text: []const u8) Allocator.Error!Ident.Idx {
+/// A format-protocol method name that has no `BuiltinParseSpecDecl` of its own,
+/// interned for lookup against an encoding type.
+fn protocolMethodName(self: *Self, comptime text: []const u8) Allocator.Error!Ident.Idx {
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
-}
-
-fn skipRecordFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
-    return try @constCast(self.cir).insertIdent(base.Ident.for_text("skip_record_field"));
-}
-
-fn renameFieldMethodName(self: *Self) Allocator.Error!Ident.Idx {
-    return try @constCast(self.cir).insertIdent(base.Ident.for_text("rename_field"));
 }
 
 fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
@@ -22611,7 +22601,7 @@ fn validateDictProtocolMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.dictMethodName(method_text);
+    const method_name = try self.protocolMethodName(method_text);
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
@@ -22748,7 +22738,7 @@ fn validateInvalidValueMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.invalidValueMethodName();
+    const method_name = try self.protocolMethodName("invalid_value");
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
@@ -22772,7 +22762,7 @@ fn validateSkipRecordFieldMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.skipRecordFieldMethodName();
+    const method_name = try self.protocolMethodName("skip_record_field");
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
@@ -22795,7 +22785,7 @@ fn validateRenameFieldMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.renameFieldMethodName();
+    const method_name = try self.protocolMethodName("rename_field");
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
     };
