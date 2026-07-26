@@ -1620,7 +1620,7 @@ const Builder = struct {
             .graph = graph,
             .cursor = directTranslateCursor(view),
             .reserved_fn_id = if (reserved_fn_id) |fn_id| @intFromEnum(fn_id) else null,
-            .template_fn_root = template.checked_fn_root,
+            .template_scheme = template.schemeId(),
         });
         defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization(graph);
         var body_draft = BodyDraftStore.init(self.allocator);

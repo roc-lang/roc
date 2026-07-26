@@ -234,6 +234,13 @@ pub const Census = struct {
     // reaches leaves no captured pair to link through.
     rehearsal_unbound_other_scheme_binder_on_chain: Counter = Counter.init(0),
     rehearsal_unbound_other_scheme_binder_off_chain: Counter = Counter.init(0),
+    // The off-chain split by direction: `inside_frame` is a scheme whose checked
+    // captured pairs name this frame's own scheme, so it is nested INSIDE the
+    // specialized body and its binders are bound at its own use sites through its
+    // own binder list (reunify.md 7.3) rather than by anything this frame carries;
+    // `unrelated` is a scheme with no checked relation to this frame at all.
+    rehearsal_unbound_binder_scheme_inside_frame: Counter = Counter.init(0),
+    rehearsal_unbound_binder_scheme_unrelated: Counter = Counter.init(0),
     rehearsal_unbound_disposed_contextual: Counter = Counter.init(0),
     rehearsal_unbound_disposed_uninhabited: Counter = Counter.init(0),
     rehearsal_unbound_disposed_module_body: Counter = Counter.init(0),
@@ -281,6 +288,19 @@ pub const Census = struct {
     // scheme disagree about which checked binder sits at that index.
     rehearsal_env_parent_linked: Counter = Counter.init(0),
     rehearsal_env_parent_absent: Counter = Counter.init(0),
+    // The owner kind of every scheme a resolved environment binds. A scheme with
+    // no enclosing scheme has nothing to link a lexical parent to, so this says
+    // whether the corpus ever asks a nested scheme to bind under a caller: a
+    // specialization whose callee scheme is a top-level owner can only ever
+    // report `parent_absent`.
+    rehearsal_env_owner_top_level: Counter = Counter.init(0),
+    rehearsal_env_owner_nested: Counter = Counter.init(0),
+    rehearsal_env_owner_required: Counter = Counter.init(0),
+    rehearsal_env_owner_synthetic: Counter = Counter.init(0),
+    // Whether the callee scheme a resolved environment binds carries any checked
+    // captured binder at all.
+    rehearsal_env_scheme_captures_present: Counter = Counter.init(0),
+    rehearsal_env_scheme_captures_absent: Counter = Counter.init(0),
     rehearsal_captured_binder: Counter = Counter.init(0),
     rehearsal_captured_binder_bound: Counter = Counter.init(0),
     rehearsal_captured_binder_outer_unattributed: Counter = Counter.init(0),
@@ -308,9 +328,11 @@ pub const Census = struct {
     // counts those; the rest name exactly why the template's scheme did not
     // supply one, and `scheme_has_binders` is the class that genuinely needs a
     // declared generated-edge binding before it can resolve.
+    // `template_scheme_absent` is the template that names no owning scheme id at
+    // all: its owner is a checked type rather than a defining-module node, which
+    // is the synthesized wrapper kinds.
     rehearsal_env_resolved_edgeless_ground: Counter = Counter.init(0),
-    rehearsal_edgeless_scheme_root_ambiguous: Counter = Counter.init(0),
-    rehearsal_edgeless_scheme_root_unowned: Counter = Counter.init(0),
+    rehearsal_edgeless_template_scheme_absent: Counter = Counter.init(0),
     rehearsal_edgeless_scheme_unresolved: Counter = Counter.init(0),
     rehearsal_edgeless_scheme_has_binders: Counter = Counter.init(0),
     rehearsal_edgeless_scheme_captures: Counter = Counter.init(0),

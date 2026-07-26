@@ -65,7 +65,10 @@ pub const Constants = struct {
     /// 40: published instantiation sites carry the checked expression id of their
     ///     CIR use node, so a consumer reading a frozen artifact names an edge by
     ///     its use rather than by the instantiated root.
-    pub const CACHE_VERSION = 40;
+    /// 41: checked procedure templates carry their owning scheme's dense id, and a
+    ///     scheme's captured-binder closure covers the enclosing binders its body
+    ///     reaches rather than only those its root reaches.
+    pub const CACHE_VERSION = 41;
 };
 
 /// Configuration for the Roc cache system.

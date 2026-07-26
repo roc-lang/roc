@@ -4207,11 +4207,13 @@ pub const CheckedTypeStore = struct {
                 module.moduleEnvConst(),
                 required_var,
             );
-            if (findCheckedTypeScheme(store.schemes.items, scheme_key) == null) {
+            {
                 // A required value's scheme carries an (ordinarily empty) binder
                 // range under the same owner rule as every other scheme
-                // (reunify.md 7.1, Slice 2); the boundary snapshotter does not
-                // record required types, so this resolves to "no snapshot".
+                // (reunify.md 7.1); the boundary snapshotter does not record
+                // required types, so this resolves to "no snapshot". Two required
+                // values with equal content get two schemes: an equal content key
+                // is not owner identity, and each owner must be addressable.
                 const owner_node = @intFromEnum(required_type.type_anno);
                 const snapshot = try publishSchemeSnapshot(allocator, module, names, import_views, &store, &active, &snapshot_index, owner_node, root);
                 const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
@@ -4250,11 +4252,14 @@ pub const CheckedTypeStore = struct {
                 module.moduleEnvConst(),
                 module.defType(def_idx),
             );
-            if (findCheckedTypeScheme(store.schemes.items, scheme_key) == null) {
+            {
                 // A generalized top-level def's scheme was snapshotted at its
                 // generalization boundary, keyed by its expression node
-                // (reunify.md 7.1, Slice 2). Publish the pristine snapshot and
-                // its binder range alongside the final root.
+                // (reunify.md 7.1). Output the pristine snapshot and its binder
+                // range alongside the final root. Two definitions whose types
+                // have equal content keys get two schemes: an equal content key
+                // is not owner identity, and every definition's owner must be
+                // addressable so a consumer names its scheme by id.
                 const owner_node = @intFromEnum(module_env.store.getDef(def_idx).expr);
                 const snapshot = try publishSchemeSnapshot(allocator, module, names, import_views, &store, &active, &snapshot_index, owner_node, root);
                 const scheme_id: CheckedTypeSchemeId = @enumFromInt(@as(u32, @intCast(store.schemes.items.len)));
@@ -4285,7 +4290,7 @@ pub const CheckedTypeStore = struct {
         // Resolve each nested scheme's captured-binder closure (reunify.md 7.1,
         // Slice 2) now that every scheme (top-level, required, nested) is
         // published and its owner is addressable.
-        try resolveCapturedBinders(allocator, module, &store, &scheme_id_by_owner);
+        try resolveCapturedBinders(allocator, module, &store, &scheme_id_by_owner, source_nodes);
 
         // Self-containment (issue #9983 / Option A): the published declaration
         // table so far holds only THIS module's own declarations. Standalone
@@ -4634,6 +4639,18 @@ pub const CheckedTypeStore = struct {
         const scheme_key = syntheticSchemeKeyForType(key);
         try self.ensureSyntheticSchemeForRoot(allocator, root, key);
         return scheme_key;
+    }
+
+    /// The id of the synthetic scheme that owns `root`, or null when this root
+    /// owns none. A compiler-synthesized template has no defining-module node, so
+    /// the checked type it stands for is its owner identity (reunify.md 7.1);
+    /// roots are content-interned, so one root names one synthetic scheme.
+    pub fn syntheticSchemeIdForRoot(self: *const CheckedTypeStore, root: CheckedTypeId) ?CheckedTypeSchemeId {
+        for (self.schemes.items) |scheme| {
+            if (scheme.owner_kind != .synthetic) continue;
+            if (scheme.owner_node == @intFromEnum(root)) return scheme.id;
+        }
+        return null;
     }
 
     fn ensureSyntheticSchemeForRoot(
@@ -7029,14 +7046,58 @@ fn publishNestedSchemes(
 /// its index within that owner's ordered binders.
 const BinderOwner = struct { owner_node: u32, binder_index: u32 };
 
+/// One scheme's captured-binder list under construction, plus the dedup state and
+/// census tallies that belong to it.
+const CapturedBinderList = struct {
+    scheme_id: CheckedTypeSchemeId,
+    owner_node: u32,
+    entries: std.ArrayList(CheckedCapturedBinder) = .empty,
+    attributed: u32 = 0,
+    unattributed: u32 = 0,
+};
+
+/// The dedup key of one captured reference within one scheme's list: each
+/// `(outer owner, binder index)` pair appears at most once per capturing scheme.
+const CapturedBinderKey = struct {
+    list: u32,
+    owner_node: u32,
+    binder_index: u32,
+};
+
+/// One scheme owner on a node's lexical chain: the CIR node that owns the scheme
+/// and the published scheme id it resolved to.
+const SchemeChainEntry = struct {
+    owner_node: u32,
+    scheme_id: CheckedTypeSchemeId,
+};
+
+/// The deepest scheme nesting one node's lexical chain is walked to. Scheme
+/// owners nest a handful deep in real source; this only bounds a chain a
+/// malformed parent link could otherwise make unbounded.
+const max_scheme_chain_depth: usize = 64;
+
 /// Resolve every nested scheme's captured-binder closure (reunify.md 7.1, Slice
 /// 2): a nested scheme is a closure over the free binders of the schemes that
-/// enclose it. The ordering authority is the SAME first-encounter identity
-/// traversal that orders a scheme's own binders (`identityVarsFromVar` over its
-/// root); this walks that traversal once and splits each identity variable into
-/// this scheme's own binder (skipped) or a captured reference — a binder OWNED BY
-/// A DIFFERENT scheme. Each captured reference resolves to an `(outer scheme,
-/// binder index)` pair, distinct, in first-encounter order.
+/// enclose it, and instantiating it depends on both its own binding and the
+/// values of those captured binders. The ordering authority is ONE first-encounter
+/// identity-slot traversal per scheme, whose slots are enumerated as the scheme's
+/// root followed by the positions of its body in CIR node order; each slot's
+/// identity variables come from the same `identityVarsFromVar` order that orders a
+/// scheme's own binders. Each variable is either this scheme's own binder
+/// (skipped, so the own-binder projection is untouched) or a captured reference —
+/// a binder OWNED BY A DIFFERENT, LEXICALLY ENCLOSING scheme. Each captured
+/// reference resolves to an `(outer scheme, binder index)` pair, distinct, in that
+/// single traversal's order.
+///
+/// Body scope matters because a scheme's root does not name every enclosing binder
+/// its body reaches: an inner definition whose own type mentions none of the
+/// enclosing binders can still use them throughout its body, and without a
+/// captured pair nothing links its instantiation to the enclosing binding. The
+/// body's positions are the marked source nodes whose lexical parent chain reaches
+/// the scheme's owner, which `CheckedSourceNodes` already records while marking.
+/// An enclosing binder appearing only in the body is appended AFTER every
+/// root-derived pair, so the root-derived prefix keeps its exact order and
+/// identity.
 ///
 /// This runs at publication rather than at the boundary because a captured
 /// binder's index is not knowable when the nested boundary fires: an enclosing
@@ -7050,6 +7111,7 @@ fn resolveCapturedBinders(
     module: TypedCIR.Module,
     store: *CheckedTypeStore,
     scheme_id_by_owner: *const std.AutoHashMap(u32, CheckedTypeSchemeId),
+    source_nodes: *const CheckedSourceNodes,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
     if (module_env.scheme_snapshots.items.items.len == 0) return;
@@ -7070,20 +7132,26 @@ fn resolveCapturedBinders(
         }
     }
 
-    var seen = std.AutoHashMap(u64, void).init(allocator);
+    var lists = std.ArrayList(CapturedBinderList).empty;
+    defer {
+        for (lists.items) |*list| list.entries.deinit(allocator);
+        lists.deinit(allocator);
+    }
+    var list_by_scheme = std.AutoHashMap(CheckedTypeSchemeId, u32).init(allocator);
+    defer list_by_scheme.deinit();
+    var seen = std.AutoHashMap(CapturedBinderKey, void).init(allocator);
     defer seen.deinit();
-    var captured = std.ArrayList(CheckedCapturedBinder).empty;
-    defer captured.deinit(allocator);
 
+    // Traversal part one: each scheme's own root, in snapshot-record order. A
+    // repeated owner keeps its first record, which is the record
+    // `publishSchemeSnapshot` took the scheme's ordered binders from, so the
+    // captured projection and the own-binder projection describe one snapshot.
     for (module_env.scheme_snapshots.items.items) |record| {
         const scheme_id = scheme_id_by_owner.get(record.owner_node) orelse continue;
+        if (list_by_scheme.contains(scheme_id)) continue;
+        const list_index = try capturedBinderListFor(allocator, &lists, &list_by_scheme, scheme_id, record.owner_node);
         const identity_vars = try canonical_type_keys.identityVarsFromVar(allocator, type_store, module_env, @enumFromInt(record.root));
         defer allocator.free(identity_vars);
-
-        seen.clearRetainingCapacity();
-        captured.clearRetainingCapacity();
-        var attributed: u32 = 0;
-        var unattributed: u32 = 0;
         for (identity_vars) |identity_var| {
             const resolved = type_store.resolveVar(identity_var).var_;
             // A captured reference is a binder of an ENCLOSING scheme; a variable
@@ -7091,24 +7159,154 @@ fn resolveCapturedBinders(
             // already ground, and is not part of the closure.
             const owner = binder_owner.get(resolved) orelse continue;
             if (owner.owner_node == record.owner_node) continue; // this scheme's own binder
-            const dedup_key = (@as(u64, owner.owner_node) << 32) | owner.binder_index;
-            const seen_entry = try seen.getOrPut(dedup_key);
-            if (seen_entry.found_existing) continue;
-            if (scheme_id_by_owner.get(owner.owner_node)) |outer_id| {
-                attributed += 1;
-                try captured.append(allocator, .{ .outer_scheme = @intFromEnum(outer_id), .binder_index = owner.binder_index });
-            } else {
-                unattributed += 1;
-                try captured.append(allocator, .{ .outer_scheme = captured_binder_outer_scheme_none, .binder_index = owner.binder_index });
+            try appendCapturedBinder(allocator, &lists, &seen, scheme_id_by_owner, list_index, owner);
+        }
+    }
+
+    // Traversal part two: each scheme's body positions, in CIR node order. A node
+    // contributes to every scheme owner on its lexical parent chain, and names an
+    // outer binder only when that binder's owner sits FURTHER OUT on the same
+    // chain — so an outer scheme never lists an inner scheme's binders.
+    try resolveBodyCapturedBinders(
+        allocator,
+        module,
+        source_nodes,
+        &binder_owner,
+        scheme_id_by_owner,
+        &lists,
+        &seen,
+        &list_by_scheme,
+    );
+
+    for (lists.items) |list| {
+        if (list.entries.items.len > 0) {
+            const range = try store.appendCapturedBinders(allocator, list.entries.items);
+            store.schemes.items[@intFromEnum(list.scheme_id)].captured_start = range.start;
+            store.schemes.items[@intFromEnum(list.scheme_id)].captured_len = range.len;
+        }
+        if (census_on) reunify_census.recordSchemeCaptures(list.attributed, list.unattributed);
+    }
+}
+
+/// The list index for `scheme_id`, appending a fresh list the first time the
+/// scheme is reached.
+fn capturedBinderListFor(
+    allocator: Allocator,
+    lists: *std.ArrayList(CapturedBinderList),
+    list_by_scheme: *std.AutoHashMap(CheckedTypeSchemeId, u32),
+    scheme_id: CheckedTypeSchemeId,
+    owner_node: u32,
+) Allocator.Error!u32 {
+    const entry = try list_by_scheme.getOrPut(scheme_id);
+    if (!entry.found_existing) {
+        entry.value_ptr.* = @intCast(lists.items.len);
+        try lists.append(allocator, .{ .scheme_id = scheme_id, .owner_node = owner_node });
+    }
+    return entry.value_ptr.*;
+}
+
+/// Append one captured reference to `list_index`'s list unless that
+/// `(outer owner, binder index)` pair was already recorded for it.
+fn appendCapturedBinder(
+    allocator: Allocator,
+    lists: *std.ArrayList(CapturedBinderList),
+    seen: *std.AutoHashMap(CapturedBinderKey, void),
+    scheme_id_by_owner: *const std.AutoHashMap(u32, CheckedTypeSchemeId),
+    list_index: u32,
+    owner: BinderOwner,
+) Allocator.Error!void {
+    const seen_entry = try seen.getOrPut(.{
+        .list = list_index,
+        .owner_node = owner.owner_node,
+        .binder_index = owner.binder_index,
+    });
+    if (seen_entry.found_existing) return;
+    const list = &lists.items[list_index];
+    if (scheme_id_by_owner.get(owner.owner_node)) |outer_id| {
+        list.attributed += 1;
+        try list.entries.append(allocator, .{ .outer_scheme = @intFromEnum(outer_id), .binder_index = owner.binder_index });
+    } else {
+        list.unattributed += 1;
+        try list.entries.append(allocator, .{ .outer_scheme = captured_binder_outer_scheme_none, .binder_index = owner.binder_index });
+    }
+}
+
+/// Extend every scheme's captured set with the enclosing binders its BODY reaches
+/// (reunify.md 7.1). Walks the module's marked source nodes in node order; for
+/// each node, the identity variables of its type are offered to every scheme owner
+/// on the node's lexical parent chain, and a variable is captured by a chain entry
+/// only when its owning scheme sits further out on that same chain.
+fn resolveBodyCapturedBinders(
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    source_nodes: *const CheckedSourceNodes,
+    binder_owner: *const std.AutoHashMap(Var, BinderOwner),
+    scheme_id_by_owner: *const std.AutoHashMap(u32, CheckedTypeSchemeId),
+    lists: *std.ArrayList(CapturedBinderList),
+    seen: *std.AutoHashMap(CapturedBinderKey, void),
+    list_by_scheme: *std.AutoHashMap(CheckedTypeSchemeId, u32),
+) Allocator.Error!void {
+    if (binder_owner.count() == 0) return;
+    const module_env = module.moduleEnvConst();
+    const type_store = module.typeStoreConst();
+
+    // One identity-slot enumeration per distinct resolved node type: many nodes
+    // share one type, and the enumeration order for a given type is fixed.
+    var identity_memo = std.AutoHashMap(Var, []Var).init(allocator);
+    defer {
+        var values = identity_memo.valueIterator();
+        while (values.next()) |vars| allocator.free(vars.*);
+        identity_memo.deinit();
+    }
+
+    var chain: [max_scheme_chain_depth]SchemeChainEntry = undefined;
+
+    var node_idx: u32 = 0;
+    while (node_idx < module.nodeCount()) : (node_idx += 1) {
+        const is_expr = source_nodes.hasExpr(@enumFromInt(node_idx));
+        if (!is_expr and !source_nodes.hasPattern(@enumFromInt(node_idx))) continue;
+
+        // The node's lexical chain of scheme owners, innermost first. A node whose
+        // chain names fewer than two schemes can capture nothing: there is no
+        // enclosing scheme for an inner one to close over.
+        var depth: usize = 0;
+        var cursor: ?u32 = node_idx;
+        while (cursor) |raw| {
+            if (scheme_id_by_owner.get(raw)) |scheme_id| {
+                if (depth == max_scheme_chain_depth) break;
+                chain[depth] = .{ .owner_node = raw, .scheme_id = scheme_id };
+                depth += 1;
+            }
+            cursor = source_nodes.parentOf(raw);
+        }
+        if (depth < 2) continue;
+
+        const source_var = if (is_expr)
+            module.exprType(@enumFromInt(node_idx))
+        else
+            module.patternType(@enumFromInt(node_idx));
+        const resolved_root = type_store.resolveVar(source_var).var_;
+        const memo = try identity_memo.getOrPut(resolved_root);
+        if (!memo.found_existing) {
+            memo.value_ptr.* = try canonical_type_keys.identityVarsFromVar(allocator, type_store, module_env, resolved_root);
+        }
+        const identity_vars = memo.value_ptr.*;
+        if (identity_vars.len == 0) continue;
+
+        for (chain[0..depth], 0..) |entry, position| {
+            const list_index = try capturedBinderListFor(allocator, lists, list_by_scheme, entry.scheme_id, entry.owner_node);
+            for (identity_vars) |identity_var| {
+                const resolved = type_store.resolveVar(identity_var).var_;
+                const owner = binder_owner.get(resolved) orelse continue;
+                if (owner.owner_node == entry.owner_node) continue; // this scheme's own binder
+                var encloses = false;
+                for (chain[position + 1 .. depth]) |outer| {
+                    if (outer.owner_node == owner.owner_node) encloses = true;
+                }
+                if (!encloses) continue;
+                try appendCapturedBinder(allocator, lists, seen, scheme_id_by_owner, list_index, owner);
             }
         }
-
-        if (captured.items.len > 0) {
-            const range = try store.appendCapturedBinders(allocator, captured.items);
-            store.schemes.items[@intFromEnum(scheme_id)].captured_start = range.start;
-            store.schemes.items[@intFromEnum(scheme_id)].captured_len = range.len;
-        }
-        if (census_on) reunify_census.recordSchemeCaptures(attributed, unattributed);
     }
 }
 
@@ -10345,11 +10543,23 @@ const CheckedSourceNodeRef = union(enum) {
     statement: CIR.Statement.Idx,
 };
 
+/// A `CheckedSourceNodes.parents` value meaning the node is a walk root: a
+/// top-level definition's pattern or expression, or a top-level statement.
+const checked_source_node_no_parent: u32 = std.math.maxInt(u32);
+
 const CheckedSourceNodes = struct {
     allocator: Allocator = undefined,
     exprs: []bool = &.{},
     patterns: []bool = &.{},
     statements: []bool = &.{},
+    /// Each marked node's enclosing scope node, or `checked_source_node_no_parent`
+    /// for a walk root. Filled by the same marking walk that discovers the node,
+    /// so a consumer reads lexical scope without a second traversal: chaining
+    /// these links names every scheme owner a node's body sits inside
+    /// (reunify.md 7.1). A binding's right-hand side links to its binding pattern
+    /// rather than to the statement, because the pattern is what owns that
+    /// binding's scheme.
+    parents: []u32 = &.{},
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!CheckedSourceNodes {
         const node_count = module.nodeCount();
@@ -10359,15 +10569,19 @@ const CheckedSourceNodes = struct {
         errdefer allocator.free(patterns);
         const statements = try allocator.alloc(bool, node_count);
         errdefer allocator.free(statements);
+        const parents = try allocator.alloc(u32, node_count);
+        errdefer allocator.free(parents);
         @memset(exprs, false);
         @memset(patterns, false);
         @memset(statements, false);
+        @memset(parents, checked_source_node_no_parent);
 
         var self = CheckedSourceNodes{
             .allocator = allocator,
             .exprs = exprs,
             .patterns = patterns,
             .statements = statements,
+            .parents = parents,
         };
 
         var work = std.ArrayList(CheckedSourceNodeRef).empty;
@@ -10376,8 +10590,8 @@ const CheckedSourceNodes = struct {
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
             const def = module.def(def_idx);
-            try self.markPattern(def.pattern.idx, &work);
-            try self.markExpr(def.expr.idx, &work);
+            try self.markPattern(def.pattern.idx, checked_source_node_no_parent, &work);
+            try self.markExpr(def.expr.idx, checked_source_node_no_parent, &work);
         }
 
         // Top-level expects have no containing expression, so seed them
@@ -10393,7 +10607,7 @@ const CheckedSourceNodes = struct {
                 .s_type_anno,
                 .s_type_var_alias,
                 .s_expect,
-                => try self.markStatement(statement_idx, &work),
+                => try self.markStatement(statement_idx, checked_source_node_no_parent, &work),
                 .s_decl,
                 .s_var,
                 .s_var_uninitialized,
@@ -10444,39 +10658,55 @@ const CheckedSourceNodes = struct {
         return raw < self.exprs.len and (self.exprs[raw] or self.statements[raw]);
     }
 
+    /// The node containing `raw_node`, or null when it is a walk root or was
+    /// never marked.
+    fn parentOf(self: *const CheckedSourceNodes, raw_node: u32) ?u32 {
+        const raw: usize = raw_node;
+        if (raw >= self.parents.len) return null;
+        const parent = self.parents[raw];
+        if (parent == checked_source_node_no_parent) return null;
+        return parent;
+    }
+
     fn markExpr(
         self: *CheckedSourceNodes,
         expr_idx: CIR.Expr.Idx,
+        parent: u32,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
         const raw = @intFromEnum(expr_idx);
         if (raw >= self.exprs.len) checkedArtifactInvariant("checked source expression {d} is out of range", .{raw});
         if (self.exprs[raw]) return;
         self.exprs[raw] = true;
+        self.parents[raw] = parent;
         try work.append(self.allocator, .{ .expr = expr_idx });
     }
 
     fn markPattern(
         self: *CheckedSourceNodes,
         pattern_idx: CIR.Pattern.Idx,
+        parent: u32,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
         const raw = @intFromEnum(pattern_idx);
         if (raw >= self.patterns.len) checkedArtifactInvariant("checked source pattern {d} is out of range", .{raw});
         if (self.patterns[raw]) return;
         self.patterns[raw] = true;
+        self.parents[raw] = parent;
         try work.append(self.allocator, .{ .pattern = pattern_idx });
     }
 
     fn markStatement(
         self: *CheckedSourceNodes,
         statement_idx: CIR.Statement.Idx,
+        parent: u32,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
         const raw = @intFromEnum(statement_idx);
         if (raw >= self.statements.len) checkedArtifactInvariant("checked source statement {d} is out of range", .{raw});
         if (self.statements[raw]) return;
         self.statements[raw] = true;
+        self.parents[raw] = parent;
         try work.append(self.allocator, .{ .statement = statement_idx });
     }
 
@@ -10486,111 +10716,112 @@ const CheckedSourceNodes = struct {
         expr_idx: CIR.Expr.Idx,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
+        const parent = @intFromEnum(expr_idx);
         switch (module.expr(expr_idx).data) {
-            .e_str => |str| try self.markExprSpan(module, str.span, work),
-            .e_list => |list| try self.markExprSpan(module, list.elems, work),
-            .e_tuple => |tuple| try self.markExprSpan(module, tuple.elems, work),
+            .e_str => |str| try self.markExprSpan(module, str.span, parent, work),
+            .e_list => |list| try self.markExprSpan(module, list.elems, parent, work),
+            .e_tuple => |tuple| try self.markExprSpan(module, tuple.elems, parent, work),
             .e_match => |match| {
-                try self.markExpr(match.cond, work);
+                try self.markExpr(match.cond, parent, work);
                 for (module.matchBranchSlice(match.branches)) |branch_idx| {
                     const branch = module.getMatchBranch(branch_idx);
                     for (module.sliceMatchBranchPatterns(branch.patterns)) |branch_pattern_idx| {
-                        try self.markPattern(module.getMatchBranchPattern(branch_pattern_idx).pattern, work);
+                        try self.markPattern(module.getMatchBranchPattern(branch_pattern_idx).pattern, parent, work);
                     }
-                    if (branch.guard) |guard| try self.markExpr(guard, work);
-                    try self.markExpr(branch.value, work);
+                    if (branch.guard) |guard| try self.markExpr(guard, parent, work);
+                    try self.markExpr(branch.value, parent, work);
                 }
             },
             .e_if => |if_| {
                 for (module.sliceIfBranches(if_.branches)) |branch_idx| {
                     const branch = module.getIfBranch(branch_idx);
-                    try self.markExpr(branch.cond, work);
-                    try self.markExpr(branch.body, work);
+                    try self.markExpr(branch.cond, parent, work);
+                    try self.markExpr(branch.body, parent, work);
                 }
-                try self.markExpr(if_.final_else, work);
+                try self.markExpr(if_.final_else, parent, work);
             },
             .e_call => |call| {
-                try self.markExpr(call.func, work);
-                try self.markExprSpan(module, call.args, work);
+                try self.markExpr(call.func, parent, work);
+                try self.markExprSpan(module, call.args, parent, work);
             },
             .e_record => |record| {
                 for (module.sliceRecordFields(record.fields)) |field_idx| {
-                    try self.markExpr(module.getRecordField(field_idx).value, work);
+                    try self.markExpr(module.getRecordField(field_idx).value, parent, work);
                 }
-                if (record.ext) |ext| try self.markExpr(ext, work);
+                if (record.ext) |ext| try self.markExpr(ext, parent, work);
             },
             .e_block => |block| {
-                try self.markStatementSpan(module, block.stmts, work);
-                try self.markExpr(block.final_expr, work);
+                try self.markStatementSpan(module, block.stmts, parent, work);
+                try self.markExpr(block.final_expr, parent, work);
             },
-            .e_tag => |tag| try self.markExprSpan(module, tag.args, work),
-            .e_nominal => |nominal| try self.markExpr(nominal.backing_expr, work),
-            .e_nominal_external => |nominal| try self.markExpr(nominal.backing_expr, work),
+            .e_tag => |tag| try self.markExprSpan(module, tag.args, parent, work),
+            .e_nominal => |nominal| try self.markExpr(nominal.backing_expr, parent, work),
+            .e_nominal_external => |nominal| try self.markExpr(nominal.backing_expr, parent, work),
             .e_closure => |closure| {
-                try self.markExpr(closure.lambda_idx, work);
+                try self.markExpr(closure.lambda_idx, parent, work);
                 for (module.moduleEnvConst().store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = module.moduleEnvConst().store.getCapture(capture_idx);
-                    try self.markPattern(capture.pattern_idx, work);
+                    try self.markPattern(capture.pattern_idx, parent, work);
                 }
             },
             .e_lambda => |lambda| {
-                try self.markPatternSpan(module, lambda.args, work);
-                try self.markExpr(lambda.body, work);
+                try self.markPatternSpan(module, lambda.args, parent, work);
+                try self.markExpr(lambda.body, parent, work);
             },
             .e_binop => |binop| {
-                try self.markExpr(binop.lhs, work);
-                try self.markExpr(binop.rhs, work);
+                try self.markExpr(binop.lhs, parent, work);
+                try self.markExpr(binop.rhs, parent, work);
             },
-            .e_unary_minus => |unary| try self.markExpr(unary.expr, work),
-            .e_unary_not => |unary| try self.markExpr(unary.expr, work),
-            .e_field_access => |field| try self.markExpr(field.receiver, work),
+            .e_unary_minus => |unary| try self.markExpr(unary.expr, parent, work),
+            .e_unary_not => |unary| try self.markExpr(unary.expr, parent, work),
+            .e_field_access => |field| try self.markExpr(field.receiver, parent, work),
             .e_method_call => |call| {
-                try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
+                try self.markExpr(call.receiver, parent, work);
+                try self.markExprSpan(module, call.args, parent, work);
             },
             .e_dispatch_call => |call| {
-                try self.markExpr(call.receiver, work);
-                try self.markExprSpan(module, call.args, work);
+                try self.markExpr(call.receiver, parent, work);
+                try self.markExprSpan(module, call.args, parent, work);
             },
             .e_interpolation => |interpolation| {
-                try self.markExpr(interpolation.first, work);
-                try self.markExprSpan(module, interpolation.parts, work);
+                try self.markExpr(interpolation.first, parent, work);
+                try self.markExprSpan(module, interpolation.parts, parent, work);
             },
             .e_structural_eq => |eq| {
-                try self.markExpr(eq.lhs, work);
-                try self.markExpr(eq.rhs, work);
+                try self.markExpr(eq.lhs, parent, work);
+                try self.markExpr(eq.rhs, parent, work);
             },
             .e_structural_hash => |h| {
-                try self.markExpr(h.value, work);
-                try self.markExpr(h.hasher, work);
+                try self.markExpr(h.value, parent, work);
+                try self.markExpr(h.hasher, parent, work);
             },
             .e_method_eq => |eq| {
-                try self.markExpr(eq.lhs, work);
-                try self.markExpr(eq.rhs, work);
+                try self.markExpr(eq.lhs, parent, work);
+                try self.markExpr(eq.rhs, parent, work);
             },
             .e_type_method_call => |call| {
-                try self.markStatement(call.type_dispatch_stmt, work);
-                try self.markExprSpan(module, call.args, work);
+                try self.markStatement(call.type_dispatch_stmt, parent, work);
+                try self.markExprSpan(module, call.args, parent, work);
             },
             .e_type_dispatch_call => |call| {
-                try self.markStatement(call.type_dispatch_stmt, work);
-                try self.markExprSpan(module, call.args, work);
+                try self.markStatement(call.type_dispatch_stmt, parent, work);
+                try self.markExprSpan(module, call.args, parent, work);
             },
-            .e_tuple_access => |access| try self.markExpr(access.tuple, work),
-            .e_dbg => |dbg| try self.markExpr(dbg.expr, work),
-            .e_expect_err => |expect_err| try self.markExpr(expect_err.expr, work),
-            .e_expect => |expect| try self.markExpr(expect.body, work),
+            .e_tuple_access => |access| try self.markExpr(access.tuple, parent, work),
+            .e_dbg => |dbg| try self.markExpr(dbg.expr, parent, work),
+            .e_expect_err => |expect_err| try self.markExpr(expect_err.expr, parent, work),
+            .e_expect => |expect| try self.markExpr(expect.body, parent, work),
             .e_return => |ret| {
-                try self.markExpr(ret.expr, work);
-                try self.markExpr(ret.lambda, work);
+                try self.markExpr(ret.expr, parent, work);
+                try self.markExpr(ret.lambda, parent, work);
             },
             .e_for => |for_| {
-                try self.markPattern(for_.patt, work);
-                try self.markExpr(for_.expr, work);
-                try self.markExpr(for_.body, work);
+                try self.markPattern(for_.patt, parent, work);
+                try self.markExpr(for_.expr, parent, work);
+                try self.markExpr(for_.body, parent, work);
             },
-            .e_hosted_lambda => |hosted| try self.markPatternSpan(module, hosted.args, work),
-            .e_run_low_level => |run| try self.markExprSpan(module, run.args, work),
+            .e_hosted_lambda => |hosted| try self.markPatternSpan(module, hosted.args, parent, work),
+            .e_run_low_level => |run| try self.markExprSpan(module, run.args, parent, work),
             .e_num,
             .e_frac_f32,
             .e_frac_f64,
@@ -10624,29 +10855,30 @@ const CheckedSourceNodes = struct {
         pattern_idx: CIR.Pattern.Idx,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
+        const parent = @intFromEnum(pattern_idx);
         switch (module.pattern(pattern_idx).data) {
-            .as => |as| try self.markPattern(as.pattern, work),
-            .applied_tag => |tag| try self.markPatternSpan(module, tag.args, work),
-            .nominal => |nominal| try self.markPattern(nominal.backing_pattern, work),
-            .nominal_external => |nominal| try self.markPattern(nominal.backing_pattern, work),
+            .as => |as| try self.markPattern(as.pattern, parent, work),
+            .applied_tag => |tag| try self.markPatternSpan(module, tag.args, parent, work),
+            .nominal => |nominal| try self.markPattern(nominal.backing_pattern, parent, work),
+            .nominal_external => |nominal| try self.markPattern(nominal.backing_pattern, parent, work),
             .record_destructure => |record| {
                 for (module.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    try self.markPattern(module.getRecordDestruct(destruct_idx).kind.toPatternIdx(), work);
+                    try self.markPattern(module.getRecordDestruct(destruct_idx).kind.toPatternIdx(), parent, work);
                 }
             },
             .list => |list| {
-                try self.markPatternSpan(module, list.patterns, work);
+                try self.markPatternSpan(module, list.patterns, parent, work);
                 if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pattern| try self.markPattern(rest_pattern, work);
+                    if (rest.pattern) |rest_pattern| try self.markPattern(rest_pattern, parent, work);
                 }
             },
-            .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, work),
+            .tuple => |tuple| try self.markPatternSpan(module, tuple.patterns, parent, work),
             .str_interpolation => |str| {
                 var step_offset: u32 = 0;
                 while (step_offset < str.steps.span.len) : (step_offset += 1) {
                     const step = module.moduleEnvConst().store.getStrPatternStep(str.steps, step_offset);
                     if (step.capture) |capture| {
-                        try self.markPattern(capture, work);
+                        try self.markPattern(capture, parent, work);
                     }
                 }
             },
@@ -10670,45 +10902,51 @@ const CheckedSourceNodes = struct {
         statement_idx: CIR.Statement.Idx,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
+        const parent = @intFromEnum(statement_idx);
         switch (module.getStatement(statement_idx)) {
             .s_decl => |decl| {
-                try self.markPattern(decl.pattern, work);
-                try self.markExpr(decl.expr, work);
+                try self.markPattern(decl.pattern, parent, work);
+                // A block-local binding's scheme is owned by its binding pattern
+                // and its body is this statement's right-hand side, so the
+                // right-hand side is linked under the pattern: chaining the links
+                // then names the binding's own scheme as the body's innermost
+                // owner (reunify.md 7.1).
+                try self.markExpr(decl.expr, @intFromEnum(decl.pattern), work);
             },
             .s_var => |var_| {
-                try self.markPattern(var_.pattern_idx, work);
-                try self.markExpr(var_.expr, work);
+                try self.markPattern(var_.pattern_idx, parent, work);
+                try self.markExpr(var_.expr, parent, work);
             },
             .s_var_uninitialized => |var_| {
-                try self.markPattern(var_.pattern_idx, work);
+                try self.markPattern(var_.pattern_idx, parent, work);
             },
             .s_reassign => |reassign| {
-                try self.markPattern(reassign.pattern_idx, work);
-                try self.markExpr(reassign.expr, work);
+                try self.markPattern(reassign.pattern_idx, parent, work);
+                try self.markExpr(reassign.expr, parent, work);
             },
-            .s_dbg => |dbg| try self.markExpr(dbg.expr, work),
-            .s_expr => |expr| try self.markExpr(expr.expr, work),
-            .s_expect => |expect| try self.markExpr(expect.body, work),
+            .s_dbg => |dbg| try self.markExpr(dbg.expr, parent, work),
+            .s_expr => |expr| try self.markExpr(expr.expr, parent, work),
+            .s_expect => |expect| try self.markExpr(expect.body, parent, work),
             .s_for => |for_| {
-                try self.markPattern(for_.patt, work);
-                try self.markExpr(for_.expr, work);
-                try self.markExpr(for_.body, work);
+                try self.markPattern(for_.patt, parent, work);
+                try self.markExpr(for_.expr, parent, work);
+                try self.markExpr(for_.body, parent, work);
             },
             .s_while => |while_| {
-                try self.markExpr(while_.cond, work);
-                try self.markExpr(while_.body, work);
+                try self.markExpr(while_.cond, parent, work);
+                try self.markExpr(while_.body, parent, work);
             },
             .s_infinite_loop => |loop| {
-                try self.markExpr(loop.cond, work);
-                try self.markExpr(loop.body, work);
+                try self.markExpr(loop.cond, parent, work);
+                try self.markExpr(loop.body, parent, work);
             },
             .s_breakable_loop => |loop| {
-                try self.markExpr(loop.cond, work);
-                try self.markExpr(loop.body, work);
+                try self.markExpr(loop.cond, parent, work);
+                try self.markExpr(loop.body, parent, work);
             },
             .s_return => |ret| {
-                try self.markExpr(ret.expr, work);
-                try self.markExpr(ret.lambda, work);
+                try self.markExpr(ret.expr, parent, work);
+                try self.markExpr(ret.lambda, parent, work);
             },
             .s_crash,
             .s_break,
@@ -10726,10 +10964,11 @@ const CheckedSourceNodes = struct {
         self: *CheckedSourceNodes,
         module: TypedCIR.Module,
         span: CIR.Expr.Span,
+        parent: u32,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
         for (module.sliceExpr(span)) |expr_idx| {
-            try self.markExpr(expr_idx, work);
+            try self.markExpr(expr_idx, parent, work);
         }
     }
 
@@ -10737,10 +10976,11 @@ const CheckedSourceNodes = struct {
         self: *CheckedSourceNodes,
         module: TypedCIR.Module,
         span: CIR.Pattern.Span,
+        parent: u32,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
         for (module.slicePatterns(span)) |pattern_idx| {
-            try self.markPattern(pattern_idx, work);
+            try self.markPattern(pattern_idx, parent, work);
         }
     }
 
@@ -10748,14 +10988,16 @@ const CheckedSourceNodes = struct {
         self: *CheckedSourceNodes,
         module: TypedCIR.Module,
         span: CIR.Statement.Span,
+        parent: u32,
         work: *std.ArrayList(CheckedSourceNodeRef),
     ) Allocator.Error!void {
         for (module.sliceStatements(span)) |statement_idx| {
-            try self.markStatement(statement_idx, work);
+            try self.markStatement(statement_idx, parent, work);
         }
     }
 
     fn deinit(self: *CheckedSourceNodes, allocator: Allocator) void {
+        allocator.free(self.parents);
         allocator.free(self.statements);
         allocator.free(self.patterns);
         allocator.free(self.exprs);
@@ -16614,12 +16856,24 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
+/// A `CheckedProcedureTemplate.checked_fn_scheme_id` value meaning this template
+/// names no owning `CheckedTypeSchemeId` in its own artifact (reunify.md 7.1).
+/// The ownerless kinds are the synthesized wrappers, whose owner is a checked
+/// type rather than a defining-module CIR node.
+pub const checked_procedure_template_scheme_none: u32 = std.math.maxInt(u32);
+
 /// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
     template_id: canonical.CheckedProcedureTemplateId,
     body: CheckedProcedureBody,
     checked_fn_scheme: canonical.CanonicalTypeSchemeKey,
+    /// The owning `CheckedTypeSchemeId` of this template within its own artifact,
+    /// or `checked_procedure_template_scheme_none` (reunify.md 7.1). Equivalent
+    /// content keys are not owner identity, so this — not `checked_fn_scheme` —
+    /// is what a consumer resolves the template's scheme by. Artifact-qualified
+    /// through the template's `ProcedureTemplateRef.artifact`.
+    checked_fn_scheme_id: u32 = checked_procedure_template_scheme_none,
     checked_fn_root: CheckedTypeId,
     static_dispatch_plans: StaticDispatchPlanTableRef,
     resolved_value_refs: ResolvedValueRefTableRef,
@@ -16630,6 +16884,12 @@ pub const CheckedProcedureTemplate = struct {
     /// `CheckedProcedureTemplateTable.evidence_params_pool`). Every
     /// specialization of this template receives one evidence entry per param.
     evidence_params: artifact_serialize.Span = .{},
+
+    /// This template's owning scheme id, or null when it names none.
+    pub fn schemeId(self: CheckedProcedureTemplate) ?CheckedTypeSchemeId {
+        if (self.checked_fn_scheme_id == checked_procedure_template_scheme_none) return null;
+        return @enumFromInt(self.checked_fn_scheme_id);
+    }
 };
 
 /// Public `CheckedProcedureTemplateTable` declaration.
@@ -16734,11 +16994,21 @@ pub const CheckedProcedureTemplateTable = struct {
                 break :blk .{ .checked_body = try checked_bodies.appendBody(allocator, root_expr, template_ref) };
             };
 
+            // The template's owner is the definition's expression node, which is
+            // the same CIR node the definition's published scheme records as its
+            // owner (reunify.md 7.1), so the owner index names this template's
+            // scheme by id rather than by content key.
+            const owner_scheme_id = checked_type_publication.store.schemeIdForOwnerNode(@intFromEnum(def.expr.idx));
+
             try templates.append(allocator, .{
                 .proc_base = proc_base,
                 .template_id = template_id,
                 .body = body,
                 .checked_fn_scheme = checked_fn_scheme,
+                .checked_fn_scheme_id = if (owner_scheme_id) |scheme_id|
+                    @intFromEnum(scheme_id)
+                else
+                    checked_procedure_template_scheme_none,
                 .checked_fn_root = checked_fn_root,
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
@@ -16799,7 +17069,10 @@ pub const CheckedProcedureTemplateTable = struct {
                 &.{},
                 root.checked_type,
             );
-            const checked_fn_scheme = syntheticSchemeKeyForType(checked_types.roots.items[@intFromEnum(checked_fn_root)].key);
+            const checked_fn_scheme = try checked_types.ensureSchemeForRoot(allocator, checked_fn_root);
+            // An entry wrapper has no defining-module node, so its owner is the
+            // synthetic scheme of the checked type it stands for (reunify.md 7.1).
+            const owner_scheme_id = checked_types.syntheticSchemeIdForRoot(checked_fn_root);
             const proc_base = try names.internProcBase(.{
                 .module_name = module_name,
                 .export_name = null,
@@ -16819,6 +17092,10 @@ pub const CheckedProcedureTemplateTable = struct {
                 .template_id = template_id,
                 .body = .{ .entry_wrapper = wrapper_id },
                 .checked_fn_scheme = checked_fn_scheme,
+                .checked_fn_scheme_id = if (owner_scheme_id) |scheme_id|
+                    @intFromEnum(scheme_id)
+                else
+                    checked_procedure_template_scheme_none,
                 .checked_fn_root = checked_fn_root,
                 .static_dispatch_plans = .{},
                 .resolved_value_refs = .{},
@@ -25484,7 +25761,11 @@ pub const CheckedModuleArtifact = struct {
     // v34 (reunify.md 7.2): `CheckedInstantiationSite` gained `use_expr`, the
     // checked expression id of its CIR use node, so a consumer reading a frozen
     // store names an edge by its use rather than by the instantiated root.
-    const serialized_layout_version: u32 = 34;
+    // v35 (reunify.md 7.1): `CheckedProcedureTemplate` gained
+    // `checked_fn_scheme_id`, the dense owning scheme id a consumer resolves the
+    // template's scheme by, and a scheme's `captured_binders` range now covers the
+    // enclosing binders its body reaches rather than only those its root reaches.
+    const serialized_layout_version: u32 = 35;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -26170,6 +26451,9 @@ pub const CheckedModuleArtifact = struct {
             _ = self.checked_types.schemeForKey(template.checked_fn_scheme) orelse {
                 std.debug.panic("checked artifact invariant violated: checked procedure template references missing type scheme", .{});
             };
+            if (template.schemeId()) |scheme_id| {
+                std.debug.assert(@intFromEnum(scheme_id) < self.checked_types.schemes.items.len);
+            }
             switch (template.body) {
                 .checked_body => |body| {
                     const checked_body = self.checked_bodies.body(body);
@@ -29705,6 +29989,52 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
     try expectAllSliceStoreRoundTrips(HostedProcTable); // transform-B: order_key moved to byte pool
 }
 
+test "procedure templates round-trip their owning scheme id and its absent sentinel" {
+    // reunify.md 7.1: the template's owner identity is a dense scheme id, not a
+    // content key, so both a resolved id and the ownerless sentinel must survive
+    // artifact caching and read back through `schemeId`.
+    const gpa = std.testing.allocator;
+    const templates = try gpa.alloc(CheckedProcedureTemplate, 2);
+    defer gpa.free(templates);
+    templates[0] = .{
+        .proc_base = @enumFromInt(7),
+        .template_id = @enumFromInt(3),
+        .body = .{ .checked_body = @enumFromInt(3) },
+        .checked_fn_scheme = .{ .bytes = [_]u8{0x21} ** 32 },
+        .checked_fn_scheme_id = 5,
+        .checked_fn_root = @enumFromInt(11),
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = .roc,
+    };
+    templates[1] = .{
+        .proc_base = @enumFromInt(8),
+        .template_id = @enumFromInt(4),
+        .body = .{ .entry_wrapper = @enumFromInt(2) },
+        .checked_fn_scheme = .{ .bytes = [_]u8{0x22} ** 32 },
+        .checked_fn_root = @enumFromInt(12),
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = .entry,
+    };
+    var table = CheckedProcedureTemplateTable{ .templates = templates };
+
+    const rt = try artifact_serialize.roundTripForTest(gpa, CheckedProcedureTemplateTable, &table);
+    defer gpa.free(rt.buffer);
+    try std.testing.expectEqual(@as(usize, 2), rt.loaded.templates.len);
+    try std.testing.expectEqual(@as(u32, 5), rt.loaded.templates[0].checked_fn_scheme_id);
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, @enumFromInt(5)), rt.loaded.templates[0].schemeId());
+    try std.testing.expectEqual(
+        @as(u32, checked_procedure_template_scheme_none),
+        rt.loaded.templates[1].checked_fn_scheme_id,
+    );
+    try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), rt.loaded.templates[1].schemeId());
+}
+
 fn testCheckedArtifactKey(byte: u8) CheckedModuleArtifactKey {
     var key: CheckedModuleArtifactKey = .{};
     key.bytes = [_]u8{byte} ** 32;
@@ -30066,12 +30396,16 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
         .gv_len = gv.len,
     });
 
-    // A nested scheme (reunify.md 7.1, Slice 2) that closes over one captured
+    // A nested scheme (reunify.md 7.1) that closes over one captured
     // enclosing-scheme binder (outer scheme 0, binder index 1) and one
-    // unattributed captured reference.
+    // unattributed captured reference from the root-derived part of its
+    // traversal, then one more enclosing binder (outer scheme 0, binder index 0)
+    // that only its body reaches — appended after the root-derived prefix, which
+    // is the order the range must preserve.
     const captured = try store.appendCapturedBinders(gpa, &.{
         .{ .outer_scheme = 0, .binder_index = 1 },
         .{ .outer_scheme = captured_binder_outer_scheme_none, .binder_index = 0 },
+        .{ .outer_scheme = 0, .binder_index = 0 },
     });
     try store.schemes.append(gpa, .{
         .id = @enumFromInt(@as(u32, @intCast(store.schemes.items.len))),
@@ -30227,10 +30561,12 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try std.testing.expectEqual(@as(u32, 246), loaded.schemes.items[1].owner_node);
     {
         const nested_captured = loaded.schemes.items[1].capturedBinders(&loaded);
-        try std.testing.expectEqual(@as(usize, 2), nested_captured.len);
+        try std.testing.expectEqual(@as(usize, 3), nested_captured.len);
         try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), nested_captured[0].outerScheme());
         try std.testing.expectEqual(@as(u32, 1), nested_captured[0].binder_index);
         try std.testing.expectEqual(@as(?CheckedTypeSchemeId, null), nested_captured[1].outerScheme());
+        try std.testing.expectEqual(@as(?CheckedTypeSchemeId, loaded.schemes.items[0].id), nested_captured[2].outerScheme());
+        try std.testing.expectEqual(@as(u32, 0), nested_captured[2].binder_index);
     }
     try std.testing.expectEqualSlices(CheckedTypeId, &.{ a, b }, loaded.schemes.items[0].generalizedVars(&loaded));
 
@@ -30558,8 +30894,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // change, bump `serialized_layout_version` and replace the golden bytes below with
     // the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE2, 0x2D, 0xDD, 0x52, 0xE5, 0xD3, 0xB3, 0x68, 0xE2, 0xDF, 0x71, 0xFD, 0x36, 0x9B, 0x53, 0x11,
-        0x65, 0x67, 0x81, 0x45, 0xCB, 0x35, 0xBC, 0xA8, 0x37, 0x77, 0x57, 0x67, 0x58, 0x17, 0x44, 0x3F,
+        0x43, 0x3E, 0x06, 0xA8, 0x11, 0x6F, 0xB3, 0x48, 0xD4, 0x5F, 0x96, 0x95, 0x40, 0x32, 0x92, 0xB6,
+        0x05, 0x7B, 0x74, 0x86, 0x42, 0x42, 0x22, 0x57, 0x4D, 0x21, 0x5D, 0x54, 0xB8, 0xB8, 0x04, 0xFA,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

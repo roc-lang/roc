@@ -212,11 +212,14 @@ pub const SpecializationStart = struct {
     /// The reserved function id when this specialization was requested earlier
     /// and lowered from the deferred queue, so its edge is looked up by id.
     reserved_fn_id: ?u32,
-    /// The specialized template's own checked function root. It names the
-    /// template's owning scheme by checked identity, which is the environment
-    /// a specialization has even when no requesting edge named it (section 9.6's
-    /// generated edges and the root requests that have no requesting site).
-    template_fn_root: checked.CheckedTypeId,
+    /// The specialized template's own owning scheme, named by the scheme id the
+    /// checked procedure template carries and qualified by the defining checked
+    /// module (reunify.md section 7.1). It is the environment a specialization
+    /// has even when no requesting edge named it (section 9.6's generated edges
+    /// and the root requests that have no requesting site). Null for a template
+    /// whose owner is a checked type rather than a defining-module node, which is
+    /// the synthesized wrapper kinds.
+    template_scheme: ?checked.CheckedTypeSchemeId,
 };
 
 /// One module's value-use instantiation sites indexed by the checked expression
@@ -227,11 +230,6 @@ const SiteIndex = struct {
     view: checked.CheckedTypeStoreView,
     by_use_expr: std.AutoHashMapUnmanaged(u32, u32),
     ambiguous: std.AutoHashMapUnmanaged(u32, void),
-    /// This module's schemes indexed by the checked root each one generalizes,
-    /// so a template names its own scheme by checked identity. Roots several
-    /// schemes share name no single owner and are marked ambiguous.
-    by_scheme_root: std.AutoHashMapUnmanaged(u32, u32),
-    ambiguous_scheme_root: std.AutoHashMapUnmanaged(u32, void),
 };
 
 /// One active specialization's environment plus the graph trace it compares
@@ -672,8 +670,6 @@ pub const Rehearsal = struct {
         while (indexes.next()) |index| {
             index.by_use_expr.deinit(self.allocator);
             index.ambiguous.deinit(self.allocator);
-            index.by_scheme_root.deinit(self.allocator);
-            index.ambiguous_scheme_root.deinit(self.allocator);
         }
         self.site_index.deinit(self.allocator);
         self.releasePendingEdge();
@@ -1099,6 +1095,7 @@ pub const Rehearsal = struct {
         frame.binders = binders;
         frame.env_ready = true;
         census.bump("rehearsal_env_resolved");
+        noteEnvironmentScheme(scheme);
         if (binders.len == 0) {
             census.bump("rehearsal_env_resolved_without_binders");
             self.classifyEmptyBinders(defining, scheme, site.importedDefiningModule() != null);
@@ -1118,22 +1115,19 @@ pub const Rehearsal = struct {
     /// exact environment whenever its own template's scheme is ground: a scheme
     /// with no binders whose root reaches no checked variable has exactly one
     /// instantiation, so the empty binding is the whole binding and no request
-    /// could change it. The scheme is named by the checked identity of the
-    /// template's function root, never by shape; a scheme that does carry
-    /// generalized structure stays skipped, because only the edge can say what
-    /// its binders took.
+    /// could change it. The scheme is named by the scheme id the checked
+    /// procedure template carries, qualified by its defining checked module
+    /// (reunify.md section 7.1) — owner identity, never a content key or a root
+    /// the module's schemes may share; a scheme that does carry generalized
+    /// structure stays skipped, because only the edge can say what its binders
+    /// took.
     fn resolveGroundTemplateEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
-        const index = self.siteIndexFor(start.cursor) orelse return;
-        const key = @intFromEnum(start.template_fn_root);
-        if (index.ambiguous_scheme_root.contains(key)) {
-            census.bump("rehearsal_edgeless_scheme_root_ambiguous");
-            return;
-        }
-        const scheme_raw = index.by_scheme_root.get(key) orelse {
-            census.bump("rehearsal_edgeless_scheme_root_unowned");
+        const scheme_id = start.template_scheme orelse {
+            census.bump("rehearsal_edgeless_template_scheme_absent");
             return;
         };
-        const scheme = start.cursor.view.schemeById(@enumFromInt(scheme_raw)) orelse {
+        const scheme_raw = @intFromEnum(scheme_id);
+        const scheme = start.cursor.view.schemeById(scheme_id) orelse {
             census.bump("rehearsal_edgeless_scheme_unresolved");
             return;
         };
@@ -1166,6 +1160,7 @@ pub const Rehearsal = struct {
         frame.env_ready = true;
         census.bump("rehearsal_env_resolved");
         census.bump("rehearsal_env_resolved_edgeless_ground");
+        noteEnvironmentScheme(scheme);
         frame.interface_root = self.emitQuietly(start.cursor, frame.environment(), scheme.owner_node, scheme.root);
     }
 
@@ -1228,6 +1223,24 @@ pub const Rehearsal = struct {
             return;
         }
         census.bump("rehearsal_actual_residual_undisposed");
+    }
+
+    /// Name the owner kind of the callee scheme one resolved environment binds,
+    /// and whether that scheme carries any checked captured binder. A scheme with
+    /// a top-level owner has no enclosing scheme, so no captured pair could link
+    /// its environment to a lexical parent however wide the checked capture is.
+    fn noteEnvironmentScheme(scheme: checked.CheckedTypeScheme) void {
+        switch (scheme.owner_kind) {
+            .top_level_def => census.bump("rehearsal_env_owner_top_level"),
+            .nested_def => census.bump("rehearsal_env_owner_nested"),
+            .required_type => census.bump("rehearsal_env_owner_required"),
+            .synthetic => census.bump("rehearsal_env_owner_synthetic"),
+        }
+        if (scheme.captured_len == 0) {
+            census.bump("rehearsal_env_scheme_captures_absent");
+        } else {
+            census.bump("rehearsal_env_scheme_captures_present");
+        }
     }
 
     /// Split one empty-binder environment into the classes reunify.md 7.1
@@ -1402,30 +1415,8 @@ pub const Rehearsal = struct {
             .view = caller.view,
             .by_use_expr = .empty,
             .ambiguous = .empty,
-            .by_scheme_root = .empty,
-            .ambiguous_scheme_root = .empty,
         };
         const index = gop.value_ptr;
-        // A root two distinct schemes claim names neither of them, so it is
-        // marked ambiguous and a template whose function root lands there is
-        // resolved by nothing. That is what keeps this index exact: it answers
-        // only where exactly one scheme in the module generalizes that root.
-        for (caller.view.schemes) |scheme| {
-            const key = @intFromEnum(scheme.root);
-            const entry = index.by_scheme_root.getOrPut(self.allocator, key) catch {
-                self.fail();
-                return null;
-            };
-            if (entry.found_existing) {
-                if (entry.value_ptr.* == @intFromEnum(scheme.id)) continue;
-                index.ambiguous_scheme_root.put(self.allocator, key, {}) catch {
-                    self.fail();
-                    return null;
-                };
-                continue;
-            }
-            entry.value_ptr.* = @intFromEnum(scheme.id);
-        }
         const sites = caller.view.instantiationSites();
         for (sites, 0..) |site, position| {
             const use_expr = site.useExpr() orelse continue;
@@ -1640,6 +1631,24 @@ pub const Rehearsal = struct {
                     census.bump("rehearsal_unbound_other_scheme_binder_on_chain");
                 } else {
                     census.bump("rehearsal_unbound_other_scheme_binder_off_chain");
+                    // Which direction the two schemes sit in: a scheme whose own
+                    // captured pairs name this frame's scheme is nested INSIDE the
+                    // specialized body, so its binders are bound by its own use
+                    // sites through its own binder list (reunify.md section 7.3),
+                    // not by any captured pair this frame could carry. The rest
+                    // name no checked relation to this frame at all.
+                    var inner_of_frame = false;
+                    for (scheme.capturedBinders(cursor.view)) |captured| {
+                        const outer_id = captured.outerScheme() orelse continue;
+                        if (@intFromEnum(outer_id) != frame.scheme.scheme) continue;
+                        if (!std.mem.eql(u8, &frame.scheme.module_bytes, &address.module_bytes)) continue;
+                        inner_of_frame = true;
+                    }
+                    if (inner_of_frame) {
+                        census.bump("rehearsal_unbound_binder_scheme_inside_frame");
+                    } else {
+                        census.bump("rehearsal_unbound_binder_scheme_unrelated");
+                    }
                 }
                 return;
             }
