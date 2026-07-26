@@ -104,6 +104,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:41:34 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
@@ -114,6 +115,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:41:52 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
@@ -124,6 +126,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:41:70 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
@@ -134,6 +137,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:39 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
@@ -144,6 +148,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:57 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
@@ -154,6 +159,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:75 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
@@ -164,6 +170,7 @@ MISSING METHOD - Color.md:48:32:48:38
  │           ‾‾‾‾‾‾‾‾‾‾                                                       │
  └──────────────────────────────────────────────────────────── Color.md:42:93 ┘
 
+    Hint: Instead of `Num.to_str(value)`, use method syntax: `value.to_str()`
 
 
 ┌────────────────┐
