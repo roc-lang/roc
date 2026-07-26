@@ -1524,6 +1524,14 @@ const Builder = struct {
                 .symbol = symbol,
             };
         };
+        // Debug/probe-only: a request that lowers its body here reserves at this
+        // point rather than through the deferred queue, so this is where its
+        // requesting edge is tied to the reserved id (reunify.md sections 7.2,
+        // 11.3). A request that came in through the queue already carries its
+        // edge under the id it reserved earlier.
+        if (reserved_fn_id == null) {
+            if (self.rehearsal) |rehearsal| rehearsal.claimRequestEdge(@intFromEnum(reservation.fn_id));
+        }
 
         switch (template.target) {
             .hosted => {
@@ -1619,7 +1627,9 @@ const Builder = struct {
         if (self.rehearsal) |rehearsal| rehearsal.beginSpecialization(.{
             .graph = graph,
             .cursor = directTranslateCursor(view),
-            .reserved_fn_id = if (reserved_fn_id) |fn_id| @intFromEnum(fn_id) else null,
+            .reserved_fn_id = @intFromEnum(reservation.fn_id),
+            .target_kind = std.meta.activeTag(template.target),
+            .template_name = templateExportName(view, template_ref),
             .template_scheme = template.schemeId(),
         });
         defer if (self.rehearsal) |rehearsal| rehearsal.endSpecialization(graph);
@@ -1931,6 +1941,12 @@ const Builder = struct {
         const export_name = proc_base.export_name orelse return;
         const name = try self.program.names.internExportName(view.names.exportNameText(export_name));
         try self.program.setProcDebugName(symbol, name);
+    }
+
+    fn templateExportName(view: ModuleView, template: names.ProcTemplate) []const u8 {
+        const proc_base = view.names.procBase(template.proc_base);
+        const export_name = proc_base.export_name orelse return "";
+        return view.names.exportNameText(export_name);
     }
 
     fn fnDefForProcedureBindingBody(
@@ -3374,9 +3390,10 @@ const Builder = struct {
                 graph,
             );
             if (reserved.needs_lowering) {
-                // Debug/probe-only: carry the requesting edge with the reserved
-                // function id so the deferred body resolves the same edge.
-                if (self.rehearsal) |rehearsal| rehearsal.rememberReservedEdge(@intFromEnum(reserved.localFnId()));
+                // Debug/probe-only: tie the requesting edge to the reserved
+                // function id so the deferred body resolves the edge that
+                // actually requested it (reunify.md sections 7.2, 11.3).
+                if (self.rehearsal) |rehearsal| rehearsal.claimRequestEdge(@intFromEnum(reserved.localFnId()));
                 try self.pinDeferredTemplateRequestToCheckedRoot(graph, template_ref, request_template.mono_fn_ty);
                 try graph.deferred_templates.append(self.allocator, .{
                     .fn_id = reserved.localFnId(),
@@ -3489,8 +3506,9 @@ const Builder = struct {
         );
         if (reserved.needs_lowering) {
             // Debug/probe-only: this request lowers later from the deferred
-            // queue, so its edge travels with the reserved function id.
-            if (self.rehearsal) |rehearsal| rehearsal.rememberReservedEdge(@intFromEnum(reserved.localFnId()));
+            // queue, so its edge travels with the reserved function id
+            // (reunify.md sections 7.2, 11.3).
+            if (self.rehearsal) |rehearsal| rehearsal.claimRequestEdge(@intFromEnum(reserved.localFnId()));
             try self.pinDeferredTemplateRequestToCheckedRoot(source_ctx.graph, template_ref, request_template.mono_fn_ty);
             try source_ctx.graph.deferred_templates.append(self.allocator, .{
                 .fn_id = reserved.localFnId(),
@@ -10224,7 +10242,8 @@ const BodyContext = struct {
             // Debug/probe-only: the same value-use edge identity as an ordinary
             // lookup (reunify.md section 7.2), named before the use requests its
             // specialization.
-            self.noteProcedureUseRequestEdge(record);
+            self.openProcedureUseRequestEdge(record);
+            defer self.closeRequestEdge();
             switch (record.ref) {
                 .local_proc => |local| return try self.addExpr(.{
                     .ty = ty,
@@ -17600,13 +17619,14 @@ const BodyContext = struct {
         return call_ctx.functionReturnType(mono_fn_ty);
     }
 
-    /// Debug/probe-only: name a procedure use's requesting edge for the
-    /// rehearsal. A value use of a procedure is a scheme instantiation edge in
-    /// reunify.md section 7.2's coverage table exactly as a direct call is, and
+    /// Debug/probe-only: open the request scope for a procedure use, naming its
+    /// requesting edge. A value use of a procedure is a scheme instantiation edge
+    /// in reunify.md section 7.2's coverage table exactly as a direct call is, and
     /// the record's checked expression is the `use_node` half of that edge's
     /// identity. A reference that binds no procedure requests no specialization,
-    /// so it names no edge.
-    fn noteProcedureUseRequestEdge(self: *BodyContext, record: anytype) void {
+    /// so its scope names no edge — and still exists, so requests made under it
+    /// cannot reach an enclosing scope's edge.
+    fn openProcedureUseRequestEdge(self: *BodyContext, record: anytype) void {
         const rehearsal = self.builder.rehearsal orelse return;
         switch (record.ref) {
             .local_proc,
@@ -17615,7 +17635,7 @@ const BodyContext = struct {
             .hosted_proc,
             .promoted_top_level_proc,
             .platform_required_proc,
-            => rehearsal.noteRequestEdge(self.view.key.bytes, record.expr),
+            => rehearsal.openRequestEdge(self.view.key.bytes, record.expr),
             .local_param,
             .local_value,
             .local_mutable_version,
@@ -17625,8 +17645,16 @@ const BodyContext = struct {
             .imported_const,
             .platform_required_const,
             .platform_required_declaration,
-            => {},
+            => rehearsal.openRequestWithoutEdge(),
         }
+    }
+
+    /// Debug/probe-only: close the request scope the innermost
+    /// `open*RequestEdge` opened. An edge no reservation claimed named a request
+    /// that bound no new specialization, so it stops here.
+    fn closeRequestEdge(self: *BodyContext) void {
+        const rehearsal = self.builder.rehearsal orelse return;
+        rehearsal.closeRequest();
     }
 
     fn fnTemplateForDirectCallWithMono(
@@ -17648,8 +17676,9 @@ const BodyContext = struct {
         // instantiation site records, so it names the site whose
         // dense actuals bind the callee scheme (reunify.md sections 7.2, 9.1).
         if (self.builder.rehearsal) |rehearsal| {
-            rehearsal.noteRequestEdge(self.view.key.bytes, self.view.resolved_refs.records[raw].expr);
+            rehearsal.openRequestEdge(self.view.key.bytes, self.view.resolved_refs.records[raw].expr);
         }
+        defer self.closeRequestEdge();
         return switch (self.view.resolved_refs.records[raw].ref) {
             .local_proc => |local| .{ .local = try self.fnTemplateForLocalProcWithMono(local, source_fn_ty, source_fn_key, mono_fn_ty, evidence) },
             .top_level_proc,
@@ -17910,7 +17939,8 @@ const BodyContext = struct {
         // callee's scheme exactly as a direct call does, so the checked
         // expression it sits at names this request's edge for the rehearsal
         // (reunify.md section 7.2's coverage table).
-        self.noteProcedureUseRequestEdge(record);
+        self.openProcedureUseRequestEdge(record);
+        defer self.closeRequestEdge();
         const data: BodyExprData = switch (record.ref) {
             .local_param,
             .local_value,
@@ -21230,6 +21260,15 @@ const BodyContext = struct {
     ) Allocator.Error!Ast.FnSlot {
         const source_fn_ty = lookup.target.callable_ty;
         const source_fn_key = lookup.view.types.rootKey(source_fn_ty);
+        // Debug/probe-only: a compiler-generated edge names no checked use site
+        // (reunify.md section 9.6), so it opens a request scope that names none.
+        // The reservation it makes therefore reads no edge at all instead of the
+        // edge of whichever use site enclosed it.
+        const generated = std.meta.activeTag(evidence_vector) == .synthesize;
+        if (generated) {
+            if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestWithoutEdge();
+        }
+        defer if (generated) self.closeRequestEdge();
         return switch (lookup.target.kind) {
             .procedure => |procedure| blk: {
                 const evidence = switch (evidence_vector) {
@@ -21281,7 +21320,8 @@ const BodyContext = struct {
         // Debug/probe-only: a resolved dispatch target instantiates the selected
         // callee's scheme, and the plan's checked expression is the `use_node`
         // half of that edge's identity (reunify.md sections 7.2, 9.7).
-        if (self.builder.rehearsal) |rehearsal| rehearsal.noteRequestEdge(self.view.key.bytes, plan.expr);
+        if (self.builder.rehearsal) |rehearsal| rehearsal.openRequestEdge(self.view.key.bytes, plan.expr);
+        defer self.closeRequestEdge();
         return .{ .call_proc = .{
             .callee = draftProcCalleeFromAst(Ast.procCalleeForSlot(try self.methodTargetCalleeWithMono(lookup, callable_mono_ty, try self.evidenceForResolvedTarget(plan.resolution)))),
             .args = args,

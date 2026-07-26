@@ -337,11 +337,74 @@ pub const Census = struct {
     rehearsal_edgeless_scheme_has_binders: Counter = Counter.init(0),
     rehearsal_edgeless_scheme_captures: Counter = Counter.init(0),
     rehearsal_edgeless_scheme_root_variable: Counter = Counter.init(0),
+    // The `scheme_has_binders` population — the specializations that genuinely
+    // still have no binding — split three ways: why the requesting edge supplied
+    // none, which owner kind the template's scheme has, and which target kind the
+    // template is. Together they say whether the missing binding is a root's
+    // requested type (reunify.md 7.2), a declared generated edge (reunify.md
+    // 9.6), or an unindexed dispatch site.
+    rehearsal_edgeless_binders_root_request: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_generated_request: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_no_site: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_site_ambiguous: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_module_differs: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_edge_unusable: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_owner_top_level: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_owner_nested: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_owner_required: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_owner_synthetic: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_target_roc: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_target_hosted: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_target_intrinsic: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_target_entry: Counter = Counter.init(0),
+    rehearsal_edgeless_binders_target_comptime: Counter = Counter.init(0),
+    // The request seam's edge association (reunify.md 7.2, 11.3). A use site's
+    // edge is visible only inside the request scope that site opened: `claimed`
+    // counts the reservations that took it, so the specialization lowered under
+    // that reserved id reads the edge that actually requested it; `unclaimed`
+    // counts scopes that closed with their edge untaken, which is a request that
+    // bound no new specialization. `claim_without_scope` and
+    // `claim_without_edge` count reservations made outside any request scope and
+    // inside one whose use named no edge — both are edgeless by construction.
+    // `claim_repeated` counts a second claim for one reserved id, which would
+    // mean two distinct use sites reserved one specialization body.
+    // Binding such an edge from the template's OWN scheme, which is the checked
+    // output of the same definition whose binder ids the specialized body names.
+    // `owner_node_agrees` is the identity precondition — both checked outputs
+    // name one defining CIR node as the scheme's owner — and the witness
+    // counters are what accepts the binding: the callee scheme root emitted
+    // under it must be the same type as the requesting site's own instantiated
+    // root (reunify.md 7.5). A binding whose witness is absent or disagrees is
+    // released, so no specialization is bound on an unproven alignment of two
+    // independently written binder orders.
+    rehearsal_foreign_scheme_owner_node_agrees: Counter = Counter.init(0),
+    rehearsal_foreign_scheme_owner_node_differs: Counter = Counter.init(0),
+    rehearsal_foreign_scheme_arity_differs: Counter = Counter.init(0),
+    rehearsal_foreign_witness_agrees: Counter = Counter.init(0),
+    rehearsal_foreign_witness_agrees_under_rerooting: Counter = Counter.init(0),
+    rehearsal_foreign_witness_absent: Counter = Counter.init(0),
+    rehearsal_foreign_witness_differs: Counter = Counter.init(0),
+    rehearsal_env_resolved_foreign_scheme: Counter = Counter.init(0),
+    rehearsal_request_edge_claimed: Counter = Counter.init(0),
+    rehearsal_request_edge_unclaimed: Counter = Counter.init(0),
+    rehearsal_request_edge_claim_without_scope: Counter = Counter.init(0),
+    rehearsal_request_edge_claim_without_edge: Counter = Counter.init(0),
+    rehearsal_request_edge_claim_repeated: Counter = Counter.init(0),
     rehearsal_skip_root_edge: Counter = Counter.init(0),
     rehearsal_skip_generated_edge: Counter = Counter.init(0),
     rehearsal_skip_no_site: Counter = Counter.init(0),
+    // The `no_site` class split by whether the use expression carries recorded
+    // sites at all: `owned_elsewhere` is a use whose sites all name other
+    // definitions as their scheme owner, and `unrecorded` is a use no site
+    // names, which is an edge outside the section 7.2 coverage table.
+    rehearsal_no_site_use_owned_elsewhere: Counter = Counter.init(0),
+    rehearsal_no_site_use_unrecorded: Counter = Counter.init(0),
     rehearsal_skip_site_ambiguous: Counter = Counter.init(0),
     rehearsal_skip_scheme_unresolved: Counter = Counter.init(0),
+    // The specialization's own template names no owning scheme, so the
+    // `scheme_owner_node` half of its requesting edge's identity is unknown and
+    // no site can be selected by it.
+    rehearsal_skip_template_owner_unresolved: Counter = Counter.init(0),
     rehearsal_skip_caller_module_absent: Counter = Counter.init(0),
     rehearsal_skip_defining_module_absent: Counter = Counter.init(0),
     rehearsal_skip_arity_mismatch: Counter = Counter.init(0),

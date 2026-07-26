@@ -66,6 +66,11 @@ const max_slot_depth: u32 = 64;
 /// The maximum number of mismatching positions described in the census dump.
 const max_mismatch_details: usize = 24;
 
+/// The maximum number of distinct unresolved specializations named in the census
+/// dump. The population is a handful of definitions repeated many times, so this
+/// bounds the list without hiding a kind.
+const max_unresolved_details: usize = 512;
+
 /// One checked type's address: the content identity of the module whose store
 /// holds it, plus its id within that store.
 pub const CheckedAddress = struct {
@@ -209,9 +214,16 @@ pub const SpecializationStart = struct {
     graph: *solve.InstGraph,
     /// The module the specialized template's body reads its checked types from.
     cursor: direct_translate.ModuleCursor,
-    /// The reserved function id when this specialization was requested earlier
-    /// and lowered from the deferred queue, so its edge is looked up by id.
-    reserved_fn_id: ?u32,
+    /// The function id this specialization reserved. The requesting edge is
+    /// stored under exactly this id when the request that reserved it named one,
+    /// so an edge reaches the specialization that requested it and no other.
+    reserved_fn_id: u32,
+    /// This template's target kind, which says whether an edgeless
+    /// specialization is an entry root, a hosted boundary, or ordinary Roc code.
+    target_kind: std.meta.Tag(checked.ProcTarget),
+    /// This template's exported name when it has one, so the census dump names
+    /// which definition an unresolved specialization belongs to.
+    template_name: []const u8,
     /// The specialized template's own owning scheme, named by the scheme id the
     /// checked procedure template carries and qualified by the defining checked
     /// module (reunify.md section 7.1). It is the environment a specialization
@@ -222,15 +234,36 @@ pub const SpecializationStart = struct {
     template_scheme: ?checked.CheckedTypeSchemeId,
 };
 
-/// One module's value-use instantiation sites indexed by the checked expression
-/// each edge is used at — the `use_node` half of the section 7.2 edge identity.
-/// A checked expression carrying several value-use edges that disagree on scheme
-/// or actuals is ambiguous and names no edge.
+/// One module's instantiation sites indexed by the edge identity a consumer can
+/// name them by: the checked expression the edge is used at together with the
+/// CIR node its callee scheme is owned by (reunify.md section 7.2's
+/// `(use_node, ..., scheme_owner_node)` identity). One expression carries an edge
+/// per callee it instantiates — an operator desugaring reaches several — so the
+/// use alone under-keys them, while the pair names exactly one callee's edge. A
+/// pair still carrying edges that disagree on scheme or actuals is ambiguous and
+/// names no edge.
 const SiteIndex = struct {
     view: checked.CheckedTypeStoreView,
-    by_use_expr: std.AutoHashMapUnmanaged(u32, u32),
-    ambiguous: std.AutoHashMapUnmanaged(u32, void),
+    by_edge: std.AutoHashMapUnmanaged(u64, u32),
+    ambiguous: std.AutoHashMapUnmanaged(u64, void),
+    /// Every use expression any recorded site names, so a lookup that finds no
+    /// edge says whether the use carries sites owned by other definitions or
+    /// carries none at all.
+    used_exprs: std.AutoHashMapUnmanaged(u32, void),
 };
+
+/// The index key for one edge identity.
+fn siteKey(use_expr: checked.CheckedExprId, scheme_owner_node: u32) u64 {
+    return (@as(u64, @intFromEnum(use_expr)) << 32) | @as(u64, scheme_owner_node);
+}
+
+/// The CIR node this specialization's own template scheme is owned by, which is
+/// the `scheme_owner_node` half of its requesting edge's identity.
+fn templateSchemeOwnerNode(start: SpecializationStart) ?u32 {
+    const scheme_id = start.template_scheme orelse return null;
+    const scheme = start.cursor.view.schemeById(scheme_id) orelse return null;
+    return scheme.owner_node;
+}
 
 /// One active specialization's environment plus the graph trace it compares
 /// against. `chain` ends at this specialization's own level, whose bound values
@@ -565,6 +598,17 @@ const NamedFieldDifference = enum {
     }
 };
 
+/// One distinct unresolved specialization, dumped with the census counters so
+/// the population that still needs a declared binding is named rather than
+/// counted: which definition it specializes, which module owns it, how many
+/// binders its scheme carries, and why its requesting edge supplied nothing.
+const UnresolvedDetail = struct {
+    name: [48]u8,
+    template_module: [6]u8,
+    binders: u32,
+    skip: Rehearsal.EdgeSkip,
+};
+
 /// The rehearsal: one per lowering run, holding the active environment stack,
 /// its own emission store, and its own representation closure engine.
 pub const Rehearsal = struct {
@@ -580,9 +624,16 @@ pub const Rehearsal = struct {
     engine: closure.Engine,
     lookup: ModuleLookup,
     frames: std.ArrayList(Frame),
-    /// The edge of the request currently being made, moved to `edges_by_fn` when
-    /// the request reserves and is lowered later.
-    pending_edge: ?RequestEdge,
+    /// The open request scopes, innermost last. The seam opens one around every
+    /// request it makes and closes it when the request finishes, so the edge a
+    /// use site named is only ever visible to the request that site made — a
+    /// reservation claims the innermost scope's edge, and a scope that closes
+    /// unclaimed drops it instead of leaving it for an unrelated later request.
+    /// An entry is null once claimed, and for a request whose use site named no
+    /// edge at all.
+    requests: std.ArrayList(?RequestEdge),
+    /// The requesting edge of each reserved function id: the identity a request
+    /// is tied to from reservation until its body lowers (reunify.md 11.3).
     edges_by_fn: std.AutoHashMapUnmanaged(u32, RequestEdge),
     site_index: std.AutoHashMapUnmanaged([32]u8, SiteIndex),
     /// Interned logical-identity digests to dense engine tokens. Two slots may
@@ -601,6 +652,7 @@ pub const Rehearsal = struct {
     /// whether the closure moved it.
     slot_descriptors: std.AutoHashMapUnmanaged(u32, policy.NamedDescriptor),
     details: std.ArrayList(MismatchDetail),
+    unresolved_details: std.ArrayList(UnresolvedDetail),
     disabled: bool,
 
     /// Build a rehearsal when it is compiled in and enabled, otherwise null.
@@ -634,7 +686,7 @@ pub const Rehearsal = struct {
             .engine = closure.Engine.init(allocator),
             .lookup = lookup,
             .frames = .empty,
-            .pending_edge = null,
+            .requests = .empty,
             .edges_by_fn = .empty,
             .site_index = .empty,
             .logical_tokens = .empty,
@@ -643,6 +695,7 @@ pub const Rehearsal = struct {
             .slots = .empty,
             .slot_descriptors = .empty,
             .details = .empty,
+            .unresolved_details = .empty,
             .disabled = false,
         };
         // The graph commits every seal through the store's content-deduplicating
@@ -663,16 +716,21 @@ pub const Rehearsal = struct {
         for (self.frames.items) |*frame| self.releaseFrame(frame);
         self.frames.deinit(self.allocator);
         self.details.deinit(self.allocator);
+        self.unresolved_details.deinit(self.allocator);
         self.slot_descriptors.deinit(self.allocator);
         self.slots.deinit(self.allocator);
         self.logical_tokens.deinit(self.allocator);
         var indexes = self.site_index.valueIterator();
         while (indexes.next()) |index| {
-            index.by_use_expr.deinit(self.allocator);
+            index.by_edge.deinit(self.allocator);
             index.ambiguous.deinit(self.allocator);
+            index.used_exprs.deinit(self.allocator);
         }
         self.site_index.deinit(self.allocator);
-        self.releasePendingEdge();
+        for (self.requests.items) |open| {
+            if (open) |edge| self.releaseEdge(edge);
+        }
+        self.requests.deinit(self.allocator);
         var held = self.edges_by_fn.valueIterator();
         while (held.next()) |edge| self.releaseEdge(edge.*);
         self.edges_by_fn.deinit(self.allocator);
@@ -682,16 +740,75 @@ pub const Rehearsal = struct {
         self.allocator.destroy(self);
     }
 
-    /// Record the edge a specialization request is being made from: the caller's
-    /// module and the checked expression the use sits at.
-    pub fn noteRequestEdge(self: *Rehearsal, module_bytes: [32]u8, use_expr: checked.CheckedExprId) void {
+    /// Open a request scope naming the edge the request is made from: the
+    /// caller's module and the checked expression the use sits at. The scope
+    /// must be closed by `closeRequest` when the request finishes, so an edge no
+    /// reservation claimed cannot be read by a later, unrelated request.
+    pub fn openRequestEdge(self: *Rehearsal, module_bytes: [32]u8, use_expr: checked.CheckedExprId) void {
         if (self.disabled) return;
-        self.releasePendingEdge();
-        self.pending_edge = .{
+        const edge = RequestEdge{
             .module_bytes = module_bytes,
             .use_expr = use_expr,
             .caller = self.captureCallerEnvironment(module_bytes),
         };
+        self.requests.append(self.allocator, edge) catch {
+            self.releaseEdge(edge);
+            self.fail();
+        };
+    }
+
+    /// Open a request scope for a use that names no instantiation edge. The
+    /// scope still exists so the requests made inside it cannot reach an
+    /// enclosing scope's edge.
+    pub fn openRequestWithoutEdge(self: *Rehearsal) void {
+        if (self.disabled) return;
+        self.requests.append(self.allocator, null) catch self.fail();
+    }
+
+    /// Close the innermost request scope. An edge no reservation claimed
+    /// belonged to a request that bound no new specialization, so it is dropped
+    /// rather than left for whichever specialization lowers next.
+    pub fn closeRequest(self: *Rehearsal) void {
+        // Once the rehearsal disables itself no scope is opened, so none is
+        // closed either and the stack stays balanced across the transition.
+        if (self.disabled) return;
+        if (self.requests.items.len == 0) return;
+        const open = self.requests.pop() orelse return;
+        const edge = open orelse return;
+        census.bump("rehearsal_request_edge_unclaimed");
+        self.releaseEdge(edge);
+    }
+
+    /// Bind the innermost open request's edge to the function id that request
+    /// reserved, which is the identity the specialization is lowered under
+    /// however much later that happens (reunify.md 11.3). A reservation made
+    /// outside any edge-naming request scope claims nothing.
+    pub fn claimRequestEdge(self: *Rehearsal, fn_id: u32) void {
+        if (self.disabled) return;
+        if (self.requests.items.len == 0) {
+            census.bump("rehearsal_request_edge_claim_without_scope");
+            return;
+        }
+        const slot = &self.requests.items[self.requests.items.len - 1];
+        const edge = slot.* orelse {
+            census.bump("rehearsal_request_edge_claim_without_edge");
+            return;
+        };
+        const existing = self.edges_by_fn.fetchPut(self.allocator, fn_id, edge) catch {
+            self.releaseEdge(edge);
+            slot.* = null;
+            self.fail();
+            return;
+        };
+        slot.* = null;
+        census.bump("rehearsal_request_edge_claimed");
+        // One reserved id is requested once: a second claim would mean two
+        // distinct use sites reserved the same specialization body, which is
+        // recorded rather than silently overwritten.
+        if (existing) |previous| {
+            census.bump("rehearsal_request_edge_claim_repeated");
+            self.releaseEdge(previous.value);
+        }
     }
 
     /// Copy the innermost ready frame's whole environment chain when it binds ids
@@ -713,26 +830,6 @@ pub const Rehearsal = struct {
     fn releaseEdge(self: *Rehearsal, edge: RequestEdge) void {
         var caller = edge.caller orelse return;
         caller.chain.release(self.allocator);
-    }
-
-    fn releasePendingEdge(self: *Rehearsal) void {
-        const edge = self.pending_edge orelse return;
-        self.releaseEdge(edge);
-        self.pending_edge = null;
-    }
-
-    /// Attach the pending edge to a reserved function id, so a specialization
-    /// lowered later from the deferred queue resolves the edge that requested it.
-    pub fn rememberReservedEdge(self: *Rehearsal, fn_id: u32) void {
-        if (self.disabled) return;
-        const edge = self.pending_edge orelse return;
-        self.pending_edge = null;
-        const existing = self.edges_by_fn.fetchPut(self.allocator, fn_id, edge) catch {
-            self.releaseEdge(edge);
-            self.disabled = true;
-            return;
-        };
-        if (existing) |previous| self.releaseEdge(previous.value);
     }
 
     /// Start one specialization: resolve its binder environment from checked
@@ -968,33 +1065,70 @@ pub const Rehearsal = struct {
         return self.store.internTagUnion(self.program_names, &.{}) catch null;
     }
 
+    /// Why one specialization's requesting edge supplied no binding. Carried to
+    /// the edgeless path so a specialization that ends up with no environment
+    /// says which half of the seam it is missing.
+    const EdgeSkip = enum {
+        /// The request that reserved this specialization named no edge at all
+        /// and no active specialization was lowering, which is a root request.
+        root_request,
+        /// The request named no edge while another specialization was lowering,
+        /// which is a compiler-generated edge (reunify.md 9.6).
+        generated_request,
+        /// The edge's use expression names no recorded instantiation site.
+        no_site,
+        /// The edge's use expression names several sites that disagree.
+        site_ambiguous,
+        /// The site's callee is defined by a different module than this
+        /// specialization's template body reads from.
+        defining_module_differs,
+        /// Everything else the edge could not supply: an absent module, an
+        /// unresolved scheme, a site arity disagreement, or an actual outside
+        /// the translatable subset. Each already has its own skip counter.
+        edge_unusable,
+    };
+
     /// Resolve one specialization's environment: from the requesting edge's site
     /// when one named it (reunify.md sections 7.2, 9.1), and otherwise from what
     /// the specialization's own template says. Every way the edge fails to
     /// resolve is a named skip class, never an assumption.
     fn resolveEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
-        if (self.resolveEnvironmentFromEdge(start, frame)) return;
-        self.resolveGroundTemplateEnvironment(start, frame);
+        const skip = self.resolveEnvironmentFromEdge(start, frame) orelse return;
+        self.resolveGroundTemplateEnvironment(start, frame, skip);
     }
 
     /// Resolve one specialization's dense binding from the requesting edge's
-    /// site, reporting whether the binding was resolved. Every way the edge fails
-    /// to resolve is a named skip class, never an assumption.
-    fn resolveEnvironmentFromEdge(self: *Rehearsal, start: SpecializationStart, frame: *Frame) bool {
+    /// site, reporting null when the binding was resolved and otherwise why the
+    /// edge supplied none. Every way the edge fails to resolve is a named skip
+    /// class, never an assumption.
+    fn resolveEnvironmentFromEdge(self: *Rehearsal, start: SpecializationStart, frame: *Frame) ?EdgeSkip {
         const edge = self.takeEdge(start.reserved_fn_id) orelse {
             if (self.frames.items.len == 0) {
                 census.bump("rehearsal_skip_root_edge");
-            } else {
-                census.bump("rehearsal_skip_generated_edge");
+                return .root_request;
             }
-            return false;
+            census.bump("rehearsal_skip_generated_edge");
+            return .generated_request;
         };
         defer self.releaseEdge(edge);
         const caller = self.lookup.cursor(edge.module_bytes) orelse {
             census.bump("rehearsal_skip_caller_module_absent");
-            return false;
+            return .edge_unusable;
         };
-        const site = self.siteFor(caller, edge.use_expr) orelse return false;
+        // The edge this specialization was requested at is the one whose callee
+        // scheme is owned by the definition this template specializes: the use
+        // expression alone names an edge per callee it instantiates, and only
+        // the owner node picks this one out (reunify.md section 7.2's edge
+        // identity).
+        const owner_node = templateSchemeOwnerNode(start) orelse {
+            census.bump("rehearsal_skip_template_owner_unresolved");
+            return .edge_unusable;
+        };
+        const site = self.siteFor(caller, edge.use_expr, owner_node) catch |err| return switch (err) {
+            error.NoSite => .no_site,
+            error.SiteAmbiguous => .site_ambiguous,
+            error.Unavailable => .edge_unusable,
+        };
         const caller_env: ?*const direct_translate.BindingEnvironment = if (edge.caller) |*captured|
             captured.environment()
         else
@@ -1005,48 +1139,49 @@ pub const Rehearsal = struct {
             checked.checked_residual_disposition_module_body_owner;
         const scheme_id = site.schemeId() orelse {
             census.bump("rehearsal_skip_scheme_unresolved");
-            return false;
+            return .edge_unusable;
         };
         const defining_bytes = site.importedDefiningModule() orelse edge.module_bytes;
-        // The edge's callee is defined by the module whose frozen store this
-        // specialization's template body reads from, so an edge naming a
-        // different defining module did not name THIS specialization: it is a
-        // request the seam recorded that reached a different template. Binding
-        // this specialization from it would substitute another scheme's actuals,
-        // so it is refused by module identity before it can bind anything and
-        // the specialization is resolved from its own template instead.
+        // The binders the specialized body's positions name are ids in the store
+        // its template reads from, so a site whose scheme is owned by a
+        // different module names none of them: its scheme id belongs to the
+        // other store entirely. The site's ACTUALS are still this request's,
+        // recorded in the requesting module and translated there, so the
+        // specialization binds from its own template's scheme instead — under an
+        // exact witness, never by assuming the two binder orders line up.
         if (!std.mem.eql(u8, &start.cursor.module_bytes, &defining_bytes)) {
             census.bump("rehearsal_skip_edge_defining_module_differs");
-            return false;
+            if (self.resolveEnvironmentFromForeignSchemeEdge(start, frame, caller, site, edge)) return null;
+            return .defining_module_differs;
         }
         census.bump("rehearsal_edge_defining_module_matches_template");
         const defining = self.definingCursor(start, defining_bytes) orelse {
             census.bump("rehearsal_skip_defining_module_absent");
-            return false;
+            return .edge_unusable;
         };
         const scheme = defining.view.schemeById(scheme_id) orelse {
             census.bump("rehearsal_skip_scheme_unresolved");
-            return false;
+            return .edge_unusable;
         };
         const binders = scheme.generalizedVars(defining.view);
         const actuals = site.actuals(caller.view);
         if (actuals.len != binders.len) {
             census.bump("rehearsal_skip_arity_mismatch");
-            return false;
+            return .edge_unusable;
         }
 
         const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
             self.fail();
-            return false;
+            return .edge_unusable;
         };
         defer self.allocator.free(bound);
         var filled: usize = 0;
         for (actuals) |actual| {
             if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) {
                 census.bump("rehearsal_skip_unreached_actual");
-                return false;
+                return .edge_unusable;
             }
-            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return false;
+            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return .edge_unusable;
             if (HeadShape.of(&self.store, translated).isEmptyTagUnionHead()) {
                 if (caller_env == null) {
                     census.bump("rehearsal_actual_residual_without_caller_env");
@@ -1067,7 +1202,7 @@ pub const Rehearsal = struct {
 
         const captured = self.bindCaptured(defining, scheme, caller_env) orelse {
             self.fail();
-            return false;
+            return .edge_unusable;
         };
         defer if (captured.values.len != 0) self.allocator.free(captured.values);
         const scheme_ident = direct_translate.SchemeIdent{
@@ -1081,7 +1216,7 @@ pub const Rehearsal = struct {
             .captured = captured.values,
         }) orelse {
             self.fail();
-            return false;
+            return .edge_unusable;
         };
         if (captured.parent_levels == 0) {
             census.bump("rehearsal_env_parent_absent");
@@ -1106,7 +1241,7 @@ pub const Rehearsal = struct {
         // binding, and the request context's own emission of the same edge.
         frame.interface_root = self.emitQuietly(defining, frame.environment(), scheme.owner_node, scheme.root);
         frame.request_root = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
-        return true;
+        return null;
     }
 
     /// Resolve a specialization the rehearsal saw no requesting edge for. A root
@@ -1121,7 +1256,12 @@ pub const Rehearsal = struct {
     /// the module's schemes may share; a scheme that does carry generalized
     /// structure stays skipped, because only the edge can say what its binders
     /// took.
-    fn resolveGroundTemplateEnvironment(self: *Rehearsal, start: SpecializationStart, frame: *Frame) void {
+    fn resolveGroundTemplateEnvironment(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        frame: *Frame,
+        skip: EdgeSkip,
+    ) void {
         const scheme_id = start.template_scheme orelse {
             census.bump("rehearsal_edgeless_template_scheme_absent");
             return;
@@ -1133,6 +1273,8 @@ pub const Rehearsal = struct {
         };
         if (scheme.gv_len != 0) {
             census.bump("rehearsal_edgeless_scheme_has_binders");
+            noteEdgelessWithBinders(start, scheme, skip);
+            self.noteUnresolvedDetail(start, scheme, skip);
             return;
         }
         if (scheme.captured_len != 0) {
@@ -1162,6 +1304,204 @@ pub const Rehearsal = struct {
         census.bump("rehearsal_env_resolved_edgeless_ground");
         noteEnvironmentScheme(scheme);
         frame.interface_root = self.emitQuietly(start.cursor, frame.environment(), scheme.owner_node, scheme.root);
+    }
+
+    /// Bind a specialization whose requesting site names its callee scheme
+    /// through a different module than the one this template's body reads from,
+    /// reporting whether the binding was resolved.
+    ///
+    /// The two modules are two checked outputs of one definition: the site's
+    /// `scheme_owner_node` is the defining CIR node the scheme is owned by, and
+    /// the template's own scheme names that same owner node. That agreement is
+    /// what makes the site's positional actuals a vector over THIS template
+    /// scheme's binders — but agreement of owner identity alone does not prove
+    /// the two checked outputs ordered their binders identically, so the binding is
+    /// only accepted once it produces an exact structural witness: the callee
+    /// scheme root emitted under it must equal the site's own instantiated root
+    /// emitted in the requesting module (reunify.md section 7.5's substitution
+    /// law). A binding without that witness is released and the specialization
+    /// stays unresolved.
+    fn resolveEnvironmentFromForeignSchemeEdge(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        frame: *Frame,
+        caller: direct_translate.ModuleCursor,
+        site: checked.CheckedInstantiationSite,
+        edge: RequestEdge,
+    ) bool {
+        const scheme_id = start.template_scheme orelse return false;
+        const scheme = start.cursor.view.schemeById(scheme_id) orelse return false;
+        if (scheme.owner_node != site.scheme_owner_node) {
+            census.bump("rehearsal_foreign_scheme_owner_node_differs");
+            return false;
+        }
+        census.bump("rehearsal_foreign_scheme_owner_node_agrees");
+        const binders = scheme.generalizedVars(start.cursor.view);
+        const actuals = site.actuals(caller.view);
+        if (actuals.len != binders.len) {
+            census.bump("rehearsal_foreign_scheme_arity_differs");
+            return false;
+        }
+
+        const caller_env: ?*const direct_translate.BindingEnvironment = if (edge.caller) |*captured|
+            captured.environment()
+        else
+            null;
+        const caller_owner_node = if (edge.caller) |captured|
+            captured.owner_node
+        else
+            checked.checked_residual_disposition_module_body_owner;
+
+        const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
+            self.fail();
+            return false;
+        };
+        defer self.allocator.free(bound);
+        for (actuals, 0..) |actual, index| {
+            if (@intFromEnum(actual) == checked.checked_instantiation_actual_unreached) {
+                census.bump("rehearsal_skip_unreached_actual");
+                return false;
+            }
+            const translated = self.translateActual(caller, caller_env, caller_owner_node, actual) orelse return false;
+            if (HeadShape.of(&self.store, translated).isEmptyTagUnionHead()) {
+                if (caller_env == null) {
+                    census.bump("rehearsal_actual_residual_without_caller_env");
+                } else {
+                    census.bump("rehearsal_actual_residual_with_caller_env");
+                }
+                switch (caller.view.payload(actual)) {
+                    .flex, .rigid => {
+                        census.bump("rehearsal_actual_residual_bare_variable");
+                        classifyResidualActual(caller, caller_owner_node, actual, caller_env);
+                    },
+                    else => census.bump("rehearsal_actual_residual_structure"),
+                }
+            }
+            bound[index] = direct_translate.BoundType.of(translated);
+        }
+
+        const scheme_ident = direct_translate.SchemeIdent{
+            .module_bytes = start.cursor.module_bytes,
+            .scheme = @intFromEnum(scheme_id),
+        };
+        var chain = self.copyEnvironmentChain(null, 0, .{
+            .scheme = scheme_ident,
+            .binders = binders,
+            .bound = bound,
+            .captured = &.{},
+        }) orelse {
+            self.fail();
+            return false;
+        };
+        const declared = self.emitQuietly(start.cursor, chain.innermost(), scheme.owner_node, scheme.root);
+        const requested = self.emitQuietly(caller, caller_env, caller_owner_node, site.instantiated_root);
+        if (!self.witnessesAgree(declared, requested)) {
+            chain.release(self.allocator);
+            return false;
+        }
+
+        frame.chain = chain;
+        frame.env_module_bytes = start.cursor.module_bytes;
+        frame.scheme = scheme_ident;
+        frame.owner_node = scheme.owner_node;
+        frame.binders = binders;
+        frame.env_ready = true;
+        frame.interface_root = declared;
+        frame.request_root = requested;
+        census.bump("rehearsal_env_resolved");
+        census.bump("rehearsal_env_resolved_foreign_scheme");
+        noteEnvironmentScheme(scheme);
+        census.bump("rehearsal_env_parent_absent");
+        return true;
+    }
+
+    /// Whether a candidate binding produced the exact witness that accepts it:
+    /// the callee's scheme root emitted under the binding and the requesting
+    /// site's own instantiated root are the same type. Two rooted recursive
+    /// graphs entered from different paths store different digests for one type
+    /// (reunify.md section 8.3), so the unfolding decides those.
+    fn witnessesAgree(self: *Rehearsal, declared: ?Type.TypeId, requested: ?Type.TypeId) bool {
+        const left = declared orelse {
+            census.bump("rehearsal_foreign_witness_absent");
+            return false;
+        };
+        const right = requested orelse {
+            census.bump("rehearsal_foreign_witness_absent");
+            return false;
+        };
+        const left_digest = self.store.typeDigest(self.program_names, left);
+        const right_digest = self.store.typeDigest(self.program_names, right);
+        if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
+            census.bump("rehearsal_foreign_witness_agrees");
+            return true;
+        }
+        const left_unfolded = self.store.unfoldedDigest(self.program_names, left);
+        const right_unfolded = self.store.unfoldedDigest(self.program_names, right);
+        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+            census.bump("rehearsal_foreign_witness_agrees_under_rerooting");
+            return true;
+        }
+        census.bump("rehearsal_foreign_witness_differs");
+        return false;
+    }
+
+    fn noteUnresolvedDetail(
+        self: *Rehearsal,
+        start: SpecializationStart,
+        scheme: checked.CheckedTypeScheme,
+        skip: EdgeSkip,
+    ) void {
+        if (comptime !census.enabled) return;
+        if (self.unresolved_details.items.len >= max_unresolved_details) return;
+        var name_buf: [48]u8 = [_]u8{' '} ** 48;
+        const copy = @min(start.template_name.len, name_buf.len);
+        @memcpy(name_buf[0..copy], start.template_name[0..copy]);
+        const entry: UnresolvedDetail = .{
+            .name = name_buf,
+            .template_module = start.cursor.module_bytes[0..6].*,
+            .binders = scheme.gv_len,
+            .skip = skip,
+        };
+        for (self.unresolved_details.items) |existing| {
+            if (std.meta.eql(existing, entry)) return;
+        }
+        self.unresolved_details.append(self.allocator, entry) catch return;
+    }
+
+    /// Name the population that genuinely still needs a binding: a
+    /// specialization whose requesting edge supplied none and whose own template
+    /// scheme carries binders, so the empty binding would be wrong. It is split
+    /// three ways — why the edge supplied nothing, which owner kind the scheme
+    /// has, and which target kind the template is — because those three together
+    /// say whether the missing binding is a root's requested type (reunify.md
+    /// 7.2), a declared generated edge (reunify.md 9.6), or an unindexed
+    /// dispatch site.
+    fn noteEdgelessWithBinders(
+        start: SpecializationStart,
+        scheme: checked.CheckedTypeScheme,
+        skip: EdgeSkip,
+    ) void {
+        switch (skip) {
+            .root_request => census.bump("rehearsal_edgeless_binders_root_request"),
+            .generated_request => census.bump("rehearsal_edgeless_binders_generated_request"),
+            .no_site => census.bump("rehearsal_edgeless_binders_no_site"),
+            .site_ambiguous => census.bump("rehearsal_edgeless_binders_site_ambiguous"),
+            .defining_module_differs => census.bump("rehearsal_edgeless_binders_module_differs"),
+            .edge_unusable => census.bump("rehearsal_edgeless_binders_edge_unusable"),
+        }
+        switch (scheme.owner_kind) {
+            .top_level_def => census.bump("rehearsal_edgeless_binders_owner_top_level"),
+            .nested_def => census.bump("rehearsal_edgeless_binders_owner_nested"),
+            .required_type => census.bump("rehearsal_edgeless_binders_owner_required"),
+            .synthetic => census.bump("rehearsal_edgeless_binders_owner_synthetic"),
+        }
+        switch (start.target_kind) {
+            .roc => census.bump("rehearsal_edgeless_binders_target_roc"),
+            .hosted => census.bump("rehearsal_edgeless_binders_target_hosted"),
+            .intrinsic => census.bump("rehearsal_edgeless_binders_target_intrinsic"),
+            .entry => census.bump("rehearsal_edgeless_binders_target_entry"),
+            .comptime_only => census.bump("rehearsal_edgeless_binders_target_comptime"),
+        }
     }
 
     /// The cursor the callee scheme's own module reads by. The lowering input
@@ -1387,20 +1727,36 @@ pub const Rehearsal = struct {
         return frame;
     }
 
+    /// Why one use expression named no usable instantiation site.
+    const SiteError = error{
+        /// No recorded site names this use expression.
+        NoSite,
+        /// Several recorded sites name it and they disagree.
+        SiteAmbiguous,
+        /// The module's site index could not be built.
+        Unavailable,
+    };
+
     fn siteFor(
         self: *Rehearsal,
         caller: direct_translate.ModuleCursor,
         use_expr: checked.CheckedExprId,
-    ) ?checked.CheckedInstantiationSite {
-        const index = self.siteIndexFor(caller) orelse return null;
-        const key = @intFromEnum(use_expr);
+        scheme_owner_node: u32,
+    ) SiteError!checked.CheckedInstantiationSite {
+        const index = self.siteIndexFor(caller) orelse return error.Unavailable;
+        const key = siteKey(use_expr, scheme_owner_node);
         if (index.ambiguous.contains(key)) {
             census.bump("rehearsal_skip_site_ambiguous");
-            return null;
+            return error.SiteAmbiguous;
         }
-        const site_index = index.by_use_expr.get(key) orelse {
+        const site_index = index.by_edge.get(key) orelse {
             census.bump("rehearsal_skip_no_site");
-            return null;
+            if (index.used_exprs.contains(@intFromEnum(use_expr))) {
+                census.bump("rehearsal_no_site_use_owned_elsewhere");
+            } else {
+                census.bump("rehearsal_no_site_use_unrecorded");
+            }
+            return error.NoSite;
         };
         return caller.view.instantiationSites()[site_index];
     }
@@ -1413,24 +1769,29 @@ pub const Rehearsal = struct {
         if (gop.found_existing) return gop.value_ptr;
         gop.value_ptr.* = .{
             .view = caller.view,
-            .by_use_expr = .empty,
+            .by_edge = .empty,
             .ambiguous = .empty,
+            .used_exprs = .empty,
         };
         const index = gop.value_ptr;
         const sites = caller.view.instantiationSites();
         for (sites, 0..) |site, position| {
             const use_expr = site.useExpr() orelse continue;
-            const key = @intFromEnum(use_expr);
-            const entry = index.by_use_expr.getOrPut(self.allocator, key) catch {
+            const key = siteKey(use_expr, site.scheme_owner_node);
+            index.used_exprs.put(self.allocator, @intFromEnum(use_expr), {}) catch {
+                self.fail();
+                return null;
+            };
+            const entry = index.by_edge.getOrPut(self.allocator, key) catch {
                 self.fail();
                 return null;
             };
             if (entry.found_existing) {
-                // Several edges legitimately name one use expression: a re-checked
+                // Several edges legitimately name one edge identity: a re-checked
                 // source edge, and a value use also reached through a shared-use
                 // record. They are the same instantiation when they agree on
                 // scheme and positional actuals, and only a genuine disagreement
-                // makes the expression unusable as an edge name.
+                // makes the identity unusable as an edge name.
                 if (!sitesAgree(caller.view, sites[entry.value_ptr.*], site)) {
                     index.ambiguous.put(self.allocator, key, {}) catch {
                         self.fail();
@@ -1444,14 +1805,11 @@ pub const Rehearsal = struct {
         return index;
     }
 
-    fn takeEdge(self: *Rehearsal, reserved_fn_id: ?u32) ?RequestEdge {
-        if (reserved_fn_id) |fn_id| {
-            const found = self.edges_by_fn.fetchRemove(fn_id) orelse return null;
-            return found.value;
-        }
-        const edge = self.pending_edge;
-        self.pending_edge = null;
-        return edge;
+    /// The edge the request that reserved `fn_id` named, or null when the
+    /// request named none.
+    fn takeEdge(self: *Rehearsal, reserved_fn_id: u32) ?RequestEdge {
+        const found = self.edges_by_fn.fetchRemove(reserved_fn_id) orelse return null;
+        return found.value;
     }
 
     /// Emit one checked position under this specialization's environment and
@@ -1923,8 +2281,32 @@ pub const Rehearsal = struct {
         return @enumFromInt(gop.value_ptr.*);
     }
 
+    fn dumpUnresolved(self: *Rehearsal) void {
+        if (comptime !census.enabled) return;
+        if (self.unresolved_details.items.len == 0) return;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(self.allocator);
+        for (self.unresolved_details.items) |detail| {
+            const line = std.fmt.allocPrint(
+                self.allocator,
+                "rehearsal_unresolved_detail name={s} module={s} binders={d} skip={s}\n",
+                .{
+                    &detail.name,
+                    &std.fmt.bytesToHex(detail.template_module, .lower),
+                    detail.binders,
+                    @tagName(detail.skip),
+                },
+            ) catch return;
+            defer self.allocator.free(line);
+            text.appendSlice(self.allocator, line) catch return;
+        }
+        census.appendToFile(raw_path, text.items);
+    }
+
     fn dumpDetails(self: *Rehearsal) void {
         if (comptime !census.enabled) return;
+        self.dumpUnresolved();
         if (self.details.items.len == 0) return;
         const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
         var text: std.ArrayList(u8) = .empty;
@@ -2027,6 +2409,21 @@ test "a seal trace joins one node's checked provenance to its sealed id" {
     const recorded = trace.provenance.get(4) orelse return error.TestUnexpectedResult;
     try testing.expectEqual(@as(u32, 17), recorded.type_id);
     try testing.expectEqual(@as(Type.TypeId, @enumFromInt(11)), trace.sealed.get(4).?);
+}
+
+test "an edge identity key separates one use expression's callees" {
+    const use: checked.CheckedExprId = @enumFromInt(7);
+    const other_use: checked.CheckedExprId = @enumFromInt(8);
+
+    // One use expression instantiating two callees is two edge identities, and
+    // the same callee at two uses is two more: no pair collides.
+    try testing.expect(siteKey(use, 3) != siteKey(use, 4));
+    try testing.expect(siteKey(use, 3) != siteKey(other_use, 3));
+    try testing.expectEqual(siteKey(use, 3), siteKey(use, 3));
+
+    // The owner node occupies the low half, so an owner node large enough to
+    // look like another expression's key still cannot alias one.
+    try testing.expect(siteKey(use, std.math.maxInt(u32)) != siteKey(other_use, 0));
 }
 
 test "occurrence recording is bounded and deduplicated" {
