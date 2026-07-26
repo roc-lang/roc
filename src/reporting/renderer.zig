@@ -37,6 +37,17 @@ fn sanitisePathForSnapshots(path: []const u8) []const u8 {
     return path;
 }
 
+/// Byte offset where `path`'s filename starts — just past the last separator,
+/// or 0 when there is none. Both separators are handled so the split is the
+/// same on every platform.
+fn filenameStart(path: []const u8) usize {
+    var start: usize = 0;
+    for (path, 0..) |c, i| {
+        if (c == '/' or c == '\\') start = i + 1;
+    }
+    return start;
+}
+
 /// Supported rendering targets.
 pub const RenderTarget = enum {
     color_terminal,
@@ -366,6 +377,33 @@ fn closeRow(writer: *std.Io.Writer, palette: ColorPalette, col: usize, rw: usize
     try writer.writeByte('\n');
 }
 
+/// Write a `path/to/Scalar.roc:141:1` location, with the filename itself in the
+/// default foreground (the same color as the source snippet) so it stands out
+/// from the dim directories, `:line:col`, and box border around it. Leaves the
+/// writer in the secondary color, ready for whatever border follows.
+fn writeLocation(
+    writer: *std.Io.Writer,
+    palette: ColorPalette,
+    path: []const u8,
+    line: u32,
+    column: u32,
+) error{WriteFailed}!void {
+    const start = filenameStart(path);
+    if (start > 0) {
+        try writer.writeAll(palette.secondary);
+        try writer.writeAll(path[0..start]);
+    }
+    try writer.writeAll(palette.reset);
+    try writer.writeAll(path[start..]);
+    try writer.writeAll(palette.secondary);
+    try writer.print(":{d}:{d}", .{ line, column });
+}
+
+/// Display width of what `writeLocation` writes (the color codes take no space).
+fn locationWidth(path: []const u8, line: u32, column: u32) usize {
+    return source_region.displayWidth(path) + 1 + decimalWidth(line) + 1 + decimalWidth(column);
+}
+
 /// The byte offset in `line` at display column `target_col`, clamped to a UTF-8
 /// boundary and never overshooting `target_col`. Tabs count as one column.
 fn byteAtDisplayCol(line: []const u8, target_col: usize) usize {
@@ -693,9 +731,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
     // location on its own line beneath.
     {
         const fname = if (region.filename) |f| sanitisePathForSnapshots(f) else "<source>";
-        const loc = try std.fmt.allocPrint(gpa, "{s}:{}:{}", .{ fname, region.start_line, region.start_column });
-        defer gpa.free(loc);
-        const loc_w = source_region.displayWidth(loc);
+        const loc_w = locationWidth(fname, region.start_line, region.start_column);
 
         try writer.writeByte(' ');
         try writer.writeAll(sec);
@@ -704,7 +740,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
             // Fits: └ + dashes + " loc " + ┘, with the location right-aligned.
             try writer.splatBytesAll("─", (rw -| 5) -| loc_w);
             try writer.writeAll(" ");
-            try writer.writeAll(loc);
+            try writeLocation(writer, palette, fname, region.start_line, region.start_column);
             try writer.writeAll(" ┘");
             try writer.writeAll(rst);
             try writer.writeByte('\n');
@@ -715,8 +751,7 @@ pub fn renderReportBoxed(report: *const Report, writer: *std.Io.Writer, palette:
             try writer.writeAll(rst);
             try writer.writeByte('\n');
             try writer.writeAll("    ");
-            try writer.writeAll(sec);
-            try writer.writeAll(loc);
+            try writeLocation(writer, palette, fname, region.start_line, region.start_column);
             try writer.writeAll(rst);
             try writer.writeByte('\n');
         }
@@ -762,7 +797,7 @@ fn renderBelowContent(
                     try writer.writeByte('\n');
                     started = true;
                 }
-                try renderEmbeddedBox(writer, palette, rw, r.region_annotation, r.filename, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text, gpa);
+                try renderEmbeddedBox(writer, palette, rw, r.region_annotation, r.filename, r.start_line, r.start_column, r.end_line, r.end_column, r.line_text);
             },
             .source_code_with_underlines => |d| {
                 try flushBelowText(writer, &buf, width, &started);
@@ -777,7 +812,7 @@ fn renderBelowContent(
                     sc = d.underline_regions[0].start_column;
                     ec = d.underline_regions[0].end_column;
                 }
-                try renderEmbeddedBox(writer, palette, rw, dr.region_annotation, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text, gpa);
+                try renderEmbeddedBox(writer, palette, rw, dr.region_annotation, dr.filename, dr.start_line, sc, dr.end_line, ec, dr.line_text);
             },
             else => try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx),
         }
@@ -823,8 +858,7 @@ fn renderEmbeddedBox(
     end_line: u32,
     end_column: u32,
     line_text: []const u8,
-    gpa: Allocator,
-) (Allocator.Error || error{WriteFailed})!void {
+) error{WriteFailed}!void {
     const sec = palette.secondary;
     const rst = palette.reset;
     const indent: usize = 4;
@@ -913,16 +947,14 @@ fn renderEmbeddedBox(
 
     // Bottom edge with the location tucked into the bottom-right corner.
     const fname = if (filename) |f| sanitisePathForSnapshots(f) else "<source>";
-    const loc = try std.fmt.allocPrint(gpa, "{s}:{}:{}", .{ fname, start_line, start_column });
-    defer gpa.free(loc);
-    const loc_w = source_region.displayWidth(loc);
+    const loc_w = locationWidth(fname, start_line, start_column);
     try writer.splatByteAll(' ', wall -| 1);
     try writer.writeAll(sec);
     try writer.writeAll("└");
     if (loc_w + 4 <= rw -| wall) {
         try writer.splatBytesAll("─", ((rw -| wall) -| loc_w) -| 3);
         try writer.writeByte(' ');
-        try writer.writeAll(loc);
+        try writeLocation(writer, palette, fname, start_line, start_column);
         try writer.writeAll(" ┘");
     } else {
         try writer.splatBytesAll("─", (rw -| wall) -| 1);
@@ -1726,7 +1758,8 @@ fn renderSourceLocationHeader(
     try writer.writeAll(" ┌");
     try writer.splatBytesAll("─", fill);
     try writer.writeAll(" ");
-    try writer.print("{s}:{}:{}\n", .{ path, start_line, start_column });
+    try writeLocation(writer, palette, path, start_line, start_column);
+    try writer.writeByte('\n');
     try writer.writeAll(palette.reset);
 
     // Separator line beneath the header, with the `│` under the `┌`.
