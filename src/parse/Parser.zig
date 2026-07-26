@@ -500,6 +500,16 @@ fn recordStatementDecl(
     }
 
     const decl_idx = try self.decl_index.addDecl(record);
+    switch (statement) {
+        .import => |import_stmt| {
+            if (!import_stmt.nested_import) {
+                if (record.name_ident) |alias_ident| {
+                    try self.decl_index.addImportAliasDecl(scope_idx, alias_ident, decl_idx);
+                }
+            }
+        },
+        else => {},
+    }
     if (record.kind == .value_anno or record.kind == .var_anno) {
         if (self.currentPendingAnno()) |pending| pending.* = decl_idx;
         return;
