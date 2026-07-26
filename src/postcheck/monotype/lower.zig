@@ -14373,7 +14373,7 @@ const BodyContext = struct {
             },
             .str_from_quote => |quote| {
                 if (try self.restoredNumeralConst(expr_id, ty)) |restored| return restored;
-                return try self.lowerNumeralCall(expr.ty, quote.plan, ty);
+                return try self.lowerQuoteExpr(expr.ty, quote, ty);
             },
             .str_segment => |str| .{ .str_lit = try self.lowerStringLiteral(str) },
             .bytes_literal => |str| .{ .bytes_lit = try self.lowerStringLiteral(str) },
@@ -27306,6 +27306,26 @@ const BodyContext = struct {
             break :blk BodyExprData{ .crash = msg };
         };
         return try self.addExpr(.{ .ty = target_ty, .data = data });
+    }
+
+    /// Specialize a checked quote conversion without guessing its target at
+    /// the checked boundary. Primitive Str receives the literal directly;
+    /// every custom target follows the explicit from_quote dispatch plan.
+    fn lowerQuoteExpr(
+        self: *BodyContext,
+        checked_ret_ty: checked.CheckedTypeId,
+        quote: checked.CheckedQuoteData,
+        target_ty: Type.TypeId,
+    ) Allocator.Error!DraftExprId {
+        switch (self.builder.shapeContent(target_ty)) {
+            .primitive => |primitive| {
+                if (primitive != .str) {
+                    Common.invariant("checked quote conversion specialized to a non-Str primitive");
+                }
+                return try self.lowerQuoteValue(quote.literal, target_ty);
+            },
+            else => return try self.lowerNumeralCall(checked_ret_ty, quote.plan, target_ty),
+        }
     }
 
     /// A numeric literal's scalar constant at a builtin numeric primitive —

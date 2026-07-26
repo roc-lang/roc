@@ -7711,6 +7711,13 @@ pub const CheckedNumeralData = struct {
     plan: ?StaticDispatchPlanId,
 };
 
+/// A checked literal-only string conversion: exact post-escape bytes plus the
+/// from_quote plan retained for custom Monotype specializations.
+pub const CheckedQuoteData = struct {
+    plan: ?StaticDispatchPlanId,
+    literal: CheckedStringLiteralId,
+};
+
 /// Checker-recorded authority for a field access to cross a named backing.
 pub const CheckedFieldBackingAccess = enum(u8) {
     inspectable,
@@ -7722,13 +7729,10 @@ pub const CheckedExprData = union(enum) {
     pending,
     /// Any numeric literal: exact digit facts plus an optional dispatch plan.
     numeral: CheckedNumeralData,
-    /// A string literal whose target is a non-builtin nominal type, converted
-    /// through the type's `from_quote` method. `literal` holds the complete
-    /// post-escape string contents.
-    str_from_quote: struct {
-        plan: ?StaticDispatchPlanId,
-        literal: CheckedStringLiteralId,
-    },
+    /// A string literal whose target is custom or still open. `literal` holds
+    /// the complete post-escape contents; Monotype either materializes Str or
+    /// converts through the specialized target's `from_quote` method.
+    str_from_quote: CheckedQuoteData,
     str_segment: CheckedStringLiteralId,
     str: []const CheckedExprId,
     bytes_literal: CheckedStringLiteralId,
@@ -7890,10 +7894,7 @@ pub const StoredCheckedInterpolation = struct {
 pub const StoredCheckedExprData = union(enum) {
     pending,
     numeral: CheckedNumeralData,
-    str_from_quote: struct {
-        plan: ?StaticDispatchPlanId,
-        literal: CheckedStringLiteralId,
-    },
+    str_from_quote: CheckedQuoteData,
     str_segment: CheckedStringLiteralId,
     str: CheckedBodyRange,
     bytes_literal: CheckedStringLiteralId,
@@ -9862,7 +9863,10 @@ pub const CheckedBodyStore = struct {
                     .plan = plan_id,
                     .literal = quote.literal,
                 } },
-                .str, .str_segment => {},
+                .str, .str_segment => checkedArtifactInvariant(
+                    "from_quote plan {d} points at a direct string checked expression {d}",
+                    .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
+                ),
                 else => checkedArtifactInvariant(
                     "from_quote plan {d} points at non-string checked expression {d}",
                     .{ @intFromEnum(plan_id), @intFromEnum(checked_expr) },
@@ -10788,7 +10792,10 @@ const CheckedBodyPayloadCopier = struct {
     }
 
     fn copyInterpolationExpr(self: *@This(), expr_idx: CIR.Expr.Idx, interpolation: anytype) Allocator.Error!CheckedExprData {
-        if (self.checkedBuiltinForExpr(expr_idx) == .str) {
+        // Only a target already proven to be Str may use the direct encoding.
+        // An open generalized target can later instantiate at a custom
+        // from_interpolation type, so it must retain the dispatch expression.
+        if (self.checkedConcreteBuiltinForExpr(expr_idx) == .str) {
             return .{ .str = try self.copyStrInterpolationSegments(interpolation) };
         }
         return .{ .interpolation = .{
@@ -10834,10 +10841,12 @@ const CheckedBodyPayloadCopier = struct {
     }
 
     fn copyStrExpr(self: *@This(), expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span) Allocator.Error!CheckedExprData {
-        // A literal whose checked type is a non-builtin nominal converts through
-        // from_quote; checking recorded a dispatch plan for it.
+        // Only a target already proven to be a builtin may use the direct
+        // string encoding. An open generalized target can later instantiate
+        // at a custom from_quote type, so it must retain the exact literal and
+        // dispatch plan until Monotype specialization selects the target.
         if (self.module.moduleEnvConst().quoteDispatchPlanForNode(ModuleEnv.nodeIdxFrom(expr_idx)) != null and
-            self.checkedBuiltinForExpr(expr_idx) == null)
+            self.checkedConcreteBuiltinForExpr(expr_idx) == null)
         {
             return .{ .str_from_quote = .{
                 .plan = null,
@@ -10920,11 +10929,11 @@ const CheckedBodyPayloadCopier = struct {
         };
     }
 
-    fn checkedBuiltinForExpr(self: *@This(), expr_idx: CIR.Expr.Idx) ?CheckedBuiltinNominal {
+    fn checkedConcreteBuiltinForExpr(self: *@This(), expr_idx: CIR.Expr.Idx) ?CheckedBuiltinNominal {
         const checked_ty = self.checked_types.rootForSourceVar(self.module, self.module.exprType(expr_idx)) orelse {
-            checkedArtifactInvariant("checked numeric expression type root was not published", .{});
+            checkedArtifactInvariant("checked literal expression type root was not published", .{});
         };
-        return checkedBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty);
+        return checkedConcreteBuiltinForLiteralTarget(self.checked_types.store.view(), checked_ty);
     }
 
     fn checkedPatternTypeRoot(self: *@This(), pattern_idx: CIR.Pattern.Idx) CheckedTypeId {
@@ -11528,23 +11537,18 @@ const CheckedBodyPayloadCopier = struct {
     }
 };
 
-/// Duck-typed predicate handed to the static-dispatch registry: whether a
-/// checked literal expression's target type is a builtin numeric (in which
-/// case monotype lowering produces its bits and no runtime `from_numeral`
-/// dispatch plan is needed).
-pub const NumeralTargetProbe = struct {
+/// Duck-typed predicates handed to the static-dispatch registry for deciding
+/// whether a checked literal target is already a concrete builtin. Open
+/// generalized targets must keep their dispatch plans because their eventual
+/// specializations can select custom literal-conversion types.
+pub const LiteralTargetProbe = struct {
     view: CheckedTypeStoreView,
     bodies: *const CheckedBodyStore,
 
-    pub fn literalTargetIsBuiltin(self: @This(), checked_expr: CheckedExprId) bool {
-        return checkedBuiltinForLiteralTarget(self.view, self.bodies.expr(checked_expr).ty) != null;
-    }
-
-    /// Like `literalTargetIsBuiltin`, but a still-open (defaultable) flex or
-    /// rigid variable answers false: a generalized literal can be
-    /// instantiated at a custom `from_numeral` type, so it MUST keep a
-    /// dispatch plan. If every instantiation lands on a builtin primitive,
-    /// lowering takes the bits path and never consults the plan.
+    /// A still-open (defaultable) flex or rigid variable answers false: a
+    /// generalized literal can be instantiated at a custom conversion type,
+    /// so it MUST keep a dispatch plan. If an instantiation lands on a builtin
+    /// primitive, lowering takes the direct path and never consults the plan.
     pub fn literalTargetIsConcreteBuiltin(self: @This(), checked_expr: CheckedExprId) bool {
         return checkedConcreteBuiltinForLiteralTarget(self.view, self.bodies.expr(checked_expr).ty) != null;
     }
@@ -19660,6 +19664,11 @@ pub const CompileTimeRootTable = struct {
                 .str_from_quote => {},
                 else => continue,
             }
+            // A generalized quote conversion is not a standalone compile-time
+            // root: each Monotype specialization either materializes Str
+            // directly or dispatches to that specialization's from_quote.
+            // Only a concrete custom target is evaluated and stored here.
+            if (checkedBuiltinForLiteralTarget(checked_types.store.view(), checked_bodies.expr(checked_expr).ty) != null) continue;
             const fn_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var));
             const try_ty = switch (checked_types.store.payload(fn_ty)) {
                 .function => |function| function.ret,
@@ -27318,7 +27327,7 @@ pub fn publishFromTypedModule(
         &checked_type_publication,
         checked_bodies,
         &plan_build_data,
-        NumeralTargetProbe{ .view = checked_type_publication.store.view(), .bodies = checked_bodies },
+        LiteralTargetProbe{ .view = checked_type_publication.store.view(), .bodies = checked_bodies },
     );
     errdefer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);
@@ -27990,7 +27999,7 @@ fn expectProvidedExportKind(
         &checked_type_publication,
         checked_bodies,
         &plan_build_data,
-        NumeralTargetProbe{ .view = checked_type_publication.store.view(), .bodies = checked_bodies },
+        LiteralTargetProbe{ .view = checked_type_publication.store.view(), .bodies = checked_bodies },
     );
     defer static_dispatch_plans.deinit(allocator);
     checked_bodies.attachStaticDispatchPlans(&static_dispatch_plans);

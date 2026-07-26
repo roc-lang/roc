@@ -756,4 +756,50 @@ pub const tests = [_]TestCase{
         .source = "(U8.plus_wrap(U8.highest, 1), U8.minus_wrap(0, 1), U8.times_wrap(128, 2))",
         .expected = .{ .inspect_str = "(0, 255, 0)" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/10321
+        .name = "issue 10321: generalized from_quote literal supports custom and builtin specializations",
+        .source_kind = .module,
+        .source =
+        \\Bar := [Text(Str), Empty].{
+        \\    from_quote : Str -> Try(Bar, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Text(str))
+        \\}
+        \\
+        \\bar_identity : Bar -> Bar
+        \\bar_identity = |bar| bar
+        \\
+        \\str_identity : Str -> Str
+        \\str_identity = |str| str
+        \\
+        \\go = |f| f("hello")
+        \\
+        \\main = (go(bar_identity), go(str_identity))
+        ,
+        .expected = .{ .inspect_str = "(Text(\"hello\"), \"hello\")" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/10321
+        .name = "issue 10321: from_quote survives a function stored in a record",
+        .source_kind = .module,
+        .source =
+        \\Bar := [Text(Str), Empty].{
+        \\    from_quote : Str -> Try(Bar, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| Ok(Text(str))
+        \\}
+        \\
+        \\identity : Bar -> Bar
+        \\identity = |bar| bar
+        \\
+        \\hooks = { mk: identity }
+        \\
+        \\use_hooks = |h| {
+        \\    mk = h.mk
+        \\    mk("hello")
+        \\}
+        \\
+        \\main = use_hooks(hooks)
+        ,
+        .expected = .{ .inspect_str = "Text(\"hello\")" },
+    },
 };
