@@ -52,6 +52,7 @@ pub const Capture = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedModule.PatternBinderId,
     capture_id: ?check.CheckedModule.CaptureId = null,
+    checked_capture_id: ?check.CheckedModule.CaptureId = null,
     ty: TypeVarId,
 };
 
@@ -83,6 +84,7 @@ pub const Content = union(enum) {
         backing: ?struct {
             ty: TypeVarId,
             use: MonoType.BackingUse,
+            authority: MonoType.BackingAuthority = .checked_public,
         } = null,
         /// Declared field order for a nominal/opaque record backing; empty
         /// otherwise.
@@ -105,6 +107,24 @@ pub const Content = union(enum) {
     },
     zst,
 };
+
+test "lambda solved named backing preserves generated-private authority" {
+    const content = Content{ .named = .{
+        .named_type = undefined,
+        .def = undefined,
+        .kind = .@"opaque",
+        .args = Span.empty(),
+        .backing = .{
+            .ty = @enumFromInt(1),
+            .use = .runtime_layout_only,
+            .authority = .generated_private,
+        },
+    } };
+    try std.testing.expectEqual(
+        MonoType.BackingAuthority.generated_private,
+        content.named.backing.?.authority,
+    );
+}
 
 /// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {

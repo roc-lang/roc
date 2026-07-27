@@ -102,6 +102,10 @@ pub const Stmt = Mono.Stmt;
 pub const Fn = struct {
     symbol: Common.Symbol,
     source: ?Mono.FnTemplate = null,
+    /// Exact producer-authored Monotype signature graph. This is present only
+    /// while the lifted function still has that signature; transformations
+    /// that synthesize a different ABI clear it explicitly.
+    signature: ?Type.TypeId = null,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,
@@ -151,6 +155,8 @@ pub const ProgramView = struct {
     types: Type.Store.View,
     imported_fns: []const ImportedFn,
     fns: []const Fn,
+    const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     exprs: []const Expr,
     pats: []const Pat,
     stmts: []const Stmt,
@@ -161,8 +167,6 @@ pub const ProgramView = struct {
     stmt_ids: []const StmtId,
     field_exprs: []const FieldExpr,
     fn_def_captures: []const FnDefCapture,
-    const_evidence_pool: []const check.ConstStore.ConstEvidence,
-    const_evidence_chain_pool: []const check.ConstStore.ConstRange,
     capture_operands: []const CaptureOperand,
     record_destructs: []const RecordDestruct,
     str_pattern_steps: []const Mono.StrPatternStep,
@@ -378,6 +382,8 @@ pub const Program = struct {
     types: Type.Store,
     imported_fns: ProgramList(ImportedFn, "imported_fns"),
     fns: ProgramList(Fn, "fns"),
+    const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
+    const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
     exprs: ProgramList(Expr, "exprs"),
     pats: ProgramList(Pat, "pats"),
     stmts: ProgramList(Stmt, "stmts"),
@@ -388,8 +394,6 @@ pub const Program = struct {
     stmt_ids: ProgramList(StmtId, "stmt_ids"),
     field_exprs: ProgramList(FieldExpr, "field_exprs"),
     fn_def_captures: ProgramList(FnDefCapture, "fn_def_captures"),
-    const_evidence_pool: ProgramList(check.ConstStore.ConstEvidence, "const_evidence_pool"),
-    const_evidence_chain_pool: ProgramList(check.ConstStore.ConstRange, "const_evidence_chain_pool"),
     /// Backing pool for `Span(CaptureOperand)` capture operand spans on lifted
     /// `fn_ref`/`call_proc` nodes.
     capture_operands: ProgramList(CaptureOperand, "capture_operands"),
@@ -459,6 +463,8 @@ pub const Program = struct {
         name_store: names.NameStore,
         types: Type.Store,
         imported_fns: std.ArrayList(ImportedFn),
+        const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+        const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
         exprs: std.ArrayList(Expr),
         pats: std.ArrayList(Pat),
         stmts: std.ArrayList(Stmt),
@@ -469,6 +475,7 @@ pub const Program = struct {
         stmt_ids: std.ArrayList(StmtId),
         field_exprs: std.ArrayList(FieldExpr),
         fn_def_captures: std.ArrayList(FnDefCapture),
+        capture_operands: std.ArrayList(CaptureOperand),
         record_destructs: std.ArrayList(RecordDestruct),
         str_pattern_steps: std.ArrayList(Mono.StrPatternStep),
         branches: std.ArrayList(Branch),
@@ -485,6 +492,7 @@ pub const Program = struct {
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
     ) Program {
+        const first_synthesized_capture_index: u32 = @intCast(locals.items.len);
         return .{
             .allocator = allocator,
             .names = name_store,
@@ -492,6 +500,8 @@ pub const Program = struct {
             .types = types,
             .imported_fns = ProgramList(ImportedFn, "imported_fns").fromArrayList(imported_fns),
             .fns = .empty,
+            .const_fn_evidence = ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence").fromArrayList(const_fn_evidence),
+            .const_fn_evidence_frames = ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames").fromArrayList(const_fn_evidence_frames),
             .exprs = ProgramList(Expr, "exprs").fromArrayList(exprs),
             .pats = ProgramList(Pat, "pats").fromArrayList(pats),
             .stmts = ProgramList(Stmt, "stmts").fromArrayList(stmts),
@@ -502,16 +512,16 @@ pub const Program = struct {
             .stmt_ids = ProgramList(StmtId, "stmt_ids").fromArrayList(stmt_ids),
             .field_exprs = ProgramList(FieldExpr, "field_exprs").fromArrayList(field_exprs),
             .fn_def_captures = ProgramList(FnDefCapture, "fn_def_captures").fromArrayList(fn_def_captures),
-            .const_evidence_pool = .empty,
-            .const_evidence_chain_pool = .empty,
-            .capture_operands = .empty,
+            .capture_operands = ProgramList(CaptureOperand, "capture_operands").fromArrayList(capture_operands),
             .record_destructs = ProgramList(RecordDestruct, "record_destructs").fromArrayList(record_destructs),
             .str_pattern_steps = ProgramList(Mono.StrPatternStep, "str_pattern_steps").fromArrayList(str_pattern_steps),
             .branches = ProgramList(Branch, "branches").fromArrayList(branches),
             .if_branches = ProgramList(IfBranch, "if_branches").fromArrayList(if_branches),
             .string_literals = ProgramList(Mono.StringLiteral, "string_literals").fromArrayList(string_literals),
             .proc_debug_names = proc_debug_names,
-            .next_lift_capture_id = 0,
+            // Final Monotype locals use generatedLift(LocalId), so ids minted
+            // by lifting and spec_constr begin after the entire input arena.
+            .next_lift_capture_id = first_synthesized_capture_index,
             .roots = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
@@ -555,8 +565,6 @@ pub const Program = struct {
         self.str_pattern_steps.deinit(self.allocator);
         self.record_destructs.deinit(self.allocator);
         self.fn_def_captures.deinit(self.allocator);
-        self.const_evidence_chain_pool.deinit(self.allocator);
-        self.const_evidence_pool.deinit(self.allocator);
         self.capture_operands.deinit(self.allocator);
         self.field_exprs.deinit(self.allocator);
         self.stmt_ids.deinit(self.allocator);
@@ -568,6 +576,8 @@ pub const Program = struct {
         self.pats.deinit(self.allocator);
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
+        self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_frames.deinit(self.allocator);
         self.imported_fns.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -580,6 +590,8 @@ pub const Program = struct {
             .types = self.types.view(),
             .imported_fns = self.imported_fns.unsafeRawItemsForView(),
             .fns = self.fns.unsafeRawItemsForView(),
+            .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
+            .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
             .exprs = self.exprs.unsafeRawItemsForView(),
             .pats = self.pats.unsafeRawItemsForView(),
             .stmts = self.stmts.unsafeRawItemsForView(),
@@ -590,8 +602,6 @@ pub const Program = struct {
             .stmt_ids = self.stmt_ids.unsafeRawItemsForView(),
             .field_exprs = self.field_exprs.unsafeRawItemsForView(),
             .fn_def_captures = self.fn_def_captures.unsafeRawItemsForView(),
-            .const_evidence_pool = self.const_evidence_pool.unsafeRawItemsForView(),
-            .const_evidence_chain_pool = self.const_evidence_chain_pool.unsafeRawItemsForView(),
             .capture_operands = self.capture_operands.unsafeRawItemsForView(),
             .record_destructs = self.record_destructs.unsafeRawItemsForView(),
             .str_pattern_steps = self.str_pattern_steps.unsafeRawItemsForView(),
@@ -932,6 +942,7 @@ pub const Program = struct {
         binder: ?check.CheckedModule.PatternBinderId,
     ) std.mem.Allocator.Error!LocalId {
         const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        const checked_capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null;
         try self.locals.append(self.allocator, .{
             .id = id,
             .symbol = symbol,
@@ -939,7 +950,46 @@ pub const Program = struct {
             .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = if (binder) |b| check.CheckedModule.CaptureId.fromBinder(b) else null,
+            .capture_id = checked_capture_id,
+            .checked_capture_id = checked_capture_id,
+        });
+        try self.local_names.append(self.allocator, "");
+        return id;
+    }
+
+    /// Add a replacement local that retains a source capture's complete
+    /// identity while changing its monomorphic type. One-to-one capture ABI
+    /// rewrites must preserve both the checked binder and the CaptureId; only a
+    /// one-to-many split may mint a new generated identity.
+    pub fn addLocalWithCaptureIdentity(
+        self: *Program,
+        symbol: Common.Symbol,
+        ty: Type.TypeId,
+        binder: ?check.CheckedModule.PatternBinderId,
+        capture_id: check.CheckedModule.CaptureId,
+        checked_capture_id: ?check.CheckedModule.CaptureId,
+    ) std.mem.Allocator.Error!LocalId {
+        if (checked_capture_id) |checked_id| {
+            if (checked_id.isCanonical()) {
+                const source_binder = binder orelse
+                    Common.invariant("source capture identity had no checked binder");
+                if (checked_id != check.CheckedModule.CaptureId.fromBinder(source_binder)) {
+                    Common.invariant("checked capture identity disagreed with its binder");
+                }
+            }
+        }
+        if (binder == null and capture_id.isCanonical()) {
+            Common.invariant("capture replacement CaptureId had no checked binder");
+        }
+
+        const id: LocalId = @enumFromInt(@as(u32, @intCast(self.locals.len())));
+        try self.locals.append(self.allocator, .{
+            .id = id,
+            .symbol = symbol,
+            .ty = ty,
+            .binder = binder,
+            .capture_id = capture_id,
+            .checked_capture_id = checked_capture_id,
         });
         try self.local_names.append(self.allocator, "");
         return id;
@@ -951,6 +1001,9 @@ pub const Program = struct {
     /// within the program.
     pub fn nextLiftCaptureId(self: *Program) check.CheckedModule.CaptureId {
         const index = self.next_lift_capture_id;
+        if (index > check.CheckedModule.CaptureId.max_generated_index) {
+            Common.invariant("lifted program exhausted durable capture identities");
+        }
         self.next_lift_capture_id += 1;
         return check.CheckedModule.CaptureId.generatedLift(index);
     }

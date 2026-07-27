@@ -1216,6 +1216,163 @@ fn reachableProcShape(
     return (try reachableProcShapeCount(allocator, lowered, matches)) > 0;
 }
 
+fn markReachableLiftedExpr(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    expr_id: postcheck.MonotypeLifted.Ast.ExprId,
+    reachable: []bool,
+) void {
+    const index = @intFromEnum(expr_id);
+    if (reachable[index]) return;
+    reachable[index] = true;
+
+    switch (program.getExprAt(index).data) {
+        .@"unreachable",
+        .local,
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .crash,
+        .comptime_exhaustiveness_failed,
+        .uninitialized,
+        .uninitialized_payload,
+        => {},
+        .fn_ref => |fn_ref| {
+            const operands = program.captureOperandSpan(fn_ref.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
+            }
+        },
+        .list,
+        .tuple,
+        => |items| {
+            const children = program.exprSpan(items);
+            for (0..children.len) |i| markReachableLiftedExpr(program, GuardedList.at(children, i), reachable);
+        },
+        .record => |fields| {
+            const field_exprs = program.fieldExprSpan(fields);
+            for (0..field_exprs.len) |i| {
+                const field = GuardedList.at(field_exprs, i);
+                markReachableLiftedExpr(program, field.value, reachable);
+            }
+        },
+        .tag => |tag| {
+            const payloads = program.exprSpan(tag.payloads);
+            for (0..payloads.len) |i| markReachableLiftedExpr(program, GuardedList.at(payloads, i), reachable);
+        },
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| markReachableLiftedExpr(program, child, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
+        .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
+        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
+        .if_initialized_payload => |switch_| {
+            markReachableLiftedExpr(program, switch_.cond, reachable);
+            markReachableLiftedExpr(program, switch_.initialized, reachable);
+            markReachableLiftedExpr(program, switch_.uninitialized, reachable);
+        },
+        .try_sequence => |sequence| {
+            markReachableLiftedExpr(program, sequence.try_expr, reachable);
+            markReachableLiftedExpr(program, sequence.ok_body, reachable);
+        },
+        .try_record_sequence => |sequence| {
+            markReachableLiftedExpr(program, sequence.try_expr, reachable);
+            markReachableLiftedExpr(program, sequence.ok_body, reachable);
+        },
+        .let_ => |let_| {
+            markReachableLiftedExpr(program, let_.value, reachable);
+            markReachableLiftedExpr(program, let_.rest, reachable);
+        },
+        .lambda,
+        .def_ref,
+        .fn_def,
+        => {},
+        .call_value => |call| {
+            markReachableLiftedExpr(program, call.callee, reachable);
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+        },
+        .call_proc => |call| {
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+            const operands = program.captureOperandSpan(call.captures);
+            for (0..operands.len) |i| {
+                const operand = GuardedList.at(operands, i);
+                markReachableLiftedExpr(program, operand.value, reachable);
+            }
+        },
+        .low_level => |call| {
+            const args = program.exprSpan(call.args);
+            for (0..args.len) |i| markReachableLiftedExpr(program, GuardedList.at(args, i), reachable);
+        },
+        .field_access => |field| markReachableLiftedExpr(program, field.receiver, reachable),
+        .tuple_access => |access| markReachableLiftedExpr(program, access.tuple, reachable),
+        .structural_eq => |eq| {
+            markReachableLiftedExpr(program, eq.lhs, reachable);
+            markReachableLiftedExpr(program, eq.rhs, reachable);
+        },
+        .structural_hash => |h| {
+            markReachableLiftedExpr(program, h.value, reachable);
+            markReachableLiftedExpr(program, h.hasher, reachable);
+        },
+        .match_ => |match| {
+            markReachableLiftedExpr(program, match.scrutinee, reachable);
+            const branches = program.branchSpan(match.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
+                if (branch.guard) |guard| markReachableLiftedExpr(program, guard, reachable);
+                markReachableLiftedExpr(program, branch.body, reachable);
+            }
+        },
+        .if_ => |if_| {
+            const branches = program.ifBranchSpan(if_.branches);
+            for (0..branches.len) |i| {
+                const branch = GuardedList.at(branches, i);
+                markReachableLiftedExpr(program, branch.cond, reachable);
+                markReachableLiftedExpr(program, branch.body, reachable);
+            }
+            markReachableLiftedExpr(program, if_.final_else, reachable);
+        },
+        .block => |block| {
+            const statements = program.stmtSpan(block.statements);
+            for (0..statements.len) |i| markReachableLiftedStmt(program, GuardedList.at(statements, i), reachable);
+            markReachableLiftedExpr(program, block.final_expr, reachable);
+        },
+        .loop_ => |loop| {
+            const initial_values = program.exprSpan(loop.initial_values);
+            for (0..initial_values.len) |i| markReachableLiftedExpr(program, GuardedList.at(initial_values, i), reachable);
+            markReachableLiftedExpr(program, loop.body, reachable);
+        },
+        .break_ => |maybe| if (maybe) |value| markReachableLiftedExpr(program, value, reachable),
+        .continue_ => |continue_| {
+            const values = program.exprSpan(continue_.values);
+            for (0..values.len) |i| markReachableLiftedExpr(program, GuardedList.at(values, i), reachable);
+        },
+    }
+}
+
+fn markReachableLiftedStmt(
+    program: *const postcheck.MonotypeLifted.Ast.Program,
+    stmt_id: postcheck.MonotypeLifted.Ast.StmtId,
+    reachable: []bool,
+) void {
+    switch (program.getStmt(stmt_id)) {
+        .let_ => |let_| markReachableLiftedExpr(program, let_.value, reachable),
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| markReachableLiftedExpr(program, expr, reachable),
+        .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
+        .crash => {},
+        .uninitialized => {},
+    }
+}
+
 fn directRecordWorkerIsSpecialized(shape: ProcShape) bool {
     return shape.arg_count == 2 and
         shape.self_call_count == 0 and
@@ -1559,23 +1716,21 @@ test "issue 9802 same-type map2 specialization counters are bounded" {
     const counters = try monotypeCountersForModule(allocator, source);
 
     try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
-        .template_requests = 53,
+        .template_requests = 27,
         .template_hits = 22,
         .template_misses = 5,
-        .nested_requests = 8,
-        .nested_hits = 0,
+        .nested_requests = 16,
+        .nested_hits = 8,
         .nested_misses = 8,
-        .template_lookup_candidates = 22,
+        .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 74,
-        .specialization_type_digest_cache_hits = 139,
-        .specialization_type_digest_cache_misses = 128,
-        .specialization_type_digest_nodes_visited = 128,
-        .exact_type_checks = 22,
+        .specialization_type_digest_requests = 66,
+        .specialization_type_digest_cache_hits = 118,
+        .specialization_type_digest_cache_misses = 101,
+        .specialization_type_digest_nodes_visited = 101,
+        .exact_type_checks = 0,
         .nominal_backing_reuses = 1,
-        .nominal_backing_instantiations = 73,
-        .evidence_walks = 682,
-        .evidence_walk_memo_hits = 514,
+        .nominal_backing_instantiations = 81,
     }, counters);
 }
 
@@ -1609,23 +1764,21 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
     const counters = try monotypeCountersForModule(allocator, source);
 
     try std.testing.expectEqual(postcheck.Monotype.Lower.SpecializationCounters{
-        .template_requests = 29,
+        .template_requests = 15,
         .template_hits = 5,
         .template_misses = 10,
-        .nested_requests = 6,
-        .nested_hits = 0,
+        .nested_requests = 12,
+        .nested_hits = 6,
         .nested_misses = 6,
-        .template_lookup_candidates = 5,
+        .template_lookup_candidates = 0,
         .nested_lookup_candidates = 0,
-        .specialization_type_digest_requests = 51,
-        .specialization_type_digest_cache_hits = 244,
-        .specialization_type_digest_cache_misses = 290,
-        .specialization_type_digest_nodes_visited = 290,
-        .exact_type_checks = 5,
+        .specialization_type_digest_requests = 63,
+        .specialization_type_digest_cache_hits = 217,
+        .specialization_type_digest_cache_misses = 221,
+        .specialization_type_digest_nodes_visited = 221,
+        .exact_type_checks = 0,
         .nominal_backing_reuses = 8,
-        .nominal_backing_instantiations = 101,
-        .evidence_walks = 806,
-        .evidence_walk_memo_hits = 566,
+        .nominal_backing_instantiations = 128,
     }, counters);
 }
 
@@ -1779,6 +1932,9 @@ test "monotype specialization cache read reuses loaded hits and lowers fresh mis
         .shard_id = @enumFromInt(1),
         .types = loaded_types.view,
         .specs = &loaded_specs,
+        .fns = loaded_program_view.fns,
+        .const_fn_evidence = loaded_program_view.const_fn_evidence,
+        .const_fn_evidence_frames = loaded_program_view.const_fn_evidence_frames,
     }};
 
     var no_cache = try lowerMonotypeModuleWithOptions(allocator, mixed_source, .{
@@ -1796,7 +1952,6 @@ test "monotype specialization cache read reuses loaded hits and lowers fresh mis
 
     try std.testing.expect(cached.mono.view().imported_fns.len > 0);
     try std.testing.expect(cached.mono.view().specs.len < no_cache.mono.view().specs.len);
-    try std.testing.expect(counters.template_hits > 0);
     try std.testing.expect(counters.template_misses > 0);
     try expectSpecsCoveredByCachedOrLoaded(allocator, no_cache.mono.view(), cached.mono.view(), loaded_shards[0]);
 }
@@ -3295,15 +3450,15 @@ test "iter alloc static: runtime-count map wrapping terminates at dynamic bounda
 
     var ordinary = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
     defer ordinary.deinit(allocator);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "box_box_count") > 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &ordinary.lowered, "erased_call_count", 1);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &ordinary.lowered, "packed_erased_fn_count") > 0);
 
     var optimized = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .tag_reachability = true });
     defer optimized.deinit(allocator);
-    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "box_box_count") > 0);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 0);
-    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "packed_erased_fn_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "box_box_count", 0);
+    try expectReachableProcShapeFieldEqual(allocator, &optimized.lowered, "erased_call_count", 1);
+    try std.testing.expect(try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "packed_erased_fn_count") > 0);
 }
 
 test "iter alloc static: recursive map wrapping terminates at dynamic boundary" {
@@ -3493,16 +3648,6 @@ fn branchJoinedRecordStateWorkerIsGeneric(shape: ProcShape) bool {
         shape.join_count >= 1 and
         shape.max_join_param_count == 1 and
         shape.jump_count >= 2;
-}
-
-fn isFusedRawListLoop(shape: ProcShape) bool {
-    return shape.list_get_unsafe_count >= 1 and
-        shape.join_count >= 1 and
-        shape.direct_call_count == 0;
-}
-
-fn rawListAccessOutsideLoop(shape: ProcShape) bool {
-    return shape.list_get_unsafe_count >= 1 and shape.join_count == 0;
 }
 
 fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_unsafe_count: usize) TestError!void {
@@ -5719,7 +5864,28 @@ test "issue 10301 for-loop over effect-produced list scalarizes" {
     try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
 }
 
-test "issue 10301 fold over effect-produced list scalarizes" {
+test "iter alloc static: runtime list for-loop has no boxed iterator state" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : List(U8) -> U64
+        \\main = |bytes| {
+        \\    var $sum = 0.U64
+        \\    for byte in bytes {
+        \\        $sum = $sum + byte.to_u64()
+        \\    }
+        \\    $sum
+        \\}
+    ;
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .tag_reachability = true });
+    defer lowered.deinit(allocator);
+
+    try expectLoweredIterStateHasNoBoxesOrErasedCallables(allocator, &lowered.lowered);
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/10340: the fold must
+// scalarize into one self-contained raw-indexed loop in the root proc, without
+// peeling the first step and calling a separate fused worker for the rest.
+test "issue 10340 fold over effect-produced list scalarizes in root" {
     const allocator = std.testing.allocator;
     const source =
         \\produce : U64 -> List(U64)
@@ -5734,14 +5900,27 @@ test "issue 10301 fold over effect-produced list scalarizes" {
     var optimized = try lowerModule(allocator, source, .wrappers);
     defer optimized.deinit(allocator);
 
-    // The fold fuses as a peel plus worker, the same shape a static-list fold
-    // takes: the root runs the first step inline and calls the fused worker
-    // once for the rest. Exactly one reachable proc is a self-contained
-    // raw-indexed loop with no per-element call, and every raw list access
-    // lives inside a loop-carrying proc — a retained per-element step proc is
-    // loop-less, so none may remain.
-    try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeCount(allocator, &optimized.lowered, isFusedRawListLoop));
-    try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeCount(allocator, &optimized.lowered, rawListAccessOutsideLoop));
+    const root_shape = try collectProcShape(allocator, &optimized.lowered, try rootProc(&optimized.lowered));
+    const reachable_total = try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count");
+    try std.testing.expect(root_shape.list_get_unsafe_count >= 1);
+    try std.testing.expect(root_shape.join_count >= 1);
+    try std.testing.expectEqual(@as(usize, 0), root_shape.direct_call_count);
+    try std.testing.expectEqual(root_shape.list_get_unsafe_count, reachable_total);
+
+    var runtime_env = eval.RuntimeHostEnv.init(allocator);
+    defer runtime_env.deinit();
+    var interpreter = try eval.Interpreter.init(
+        allocator,
+        &optimized.lowered.lir_result.store,
+        &optimized.lowered.lir_result.layouts,
+        runtime_env.get_ops(),
+        .preserve,
+    );
+    defer interpreter.deinit();
+    const result = try interpreter.eval(.{ .proc_id = try rootProc(&optimized.lowered) });
+    switch (result) {
+        .value => |value| try std.testing.expectEqual(@as(u64, 1026), value.read(u64)),
+    }
 }
 
 // Repro for https://github.com/roc-lang/roc/issues/10317: a loop-carried

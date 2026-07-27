@@ -421,7 +421,7 @@ Builtin :: [].{
 					if trimmed.point > 21 or trimmed.point < -18 {
 						Err(BadNumStr)
 					} else {
-						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.digits_len, trimmed.point)?
+						normalized = Json.normalize_json_dec_digits(negative, trimmed.digits, trimmed.point)?
 						dec_from_str(normalized)
 					}
 				}
@@ -429,9 +429,7 @@ Builtin :: [].{
 
 			json_dec_digits_are_zero : Str -> Bool
 			json_dec_digits_are_zero = |digits| {
-				bytes = Str.to_utf8(digits)
-
-				for byte in bytes {
+				for byte in Str.iter_utf8(digits) {
 					if byte != 48 {
 						return False
 					}
@@ -440,25 +438,24 @@ Builtin :: [].{
 				True
 			}
 
-			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, digits_len : U64, point : I64 }
+			trim_json_dec_leading_zeros : Str, I64 -> { digits : Str, point : I64 }
 			trim_json_dec_leading_zeros = |digits, point| {
-				bytes = Str.to_utf8(digits)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(digits)
 				var $index = 0
 
-				while $index < len and list_get_unsafe(bytes, $index) == 48 {
+				while $index < len and str_get_utf8_byte_unsafe(digits, $index) == 48 {
 					$index = $index + 1
 				}
 
 				{
-					digits: Str.from_utf8_lossy(List.drop_first(bytes, $index)),
-					digits_len: len - $index,
+					# the dropped prefix is ASCII zeros, so the cut is a UTF-8 boundary
+					digits: str_drop_first_bytes_unsafe(digits, $index),
 					point: point - $index.to_i64_wrap(),
 				}
 			}
 
-			normalize_json_dec_digits : Bool, Str, U64, I64 -> Try(Str, [BadNumStr])
-			normalize_json_dec_digits = |negative, digits, digits_len, point| {
+			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
+			normalize_json_dec_digits = |negative, digits, point| {
 				sign = if negative "-" else ""
 
 				if point <= 0 {
@@ -472,14 +469,15 @@ Builtin :: [].{
 					)
 				} else {
 					point_u64 = point.to_u64_wrap()
+					digits_len = Str.count_utf8_bytes(digits)
 
 					if point_u64 >= digits_len {
 						zero_count = point_u64 - digits_len
 						Ok(Str.concat(sign, Str.concat(digits, Str.repeat("0", zero_count))))
 					} else {
-						bytes = Str.to_utf8(digits)
-						before = Str.from_utf8_lossy(List.take_first(bytes, point_u64))
-						after = Str.from_utf8_lossy(List.drop_first(bytes, point_u64))
+						# digits holds only ASCII digits, so any cut is a UTF-8 boundary
+						before = str_substring_unsafe(digits, 0, point_u64)
+						after = str_drop_first_bytes_unsafe(digits, point_u64)
 
 						Ok(Str.concat(sign, Str.concat(before, Str.concat(".", after))))
 					}
@@ -1072,8 +1070,7 @@ Builtin :: [].{
 
 			is_json_number : Str -> Bool
 			is_json_number = |value| {
-				bytes = Str.to_utf8(value)
-				len = List.len(bytes)
+				len = Str.count_utf8_bytes(value)
 
 				if len == 0 {
 					return False
@@ -1081,7 +1078,7 @@ Builtin :: [].{
 
 				var $index = 0
 
-				first = list_get_unsafe(bytes, $index)
+				first = str_get_utf8_byte_unsafe(value, $index)
 
 				if first == 45 {
 					$index = $index + 1
@@ -1091,7 +1088,7 @@ Builtin :: [].{
 					}
 				}
 
-				int_first = list_get_unsafe(bytes, $index)
+				int_first = str_get_utf8_byte_unsafe(value, $index)
 
 				if int_first == 48 {
 					$index = $index + 1
@@ -1099,7 +1096,7 @@ Builtin :: [].{
 					$index = $index + 1
 
 					while $index < len {
-						byte = list_get_unsafe(bytes, $index)
+						byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_digit(byte) {
 							$index = $index + 1
@@ -1112,7 +1109,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if byte == 46 {
 						$index = $index + 1
@@ -1121,14 +1118,14 @@ Builtin :: [].{
 							return False
 						}
 
-						first_fraction_byte = list_get_unsafe(bytes, $index)
+						first_fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_fraction_byte) {
 							return False
 						}
 
 						while $index < len {
-							fraction_byte = list_get_unsafe(bytes, $index)
+							fraction_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(fraction_byte) {
 								$index = $index + 1
@@ -1140,7 +1137,7 @@ Builtin :: [].{
 				}
 
 				if $index < len {
-					byte = list_get_unsafe(bytes, $index)
+					byte = str_get_utf8_byte_unsafe(value, $index)
 
 					if Json.is_json_exponent_marker(byte) {
 						$index = $index + 1
@@ -1149,7 +1146,7 @@ Builtin :: [].{
 							return False
 						}
 
-						exponent_first_byte = list_get_unsafe(bytes, $index)
+						exponent_first_byte = str_get_utf8_byte_unsafe(value, $index)
 
 						if Json.is_json_sign(exponent_first_byte) {
 							$index = $index + 1
@@ -1159,14 +1156,14 @@ Builtin :: [].{
 							}
 						}
 
-						first_exponent_digit = list_get_unsafe(bytes, $index)
+						first_exponent_digit = str_get_utf8_byte_unsafe(value, $index)
 
 						if !Json.is_json_digit(first_exponent_digit) {
 							return False
 						}
 
 						while $index < len {
-							exponent_byte = list_get_unsafe(bytes, $index)
+							exponent_byte = str_get_utf8_byte_unsafe(value, $index)
 
 							if Json.is_json_digit(exponent_byte) {
 								$index = $index + 1
@@ -1300,12 +1297,8 @@ Builtin :: [].{
 								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
 							}
 						}
-						after = match Str.drop_first_bytes(raw, $index) {
-							Ok(v) => v
-							Err(BadUtf8) => {
-								crash "Json scalar splitter invariant violated: ASCII delimiter was not a UTF-8 boundary"
-							}
-						}
+						# the cut is at an ASCII delimiter, so it is a UTF-8 boundary
+						after = str_drop_first_bytes_unsafe(raw, $index)
 						Ok({ value, after })
 					}
 				} else if $index == 0 {
@@ -2234,17 +2227,13 @@ Builtin :: [].{
 		## returns `Err(BadUtf8)`. Valid slices do not allocate.
 		drop_first_bytes : Str, U64 -> Try(Str, [BadUtf8, ..])
 		drop_first_bytes = |str, count| {
-			len = Str.count_utf8_bytes(str)
-			if count >= len {
-				Ok("")
-			} else {
+			if count < Str.count_utf8_bytes(str) {
 				byte = str_get_utf8_byte_unsafe(str, count)
 				if byte >= 128 and byte < 192 {
-					Err(BadUtf8)
-				} else {
-					Ok(str_substring_unsafe(str, count, len - count))
+					return Err(BadUtf8)
 				}
 			}
+			Ok(str_drop_first_bytes_unsafe(str, count))
 		}
 
 		## Drop a byte count from the end of a string. Counts at or beyond the byte
@@ -3572,6 +3561,16 @@ Builtin :: [].{
 		append_if_ok : List(a), Try(a, err) -> List(a)
 		append_if_ok = |list, maybe_item| list_append_if_ok(list, maybe_item)
 
+		## Add the `Ok` payload to the beginning of a list, or leave the list unchanged
+		## if the value is `Err`.
+		## ```roc
+		## expect List.prepend_if_ok([2, 3], Ok(1)) == [1, 2, 3]
+		##
+		## expect List.prepend_if_ok([2, 3], Err(NotFound)) == [2, 3]
+		## ```
+		prepend_if_ok : List(a), Try(a, err) -> List(a)
+		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
+
 		## Add a single element to the beginning of a list.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
@@ -3691,6 +3690,36 @@ Builtin :: [].{
 				Ok(list_swap_unsafe(list, index_1, index_2))
 			} else {
 				Err(OutOfBounds)
+			}
+		}
+
+		## Inserts an element at the given index, shifting later elements toward the end.
+		## An index equal to the length appends the element; a greater index is out of bounds.
+		## ```roc
+		## expect [1.I64, 2, 3].insert(1, 9) == Ok([1, 9, 2, 3])
+		##
+		## expect [1.I64, 2, 3].insert(5, 9) == Err(OutOfBounds)
+		## ```
+		insert : List(a), U64, a -> Try(List(a), [OutOfBounds, ..])
+		insert = |list, index, item| {
+			len = List.len(list)
+			if index > len {
+				Err(OutOfBounds)
+			} else {
+				# The two loops append exactly `index` then `len - index` elements plus
+				# the inserted one, so every unchecked append stays within `len + 1`.
+				var $result = List.with_capacity(len + 1)
+				var $i = 0
+				while $i < index {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				$result = list_append_unsafe($result, item)
+				while $i < len {
+					$result = list_append_unsafe($result, list_get_unsafe(list, $i))
+					$i = $i + 1
+				}
+				Ok($result)
 			}
 		}
 
@@ -14032,215 +14061,215 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
-			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i8(3.4) == 3
+			## expect Dec.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : Dec -> I8
-			round_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_round_to_whole(self)))
+			round_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| Dec.to_i8_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i16(3.4) == 3
+			## expect Dec.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : Dec -> I16
-			round_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_round_to_whole(self)))
+			round_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| Dec.to_i16_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i32(-3.6) == -4
+			## expect Dec.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : Dec -> I32
-			round_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_round_to_whole(self)))
+			round_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| Dec.to_i32_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i64(7.2) == 7
+			## expect Dec.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : Dec -> I64
-			round_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_round_to_whole(self)))
+			round_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| Dec.to_i64_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [I128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_i128(7.2) == 7
+			## expect Dec.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : Dec -> I128
-			round_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_round_to_whole(self)))
+			round_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| Dec.to_i128_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u8(3.4) == 3
+			## expect Dec.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : Dec -> U8
-			round_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_round_to_whole(self)))
+			round_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| Dec.to_u8_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U16]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u16(3.4) == 3
+			## expect Dec.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : Dec -> U16
-			round_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_round_to_whole(self)))
+			round_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| Dec.to_u16_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U32]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u32(7.2) == 7
+			## expect Dec.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : Dec -> U32
-			round_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_round_to_whole(self)))
+			round_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| Dec.to_u32_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U64]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u64(7.2) == 7
+			## expect Dec.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : Dec -> U64
-			round_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_round_to_whole(self)))
+			round_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| Dec.to_u64_try(dec_round_to_whole(self))
 
-			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Crashes if the rounded value is out of range.
+			## Round a [Dec] to the nearest [U128]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.round_to_u128(7.2) == 7
+			## expect Dec.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : Dec -> U128
-			round_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_round_to_whole(self)))
+			round_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| Dec.to_u128_try(dec_round_to_whole(self))
 
-			## Round a [Dec] down to an [I8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i8(-3.2) == -4
+			## expect Dec.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : Dec -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_floor_to_whole(self)))
+			floor_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| Dec.to_i8_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i16(-3.2) == -4
+			## expect Dec.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : Dec -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_floor_to_whole(self)))
+			floor_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| Dec.to_i16_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i32(3.8) == 3
+			## expect Dec.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : Dec -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_floor_to_whole(self)))
+			floor_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| Dec.to_i32_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i64(3.8) == 3
+			## expect Dec.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : Dec -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_floor_to_whole(self)))
+			floor_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| Dec.to_i64_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to an [I128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_i128(3.8) == 3
+			## expect Dec.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : Dec -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_floor_to_whole(self)))
+			floor_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| Dec.to_i128_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u8(3.8) == 3
+			## expect Dec.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : Dec -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_floor_to_whole(self)))
+			floor_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| Dec.to_u8_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u16(3.8) == 3
+			## expect Dec.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : Dec -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_floor_to_whole(self)))
+			floor_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| Dec.to_u16_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u32(3.8) == 3
+			## expect Dec.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : Dec -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_floor_to_whole(self)))
+			floor_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| Dec.to_u32_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u64(3.8) == 3
+			## expect Dec.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : Dec -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_floor_to_whole(self)))
+			floor_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| Dec.to_u64_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] down to a [U128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.floor_to_u128(3.8) == 3
+			## expect Dec.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : Dec -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_floor_to_whole(self)))
+			floor_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| Dec.to_u128_try(dec_floor_to_whole(self))
 
-			## Round a [Dec] up to an [I8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i8(-3.2) == -3
+			## expect Dec.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : Dec -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(Dec.to_i8_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i8_try : Dec -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| Dec.to_i8_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i16(-3.2) == -3
+			## expect Dec.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : Dec -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(Dec.to_i16_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i16_try : Dec -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| Dec.to_i16_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i32(3.2) == 4
+			## expect Dec.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : Dec -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(Dec.to_i32_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i32_try : Dec -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| Dec.to_i32_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i64(3.2) == 4
+			## expect Dec.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : Dec -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(Dec.to_i64_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i64_try : Dec -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| Dec.to_i64_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to an [I128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_i128(3.2) == 4
+			## expect Dec.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : Dec -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(Dec.to_i128_try(dec_ceiling_to_whole(self)))
+			ceiling_to_i128_try : Dec -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| Dec.to_i128_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U8]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u8(3.2) == 4
+			## expect Dec.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : Dec -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(Dec.to_u8_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u8_try : Dec -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| Dec.to_u8_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U16]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u16(3.2) == 4
+			## expect Dec.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : Dec -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(Dec.to_u16_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u16_try : Dec -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| Dec.to_u16_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U32]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u32(3.2) == 4
+			## expect Dec.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : Dec -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(Dec.to_u32_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u32_try : Dec -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| Dec.to_u32_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U64]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u64(3.2) == 4
+			## expect Dec.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : Dec -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(Dec.to_u64_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u64_try : Dec -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| Dec.to_u64_try(dec_ceiling_to_whole(self))
 
-			## Round a [Dec] up to a [U128]. Crashes if the rounded value is out of range.
+			## Round a [Dec] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
-			## expect Dec.ceiling_to_u128(3.2) == 4
+			## expect Dec.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : Dec -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(Dec.to_u128_try(dec_ceiling_to_whole(self)))
+			ceiling_to_u128_try : Dec -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| Dec.to_u128_try(dec_ceiling_to_whole(self))
 
 			## Build a [Dec] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
@@ -15039,215 +15068,215 @@ Builtin :: [].{
 			## ```
 			abs_diff : F32, F32 -> F32
 
-			## Round an [F32] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i8(3.4) == 3
+			## expect F32.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : F32 -> I8
-			round_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_round_to_whole(self)))
+			round_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| F32.to_i8_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i16(3.4) == 3
+			## expect F32.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : F32 -> I16
-			round_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_round_to_whole(self)))
+			round_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| F32.to_i16_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i32(-3.6) == -4
+			## expect F32.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : F32 -> I32
-			round_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_round_to_whole(self)))
+			round_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| F32.to_i32_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i64(7.2) == 7
+			## expect F32.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : F32 -> I64
-			round_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_round_to_whole(self)))
+			round_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| F32.to_i64_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_i128(7.2) == 7
+			## expect F32.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : F32 -> I128
-			round_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_round_to_whole(self)))
+			round_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| F32.to_i128_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u8(3.4) == 3
+			## expect F32.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : F32 -> U8
-			round_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_round_to_whole(self)))
+			round_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| F32.to_u8_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u16(3.4) == 3
+			## expect F32.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : F32 -> U16
-			round_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_round_to_whole(self)))
+			round_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| F32.to_u16_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u32(7.2) == 7
+			## expect F32.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : F32 -> U32
-			round_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_round_to_whole(self)))
+			round_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| F32.to_u32_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u64(7.2) == 7
+			## expect F32.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : F32 -> U64
-			round_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_round_to_whole(self)))
+			round_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| F32.to_u64_try(f32_round_to_whole(self))
 
-			## Round an [F32] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.round_to_u128(7.2) == 7
+			## expect F32.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : F32 -> U128
-			round_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_round_to_whole(self)))
+			round_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| F32.to_u128_try(f32_round_to_whole(self))
 
-			## Round an [F32] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i8(-3.2) == -4
+			## expect F32.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : F32 -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_floor_unsafe(self)))
+			floor_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| F32.to_i8_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i16(-3.2) == -4
+			## expect F32.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : F32 -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_floor_unsafe(self)))
+			floor_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| F32.to_i16_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i32(3.8) == 3
+			## expect F32.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : F32 -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_floor_unsafe(self)))
+			floor_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| F32.to_i32_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i64(3.8) == 3
+			## expect F32.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : F32 -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_floor_unsafe(self)))
+			floor_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| F32.to_i64_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_i128(3.8) == 3
+			## expect F32.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : F32 -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_floor_unsafe(self)))
+			floor_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| F32.to_i128_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u8(3.8) == 3
+			## expect F32.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : F32 -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_floor_unsafe(self)))
+			floor_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| F32.to_u8_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u16(3.8) == 3
+			## expect F32.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : F32 -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_floor_unsafe(self)))
+			floor_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| F32.to_u16_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u32(3.8) == 3
+			## expect F32.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : F32 -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_floor_unsafe(self)))
+			floor_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| F32.to_u32_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u64(3.8) == 3
+			## expect F32.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : F32 -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_floor_unsafe(self)))
+			floor_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| F32.to_u64_try(f32_floor_unsafe(self))
 
-			## Round an [F32] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.floor_to_u128(3.8) == 3
+			## expect F32.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : F32 -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_floor_unsafe(self)))
+			floor_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| F32.to_u128_try(f32_floor_unsafe(self))
 
-			## Round an [F32] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i8(-3.2) == -3
+			## expect F32.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : F32 -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(F32.to_i8_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i8_try : F32 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| F32.to_i8_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i16(-3.2) == -3
+			## expect F32.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : F32 -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(F32.to_i16_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i16_try : F32 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| F32.to_i16_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i32(3.2) == 4
+			## expect F32.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : F32 -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(F32.to_i32_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i32_try : F32 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| F32.to_i32_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i64(3.2) == 4
+			## expect F32.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : F32 -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(F32.to_i64_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i64_try : F32 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| F32.to_i64_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_i128(3.2) == 4
+			## expect F32.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : F32 -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(F32.to_i128_try(f32_ceiling_unsafe(self)))
+			ceiling_to_i128_try : F32 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| F32.to_i128_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u8(3.2) == 4
+			## expect F32.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : F32 -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(F32.to_u8_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u8_try : F32 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| F32.to_u8_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u16(3.2) == 4
+			## expect F32.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : F32 -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(F32.to_u16_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u16_try : F32 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| F32.to_u16_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u32(3.2) == 4
+			## expect F32.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : F32 -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(F32.to_u32_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u32_try : F32 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| F32.to_u32_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u64(3.2) == 4
+			## expect F32.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : F32 -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(F32.to_u64_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u64_try : F32 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| F32.to_u64_try(f32_ceiling_unsafe(self))
 
-			## Round an [F32] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F32] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F32.ceiling_to_u128(3.2) == 4
+			## expect F32.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : F32 -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(F32.to_u128_try(f32_ceiling_unsafe(self)))
+			ceiling_to_u128_try : F32 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| F32.to_u128_try(f32_ceiling_unsafe(self))
 
 			## Build an [F32] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
@@ -15986,215 +16015,215 @@ Builtin :: [].{
 			## ```
 			abs_diff : F64, F64 -> F64
 
-			## Round an [F64] to the nearest [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i8(3.4) == 3
+			## expect F64.round_to_i8_try(3.4) == Ok(3)
 			## ```
-			round_to_i8 : F64 -> I8
-			round_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_round_to_whole(self)))
+			round_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			round_to_i8_try = |self| F64.to_i8_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i16(3.4) == 3
+			## expect F64.round_to_i16_try(3.4) == Ok(3)
 			## ```
-			round_to_i16 : F64 -> I16
-			round_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_round_to_whole(self)))
+			round_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			round_to_i16_try = |self| F64.to_i16_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i32(-3.6) == -4
+			## expect F64.round_to_i32_try(-3.6) == Ok(-4)
 			## ```
-			round_to_i32 : F64 -> I32
-			round_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_round_to_whole(self)))
+			round_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			round_to_i32_try = |self| F64.to_i32_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i64(7.2) == 7
+			## expect F64.round_to_i64_try(7.2) == Ok(7)
 			## ```
-			round_to_i64 : F64 -> I64
-			round_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_round_to_whole(self)))
+			round_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			round_to_i64_try = |self| F64.to_i64_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_i128(7.2) == 7
+			## expect F64.round_to_i128_try(7.2) == Ok(7)
 			## ```
-			round_to_i128 : F64 -> I128
-			round_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_round_to_whole(self)))
+			round_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			round_to_i128_try = |self| F64.to_i128_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u8(3.4) == 3
+			## expect F64.round_to_u8_try(3.4) == Ok(3)
 			## ```
-			round_to_u8 : F64 -> U8
-			round_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_round_to_whole(self)))
+			round_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			round_to_u8_try = |self| F64.to_u8_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u16(3.4) == 3
+			## expect F64.round_to_u16_try(3.4) == Ok(3)
 			## ```
-			round_to_u16 : F64 -> U16
-			round_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_round_to_whole(self)))
+			round_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			round_to_u16_try = |self| F64.to_u16_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u32(7.2) == 7
+			## expect F64.round_to_u32_try(7.2) == Ok(7)
 			## ```
-			round_to_u32 : F64 -> U32
-			round_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_round_to_whole(self)))
+			round_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			round_to_u32_try = |self| F64.to_u32_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u64(7.2) == 7
+			## expect F64.round_to_u64_try(7.2) == Ok(7)
 			## ```
-			round_to_u64 : F64 -> U64
-			round_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_round_to_whole(self)))
+			round_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			round_to_u64_try = |self| F64.to_u64_try(f64_round_to_whole(self))
 
-			## Round an [F64] to the nearest [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] to the nearest [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.round_to_u128(7.2) == 7
+			## expect F64.round_to_u128_try(7.2) == Ok(7)
 			## ```
-			round_to_u128 : F64 -> U128
-			round_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_round_to_whole(self)))
+			round_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			round_to_u128_try = |self| F64.to_u128_try(f64_round_to_whole(self))
 
-			## Round an [F64] down to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i8(-3.2) == -4
+			## expect F64.floor_to_i8_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i8 : F64 -> I8
-			floor_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_floor_unsafe(self)))
+			floor_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			floor_to_i8_try = |self| F64.to_i8_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i16(-3.2) == -4
+			## expect F64.floor_to_i16_try(-3.2) == Ok(-4)
 			## ```
-			floor_to_i16 : F64 -> I16
-			floor_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_floor_unsafe(self)))
+			floor_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			floor_to_i16_try = |self| F64.to_i16_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i32(3.8) == 3
+			## expect F64.floor_to_i32_try(3.8) == Ok(3)
 			## ```
-			floor_to_i32 : F64 -> I32
-			floor_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_floor_unsafe(self)))
+			floor_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			floor_to_i32_try = |self| F64.to_i32_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i64(3.8) == 3
+			## expect F64.floor_to_i64_try(3.8) == Ok(3)
 			## ```
-			floor_to_i64 : F64 -> I64
-			floor_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_floor_unsafe(self)))
+			floor_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			floor_to_i64_try = |self| F64.to_i64_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_i128(3.8) == 3
+			## expect F64.floor_to_i128_try(3.8) == Ok(3)
 			## ```
-			floor_to_i128 : F64 -> I128
-			floor_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_floor_unsafe(self)))
+			floor_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			floor_to_i128_try = |self| F64.to_i128_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u8(3.8) == 3
+			## expect F64.floor_to_u8_try(3.8) == Ok(3)
 			## ```
-			floor_to_u8 : F64 -> U8
-			floor_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_floor_unsafe(self)))
+			floor_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			floor_to_u8_try = |self| F64.to_u8_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u16(3.8) == 3
+			## expect F64.floor_to_u16_try(3.8) == Ok(3)
 			## ```
-			floor_to_u16 : F64 -> U16
-			floor_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_floor_unsafe(self)))
+			floor_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			floor_to_u16_try = |self| F64.to_u16_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u32(3.8) == 3
+			## expect F64.floor_to_u32_try(3.8) == Ok(3)
 			## ```
-			floor_to_u32 : F64 -> U32
-			floor_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_floor_unsafe(self)))
+			floor_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			floor_to_u32_try = |self| F64.to_u32_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u64(3.8) == 3
+			## expect F64.floor_to_u64_try(3.8) == Ok(3)
 			## ```
-			floor_to_u64 : F64 -> U64
-			floor_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_floor_unsafe(self)))
+			floor_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			floor_to_u64_try = |self| F64.to_u64_try(f64_floor_unsafe(self))
 
-			## Round an [F64] down to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] down to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.floor_to_u128(3.8) == 3
+			## expect F64.floor_to_u128_try(3.8) == Ok(3)
 			## ```
-			floor_to_u128 : F64 -> U128
-			floor_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_floor_unsafe(self)))
+			floor_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			floor_to_u128_try = |self| F64.to_u128_try(f64_floor_unsafe(self))
 
-			## Round an [F64] up to an [I8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i8(-3.2) == -3
+			## expect F64.ceiling_to_i8_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i8 : F64 -> I8
-			ceiling_to_i8 = |self| out_of_range_or_crash(F64.to_i8_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i8_try : F64 -> Try(I8, [OutOfRange])
+			ceiling_to_i8_try = |self| F64.to_i8_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i16(-3.2) == -3
+			## expect F64.ceiling_to_i16_try(-3.2) == Ok(-3)
 			## ```
-			ceiling_to_i16 : F64 -> I16
-			ceiling_to_i16 = |self| out_of_range_or_crash(F64.to_i16_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i16_try : F64 -> Try(I16, [OutOfRange])
+			ceiling_to_i16_try = |self| F64.to_i16_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i32(3.2) == 4
+			## expect F64.ceiling_to_i32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i32 : F64 -> I32
-			ceiling_to_i32 = |self| out_of_range_or_crash(F64.to_i32_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i32_try : F64 -> Try(I32, [OutOfRange])
+			ceiling_to_i32_try = |self| F64.to_i32_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i64(3.2) == 4
+			## expect F64.ceiling_to_i64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i64 : F64 -> I64
-			ceiling_to_i64 = |self| out_of_range_or_crash(F64.to_i64_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i64_try : F64 -> Try(I64, [OutOfRange])
+			ceiling_to_i64_try = |self| F64.to_i64_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to an [I128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to an [I128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_i128(3.2) == 4
+			## expect F64.ceiling_to_i128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_i128 : F64 -> I128
-			ceiling_to_i128 = |self| out_of_range_or_crash(F64.to_i128_try(f64_ceiling_unsafe(self)))
+			ceiling_to_i128_try : F64 -> Try(I128, [OutOfRange])
+			ceiling_to_i128_try = |self| F64.to_i128_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U8]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U8]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u8(3.2) == 4
+			## expect F64.ceiling_to_u8_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u8 : F64 -> U8
-			ceiling_to_u8 = |self| out_of_range_or_crash(F64.to_u8_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u8_try : F64 -> Try(U8, [OutOfRange])
+			ceiling_to_u8_try = |self| F64.to_u8_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U16]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U16]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u16(3.2) == 4
+			## expect F64.ceiling_to_u16_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u16 : F64 -> U16
-			ceiling_to_u16 = |self| out_of_range_or_crash(F64.to_u16_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u16_try : F64 -> Try(U16, [OutOfRange])
+			ceiling_to_u16_try = |self| F64.to_u16_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U32]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U32]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u32(3.2) == 4
+			## expect F64.ceiling_to_u32_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u32 : F64 -> U32
-			ceiling_to_u32 = |self| out_of_range_or_crash(F64.to_u32_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u32_try : F64 -> Try(U32, [OutOfRange])
+			ceiling_to_u32_try = |self| F64.to_u32_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U64]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U64]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u64(3.2) == 4
+			## expect F64.ceiling_to_u64_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u64 : F64 -> U64
-			ceiling_to_u64 = |self| out_of_range_or_crash(F64.to_u64_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u64_try : F64 -> Try(U64, [OutOfRange])
+			ceiling_to_u64_try = |self| F64.to_u64_try(f64_ceiling_unsafe(self))
 
-			## Round an [F64] up to a [U128]. Crashes if the rounded value is out of range, `NaN`, or infinite.
+			## Round an [F64] up to a [U128]. Returns `Err(OutOfRange)` if the rounded value is out of range, `NaN`, or infinite.
 			## ```roc
-			## expect F64.ceiling_to_u128(3.2) == 4
+			## expect F64.ceiling_to_u128_try(3.2) == Ok(4)
 			## ```
-			ceiling_to_u128 : F64 -> U128
-			ceiling_to_u128 = |self| out_of_range_or_crash(F64.to_u128_try(f64_ceiling_unsafe(self)))
+			ceiling_to_u128_try : F64 -> Try(U128, [OutOfRange])
+			ceiling_to_u128_try = |self| F64.to_u128_try(f64_ceiling_unsafe(self))
 
 			## Build an [F64] from a list of base-10 digits, most significant
 			## first. Each element of the list must be a digit in the range `0`
@@ -20940,15 +20969,6 @@ out_of_range_try = |answer|
 		Err(OutOfRange)
 	}
 
-out_of_range_or_crash : Try(item, [OutOfRange]) -> item
-out_of_range_or_crash = |answer|
-	match answer {
-		Ok(value) => value
-		Err(OutOfRange) => {
-			crash "number is out of range"
-		}
-	}
-
 dec_round_to_whole : Dec -> Dec
 dec_round_to_whole = |self| {
 	truncated = Dec.div_trunc_by(self, 1.0)
@@ -21386,6 +21406,13 @@ list_append_if_ok = |list, maybe_item|
 		Err(_) => list
 	}
 
+list_prepend_if_ok : List(a), Try(a, err) -> List(a)
+list_prepend_if_ok = |list, maybe_item|
+	match maybe_item {
+		Ok(item) => List.prepend(list, item)
+		Err(_) => list
+	}
+
 unsigned_minus_saturated : item, item, item -> item
 	where [item.is_lt : item, item -> Bool, item.minus : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
@@ -21521,32 +21548,23 @@ ScannedJsonString : { after : Str, body : [NoEscapes(Str), HasEscapes(Str)] }
 ## along the way.
 scan_json_string_tail : Str -> Try(ScannedJsonString, [InvalidJson(Str), ..])
 scan_json_string_tail = |tail| {
-	bytes = Str.to_utf8(tail)
-	len = List.len(bytes)
+	len = Str.count_utf8_bytes(tail)
 	var $index = 0
 	var $had_escape = False
 
-	# Walk the bytes, consuming each escape atomically, until the closing quote.
-	# Every escape must be validated so that invalid escapes are rejected as invalid JSON
-	# (even inside skipped strings).
+	# Walk the string's bytes in place, consuming each escape atomically, until the
+	# closing quote. Every escape must be validated so that invalid escapes are
+	# rejected as invalid JSON (even inside skipped strings).
 	while $index < len {
-		byte = list_get_unsafe(bytes, $index)
+		byte = str_get_utf8_byte_unsafe(tail, $index)
 		match byte {
 			# Because we consume escapes atomically, if we hit a quote we know that it's the end
 			# of the string.
 			'"' => {
-				raw = match Str.from_utf8(List.take_first(bytes, $index)) {
-					Ok(body) => body
-					# unreachable: the split point is an ASCII quote, so the prefix is always valid UTF-8
-					Err(_) => {
-						crash "Json scanner invariant violated: split at a quote was not valid UTF-8"
-					}
-				}
-
-				# Str has no index-based slicing, so recover `after` by dropping the
-				# body (a content-matched prefix of `tail`) and then the closing
-				# quote — both zero-copy slice operations.
-				after = Str.drop_prefix(Str.drop_prefix(tail, raw), "\"")
+				# The quote is ASCII, so both cut points are UTF-8 boundaries and the
+				# slices are valid strings; slicing past the quote also skips it.
+				raw = str_substring_unsafe(tail, 0, $index)
+				after = str_drop_first_bytes_unsafe(tail, $index + 1)
 
 				return Ok({ after, body: if $had_escape HasEscapes(raw) else NoEscapes(raw) })
 			}
@@ -21554,14 +21572,14 @@ scan_json_string_tail = |tail| {
 			# escape sequence atomically
 			'\\' => {
 				$had_escape = True
-				escape = parse_json_escape_sequence(List.drop_first(bytes, $index + 1))?
-				$index = $index + 1 + escape.consumed
+				escape = parse_json_escaped_code_point(tail, $index)?
+				$index = $index + escape.consumed
 			}
-			# For any other character besides a quote or a backslash, we continue.
+			# For any other byte besides a quote or a backslash, we continue.
 			_ => {
 				# JSON requires U+0000 through U+001F to be escaped inside strings.
 				if byte < 32 {
-					return Err(Json.invalid_json)
+					return Err(InvalidJson("unescaped control character in string"))
 				} else {
 					$index = $index + 1
 				}
@@ -21570,7 +21588,7 @@ scan_json_string_tail = |tail| {
 	}
 
 	# no unescaped closing quote anywhere: the string is unterminated
-	Err(Json.invalid_json)
+	Err(InvalidJson("unterminated string"))
 }
 
 ## Find the end of a JSON string, for skipped values whose content is discarded.
@@ -21584,20 +21602,23 @@ skip_json_string_tail = |tail| {
 
 ## Decode a JSON string body: walk it, mapping each escape sequence to its code point and
 ## copying everything else.
+##
+## The scan already validated every escape, so decoding re-parses them. This double
+## parse is deliberate: it keeps scanning allocation-free, and skipped strings and
+## clean strings never decode at all.
 decode_json_string_body : Str -> Try(Str, [InvalidJson(Str), ..])
 decode_json_string_body = |raw| {
-	bytes = Str.to_utf8(raw)
-	len = List.len(bytes)
+	len = Str.count_utf8_bytes(raw)
 	var $out = u8_list_reserve([], len)
 	var $index = 0
 
 	while $index < len {
-		byte = list_get_unsafe(bytes, $index)
+		byte = str_get_utf8_byte_unsafe(raw, $index)
 		match byte {
 			'\\' => {
-				escape = parse_json_escape_sequence(List.drop_first(bytes, $index + 1))?
+				escape = parse_json_escaped_code_point(raw, $index)?
 				$out = append_utf8_code_point($out, escape.code_point)
-				$index = $index + 1 + escape.consumed
+				$index = $index + escape.consumed
 			}
 			_ => {
 				$out = u8_append($out, byte)
@@ -21616,49 +21637,84 @@ decode_json_string_body = |raw| {
 	}
 }
 
-## Parse one JSON escape sequence. `rest` is expected to hold the bytes after a backslash.
-## Every JSON escape denotes exactly one code point (surrogate pairs combine into one), so
-## this returns that code point plus the number of bytes consumed from `rest`.
-parse_json_escape_sequence : List(U8) -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
-parse_json_escape_sequence = |rest| match rest {
-	['"', ..] => Ok({ code_point: '"', consumed: 1 })
-	['\\', ..] => Ok({ code_point: '\\', consumed: 1 })
-	['/', ..] => Ok({ code_point: '/', consumed: 1 })
-	# backspace
-	['b', ..] => Ok({ code_point: 8, consumed: 1 })
-	# form feed
-	['f', ..] => Ok({ code_point: 12, consumed: 1 })
-	# newline
-	['n', ..] => Ok({ code_point: 10, consumed: 1 })
-	# carriage return
-	['r', ..] => Ok({ code_point: 13, consumed: 1 })
-	# tab
-	['t', ..] => Ok({ code_point: 9, consumed: 1 })
-	# \uXXXX names a UTF-16 code unit, not a code point, so surrogates may need pairing
-	['u', h0, h1, h2, h3, .. as tail] => {
-		unit = decode_json_hex4(h0, h1, h2, h3)?
-		if unit >= 55296 and unit <= 56319 {
-			# high surrogate (U+D800..U+DBFF): a \uDC00..\uDFFF escape must follow
-			match tail {
-				['\\', 'u', h4, h5, h6, h7, ..] => {
-					low = decode_json_hex4(h4, h5, h6, h7)?
-					if low >= 56320 and low <= 57343 {
-						Ok({ code_point: 65536 + (unit - 55296) * 1024 + (low - 56320), consumed: 11 })
-					} else {
-						Err(Json.invalid_json)
-					}
-				}
-				_ => Err(Json.invalid_json)
-			}
-		} else if unit >= 56320 and unit <= 57343 {
-			# unpaired low surrogate (U+DC00..U+DFFF)
-			Err(Json.invalid_json)
-		} else {
-			Ok({ code_point: unit, consumed: 5 })
-		}
+## Parse one escaped character from string `s`, starting at byte `index`.
+##
+## `index` is expected (but not verified) to be the index of the `\` character that starts
+## the escape. (Note that we index into `s`, rather than taking a slice and starting at 0,
+## because the latter was found to be slower empirically.)
+##
+## Returns the character's code point and the number of bytes consumed, which could be:
+##   2, for simple sequences like `\n`
+##   6, for characters represented by a single UTF-16 code unit, like `\u00E9` (é)
+##  12, for characters represented by a pair of UTF-16 code units, like `\uD83D\uDE00` (😀)
+##
+## Each branch checks the length before reading; the three checks mirror the three sizes
+## above.
+parse_json_escaped_code_point : Str, U64 -> Try({ code_point : U64, consumed : U64 }, [InvalidJson(Str), ..])
+parse_json_escaped_code_point = |s, index| {
+	len = Str.count_utf8_bytes(s)
+	if index + 2 > len {
+		# the backslash ends the input: a truncated escape
+		return Err(InvalidJson("truncated escape"))
 	}
-	# truncated or unknown escape
-	_ => Err(Json.invalid_json)
+
+	match str_get_utf8_byte_unsafe(s, index + 1) {
+		'"' => Ok({ code_point: '"', consumed: 2 })
+		'\\' => Ok({ code_point: '\\', consumed: 2 })
+		'/' => Ok({ code_point: '/', consumed: 2 })
+		# backspace
+		'b' => Ok({ code_point: 8, consumed: 2 })
+		# form feed
+		'f' => Ok({ code_point: 12, consumed: 2 })
+		# newline
+		'n' => Ok({ code_point: 10, consumed: 2 })
+		# carriage return
+		'r' => Ok({ code_point: 13, consumed: 2 })
+		# tab
+		't' => Ok({ code_point: 9, consumed: 2 })
+		# the four hex digits name a UTF-16 code unit
+		'u' => {
+			if index + 6 > len {
+				# truncated \uXXXX escape
+				return Err(InvalidJson("truncated \\uXXXX escape"))
+			}
+			unit = decode_json_hex4(
+				str_get_utf8_byte_unsafe(s, index + 2),
+				str_get_utf8_byte_unsafe(s, index + 3),
+				str_get_utf8_byte_unsafe(s, index + 4),
+				str_get_utf8_byte_unsafe(s, index + 5),
+			)?
+			if unit >= 0xD800 and unit <= 0xDBFF {
+				# a high surrogate (U+D800..U+DBFF) merges with the low
+				# surrogate escape that must follow
+				if index + 12 > len {
+					return Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+				if str_get_utf8_byte_unsafe(s, index + 6) != '\\' or str_get_utf8_byte_unsafe(s, index + 7) != 'u' {
+					return Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+				low = decode_json_hex4(
+					str_get_utf8_byte_unsafe(s, index + 8),
+					str_get_utf8_byte_unsafe(s, index + 9),
+					str_get_utf8_byte_unsafe(s, index + 10),
+					str_get_utf8_byte_unsafe(s, index + 11),
+				)?
+				if low >= 0xDC00 and low <= 0xDFFF {
+					Ok({ code_point: 0x10000 + (unit - 0xD800) * 0x400 + (low - 0xDC00), consumed: 12 })
+				} else {
+					Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
+				}
+			} else if unit >= 0xDC00 and unit <= 0xDFFF {
+				# unpaired low surrogate (U+DC00..U+DFFF)
+				Err(InvalidJson("unpaired low surrogate escape"))
+			} else {
+				# a BMP code unit already is the code point
+				Ok({ code_point: unit, consumed: 6 })
+			}
+		}
+		# unknown escape
+		_ => Err(InvalidJson("unknown escape character"))
+	}
 }
 
 ## Combine 4 hex-digit bytes (as in \uXXXX) into their numeric value.
@@ -21673,7 +21729,9 @@ decode_json_hex4 = |b0, b1, b2, b3| {
 
 decode_json_hex_digit : U8 -> Try(U64, [InvalidJson(Str), ..])
 decode_json_hex_digit = |byte|
-	hex_digit_value(byte).map_ok(|value| value.to_u64()).map_err(|_| Json.invalid_json)
+	hex_digit_value(byte)
+		.map_ok(|value| value.to_u64())
+		.map_err(|_| InvalidJson("invalid hex digit in \\uXXXX escape"))
 
 ## JSON whitespace per RFC 8259: space, tab, `\n`, or `\r`.
 is_json_whitespace : U8 -> Bool
@@ -21702,12 +21760,8 @@ json_trim_start = |s| {
 	if $index == 0 {
 		s
 	} else {
-		match Str.drop_first_bytes(s, $index) {
-			Ok(trimmed) => trimmed
-			Err(BadUtf8) => {
-				crash "json_trim_start invariant violated: ASCII whitespace ended inside UTF-8"
-			}
-		}
+		# the dropped prefix is ASCII whitespace, so the cut is a UTF-8 boundary
+		str_drop_first_bytes_unsafe(s, $index)
 	}
 }
 
@@ -21773,6 +21827,20 @@ str_get_utf8_byte_unsafe : Str, U64 -> U8
 # Implemented by the compiler. The caller guarantees the byte range is in bounds.
 # The result shares the source string's allocation.
 str_substring_unsafe : Str, U64, U64 -> Str
+
+## Drop `count` bytes from the front of a string as a zero-copy slice ("" when
+## `count` is at or past the end). Bounds are handled; what is NOT checked is
+## that `count` falls on a UTF-8 boundary — the caller guarantees that, so the
+## slice is a valid string. (`Str.drop_first_bytes` is the checked version.)
+str_drop_first_bytes_unsafe : Str, U64 -> Str
+str_drop_first_bytes_unsafe = |s, count| {
+	len = Str.count_utf8_bytes(s)
+	if count >= len {
+		""
+	} else {
+		str_substring_unsafe(s, count, len - count)
+	}
+}
 
 # Implemented by the compiler. Returns 1 (otherwise 0) when List.map may reuse
 # the input list's allocation for its output: the input and output element

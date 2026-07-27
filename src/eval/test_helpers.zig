@@ -134,6 +134,10 @@ const SharedMemoryAllocator = if (builtin.target.os.tag == .freestanding) struct
         return self.fixed_buffer.end_index;
     }
 
+    fn getAvailableSize(self: *const @This()) usize {
+        return self.buffer.len - self.fixed_buffer.end_index;
+    }
+
     fn updateHeader(_: *@This()) void {}
 } else @import("ipc").SharedMemoryAllocator;
 
@@ -330,9 +334,10 @@ else if (builtin.os.tag == .windows)
 else
     2 * 1024 * 1024 * 1024 * 1024;
 
-// Floor for the retry loop. The exhaustive SIMD module needs more than 256 MB,
-// so every 64-bit target must retain the same tested 1 GB minimum as Windows.
-// The allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for 32-bit and
+// Floor for the retry loop. Eval tests place only finalized LIR into this
+// image, but the exhaustive SIMD module needs more than 256 MB, so every
+// 64-bit target retains the same tested 1 GB minimum as Windows. The
+// allocator clamps this down to `EVAL_SHARED_MEMORY_SIZE` for 32-bit and
 // freestanding targets whose preferred reservation is smaller.
 const EVAL_SHARED_MEMORY_MIN_SIZE: usize = 1024 * 1024 * 1024;
 
@@ -1650,8 +1655,8 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        shm_allocator,
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
         .{
             .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
@@ -1666,14 +1671,16 @@ fn lowerCheckedRootWithViews(
             .debug_materialized_out = options.debug_materialized_out,
         },
     );
+    defer lowered.deinit();
 
-    try LirImage.fillHeaderInSharedMemory(
-        image_header,
+    const copied = try LirImage.copyProgramIntoBuffer(
+        shm_allocator,
         shm.base_ptr,
-        shm.getUsedSize(),
+        shm.getUsedSize() + shm.getAvailableSize(),
         &lowered.lir_result,
         &.{},
     );
+    try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
 
     const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize(), lowered.target_usize);
@@ -1891,6 +1898,61 @@ pub fn renderProblemsWithConfig(
 /// List(U8)` statements so re-canonicalizing to render diagnostics can read the
 /// file again; the REPL passes its real `CoreCtx`. Pass `null` when no file
 /// imports are involved.
+/// Whether any diagnostic across the parsed program's modules is
+/// error-severity. Severity lives on the rendered report (the same
+/// classification `Coordinator.hasUserErrors` uses), so each diagnostic
+/// builds its report to ask; info and warning reports never count.
+pub fn parsedResourcesHaveErrorDiagnostics(
+    allocator: Allocator,
+    parsed: *const ParsedResources,
+) Allocator.Error!bool {
+    if (try moduleDiagnosticsHaveErrors(allocator, parsed.module_env, parsed.checker)) return true;
+    for (parsed.extra_modules) |*module| {
+        if (try moduleDiagnosticsHaveErrors(allocator, module.module_env, module.checker)) return true;
+    }
+    return false;
+}
+
+fn moduleDiagnosticsHaveErrors(
+    allocator: Allocator,
+    module_env: *ModuleEnv,
+    checker: *Check,
+) Allocator.Error!bool {
+    const diagnostics = try module_env.getDiagnostics();
+    defer module_env.gpa.free(diagnostics);
+    for (diagnostics) |diagnostic| {
+        var report = try module_env.diagnosticToReport(diagnostic, allocator, "repl");
+        defer report.deinit();
+        switch (report.severity) {
+            .info, .warning => {},
+            .runtime_error, .fatal => return true,
+        }
+    }
+    for (checker.problems.problems.items) |problem| {
+        var report_builder = try check.ReportBuilder.init(
+            allocator,
+            module_env,
+            module_env,
+            &checker.snapshots,
+            &checker.problems,
+            "repl",
+            &.{},
+            &checker.import_mapping,
+            &checker.regions,
+            null,
+        );
+        defer report_builder.deinit();
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        switch (report.severity) {
+            .info, .warning => {},
+            .runtime_error, .fatal => return true,
+        }
+    }
+    return false;
+}
+
+/// Render reported problems for a source string checked with explicit import modules.
 pub fn renderProblemsWithConfigAndImports(
     allocator: Allocator,
     source_kind: SourceKind,
