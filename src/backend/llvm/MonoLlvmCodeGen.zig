@@ -4546,53 +4546,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
     }
 
-    const FloatDecIntTryUnsafeInfo = struct {
-        src_kind: enum { f32, f64, dec },
-        target_bits: u8,
-        target_signed: bool,
-    };
-
-    const TryUnsafeOffsets = struct {
-        success: u32,
-        value: u32,
-    };
-
-    fn floatDecIntTryUnsafeInfo(op: lir.LowLevel) ?FloatDecIntTryUnsafeInfo {
-        return switch (op) {
-            .f32_to_i8_try_unsafe => .{ .src_kind = .f32, .target_bits = 8, .target_signed = true },
-            .f32_to_i16_try_unsafe => .{ .src_kind = .f32, .target_bits = 16, .target_signed = true },
-            .f32_to_i32_try_unsafe => .{ .src_kind = .f32, .target_bits = 32, .target_signed = true },
-            .f32_to_i64_try_unsafe => .{ .src_kind = .f32, .target_bits = 64, .target_signed = true },
-            .f32_to_i128_try_unsafe => .{ .src_kind = .f32, .target_bits = 128, .target_signed = true },
-            .f32_to_u8_try_unsafe => .{ .src_kind = .f32, .target_bits = 8, .target_signed = false },
-            .f32_to_u16_try_unsafe => .{ .src_kind = .f32, .target_bits = 16, .target_signed = false },
-            .f32_to_u32_try_unsafe => .{ .src_kind = .f32, .target_bits = 32, .target_signed = false },
-            .f32_to_u64_try_unsafe => .{ .src_kind = .f32, .target_bits = 64, .target_signed = false },
-            .f32_to_u128_try_unsafe => .{ .src_kind = .f32, .target_bits = 128, .target_signed = false },
-            .f64_to_i8_try_unsafe => .{ .src_kind = .f64, .target_bits = 8, .target_signed = true },
-            .f64_to_i16_try_unsafe => .{ .src_kind = .f64, .target_bits = 16, .target_signed = true },
-            .f64_to_i32_try_unsafe => .{ .src_kind = .f64, .target_bits = 32, .target_signed = true },
-            .f64_to_i64_try_unsafe => .{ .src_kind = .f64, .target_bits = 64, .target_signed = true },
-            .f64_to_i128_try_unsafe => .{ .src_kind = .f64, .target_bits = 128, .target_signed = true },
-            .f64_to_u8_try_unsafe => .{ .src_kind = .f64, .target_bits = 8, .target_signed = false },
-            .f64_to_u16_try_unsafe => .{ .src_kind = .f64, .target_bits = 16, .target_signed = false },
-            .f64_to_u32_try_unsafe => .{ .src_kind = .f64, .target_bits = 32, .target_signed = false },
-            .f64_to_u64_try_unsafe => .{ .src_kind = .f64, .target_bits = 64, .target_signed = false },
-            .f64_to_u128_try_unsafe => .{ .src_kind = .f64, .target_bits = 128, .target_signed = false },
-            .dec_to_i8_try_unsafe => .{ .src_kind = .dec, .target_bits = 8, .target_signed = true },
-            .dec_to_i16_try_unsafe => .{ .src_kind = .dec, .target_bits = 16, .target_signed = true },
-            .dec_to_i32_try_unsafe => .{ .src_kind = .dec, .target_bits = 32, .target_signed = true },
-            .dec_to_i64_try_unsafe => .{ .src_kind = .dec, .target_bits = 64, .target_signed = true },
-            .dec_to_i128_try_unsafe => .{ .src_kind = .dec, .target_bits = 128, .target_signed = true },
-            .dec_to_u8_try_unsafe => .{ .src_kind = .dec, .target_bits = 8, .target_signed = false },
-            .dec_to_u16_try_unsafe => .{ .src_kind = .dec, .target_bits = 16, .target_signed = false },
-            .dec_to_u32_try_unsafe => .{ .src_kind = .dec, .target_bits = 32, .target_signed = false },
-            .dec_to_u64_try_unsafe => .{ .src_kind = .dec, .target_bits = 64, .target_signed = false },
-            .dec_to_u128_try_unsafe => .{ .src_kind = .dec, .target_bits = 128, .target_signed = false },
-            else => null,
-        };
-    }
-
     const FloatToIntTruncInfo = struct {
         src_is_f32: bool,
         target_bits: u8,
@@ -4633,62 +4586,6 @@ pub const MonoLlvmCodeGen = struct {
                 builder.intValue(.i32, @as(u32, info.target_bits) / 8) catch return error.OutOfMemory,
             },
         );
-    }
-
-    fn tryUnsafeOffsets(self: *MonoLlvmCodeGen, ret_layout: layout.Idx) Error!TryUnsafeOffsets {
-        const ret_layout_val = self.layoutValue(ret_layout);
-        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
-        const struct_idx = ret_layout_val.getStruct().idx;
-        return .{
-            .success = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 0),
-            .value = self.layouts().getStructFieldOffsetByOriginalIndex(struct_idx, 1),
-        };
-    }
-
-    fn emitFloatDecIntTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, info: FloatDecIntTryUnsafeInfo) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const allocated = try self.allocAggregateTarget(target);
-        const offsets = try self.tryUnsafeOffsets(allocated.layout_idx);
-        const val_size: u32 = @as(u32, info.target_bits) / 8;
-
-        switch (info.src_kind) {
-            .f32, .f64 => {
-                const is_f32 = info.src_kind == .f32;
-                const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
-                const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-                try self.callBuiltinVoid(
-                    if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
-                    &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
-                    &.{
-                        allocated.ptr,
-                        value,
-                        builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
-                        builder.intValue(.i32, @intFromBool(info.target_signed)) catch return error.OutOfMemory,
-                        builder.intValue(.i32, val_size) catch return error.OutOfMemory,
-                        builder.intValue(.i32, offsets.success) catch return error.OutOfMemory,
-                        builder.intValue(.i32, offsets.value) catch return error.OutOfMemory,
-                    },
-                );
-            },
-            .dec => {
-                const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
-                const parts = try self.splitI128Value(dec_value);
-                try self.callBuiltinVoid(
-                    builtinSymbol(.dec_to_int_try_unsafe),
-                    &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32, .i32 },
-                    &.{
-                        allocated.ptr,
-                        parts.low,
-                        parts.high,
-                        builder.intValue(.i32, info.target_bits) catch return error.OutOfMemory,
-                        builder.intValue(.i32, @intFromBool(info.target_signed)) catch return error.OutOfMemory,
-                        builder.intValue(.i32, val_size) catch return error.OutOfMemory,
-                        builder.intValue(.i32, offsets.success) catch return error.OutOfMemory,
-                        builder.intValue(.i32, offsets.value) catch return error.OutOfMemory,
-                    },
-                );
-            },
-        }
     }
 
     fn emitIntToDec(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
