@@ -308,12 +308,14 @@ const Solver = struct {
     /// position flips from borrowed to owned.
     param_uses: std.ArrayList(ParamUseFact),
     /// Reachable returned locals and joins, partitioned by source proc.
+    /// This is the sole structural walk of the ownership-neutral CFG. Every
+    /// analysis below projects its exact facts from this shared inventory.
+    proc_stmts: []std.ArrayList(LIR.CFStmtId),
     proc_returns: []std.ArrayList(u32),
     proc_join_bodies: []std.ArrayList(JoinBody),
     /// Reachable direct calls, retained for the return-mode binding update
     /// and unique-return dependency solve.
     direct_calls: std.ArrayList(DirectCallFact),
-    visited: std.AutoHashMap(LIR.CFStmtId, void),
     stack: std.ArrayList(LIR.CFStmtId),
 };
 
@@ -344,12 +346,13 @@ pub fn solve(
         .maybe_uninitialized_condition = try allocator.alloc(u32, local_count),
         .maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count),
         .param_uses = .empty,
+        .proc_stmts = try allocator.alloc(std.ArrayList(LIR.CFStmtId), proc_count),
         .proc_returns = try allocator.alloc(std.ArrayList(u32), proc_count),
         .proc_join_bodies = try allocator.alloc(std.ArrayList(JoinBody), proc_count),
         .direct_calls = .empty,
-        .visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator),
         .stack = std.ArrayList(LIR.CFStmtId).empty,
     };
+    @memset(solver.proc_stmts, .empty);
     @memset(solver.proc_returns, .empty);
     @memset(solver.proc_join_bodies, .empty);
     var solver_sigs_kept = false;
@@ -375,12 +378,13 @@ pub fn solve(
         if (!solver_sigs_kept) allocator.free(solver.maybe_uninitialized_condition);
         if (!solver_sigs_kept) allocator.free(solver.maybe_uninitialized_condition_mask);
         solver.param_uses.deinit(allocator);
+        for (solver.proc_stmts) |*stmts| stmts.deinit(allocator);
+        allocator.free(solver.proc_stmts);
         for (solver.proc_returns) |*returns| returns.deinit(allocator);
         allocator.free(solver.proc_returns);
         for (solver.proc_join_bodies) |*joins| joins.deinit(allocator);
         allocator.free(solver.proc_join_bodies);
         solver.direct_calls.deinit(allocator);
-        solver.visited.deinit();
         solver.stack.deinit(allocator);
         if (!solver_sigs_kept) allocator.free(solver.sigs);
     }
@@ -390,6 +394,7 @@ pub fn solve(
     @memset(solver.maybe_uninitialized_condition, no_local);
     @memset(solver.maybe_uninitialized_condition_mask, 0);
 
+    try liftReachableStatements(&solver);
     try computePins(&solver, roots);
     try computeSccs(&solver);
 
@@ -446,7 +451,7 @@ pub fn solve(
     var binding = try resolveBindings(&solver, local_count);
     errdefer binding.deinit(allocator);
 
-    var visible = try computeVisibility(allocator, store, rc_local, &solver.pinned);
+    var visible = try computeVisibilityFromLift(allocator, store, rc_local, &solver.pinned, solver.proc_stmts, solver.proc_returns);
     errdefer visible.deinit(allocator);
 
     // Unique returns form a second monotone dependency graph: proc-return
@@ -456,7 +461,7 @@ pub fn solve(
     // worklist; no uniqueness rescan is needed.
     var unique_origins = try UniqueOriginFacts.init(allocator, rc_local, proc_count);
     defer unique_origins.deinit();
-    var uniqueness = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, &unique_origins);
+    var uniqueness = try computeUniquenessDetailed(allocator, store, rc_local, .{ .sigs = solver.sigs }, &unique_origins, solver.proc_stmts);
     {
         errdefer uniqueness.deinit(allocator);
         try solveUniqueReturnModes(&solver, &uniqueness, &unique_origins);
@@ -879,6 +884,119 @@ fn solveUniqueReturnModes(
     try work.run();
 }
 
+/// Lifts each procedure's reachable ownership-neutral statements exactly
+/// once. The lists are the producer-authored CFG projected into a stable
+/// per-procedure inventory; pins, call SCCs, binding/signature facts,
+/// visibility, uniqueness, returns, and joins all consume this same lift.
+fn liftReachableStatements(solver: *Solver) SolveError!void {
+    var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(solver.allocator, solver.store.cfStmtCount());
+    defer seen.deinit(solver.allocator);
+
+    for (0..solver.store.procSpecCount()) |proc_index| {
+        const proc = solver.store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const body = proc.body orelse continue;
+        const stmts = &solver.proc_stmts[proc_index];
+        solver.stack.clearRetainingCapacity();
+        try solver.stack.append(solver.allocator, body);
+        while (solver.stack.pop()) |current| {
+            const stmt_index = @intFromEnum(current);
+            if (seen.isSet(stmt_index)) continue;
+            seen.set(stmt_index);
+            try stmts.append(solver.allocator, current);
+            try appendStructuralSuccessors(solver.allocator, solver.store, &solver.stack, solver.store.getCFStmt(current));
+        }
+        for (stmts.items) |stmt| seen.unset(@intFromEnum(stmt));
+    }
+}
+
+fn appendStructuralSuccessors(
+    allocator: Allocator,
+    store: *const LirStore,
+    stack: *std.ArrayList(LIR.CFStmtId),
+    stmt: LIR.CFStmt,
+) SolveError!void {
+    switch (stmt) {
+        .switch_stmt => |switch_stmt| {
+            const branches = store.getCFSwitchBranches(switch_stmt.branches);
+            for (0..GuardedList.borrowLen(branches)) |branch_index| {
+                try stack.append(allocator, GuardedList.at(branches, branch_index).body);
+            }
+            try stack.append(allocator, switch_stmt.default_branch);
+            if (switch_stmt.continuation) |continuation| try stack.append(allocator, continuation);
+        },
+        .switch_initialized_payload => |switch_stmt| {
+            try stack.append(allocator, switch_stmt.initialized_branch);
+            try stack.append(allocator, switch_stmt.uninitialized_branch);
+        },
+        .str_match => |str_match| {
+            try stack.append(allocator, str_match.on_match);
+            try stack.append(allocator, str_match.on_miss);
+        },
+        .str_match_set => |str_match_set| {
+            const arms = store.getStrMatchArms(str_match_set.arms);
+            for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                try stack.append(allocator, GuardedList.at(arms, arm_index).on_match);
+            }
+            try stack.append(allocator, str_match_set.on_miss);
+        },
+        .join => |join_stmt| {
+            try stack.append(allocator, join_stmt.body);
+            try stack.append(allocator, join_stmt.remainder);
+        },
+        inline .assign_ref,
+        .assign_literal,
+        .init_uninitialized,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |linear| try stack.append(allocator, linear.next),
+        .jump,
+        .ret,
+        .crash,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .loop_continue,
+        .loop_break,
+        => {},
+    }
+}
+
+/// Exact reachable statement set used by independent ARC certifier mirrors.
+/// The main solver retains the stronger per-proc inventory from its one lift.
+fn reachableStatementSet(allocator: Allocator, store: *const LirStore) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    errdefer reachable.deinit(allocator);
+    var stack = std.ArrayList(LIR.CFStmtId).empty;
+    defer stack.deinit(allocator);
+
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        if (proc.body) |body| try stack.append(allocator, body);
+    }
+    while (stack.pop()) |current| {
+        const stmt_index = @intFromEnum(current);
+        if (reachable.isSet(stmt_index)) continue;
+        reachable.set(stmt_index);
+        try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+    }
+    return reachable;
+}
+
 fn collectAll(solver: *Solver) SolveError!void {
     @memset(solver.defs, .none);
     @memset(solver.demand, false);
@@ -887,18 +1005,13 @@ fn collectAll(solver: *Solver) SolveError!void {
     const store = solver.store;
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        const body = proc.body orelse continue;
+        _ = proc.body orelse continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
             const param = GuardedList.at(params, param_index);
             noteDef(solver.defs, param, .fresh);
         }
-        solver.visited.clearRetainingCapacity();
-        solver.stack.clearRetainingCapacity();
-        try solver.stack.append(solver.allocator, body);
-        while (solver.stack.pop()) |current| {
-            if (solver.visited.contains(current)) continue;
-            try solver.visited.put(current, {});
+        for (solver.proc_stmts[proc_index].items) |current| {
             try collectStmt(solver, @intCast(proc_index), current);
         }
     }
@@ -1072,15 +1185,11 @@ fn collectStmt(
                     noteAlias(solver, assign.target, op.backing_ref);
                 },
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_literal => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
-            try solver.stack.append(allocator, assign.next);
         },
-        .init_uninitialized => |init| {
-            try solver.stack.append(allocator, init.next);
-        },
+        .init_uninitialized => {},
         .assign_call => |assign| {
             const callee_sig = solver.sigs[@intFromEnum(assign.proc)];
             const args = store.getLocalSpan(assign.args);
@@ -1111,7 +1220,6 @@ fn collectStmt(
                 if (!tail_call and callee_sig.paramMode(position) == .borrowed) continue;
                 noteDemand(solver, arg);
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_call_erased => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
@@ -1122,13 +1230,11 @@ fn collectStmt(
                 if (!solver.rc_local[@intFromEnum(arg)]) continue;
                 noteDemand(solver, arg);
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_packed_erased_fn => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             if (assign.capture) |capture| noteDemand(solver, capture);
             if (assign.reuse) |reuse| noteDemand(solver, reuse);
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_low_level => |assign| {
             const args = store.getLocalSpan(assign.args);
@@ -1152,7 +1258,6 @@ fn collectStmt(
                     noteDemand(solver, arg);
                 }
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_list => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
@@ -1161,7 +1266,6 @@ fn collectStmt(
                 const elem = GuardedList.at(elems, index);
                 noteDemand(solver, elem);
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_struct => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
@@ -1170,12 +1274,10 @@ fn collectStmt(
                 const field = GuardedList.at(fields, index);
                 noteDemand(solver, field);
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .assign_tag => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             if (assign.payload) |payload| noteDemand(solver, payload);
-            try solver.stack.append(allocator, assign.next);
         },
         .store_struct => |assign| {
             noteDemand(solver, assign.dest);
@@ -1184,45 +1286,28 @@ fn collectStmt(
                 const field = GuardedList.at(fields, index);
                 noteDemand(solver, field);
             }
-            try solver.stack.append(allocator, assign.next);
         },
         .store_tag => |assign| {
             noteDemand(solver, assign.dest);
             if (assign.payload) |payload| noteDemand(solver, payload);
-            try solver.stack.append(allocator, assign.next);
         },
         .set_local => |assign| {
             noteDef(solver.defs, assign.target, .fresh);
             if (assign.target != assign.value) noteDemand(solver, assign.value);
-            try solver.stack.append(allocator, assign.next);
         },
-        .debug => |debug_stmt| try solver.stack.append(allocator, debug_stmt.next),
+        .debug => {},
         // The failure report takes ownership of the message.
         .expect_err => |expect_err_stmt| noteDemand(solver, expect_err_stmt.message),
-        .expect => |expect_stmt| try solver.stack.append(allocator, expect_stmt.next),
-        .comptime_branch_taken => |marker| try solver.stack.append(allocator, marker.next),
-        .incref => |rc| try solver.stack.append(allocator, rc.next),
-        .decref => |rc| try solver.stack.append(allocator, rc.next),
+        .expect => {},
+        .comptime_branch_taken => {},
+        .incref => {},
+        .decref => {},
         .decref_if_initialized => |rc| {
             noteDemand(solver, rc.value);
-            try solver.stack.append(allocator, rc.next);
         },
-        .free => |rc| try solver.stack.append(allocator, rc.next),
-        .switch_stmt => |switch_stmt| {
-            const branches = store.getCFSwitchBranches(switch_stmt.branches);
-            for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                const branch = GuardedList.at(branches, branch_index);
-                try solver.stack.append(allocator, branch.body);
-            }
-            try solver.stack.append(allocator, switch_stmt.default_branch);
-            if (switch_stmt.continuation) |continuation| {
-                try solver.stack.append(allocator, continuation);
-            }
-        },
-        .switch_initialized_payload => |switch_stmt| {
-            try solver.stack.append(allocator, switch_stmt.initialized_branch);
-            try solver.stack.append(allocator, switch_stmt.uninitialized_branch);
-        },
+        .free => {},
+        .switch_stmt => {},
+        .switch_initialized_payload => {},
         .str_match => |str_match| {
             const steps = store.getStrMatchSteps(str_match.steps);
             for (0..GuardedList.borrowLen(steps)) |step_index| {
@@ -1232,8 +1317,6 @@ fn collectStmt(
                     .view => |local| noteDef(solver.defs, local, .{ .borrow_capable = @intFromEnum(str_match.source) }),
                 }
             }
-            try solver.stack.append(allocator, str_match.on_match);
-            try solver.stack.append(allocator, str_match.on_miss);
         },
         .str_match_set => |str_match_set| {
             const arms = store.getStrMatchArms(str_match_set.arms);
@@ -1247,9 +1330,7 @@ fn collectStmt(
                         .view => |local| noteDef(solver.defs, local, .{ .borrow_capable = @intFromEnum(str_match_set.source) }),
                     }
                 }
-                try solver.stack.append(allocator, arm.on_match);
             }
-            try solver.stack.append(allocator, str_match_set.on_miss);
         },
         .join => |join_stmt| {
             // Join parameters are written at every jump; they stay owned.
@@ -1278,8 +1359,6 @@ fn collectStmt(
                 .id = join_stmt.id,
                 .body = join_stmt.body,
             });
-            try solver.stack.append(allocator, join_stmt.body);
-            try solver.stack.append(allocator, join_stmt.remainder);
         },
         .ret => |ret_stmt| try solver.proc_returns[proc_index].append(allocator, @intFromEnum(ret_stmt.value)),
         .jump, .crash, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1337,7 +1416,17 @@ fn lowLevelBorrowSource(
 }
 
 fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!void {
-    fillPinnedProcs(solver.store, roots, &solver.pinned);
+    fillPinnedProcContracts(solver.store, roots, &solver.pinned);
+    for (solver.proc_stmts) |stmts| {
+        for (stmts.items) |stmt_id| switch (solver.store.getCFStmt(stmt_id)) {
+            .assign_literal => |assign| switch (assign.value) {
+                .proc_ref => |proc| solver.pinned.set(@intFromEnum(proc)),
+                else => {},
+            },
+            .assign_packed_erased_fn => |assign| solver.pinned.set(@intFromEnum(assign.proc)),
+            else => {},
+        };
+    }
 }
 
 /// Computes the pinned-proc set over a freshly allocated bit set; the
@@ -1349,11 +1438,22 @@ pub fn computePinnedProcs(
 ) SolveError!std.bit_set.DynamicBitSetUnmanaged {
     var pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.procSpecCount());
     errdefer pinned.deinit(allocator);
-    fillPinnedProcs(store, roots, &pinned);
+    fillPinnedProcContracts(store, roots, &pinned);
+    var reachable = try reachableStatementSet(allocator, store);
+    defer reachable.deinit(allocator);
+    var iter = reachable.iterator(.{});
+    while (iter.next()) |stmt_index| switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
+        .assign_literal => |assign| switch (assign.value) {
+            .proc_ref => |proc| pinned.set(@intFromEnum(proc)),
+            else => {},
+        },
+        .assign_packed_erased_fn => |assign| pinned.set(@intFromEnum(assign.proc)),
+        else => {},
+    };
     return pinned;
 }
 
-fn fillPinnedProcs(
+fn fillPinnedProcContracts(
     store: *const LirStore,
     roots: []const LIR.LirProcSpecId,
     pinned: *std.bit_set.DynamicBitSetUnmanaged,
@@ -1365,19 +1465,6 @@ fn fillPinnedProcs(
         const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
         if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable) {
             pinned.set(proc_index);
-        }
-    }
-    // Procs whose address escapes are callable through paths the solver
-    // cannot see; they keep the all-owned ABI.
-    for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
-        switch (stmt) {
-            .assign_literal => |assign| switch (assign.value) {
-                .proc_ref => |proc| pinned.set(@intFromEnum(proc)),
-                else => {},
-            },
-            .assign_packed_erased_fn => |assign| pinned.set(@intFromEnum(assign.proc)),
-            else => {},
         }
     }
 }
@@ -1394,8 +1481,25 @@ pub fn computeVisibility(
     rc_local: []const bool,
     pinned: *const std.bit_set.DynamicBitSetUnmanaged,
 ) SolveError!std.bit_set.DynamicBitSetUnmanaged {
+    return computeVisibilityFromLift(allocator, store, rc_local, pinned, null, null);
+}
+
+fn computeVisibilityFromLift(
+    allocator: Allocator,
+    store: *const LirStore,
+    rc_local: []const bool,
+    pinned: *const std.bit_set.DynamicBitSetUnmanaged,
+    proc_stmts: ?[]const std.ArrayList(LIR.CFStmtId),
+    lifted_returns: ?[]const std.ArrayList(u32),
+) SolveError!std.bit_set.DynamicBitSetUnmanaged {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
+
+    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    defer reachable.deinit(allocator);
+    if (proc_stmts) |by_proc| {
+        for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+    }
 
     var visited = std.AutoHashMap(LIR.CFStmtId, void).init(allocator);
     defer visited.deinit();
@@ -1414,52 +1518,59 @@ pub fn computeVisibility(
         allocator.free(ret_values);
     }
     @memset(ret_values, .empty);
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
-        const body = proc.body orelse continue;
-        visited.clearRetainingCapacity();
-        stack.clearRetainingCapacity();
-        try stack.append(allocator, body);
-        while (stack.pop()) |current| {
-            if (visited.contains(current)) continue;
-            try visited.put(current, {});
-            switch (store.getCFStmt(current)) {
-                .ret => |ret_stmt| try ret_values[proc_index].append(allocator, @intFromEnum(ret_stmt.value)),
-                .switch_stmt => |stmt| {
-                    const branches = store.getCFSwitchBranches(stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try stack.append(allocator, branch.body);
-                    }
-                    try stack.append(allocator, stmt.default_branch);
-                    if (stmt.continuation) |continuation| {
-                        try stack.append(allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |stmt| {
-                    try stack.append(allocator, stmt.initialized_branch);
-                    try stack.append(allocator, stmt.uninitialized_branch);
-                },
-                .str_match => |stmt| {
-                    try stack.append(allocator, stmt.on_match);
-                    try stack.append(allocator, stmt.on_miss);
-                },
-                .str_match_set => |stmt| {
-                    const arms = store.getStrMatchArms(stmt.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try stack.append(allocator, arm.on_match);
-                    }
-                    try stack.append(allocator, stmt.on_miss);
-                },
-                .join => |stmt| {
-                    try stack.append(allocator, stmt.body);
-                    try stack.append(allocator, stmt.remainder);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
-                    try stack.append(allocator, stmt.next);
-                },
-                .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+    if (lifted_returns) |returns_by_proc| {
+        for (returns_by_proc, 0..) |returns, proc_index| {
+            try ret_values[proc_index].appendSlice(allocator, returns.items);
+        }
+    } else {
+        for (0..store.procSpecCount()) |proc_index| {
+            const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+            const body = proc.body orelse continue;
+            visited.clearRetainingCapacity();
+            stack.clearRetainingCapacity();
+            try stack.append(allocator, body);
+            while (stack.pop()) |current| {
+                if (visited.contains(current)) continue;
+                try visited.put(current, {});
+                reachable.set(@intFromEnum(current));
+                switch (store.getCFStmt(current)) {
+                    .ret => |ret_stmt| try ret_values[proc_index].append(allocator, @intFromEnum(ret_stmt.value)),
+                    .switch_stmt => |stmt| {
+                        const branches = store.getCFSwitchBranches(stmt.branches);
+                        for (0..GuardedList.borrowLen(branches)) |branch_index| {
+                            const branch = GuardedList.at(branches, branch_index);
+                            try stack.append(allocator, branch.body);
+                        }
+                        try stack.append(allocator, stmt.default_branch);
+                        if (stmt.continuation) |continuation| {
+                            try stack.append(allocator, continuation);
+                        }
+                    },
+                    .switch_initialized_payload => |stmt| {
+                        try stack.append(allocator, stmt.initialized_branch);
+                        try stack.append(allocator, stmt.uninitialized_branch);
+                    },
+                    .str_match => |stmt| {
+                        try stack.append(allocator, stmt.on_match);
+                        try stack.append(allocator, stmt.on_miss);
+                    },
+                    .str_match_set => |stmt| {
+                        const arms = store.getStrMatchArms(stmt.arms);
+                        for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                            const arm = GuardedList.at(arms, arm_index);
+                            try stack.append(allocator, arm.on_match);
+                        }
+                        try stack.append(allocator, stmt.on_miss);
+                    },
+                    .join => |stmt| {
+                        try stack.append(allocator, stmt.body);
+                        try stack.append(allocator, stmt.remainder);
+                    },
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                        try stack.append(allocator, stmt.next);
+                    },
+                    .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                }
             }
         }
     }
@@ -1515,6 +1626,7 @@ pub fn computeVisibility(
     }.go;
 
     for (0..store.cfStmtCount()) |stmt_index| {
+        if (!reachable.isSet(stmt_index)) continue;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
         switch (stmt) {
             .assign_ref => |assign| {
@@ -1897,15 +2009,16 @@ fn collectUniqueOriginStmt(facts: *UniqueOriginFacts, store: *const LirStore, st
 /// 1). A multi-bound alias target never inherits. Variant parameter seeds
 /// are not applied here: variants share parameter locals with their source
 /// proc, so emission and the certifier overlay `RcSig.unique_params` per
-/// proc. Statement iteration is flat, so unreachable statements only
-/// destroy uniqueness, which is conservative-sound.
+/// proc. Only reachable statements contribute; the solver consumes its
+/// shared per-proc lift and the independent certifier mirror derives the
+/// same reachable set from the completed store.
 pub fn computeUniqueness(
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null);
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null);
 }
 
 fn computeUniquenessDetailed(
@@ -1914,8 +2027,18 @@ fn computeUniquenessDetailed(
     rc_local: []const bool,
     sigs: arc_sig.SigTable,
     origin_facts: ?*UniqueOriginFacts,
+    proc_stmts: ?[]const std.ArrayList(LIR.CFStmtId),
 ) SolveError!Uniqueness {
     const local_count = store.localCount();
+
+    var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
+    defer reachable.deinit(allocator);
+    if (proc_stmts) |by_proc| {
+        for (by_proc) |stmts| for (stmts.items) |stmt| reachable.set(@intFromEnum(stmt));
+    } else {
+        reachable.deinit(allocator);
+        reachable = try reachableStatementSet(allocator, store);
+    }
 
     var born = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     errdefer born.deinit(allocator);
@@ -2046,6 +2169,7 @@ fn computeUniquenessDetailed(
     }
 
     for (0..store.cfStmtCount()) |stmt_index| {
+        if (!reachable.isSet(stmt_index)) continue;
         const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
         if (origin_facts) |facts| try collectUniqueOriginStmt(facts, store, stmt);
         switch (stmt) {
@@ -2311,60 +2435,14 @@ fn computeSccs(solver: *Solver) SolveError!void {
     const store = solver.store;
     const proc_count = store.procSpecCount();
 
-    // Collect direct-call edges.
+    // Project direct-call edges from the shared reachable-statement lift.
     var edges = std.ArrayList([2]u32).empty;
     defer edges.deinit(allocator);
     for (0..store.procSpecCount()) |caller| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(caller))));
-        const body = proc.body orelse continue;
-        solver.visited.clearRetainingCapacity();
-        solver.stack.clearRetainingCapacity();
-        try solver.stack.append(allocator, body);
-        while (solver.stack.pop()) |current| {
-            if (solver.visited.contains(current)) continue;
-            try solver.visited.put(current, {});
-            switch (store.getCFStmt(current)) {
-                .assign_call => |assign| {
-                    try edges.append(allocator, .{ @intCast(caller), @intFromEnum(assign.proc) });
-                    try solver.stack.append(allocator, assign.next);
-                },
-                .switch_stmt => |s| {
-                    const branches = store.getCFSwitchBranches(s.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try solver.stack.append(allocator, branch.body);
-                    }
-                    try solver.stack.append(allocator, s.default_branch);
-                    if (s.continuation) |continuation| {
-                        try solver.stack.append(allocator, continuation);
-                    }
-                },
-                .switch_initialized_payload => |s| {
-                    try solver.stack.append(allocator, s.initialized_branch);
-                    try solver.stack.append(allocator, s.uninitialized_branch);
-                },
-                .str_match => |s| {
-                    try solver.stack.append(allocator, s.on_match);
-                    try solver.stack.append(allocator, s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = store.getStrMatchArms(s.arms);
-                    for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                        const arm = GuardedList.at(arms, arm_index);
-                        try solver.stack.append(allocator, arm.on_match);
-                    }
-                    try solver.stack.append(allocator, s.on_miss);
-                },
-                .join => |j| {
-                    try solver.stack.append(allocator, j.body);
-                    try solver.stack.append(allocator, j.remainder);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                    try solver.stack.append(allocator, s.next);
-                },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            }
-        }
+        for (solver.proc_stmts[caller].items) |current| switch (store.getCFStmt(current)) {
+            .assign_call => |assign| try edges.append(allocator, .{ @intCast(caller), @intFromEnum(assign.proc) }),
+            else => {},
+        };
     }
 
     // Adjacency lists.

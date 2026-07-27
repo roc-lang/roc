@@ -4644,9 +4644,11 @@ exactly as all-owned insertion would emit it.
 - `RcSig`: the solved ownership signature of one proc — a mode for every
   refcounted param and return position, plus the lifetime relation between
   borrowed returns and the params they may borrow from.
-- emission: the final walk that writes RC statements into statement chains.
-  Emission consumes the solved modes and precise lifetimes; it makes no
-  decisions of its own.
+- `ArcPlan`: stage-local, per-emission decisions for each statement: concrete
+  moves, retains, releases, call target, and uniqueness bits. It contains no
+  ownership set, liveness row, or solver context.
+- materialization: consumes an `ArcPlan` and writes RC statements into LIR
+  statement chains. Materialization makes no ownership or liveness decisions.
 
 The paper's `dup` corresponds to LIR `incref`, its `drop` to `decref`/`free`,
 and its moves to the absence of both at a final owned occurrence.
@@ -4819,12 +4821,19 @@ before solving and never weakened:
 
 ### Interprocedural Solving
 
-The proc call graph is derived from `assign_call` statements over
-`LirStore.getProcSpecs()`. The parameter/return solver lifts the
-ownership-neutral bodies into exact facts once: local definitions and static
-demands, pure-alias edges, direct-call argument dependencies, reachable return
-locals, and join bodies. No signature round rescans a proc body. Signatures
-solve in two phases:
+The solver performs one exact structural walk of every ownership-neutral proc
+body and records its reachable statements as a per-proc inventory. Pinned-proc
+escapes, call-graph SCCs, binding and signature facts, visibility edges,
+uniqueness facts, reachable returns, and join bodies are all projections of
+that inventory; none independently rediscovers CFG reachability. The inventory
+is stage-local and exact: it records every reachable statement and no
+unreachable statement, with no cap or approximation.
+
+The proc call graph is derived from the lifted `assign_call` statements. The
+parameter/return solver projects local definitions and static demands,
+pure-alias edges, direct-call argument dependencies, reachable return locals,
+and join bodies from the same lift. No signature round rescans a proc body.
+Signatures solve in two phases:
 
 1. Parameter modes reach a fixpoint with returns treated as owned: non-pinned
    refcounted parameter positions start borrowed and flip to owned when any
@@ -4866,10 +4875,13 @@ emission never places a release after the call on that path. Calls that
 leave the SCC keep borrowed positions, since the caller's drops precede the
 tail call there only when the values genuinely die earlier.
 
-### RC Statement Emission
+### RC Planning and Materialization
 
-Emission walks each proc once, consuming solved modes and precise lifetimes,
-and rebuilds statement chains with the same insertion machinery used today:
+After ownership summaries settle, planning consumes solved modes and precise
+lifetimes and produces an explicit `ArcPlan` for each structured path. The
+plan records every concrete move/retain/release decision and any call-variant
+or uniqueness choice. Materialization consumes those decisions and rebuilds
+statement chains with the same insertion machinery used today:
 
 - borrowed occurrence: no statements.
 - owned occurrence that is not the final occurrence on its path: `incref`
@@ -4901,7 +4913,7 @@ deallocation with nested decrefs through the RC helper plan.
 RC helper selection is unchanged: each emitted statement carries the helper
 derived from the local's layout, and helper choice stays in this stage.
 
-Emission decisions consume one precomputed per-statement liveness table over
+Planning decisions consume one precomputed per-statement liveness table over
 the ownership-neutral statement graph. Each proc has its own dense ARC domain,
 constructed directly from that proc's complete, unique, sorted `frame_locals`
 inventory. The domain contains only locals whose committed layouts contain
@@ -4925,17 +4937,32 @@ on-demand forward scans. Compile-time performance work may change its storage
 or construction, but must not weaken the liveness questions, omit resource
 bits, or approximate the least fixed point.
 
-Rows whose explicit domain width fits in one machine word are stored inline;
-wider rows use exact allocated words. This is a representation choice made
-solely from the producer-authored domain width, not a heuristic. Keep-free rows
-are indexed directly by dense ownership-neutral statement id, while the less
-common loop-keep rows retain their exact `(statement, loop identity)` key.
+Ownership sets and liveness rows whose explicit domain width fits in one
+machine word are stored inline; wider sets use exact allocated words. This is a
+representation choice made solely from the producer-authored domain width, not
+a heuristic. The liveness graph uses a reusable dense statement-to-node table,
+so successor, predecessor, and worklist edges are direct node indices rather
+than statement hash lookups. Keep-free rows are indexed directly by dense
+ownership-neutral statement id, while the less common loop-keep rows retain
+their exact `(statement, loop identity)` key.
 
-All solver-summary and rewrite-task state for one proc emission has the same
-lifetime and is allocated from one proc-scoped arena. Emitted LIR remains in
-the `LirStore`; arena-backed frames, ownership snapshots, branch results, and
+Join ownership is a must-property. Each reachable jump site contributes a
+state that can only shrink; a join summary maintains their running
+intersection incrementally, and recomputes the body keep-set from that exact
+meet plus the join parameters. A site contribution that shrinks without
+changing the global meet cannot schedule downstream work. Each loop identity
+also records exactly which liveness rows were cached for it and whether any of
+those rows read the loop keep-set. When the keep-set shrinks, only those rows
+are invalidated; ARC never scans the whole cache and never invalidates a row
+whose equation did not depend on the changed input.
+
+All solver-summary, planning, and materialization state for one proc emission
+has the same lifetime and is allocated from one proc-scoped arena. Emitted LIR remains in
+the `LirStore`; arena-backed plans, ownership snapshots, branch results, and
 decision slices are discarded together only after the proc body and metadata
-have been committed.
+have been committed. `ArcPlan` is the phase boundary: plan construction may
+query ownership and liveness, while its materializer accepts neither and only
+follows the explicit decisions.
 
 Immediate `incref`/matching-`decref` cancellation is part of retain
 construction: count one cancels the pair and larger counts are reduced by one.

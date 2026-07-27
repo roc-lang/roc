@@ -45,6 +45,7 @@ pub const InsertOptions = struct {
 };
 
 const no_proc_local_index = std.math.maxInt(u32);
+const no_stmt_node_index = std.math.maxInt(u32);
 const no_arc_bit = std.math.maxInt(u32);
 const arc_bit_needed = no_arc_bit - 1;
 
@@ -267,6 +268,14 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer store.allocator.free(proc_local_index);
     @memset(proc_local_index, no_proc_local_index);
 
+    // Liveness graphs are built serially. Reuse one dense statement-to-node
+    // table for every build and clear exactly the statements each graph
+    // touched, avoiding hash lookup in the dataflow inner loop.
+    const stmt_node_indices = try store.allocator.alloc(u32, store.cfStmtCount());
+    defer store.allocator.free(stmt_node_indices);
+    @memset(stmt_node_indices, no_stmt_node_index);
+    inserter.stmt_node_indices = stmt_node_indices;
+
     var read_cache_arena = std.heap.ArenaAllocator.init(store.allocator);
     defer read_cache_arena.deinit();
     inserter.read_cache_arena = &read_cache_arena;
@@ -274,24 +283,18 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     // Keep-free rows are the overwhelmingly common case and their statement
     // IDs are already dense, so index them directly. Loop-keyed rows remain
     // in a map because their key has a second, dynamically-created identity.
-    const keep_free_reads_cache = try store.allocator.alloc(?LivenessSet, store.cfStmtCount());
+    const keep_free_reads_cache = try store.allocator.alloc(?ExactBitSet, store.cfStmtCount());
     defer store.allocator.free(keep_free_reads_cache);
     @memset(keep_free_reads_cache, null);
     inserter.keep_free_reads_cache = keep_free_reads_cache;
     var keep_free_cached_stmts = std.ArrayList(LIR.CFStmtId).empty;
     defer keep_free_cached_stmts.deinit(store.allocator);
     inserter.keep_free_cached_stmts = &keep_free_cached_stmts;
-    var reads_before_rebind_cache = std.AutoHashMap(ReadBeforeRebindKey, LivenessSet).init(store.allocator);
+    var reads_before_rebind_cache = std.AutoHashMap(ReadBeforeRebindKey, ExactBitSet).init(store.allocator);
     defer reads_before_rebind_cache.deinit();
     inserter.reads_before_rebind_cache = &reads_before_rebind_cache;
-    var active_loop_keep_ids = std.AutoHashMap(usize, u32).init(store.allocator);
-    defer active_loop_keep_ids.deinit();
-    inserter.active_loop_keep_ids = &active_loop_keep_ids;
-    var loop_keep_reads_consumed = std.AutoHashMap(u32, void).init(store.allocator);
-    defer loop_keep_reads_consumed.deinit();
-    inserter.loop_keep_reads_consumed = &loop_keep_reads_consumed;
-    var reaches_loop_edge = std.AutoHashMap(LIR.CFStmtId, void).init(store.allocator);
-    defer reaches_loop_edge.deinit();
+    var reaches_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(store.allocator, store.cfStmtCount());
+    defer reaches_loop_edge.deinit(store.allocator);
     inserter.reaches_loop_edge = &reaches_loop_edge;
 
     // Original (ownership-neutral) bodies stay valid after each proc's base
@@ -371,6 +374,15 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         defer emission_arena.deinit();
         inserter.emission_allocator = emission_arena.allocator();
         inserter.solve_allocator = inserter.emission_allocator;
+        inserter.next_loop_keep_id = 1;
+        var loop_cached_stmts = std.ArrayList(std.ArrayList(LIR.CFStmtId)).empty;
+        defer loop_cached_stmts.deinit(inserter.emission_allocator);
+        try loop_cached_stmts.append(inserter.emission_allocator, .empty);
+        inserter.loop_cached_stmts = &loop_cached_stmts;
+        var loop_keep_reads_consumed = std.ArrayList(bool).empty;
+        defer loop_keep_reads_consumed.deinit(inserter.emission_allocator);
+        try loop_keep_reads_consumed.append(inserter.emission_allocator, false);
+        inserter.loop_keep_reads_consumed = &loop_keep_reads_consumed;
 
         var owned_param_override = try OwnedSet.init(inserter.emission_allocator, &domain);
         defer owned_param_override.deinit();
@@ -434,10 +446,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         inserter.join_summaries = &join_summaries;
         inserter.switch_summaries = &switch_summaries;
         defer {
-            var solved_joins = join_summaries.valueIterator();
-            while (solved_joins.next()) |summary| {
-                _ = inserter.active_loop_keep_ids.remove(@intFromPtr(&summary.*.body_keep));
-            }
             inserter.join_summaries = null;
             inserter.switch_summaries = null;
         }
@@ -489,10 +497,17 @@ const VariantTable = struct {
     unique_seed_masks: []?u64,
 };
 
+/// Explicit loop-liveness input. The identity is allocated with the join
+/// summary and travels with the keep-set; no consumer reconstructs it from a
+/// pointer address.
+const LoopKeep = struct {
+    set: *const OwnedSet,
+    id: u32,
+};
+
 const RewriteOptions = struct {
     boundaries: []const RewriteBoundary = &.{},
-    loop_keep: ?*const OwnedSet = null,
-    loop_keep_id: u32 = 0,
+    loop_keep: ?LoopKeep = null,
 };
 
 const RewriteBoundary = struct {
@@ -506,18 +521,18 @@ const ReadBeforeRebindKey = struct {
     loop_keep_id: u32,
 };
 
-/// One exact liveness row. Procedure-local liveness domains usually fit in a
-/// machine word; represent those rows inline and allocate words only for the
-/// uncommon larger domain. The representation choice depends solely on the
-/// explicit domain width and does not change the dataflow lattice.
-const LivenessSet = struct {
+/// One exact finite-lattice bit set. Procedure-local ARC domains commonly fit
+/// in one machine word; those sets stay inline and wider producer-authored
+/// domains allocate exact words. Ownership and liveness use the same
+/// representation so snapshots preserve identical operations and ordering.
+const ExactBitSet = struct {
     bit_len: usize,
     storage: union(enum) {
         inline_word: usize,
         allocated: std.bit_set.DynamicBitSetUnmanaged,
     },
 
-    fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!LivenessSet {
+    fn initEmpty(allocator: Allocator, bit_len: usize) Allocator.Error!ExactBitSet {
         if (bit_len <= @bitSizeOf(usize)) {
             return .{ .bit_len = bit_len, .storage = .{ .inline_word = 0 } };
         }
@@ -527,7 +542,7 @@ const LivenessSet = struct {
         };
     }
 
-    fn deinit(self: *LivenessSet, allocator: Allocator) void {
+    fn deinit(self: *ExactBitSet, allocator: Allocator) void {
         switch (self.storage) {
             .inline_word => {},
             .allocated => |*bits| bits.deinit(allocator),
@@ -535,14 +550,14 @@ const LivenessSet = struct {
         self.* = undefined;
     }
 
-    fn clone(self: *const LivenessSet, allocator: Allocator) Allocator.Error!LivenessSet {
+    fn clone(self: *const ExactBitSet, allocator: Allocator) Allocator.Error!ExactBitSet {
         return switch (self.storage) {
             .inline_word => |bits| .{ .bit_len = self.bit_len, .storage = .{ .inline_word = bits } },
             .allocated => |bits| .{ .bit_len = self.bit_len, .storage = .{ .allocated = try bits.clone(allocator) } },
         };
     }
 
-    fn set(self: *LivenessSet, bit: usize) void {
+    fn set(self: *ExactBitSet, bit: usize) void {
         std.debug.assert(bit < self.bit_len);
         switch (self.storage) {
             .inline_word => |*bits| bits.* |= @as(usize, 1) << @intCast(bit),
@@ -550,7 +565,7 @@ const LivenessSet = struct {
         }
     }
 
-    fn unset(self: *LivenessSet, bit: usize) void {
+    fn unset(self: *ExactBitSet, bit: usize) void {
         std.debug.assert(bit < self.bit_len);
         switch (self.storage) {
             .inline_word => |*bits| bits.* &= ~(@as(usize, 1) << @intCast(bit)),
@@ -558,7 +573,7 @@ const LivenessSet = struct {
         }
     }
 
-    fn isSet(self: *const LivenessSet, bit: usize) bool {
+    fn isSet(self: *const ExactBitSet, bit: usize) bool {
         std.debug.assert(bit < self.bit_len);
         return switch (self.storage) {
             .inline_word => |bits| bits & (@as(usize, 1) << @intCast(bit)) != 0,
@@ -566,14 +581,14 @@ const LivenessSet = struct {
         };
     }
 
-    fn unsetAll(self: *LivenessSet) void {
+    fn unsetAll(self: *ExactBitSet) void {
         switch (self.storage) {
             .inline_word => |*bits| bits.* = 0,
             .allocated => |*bits| bits.unsetAll(),
         }
     }
 
-    fn setUnion(self: *LivenessSet, other: LivenessSet) void {
+    fn setUnion(self: *ExactBitSet, other: ExactBitSet) void {
         std.debug.assert(self.bit_len == other.bit_len);
         switch (self.storage) {
             .inline_word => |*bits| bits.* |= other.storage.inline_word,
@@ -581,7 +596,52 @@ const LivenessSet = struct {
         }
     }
 
-    fn eql(self: *const LivenessSet, other: LivenessSet) bool {
+    fn setIntersection(self: *ExactBitSet, other: ExactBitSet) void {
+        std.debug.assert(self.bit_len == other.bit_len);
+        switch (self.storage) {
+            .inline_word => |*bits| bits.* &= other.storage.inline_word,
+            .allocated => |*bits| bits.setIntersection(other.storage.allocated),
+        }
+    }
+
+    fn count(self: *const ExactBitSet) usize {
+        return switch (self.storage) {
+            .inline_word => |bits| @popCount(bits),
+            .allocated => |bits| bits.count(),
+        };
+    }
+
+    fn Iterator(comptime options: std.bit_set.IteratorOptions) type {
+        if (options.kind != .set) @compileError("ARC exact sets iterate only set bits");
+        return union(enum) {
+            inline_word: usize,
+            allocated: std.bit_set.DynamicBitSetUnmanaged.Iterator(options),
+
+            fn next(self: *@This()) ?usize {
+                return switch (self.*) {
+                    .inline_word => |*remaining| {
+                        if (remaining.* == 0) return null;
+                        const bit = switch (options.direction) {
+                            .forward => @ctz(remaining.*),
+                            .reverse => @bitSizeOf(usize) - 1 - @clz(remaining.*),
+                        };
+                        remaining.* &= ~(@as(usize, 1) << @intCast(bit));
+                        return bit;
+                    },
+                    .allocated => |*iter| iter.next(),
+                };
+            }
+        };
+    }
+
+    fn iterator(self: *const ExactBitSet, comptime options: std.bit_set.IteratorOptions) Iterator(options) {
+        return switch (self.storage) {
+            .inline_word => |bits| .{ .inline_word = bits },
+            .allocated => |*bits| .{ .allocated = bits.iterator(options) },
+        };
+    }
+
+    fn eql(self: *const ExactBitSet, other: ExactBitSet) bool {
         if (self.bit_len != other.bit_len) return false;
         return switch (self.storage) {
             .inline_word => |bits| bits == other.storage.inline_word,
@@ -648,6 +708,10 @@ const JoinSummary = struct {
     /// Pointer-stable: loop keep-set registrations and rewrite options
     /// reference this set in place.
     body_keep: OwnedSet,
+    /// Monotone intersection of the latest state from every eligible jump
+    /// site. When one site shrinks, intersecting only that new state produces
+    /// the exact new all-site meet.
+    jump_common: OwnedSet,
     body_keep_seeded: bool = false,
     body_reachable: bool = false,
     loop_keep_id: u32,
@@ -689,8 +753,7 @@ const SolveBodyScope = struct {
 };
 
 const SolveContext = struct {
-    loop_keep: ?*const OwnedSet = null,
-    loop_keep_id: u32 = 0,
+    loop_keep: ?LoopKeep = null,
     stops: ?*const SolveStop = null,
     body_scope: ?*const SolveBodyScope = null,
 };
@@ -760,8 +823,13 @@ fn appendRewriteBoundary(
     return nested;
 }
 
-const LinearRewriteFrame = struct {
+/// One fully-decided linear ARC plan step. Planning owns all ownership and
+/// liveness reasoning; materialization consumes only these concrete choices
+/// plus the ownership-neutral source statement.
+const ArcPlanStep = struct {
     stmt: LIR.CFStmtId,
+    /// Concrete pre-statement RC prefix already selected while this step was
+    /// planned; materialization only splices it around the cloned statement.
     head: LIR.CFStmtId,
     retain_assign_ref_target: bool = true,
     retain_set_target: bool = true,
@@ -790,6 +858,26 @@ const LinearRewriteFrame = struct {
     post_release: []const LIR.LocalId = &.{},
 };
 
+/// Explicit per-path ARC emission plan. It deliberately contains no
+/// `OwnedSet`, liveness row, join summary, or solver context, so consuming a
+/// completed plan cannot redo or reinterpret an ARC decision.
+const ArcPlan = struct {
+    steps: std.ArrayList(ArcPlanStep) = .empty,
+    const empty: ArcPlan = .{};
+
+    fn append(self: *ArcPlan, allocator: Allocator, step: ArcPlanStep) ResourceError!void {
+        try self.steps.append(allocator, step);
+    }
+
+    fn pop(self: *ArcPlan) ?ArcPlanStep {
+        return self.steps.pop();
+    }
+
+    fn deinit(self: *ArcPlan, allocator: Allocator) void {
+        self.steps.deinit(allocator);
+    }
+};
+
 const Inserter = struct {
     store: *LirStore,
     layouts: *const layout_mod.Store,
@@ -815,24 +903,24 @@ const Inserter = struct {
     /// becomes quadratic. This cache stores the same information under the
     /// statement transfer rules: reads happen before a statement's target
     /// rebinding kills the previous value.
-    keep_free_reads_cache: []?LivenessSet = &.{},
+    keep_free_reads_cache: []?ExactBitSet = &.{},
     keep_free_cached_stmts: *std.ArrayList(LIR.CFStmtId) = undefined,
-    reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, LivenessSet) = undefined,
+    reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, ExactBitSet) = undefined,
     read_cache_arena: *std.heap.ArenaAllocator = undefined,
     read_cache_allocator: Allocator = undefined,
-    /// Live mapping from an OwnedSet address used as a loop keep-set to its
-    /// explicit cache identity. IDs are never reused within one proc emission,
-    /// and the map entry is removed before the keep-set storage is destroyed.
-    active_loop_keep_ids: *std.AutoHashMap(usize, u32) = undefined,
     /// Loop keep identities whose cached liveness rows read keep-set bits at
     /// a loop edge; only these need purging when their keep-set shrinks.
-    loop_keep_reads_consumed: *std.AutoHashMap(u32, void) = undefined,
+    /// Cached loop-keyed rows partitioned by explicit loop identity.
+    loop_cached_stmts: *std.ArrayList(std.ArrayList(LIR.CFStmtId)) = undefined,
+    loop_keep_reads_consumed: *std.ArrayList(bool) = undefined,
     /// Statements from which a `loop_continue`/`loop_break` is reachable,
     /// discovered by keep-free liveness builds. Only these statements' rows
     /// depend on a loop keep-set; every other loop-keyed query is answered
     /// by the shared keep-free row, which keeps the row cache linear in
     /// proc size instead of growing per join nesting level.
-    reaches_loop_edge: *std.AutoHashMap(LIR.CFStmtId, void) = undefined,
+    reaches_loop_edge: *std.bit_set.DynamicBitSetUnmanaged = undefined,
+    /// Reusable dense original-statement id -> active liveness-node index.
+    stmt_node_indices: []u32 = &.{},
     next_loop_keep_id: u32 = 1,
     current_proc_body: LIR.CFStmtId = undefined,
     join_bodies: ?*const JoinBodyMap = null,
@@ -877,7 +965,7 @@ const Inserter = struct {
         cursor: LIR.CFStmtId,
         owned: OwnedSet,
         options: RewriteOptions,
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -895,7 +983,7 @@ const Inserter = struct {
         body_keep: OwnedSet,
         body_reachable: bool,
         loop_keep_id: u32,
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -907,7 +995,7 @@ const Inserter = struct {
         default_branch: LIR.CFStmtId = undefined,
         default_is_cold: bool,
         continuation: ?LIR.CFStmtId,
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -924,7 +1012,7 @@ const Inserter = struct {
         common: OwnedSet,
         parent_options: RewriteOptions,
         nested_boundaries: []RewriteBoundary = &.{},
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -935,7 +1023,7 @@ const Inserter = struct {
         uninitialized_is_cold: bool,
         initialized_branch: LIR.CFStmtId = undefined,
         uninitialized_branch: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -947,7 +1035,7 @@ const Inserter = struct {
         end: LIR.StrPatternEnd,
         on_match: LIR.CFStmtId = undefined,
         on_miss: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -957,7 +1045,7 @@ const Inserter = struct {
         arms: LIR.StrMatchArmSpan,
         on_matches: []LIR.CFStmtId,
         on_miss: LIR.CFStmtId = undefined,
-        frames: std.ArrayList(LinearRewriteFrame),
+        frames: ArcPlan,
         result: *LIR.CFStmtId,
     };
 
@@ -1006,7 +1094,7 @@ const Inserter = struct {
         try tasks.append(self.emission_allocator, .{ .path = task });
     }
 
-    fn takeRewriteFrames(path: *RewritePathTask) std.ArrayList(LinearRewriteFrame) {
+    fn takeRewriteFrames(path: *RewritePathTask) ArcPlan {
         const frames = path.frames;
         path.frames = .empty;
         return frames;
@@ -1369,13 +1457,13 @@ const Inserter = struct {
                     path.cursor = marker.next;
                 },
                 .loop_continue => {
-                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
+                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep.set, path.cursor) else path.cursor;
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
                     self.destroyRewritePath(path);
                     return;
                 },
                 .loop_break => {
-                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep, path.cursor) else path.cursor;
+                    const tail = if (path.options.loop_keep) |keep| try self.releaseDifference(&path.owned, keep.set, path.cursor) else path.cursor;
                     path.result.* = try self.finishLinearRewrite(&path.frames, tail);
                     self.destroyRewritePath(path);
                     return;
@@ -1432,7 +1520,7 @@ const Inserter = struct {
 
     fn finishLinearRewrite(
         self: *Inserter,
-        frames: *std.ArrayList(LinearRewriteFrame),
+        frames: *ArcPlan,
         tail_start: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
         var next = tail_start;
@@ -1444,7 +1532,7 @@ const Inserter = struct {
 
     fn patchLinearFrame(
         self: *Inserter,
-        frame: LinearRewriteFrame,
+        frame: ArcPlanStep,
         tail_start: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
         const stmt = self.store.getCFStmt(frame.stmt);
@@ -1765,24 +1853,15 @@ const Inserter = struct {
         errdefer if (!queued) state.entry_keep.deinit();
         errdefer if (!queued) state.body_keep.deinit();
         errdefer if (!queued) state.frames.deinit(self.emission_allocator);
-        var loop_keep_registered = false;
-        errdefer if (!queued and loop_keep_registered) {
-            _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
-        };
-        try self.active_loop_keep_ids.put(@intFromPtr(&state.body_keep), state.loop_keep_id);
-        loop_keep_registered = true;
-
         try tasks.append(self.emission_allocator, .{ .join = state });
         queued = true;
         const join_options = RewriteOptions{
             .boundaries = path.options.boundaries,
-            .loop_keep = &state.body_keep,
-            .loop_keep_id = state.loop_keep_id,
+            .loop_keep = .{ .set = &state.body_keep, .id = state.loop_keep_id },
         };
         try self.pushRewritePath(tasks, join_stmt.remainder, &state.entry_keep, .{
             .boundaries = join_options.boundaries,
             .loop_keep = join_options.loop_keep,
-            .loop_keep_id = join_options.loop_keep_id,
         }, &state.remainder);
         if (state.body_reachable) {
             try self.pushRewritePath(tasks, join_stmt.body, &state.body_keep, join_options, &state.body);
@@ -2012,7 +2091,6 @@ const Inserter = struct {
         const nested_options = RewriteOptions{
             .boundaries = state.nested_boundaries,
             .loop_keep = state.parent_options.loop_keep,
-            .loop_keep_id = state.parent_options.loop_keep_id,
         };
 
         try tasks.append(self.emission_allocator, .{ .switch_finish_continuation = state });
@@ -2493,21 +2571,37 @@ const Inserter = struct {
         return node;
     }
 
-    /// Drops cached loop-keyed liveness rows after their keep-set shrank.
-    /// Rows depend on the keep-set contents only through `loop_continue` /
-    /// `loop_break` reads, so builds that never consumed keep bits stay
-    /// valid and nothing is purged. Returns whether rows were dropped.
+    fn registerLoopKeep(self: *Inserter, loop_keep_id: u32) ResourceError!void {
+        if (loop_keep_id != self.loop_cached_stmts.items.len or
+            loop_keep_id != self.loop_keep_reads_consumed.items.len)
+        {
+            arcInvariant("ARC loop identities were not registered sequentially");
+        }
+        try self.loop_cached_stmts.append(self.emission_allocator, .empty);
+        try self.loop_keep_reads_consumed.append(self.emission_allocator, false);
+    }
+
+    /// Drops exactly one loop identity's cached liveness rows after its
+    /// keep-set shrank. Rows depend on the keep-set only through loop-edge
+    /// reads, so a build that consumed no keep bits remains valid.
     fn purgeLoopKeepLiveness(self: *Inserter, loop_keep_id: u32) ResourceError!bool {
-        if (!self.loop_keep_reads_consumed.remove(loop_keep_id)) return false;
-        var stale = std.ArrayList(ReadBeforeRebindKey).empty;
-        defer stale.deinit(self.emission_allocator);
-        var keys = self.reads_before_rebind_cache.keyIterator();
-        while (keys.next()) |key| {
-            if (key.loop_keep_id == loop_keep_id) try stale.append(self.emission_allocator, key.*);
+        if (loop_keep_id >= self.loop_cached_stmts.items.len or
+            loop_keep_id >= self.loop_keep_reads_consumed.items.len)
+        {
+            arcInvariant("ARC purged an unknown loop identity");
         }
-        for (stale.items) |key| {
-            _ = self.reads_before_rebind_cache.remove(key);
+        if (!self.loop_keep_reads_consumed.items[loop_keep_id]) return false;
+        self.loop_keep_reads_consumed.items[loop_keep_id] = false;
+        const cached = &self.loop_cached_stmts.items[loop_keep_id];
+        for (cached.items) |stmt| {
+            if (!self.reads_before_rebind_cache.remove(.{
+                .start = stmt,
+                .loop_keep_id = loop_keep_id,
+            })) {
+                arcInvariant("ARC loop row inventory named a missing cache entry");
+            }
         }
+        cached.clearRetainingCapacity();
         return true;
     }
 
@@ -2516,7 +2610,7 @@ const Inserter = struct {
     /// otherwise.
     fn groupUsedFromTable(
         self: *Inserter,
-        reads: *const LivenessSet,
+        reads: *const ExactBitSet,
         local: LIR.LocalId,
     ) bool {
         const leader = self.solution.leaderOf(local);
@@ -2562,18 +2656,9 @@ const Inserter = struct {
     /// filter to units read in the body, then place params. The stored keep
     /// can only shrink.
     fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!BodyKeepUpdate {
-        if (summary.jump_states.count() == 0) return .{ .changed = false, .purged = false };
+        if (!summary.body_reachable) return .{ .changed = false, .purged = false };
         var merged = try OwnedSet.init(self.solve_allocator, self.domain());
-        var first = true;
-        var sites = summary.jump_states.valueIterator();
-        while (sites.next()) |state| {
-            if (first) {
-                assignOwnedSet(&merged, state);
-                first = false;
-            } else {
-                merged.intersect(state);
-            }
-        }
+        assignOwnedSet(&merged, &summary.jump_common);
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
         var owned_iter = merged.bits.iterator(.{});
         while (owned_iter.next()) |index| {
@@ -2613,8 +2698,7 @@ const Inserter = struct {
         body_scope: ?*const SolveBodyScope,
     ) ResourceError!SolveContext {
         return .{
-            .loop_keep = &summary.body_keep,
-            .loop_keep_id = summary.loop_keep_id,
+            .loop_keep = .{ .set = &summary.body_keep, .id = summary.loop_keep_id },
             .stops = try self.stripStopContributions(summary.origin_ctx.stops),
             .body_scope = body_scope,
         };
@@ -2699,12 +2783,13 @@ const Inserter = struct {
                 .entry_state = try cloneOwnedSetWith(self.solve_allocator, &segment.owned),
                 .entry_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .body_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
+                .jump_common = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .loop_keep_id = self.next_loop_keep_id,
                 .origin_ctx = segment.ctx,
                 .jump_states = std.AutoHashMap(LIR.CFStmtId, OwnedSet).init(self.solve_allocator),
             };
+            try self.registerLoopKeep(summary.loop_keep_id);
             self.next_loop_keep_id += 1;
-            try self.active_loop_keep_ids.put(@intFromPtr(&summary.body_keep), summary.loop_keep_id);
             gop.value_ptr.* = summary;
             try self.scheduleSolveJoinProcess(tasks, summary);
             return;
@@ -2745,8 +2830,13 @@ const Inserter = struct {
             changed = intersectOwnedSetChanged(site.value_ptr, &segment.owned);
         }
         const first_reach = !summary.body_reachable;
-        if (first_reach) summary.body_reachable = true;
         if (!changed and !first_reach) return;
+        const common_changed = if (first_reach) blk: {
+            summary.body_reachable = true;
+            assignOwnedSet(&summary.jump_common, site.value_ptr);
+            break :blk true;
+        } else intersectOwnedSetChanged(&summary.jump_common, site.value_ptr);
+        if (!common_changed) return;
         const update = try self.recomputeSolveBodyKeep(summary);
         if (update.purged) {
             // Liveness rows under this join's keep changed, so states
@@ -2781,8 +2871,8 @@ const Inserter = struct {
         }
     }
 
-    fn destroyFrames(self: *Inserter, frames: *std.ArrayList(LinearRewriteFrame)) void {
-        for (frames.items) |frame| {
+    fn destroyFrames(self: *Inserter, frames: *ArcPlan) void {
+        for (frames.steps.items) |frame| {
             if (frame.post_release.len != 0) {
                 self.emission_allocator.free(frame.post_release);
             }
@@ -2800,7 +2890,6 @@ const Inserter = struct {
     }
 
     fn destroyRewriteJoin(self: *Inserter, state: *RewriteJoinTask) void {
-        _ = self.active_loop_keep_ids.remove(@intFromPtr(&state.body_keep));
         self.destroyFrames(&state.frames);
         state.incoming_owned.deinit();
         state.entry_keep.deinit();
@@ -2975,7 +3064,7 @@ const Inserter = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         const move_value = try self.canMoveSetLocalValue(owned, source, next, loop_keep);
         const release_old_target = self.takeRebindTarget(owned, target);
@@ -3009,7 +3098,7 @@ const Inserter = struct {
         value: LIR.LocalId,
         mode: LIR.SetLocalWriteMode,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
         const move_value = try self.canMoveSetLocalValue(owned, value, next, loop_keep);
@@ -3049,7 +3138,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         extra_use: ?LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!CallTransfer {
         var arg_ownership = try self.callArgOwnership(callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
         errdefer arg_ownership.deinit(self.emission_allocator);
@@ -3084,7 +3173,7 @@ const Inserter = struct {
         operands: LIR.LocalSpan,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         transfer_positions: ?*std.ArrayList(u32),
     ) ResourceError!AggregateTransfer {
         try self.spanTransferPositions(operands, next, target, owned, loop_keep, transfer_positions);
@@ -3107,7 +3196,7 @@ const Inserter = struct {
         payload: ?LIR.LocalId,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!SingleTransfer {
         var transfer_single = false;
         if (payload) |operand| {
@@ -3142,7 +3231,7 @@ const Inserter = struct {
         rc_effect: LIR.LowLevel.RcEffect,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         want_unique: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
@@ -3205,7 +3294,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
         if (!self.localContainsRefcounted(target)) return 0;
@@ -3236,7 +3325,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         transferred_positions: ?*std.ArrayList(u32),
     ) ResourceError!void {
         if (!self.localContainsRefcounted(target)) return;
@@ -3262,7 +3351,7 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         if (local == target) return false;
         if (!self.localContainsRefcounted(target)) return false;
@@ -3283,7 +3372,7 @@ const Inserter = struct {
         singles: []const LIR.LocalId,
         span: ?LIR.LocalSpan,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         for (singles) |local| {
@@ -3303,7 +3392,7 @@ const Inserter = struct {
         owned: *OwnedSet,
         local: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         // A borrowed operand's lifetime event belongs to its owning leader:
@@ -3326,7 +3415,7 @@ const Inserter = struct {
         local: LIR.LocalId,
         ret_mode: arc_sig.Mode,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         if (ret_mode == .owned and self.solution.isBorrowed(local)) {
@@ -3341,7 +3430,7 @@ const Inserter = struct {
         owned: *OwnedSet,
         local: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(LIR.LocalId),
     ) ResourceError!void {
         if (!owned.contains(local)) return;
@@ -3368,7 +3457,7 @@ const Inserter = struct {
         owned: *const OwnedSet,
         value: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         if (!self.ownsUnit(owned, value)) return false;
         if (!self.localContainsRefcounted(value)) return false;
@@ -3405,7 +3494,7 @@ const Inserter = struct {
         mask: u64,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!u64 {
         if (mask == 0) return 0;
         var preserve: u64 = 0;
@@ -3644,7 +3733,7 @@ const Inserter = struct {
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!CallArgOwnership {
         var result = CallArgOwnership{};
         errdefer result.deinit(self.emission_allocator);
@@ -3826,8 +3915,8 @@ const Inserter = struct {
 
     const ReadBeforeRebindNode = struct {
         stmt: LIR.CFStmtId,
-        reads: LivenessSet,
-        exposed: LivenessSet,
+        reads: ExactBitSet,
+        exposed: ExactBitSet,
         successor_start: usize,
         successor_len: u32,
         def: ?LIR.LocalId,
@@ -3837,16 +3926,25 @@ const Inserter = struct {
     const ReadBeforeRebindGraph = struct {
         allocator: Allocator,
         nodes: std.ArrayList(ReadBeforeRebindNode),
-        successors: std.ArrayList(LIR.CFStmtId),
-        indices: std.AutoHashMap(LIR.CFStmtId, usize),
+        /// Node indices, resolved exactly once while each edge is appended.
+        successors: std.ArrayList(u32),
 
         fn init(allocator: Allocator) ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
                 .nodes = .empty,
                 .successors = .empty,
-                .indices = std.AutoHashMap(LIR.CFStmtId, usize).init(allocator),
             };
+        }
+
+        fn clearStmtIndices(self: *const ReadBeforeRebindGraph, indices: []u32) void {
+            for (self.nodes.items) |node| {
+                const stmt_index = @intFromEnum(node.stmt);
+                if (stmt_index >= indices.len or indices[stmt_index] == no_stmt_node_index) {
+                    arcInvariant("ARC liveness statement index was not active");
+                }
+                indices[stmt_index] = no_stmt_node_index;
+            }
         }
     };
 
@@ -3856,27 +3954,31 @@ const Inserter = struct {
         }
         self.keep_free_cached_stmts.clearRetainingCapacity();
         self.reads_before_rebind_cache.clearRetainingCapacity();
-        self.loop_keep_reads_consumed.clearRetainingCapacity();
-        self.reaches_loop_edge.clearRetainingCapacity();
+        self.reaches_loop_edge.unsetAll();
         _ = self.read_cache_arena.reset(.retain_capacity);
     }
 
     fn ensureReadBeforeRebindNode(
         self: *Inserter,
         graph: *ReadBeforeRebindGraph,
-        work: *std.ArrayList(LIR.CFStmtId),
+        work: *std.ArrayList(u32),
         stmt: LIR.CFStmtId,
-    ) ResourceError!void {
-        if (graph.indices.contains(stmt)) return;
+    ) ResourceError!u32 {
+        const stmt_index = @intFromEnum(stmt);
+        if (stmt_index >= self.stmt_node_indices.len) {
+            arcInvariant("ARC liveness reached a generated statement");
+        }
+        if (self.stmt_node_indices[stmt_index] != no_stmt_node_index) {
+            return self.stmt_node_indices[stmt_index];
+        }
 
-        var reads = try LivenessSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
+        var reads = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer reads.deinit(graph.allocator);
-        var exposed = try LivenessSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
+        var exposed = try ExactBitSet.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer exposed.deinit(graph.allocator);
 
         const index = graph.nodes.items.len;
-        try graph.indices.put(stmt, index);
-        errdefer _ = graph.indices.remove(stmt);
+        if (index >= no_stmt_node_index) arcInvariant("ARC liveness graph exceeded its node index representation");
 
         try graph.nodes.append(graph.allocator, .{
             .stmt = stmt,
@@ -3886,23 +3988,25 @@ const Inserter = struct {
             .successor_len = 0,
             .def = null,
         });
-        try work.append(graph.allocator, stmt);
+        self.stmt_node_indices[stmt_index] = @intCast(index);
+        try work.append(graph.allocator, @intCast(index));
+        return @intCast(index);
     }
 
     fn appendReadBeforeRebindSuccessor(
         self: *Inserter,
         graph: *ReadBeforeRebindGraph,
-        work: *std.ArrayList(LIR.CFStmtId),
+        work: *std.ArrayList(u32),
         node_index: usize,
         successor: LIR.CFStmtId,
     ) ResourceError!void {
+        const successor_node = try self.ensureReadBeforeRebindNode(graph, work, successor);
         const successor_index = graph.successors.items.len;
         if (graph.nodes.items[node_index].successor_len == 0) {
             graph.nodes.items[node_index].successor_start = successor_index;
         }
-        try graph.successors.append(graph.allocator, successor);
+        try graph.successors.append(graph.allocator, successor_node);
         graph.nodes.items[node_index].successor_len += 1;
-        try self.ensureReadBeforeRebindNode(graph, work, successor);
     }
 
     /// Raw liveness-bit position for a refcounted resource local or one of
@@ -3911,7 +4015,7 @@ const Inserter = struct {
         return self.domain().resourceBitOf(local);
     }
 
-    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *LivenessSet, local: LIR.LocalId) void {
+    fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) void {
         if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
     }
 
@@ -3930,13 +4034,13 @@ const Inserter = struct {
     /// group bit, and its value-use bit. Reference-count statements record
     /// only the raw bit through `noteReadBeforeRebindLocal`: they must not
     /// extend group or call-result liveness.
-    fn noteLivenessUseLocal(self: *const Inserter, reads: *LivenessSet, local: LIR.LocalId) void {
+    fn noteLivenessUseLocal(self: *const Inserter, reads: *ExactBitSet, local: LIR.LocalId) void {
         if (self.rawLivenessBitOf(local)) |bit| reads.set(bit);
         if (self.groupBitOf(local)) |bit| reads.set(bit);
         if (self.valueUseBitOf(local)) |bit| reads.set(bit);
     }
 
-    fn noteLivenessUseSpan(self: *const Inserter, reads: *LivenessSet, span: LIR.LocalSpan) void {
+    fn noteLivenessUseSpan(self: *const Inserter, reads: *ExactBitSet, span: LIR.LocalSpan) void {
         const locals = self.store.getLocalSpan(span);
         for (0..GuardedList.borrowLen(locals)) |index| {
             const local = GuardedList.at(locals, index);
@@ -3944,14 +4048,14 @@ const Inserter = struct {
         }
     }
 
-    fn noteLivenessUseRefOp(self: *const Inserter, reads: *LivenessSet, op: LIR.RefOp) void {
+    fn noteLivenessUseRefOp(self: *const Inserter, reads: *ExactBitSet, op: LIR.RefOp) void {
         self.noteLivenessUseLocal(reads, refOpSource(op));
     }
 
     /// Records the loop keep-set as reads at a `loop_continue`/`loop_break`:
     /// kept units, groups with any kept member, and kept call-result locals
     /// all stay live across the loop edge.
-    fn noteLivenessLoopKeep(self: *const Inserter, reads: *LivenessSet, keep: *const OwnedSet) void {
+    fn noteLivenessLoopKeep(self: *const Inserter, reads: *ExactBitSet, keep: *const OwnedSet) void {
         // Every kept unit reads as a value use, which also sets its group
         // and value-use bits, so the loop edge keeps a group alive whenever
         // any member is kept.
@@ -4004,9 +4108,9 @@ const Inserter = struct {
     fn computeReadsBeforeRebind(
         self: *Inserter,
         start: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
         loop_keep_id: u32,
-    ) ResourceError!*const LivenessSet {
+    ) ResourceError!*const ExactBitSet {
         const key = ReadBeforeRebindKey{
             .start = start,
             .loop_keep_id = loop_keep_id,
@@ -4024,7 +4128,8 @@ const Inserter = struct {
         const graph_allocator = graph_arena.allocator();
 
         var graph = ReadBeforeRebindGraph.init(graph_allocator);
-        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer graph.clearStmtIndices(self.stmt_node_indices);
+        var work = std.ArrayList(u32).empty;
         // Loop-edge nodes found by a keep-free build seed the backward
         // reachability sweep that decides which statements ever need
         // loop-keyed rows.
@@ -4036,12 +4141,13 @@ const Inserter = struct {
         // root the graph at the queried statement instead of applying that
         // loop's exits to unrelated loops elsewhere in the proc.
         if (loop_keep == null) {
-            try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
+            _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
         }
-        try self.ensureReadBeforeRebindNode(&graph, &work, start);
+        _ = try self.ensureReadBeforeRebindNode(&graph, &work, start);
 
-        while (work.pop()) |stmt| {
-            const node_index = graph.indices.get(stmt) orelse unreachable;
+        while (work.pop()) |node_index_u32| {
+            const node_index: usize = node_index_u32;
+            const stmt = graph.nodes.items[node_index].stmt;
 
             switch (self.store.getCFStmt(stmt)) {
                 .assign_ref => |assign| {
@@ -4180,7 +4286,7 @@ const Inserter = struct {
                     // modeled by entering the collected body below. Still add
                     // the body as an independent root so direct queries for
                     // `groupUsedInPath(join.body, ...)` are cached by this run.
-                    try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
+                    _ = try self.ensureReadBeforeRebindNode(&graph, &work, join_stmt.body);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join_stmt.remainder);
                 },
                 .jump => |jump_stmt| {
@@ -4194,8 +4300,11 @@ const Inserter = struct {
                 .loop_continue,
                 .loop_break,
                 => if (loop_keep) |keep| {
-                    self.noteLivenessLoopKeep(&graph.nodes.items[node_index].reads, keep);
-                    try self.loop_keep_reads_consumed.put(loop_keep_id, {});
+                    self.noteLivenessLoopKeep(&graph.nodes.items[node_index].reads, keep.set);
+                    if (loop_keep_id >= self.loop_keep_reads_consumed.items.len) {
+                        arcInvariant("ARC liveness consumed an unknown loop identity");
+                    }
+                    self.loop_keep_reads_consumed.items[loop_keep_id] = true;
                 } else {
                     try loop_edge_nodes.append(graph_allocator, node_index);
                 },
@@ -4216,7 +4325,7 @@ const Inserter = struct {
             const successor_start = node.successor_start;
             const successor_end = successor_start + @as(usize, node.successor_len);
             for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
+                const successor_index: usize = successor;
                 pred_counts[successor_index] += 1;
             }
         }
@@ -4232,7 +4341,7 @@ const Inserter = struct {
             const successor_start = node.successor_start;
             const successor_end = successor_start + @as(usize, node.successor_len);
             for (graph.successors.items[successor_start..successor_end]) |successor| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
+                const successor_index: usize = successor;
                 const write_index = pred_writes[successor_index];
                 predecessors[write_index] = predecessor_index;
                 pred_writes[successor_index] += 1;
@@ -4243,7 +4352,7 @@ const Inserter = struct {
             var reached = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
             for (loop_edge_nodes.items) |edge_node| reached.set(edge_node);
             while (loop_edge_nodes.pop()) |reach_index| {
-                try self.reaches_loop_edge.put(graph.nodes.items[reach_index].stmt, {});
+                self.reaches_loop_edge.set(@intFromEnum(graph.nodes.items[reach_index].stmt));
                 const pred_start = pred_starts[reach_index];
                 const pred_end = pred_starts[reach_index + 1];
                 for (predecessors[pred_start..pred_end]) |predecessor_index| {
@@ -4254,8 +4363,8 @@ const Inserter = struct {
             }
         }
 
-        var scratch = try LivenessSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
-        var edge_scratch = try LivenessSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
+        var scratch = try ExactBitSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
+        var edge_scratch = try ExactBitSet.initEmpty(graph_allocator, self.domain().livenessBitLen());
         var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
         var node_work = std.ArrayList(usize).empty;
         try node_work.ensureTotalCapacity(graph_allocator, node_count);
@@ -4272,7 +4381,7 @@ const Inserter = struct {
             const successor_start = node.successor_start;
             const successor_end = successor_start + @as(usize, node.successor_len);
             for (graph.successors.items[successor_start..successor_end], 0..) |successor, successor_offset| {
-                const successor_index = graph.indices.get(successor) orelse unreachable;
+                const successor_index: usize = successor;
                 var edge_killed = false;
                 for (node.edge_kills) |kill| {
                     if (kill.successor_offset != successor_offset) continue;
@@ -4325,8 +4434,12 @@ const Inserter = struct {
                 try self.keep_free_cached_stmts.append(self.store.allocator, node.stmt);
             } else {
                 if (self.reads_before_rebind_cache.contains(node_key)) continue;
+                if (loop_keep_id >= self.loop_cached_stmts.items.len) {
+                    arcInvariant("ARC cached a row for an unknown loop identity");
+                }
                 const cached = try node.exposed.clone(self.read_cache_allocator);
                 try self.reads_before_rebind_cache.put(node_key, cached);
+                try self.loop_cached_stmts.items[loop_keep_id].append(self.emission_allocator, node.stmt);
             }
         }
 
@@ -4345,7 +4458,7 @@ const Inserter = struct {
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         const bit = self.valueUseBitOf(needle) orelse
             arcInvariant("ARC value-use query for a local without a value-use bit");
@@ -4372,24 +4485,20 @@ const Inserter = struct {
     fn livenessRow(
         self: *Inserter,
         start: LIR.CFStmtId,
-        loop_keep: ?*const OwnedSet,
-    ) ResourceError!*const LivenessSet {
-        const loop_keep_id: u32 = if (loop_keep) |keep|
-            self.active_loop_keep_ids.get(@intFromPtr(keep)) orelse
-                arcInvariant("ARC liveness query used an unregistered loop keep-set")
-        else
-            0;
-        if (loop_keep_id == 0) return self.computeReadsBeforeRebind(start, null, 0);
+        loop_keep: ?LoopKeep,
+    ) ResourceError!*const ExactBitSet {
+        const keep = loop_keep orelse return self.computeReadsBeforeRebind(start, null, 0);
+        if (keep.id == 0) arcInvariant("ARC loop keep-set used the keep-free identity");
         const keep_free = try self.computeReadsBeforeRebind(start, null, 0);
-        if (!self.reaches_loop_edge.contains(start)) return keep_free;
-        return self.computeReadsBeforeRebind(start, loop_keep, loop_keep_id);
+        if (!self.reaches_loop_edge.isSet(@intFromEnum(start))) return keep_free;
+        return self.computeReadsBeforeRebind(start, keep, keep.id);
     }
 
     fn groupUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         local: LIR.LocalId,
-        loop_keep: ?*const OwnedSet,
+        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         const reads = try self.livenessRow(start, loop_keep);
         return self.groupUsedFromTable(reads, local);
@@ -4558,16 +4667,15 @@ const RewrittenJoinMap = std.AutoHashMap(LIR.CFStmtId, RewrittenJoin);
 const OwnedSet = struct {
     allocator: std.mem.Allocator,
     domain: *const ProcArcDomain,
-    bits: std.bit_set.DynamicBitSetUnmanaged,
+    bits: ExactBitSet,
 
     fn init(allocator: std.mem.Allocator, domain: *const ProcArcDomain) ResourceError!OwnedSet {
-        const bits = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, domain.resource_locals.len);
+        const bits = try ExactBitSet.initEmpty(allocator, domain.resource_locals.len);
         return .{ .allocator = allocator, .domain = domain, .bits = bits };
     }
 
     fn deinit(self: *OwnedSet) void {
         self.bits.deinit(self.allocator);
-        self.bits = .{};
     }
 
     fn clone(self: *const OwnedSet) ResourceError!OwnedSet {
@@ -4665,6 +4773,30 @@ fn argMaskBit(index: usize) u64 {
 fn arcInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
     unreachable;
+}
+
+test "exact ARC sets preserve operations at the inline boundary" {
+    const word_bits = @bitSizeOf(usize);
+    for ([_]usize{ word_bits, word_bits + 1 }) |bit_len| {
+        var left = try ExactBitSet.initEmpty(testing.allocator, bit_len);
+        defer left.deinit(testing.allocator);
+        var right = try ExactBitSet.initEmpty(testing.allocator, bit_len);
+        defer right.deinit(testing.allocator);
+
+        left.set(0);
+        left.set(bit_len - 1);
+        right.set(bit_len - 1);
+        left.setIntersection(right);
+        try testing.expectEqual(@as(usize, 1), left.count());
+        try testing.expect(left.isSet(bit_len - 1));
+
+        var cloned = try left.clone(testing.allocator);
+        defer cloned.deinit(testing.allocator);
+        try testing.expect(cloned.eql(left));
+        var iter = cloned.iterator(.{ .direction = .reverse });
+        try testing.expectEqual(bit_len - 1, iter.next().?);
+        try testing.expectEqual(@as(?usize, null), iter.next());
+    }
 }
 
 test "arc insertion boundary exists" {
