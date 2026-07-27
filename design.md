@@ -2294,14 +2294,28 @@ the distinction producer-authored: finalization consumes the recorded recursive
 edge and minted join instead of inferring recursion from a finished type shape,
 union-find root selection, or call-stack depth.
 
-The recursive edge itself is also producer-authored. Every draft function
-records the draft owner that created it, forming an explicit active ownership
-tree. A partial open-interface match may reuse an in-progress specialization
-only when the current owner descends from that specialization in this tree.
-Shared graph cells alone cannot classify two sibling calls as recursion. Exact
-completed interfaces may still deduplicate normally, but only an explicit
-ancestor edge invokes recursive-interface unification and records recursive
-representation growth.
+A loop `continue` edge is likewise explicit producer-authored recursive value
+flow, so every loop-carried slot on that edge is recorded even if an earlier
+assignment already joined it to the loop parameter. Recording the slot does not
+by itself force dynamic representation; only its later join of distinct minted
+identities does.
+
+An imported finished Monotype can participate in such a minted join, but it has
+no live graph provenance because its producer has already sealed its identity.
+When exactly one side of the join is a graph-owned iterator, union preserves
+that side as the class authority. Representation finalization then consumes its
+explicit public source and producer topology. It must not depend on operand
+order or keep the imported root and thereby discard the only data capable of
+authoring a forced-dynamic representation.
+
+The recursive edge itself is also producer-authored. Every draft function and
+globally reserved root records the owner that created it, forming an explicit
+active ownership tree. A partial open-interface match may reuse an in-progress
+specialization only when the current owner descends from that specialization in
+this tree. Shared graph cells alone cannot classify two sibling calls as
+recursion. Exact completed interfaces may still deduplicate normally, but only
+an explicit ancestor edge invokes recursive-interface unification and records
+recursive representation growth.
 
 Finalization rebuilds a selected forced-dynamic class with exactly one public
 item argument and an exact self-recursive backing before identity sealing.
@@ -3173,6 +3187,27 @@ requests can legitimately carry different concrete value arguments, and a
 callee checked root must not make those caller-owned cells aliases. The callee
 later creates its own fresh instantiation graph and constrains its complete
 checked root against the sealed request in that graph.
+
+The deferred request stores only that live caller-owned interface and a draft
+call target. Once the caller graph is frozen, the interface is sealed exactly
+once and the target maps directly to an existing specialization or to a body
+lowered in a fresh specialization-owned graph. The caller never owns a copy of
+the context-free callee body. Generated structural work may retain explicit
+lexical context when that context is one of its inputs, but it follows the same
+procedure-body ownership rule; encoding and decoding do not define a separate
+specialization path.
+
+A fresh procedure specialization reserves its global function identity before
+lowering its body and records that reservation as the active root owner. A call
+from beneath that owner may rejoin the reservation when it names the same
+checked procedure and method scope, carries the same dispatch evidence, and
+matches the active function interface. The checked source root used to reach
+the declaration is not recursive ownership: different checked occurrences may
+reach the same procedure. For a synthesized partial interface, at least one
+argument must overlap the root's initially snapshotted argument classes before
+the edge can be classified as recursive. This is the same explicit ownership
+rule used by draft-local procedures and prevents either an accidental second
+body for the root or a merge of unrelated sibling requests.
 
 Checking must also validate a mono-specialization default against the complete
 method callable type before placing direct evidence in the checked dispatch
