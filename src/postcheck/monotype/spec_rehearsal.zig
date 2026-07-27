@@ -652,7 +652,9 @@ fn templateSchemeOwnerNode(start: SpecializationStart) ?u32 {
 /// heap-allocated so the graph's pointer to it survives the frame stack growing
 /// under a nested specialization.
 const Frame = struct {
-    trace: *SealTrace,
+    /// The graph-seal trace of the transitional comparison, present only while
+    /// that Debug measurement runs.
+    trace: ?*SealTrace,
     /// The module whose ids `binders` name, and whose residual dispositions
     /// `owner_node` selects. Only positions in this module translate under the
     /// environment; a position in another module has no binder in scope.
@@ -1153,13 +1155,12 @@ const UnresolvedDetail = struct {
 /// its own emission store, and its own representation closure engine.
 pub const Rehearsal = struct {
     allocator: Allocator,
-    /// The output store, read only to digest what the graph sealed.
-    program_types: *const Type.Store,
-    /// The output name store; a rehearsal type interns its names here exactly as
-    /// graph instantiation does, so equal types digest equal.
+    /// The output type store. Directed translation emits into it, so an id this
+    /// module produces is an ordinary production Monotype id.
+    types: *Type.Store,
+    /// The output name store; a translated type interns its names here exactly
+    /// as graph instantiation does, so equal types digest equal.
     program_names: *names.NameStore,
-    /// The rehearsal's own emission store. No id here reaches lowering.
-    store: Type.Store,
     translator: direct_translate.Translator,
     engine: closure.Engine,
     lookup: ModuleLookup,
@@ -1204,24 +1205,14 @@ pub const Rehearsal = struct {
     /// so its classification is read against a concrete disagreeing pair.
     unify_details: [census.unify_site_count]?UnifyDetail,
     disabled: bool,
+    /// Whether the transitional graph comparison runs. Debug measurement only:
+    /// it selects nothing, and the emission below is the same either way.
+    comparing: bool,
 
-    /// Build a rehearsal when it is compiled in and enabled, otherwise null.
-    pub fn maybeCreate(
-        allocator: Allocator,
-        program_types: *const Type.Store,
-        program_names: *names.NameStore,
-        resolver: direct_translate.Resolver,
-        lookup: ModuleLookup,
-    ) ?*Rehearsal {
-        if (comptime !census.enabled) return null;
-        if (!reunify_shadow.shouldRun()) return null;
-        return create(allocator, program_types, program_names, resolver, lookup) catch null;
-    }
-
-    /// Build a rehearsal unconditionally; `maybeCreate` gates this.
+    /// Build the instantiation state for one lowering run.
     pub fn create(
         allocator: Allocator,
-        program_types: *const Type.Store,
+        types: *Type.Store,
         program_names: *names.NameStore,
         resolver: direct_translate.Resolver,
         lookup: ModuleLookup,
@@ -1229,9 +1220,8 @@ pub const Rehearsal = struct {
         const self = try allocator.create(Rehearsal);
         self.* = .{
             .allocator = allocator,
-            .program_types = program_types,
+            .types = types,
             .program_names = program_names,
-            .store = Type.Store.init(allocator),
             .translator = undefined,
             .engine = closure.Engine.init(allocator),
             .lookup = lookup,
@@ -1250,15 +1240,9 @@ pub const Rehearsal = struct {
             .unresolved_details = .empty,
             .unify_details = @splat(null),
             .disabled = false,
+            .comparing = census.enabled and reunify_shadow.shouldRun(),
         };
-        // The graph commits every seal through the store's content-deduplicating
-        // constructor, so the rehearsal's own store deduplicates too: a recursive
-        // group's symmetric members must collapse on both sides or two isomorphic
-        // groups would be rooted differently and digest differently (reunify.md
-        // section 8.3). The store is private to the rehearsal, so this changes
-        // nothing lowering can observe.
-        self.store.enableInterning();
-        self.translator = direct_translate.Translator.init(allocator, &self.store, program_names, resolver);
+        self.translator = direct_translate.Translator.init(allocator, self.types, program_names, resolver);
         return self;
     }
 
@@ -1293,7 +1277,6 @@ pub const Rehearsal = struct {
         self.callees.deinit(self.allocator);
         self.engine.deinit();
         self.translator.deinit();
-        self.store.deinit();
         self.allocator.destroy(self);
     }
 
@@ -1374,7 +1357,6 @@ pub const Rehearsal = struct {
     /// not resolve is still pushed, so opens and closes stay paired and its
     /// positions read exactly as they did before it was named.
     pub fn openCalleeBinding(self: *Rehearsal, binding: CalleeBinding) void {
-        if (comptime !census.enabled) return;
         if (self.disabled) return;
         const level = self.resolveCalleeBinding(binding);
         self.callees.append(self.allocator, level) catch {
@@ -1386,8 +1368,7 @@ pub const Rehearsal = struct {
 
     /// Close the innermost callee binding.
     pub fn closeCalleeBinding(self: *Rehearsal) void {
-        if (comptime !census.enabled) return;
-        // Once the rehearsal disables itself no binding is opened, so none is
+        // Once this state disables itself no binding is opened, so none is
         // closed either and the stack stays balanced across the transition.
         if (self.disabled) return;
         var level = self.callees.pop() orelse return;
@@ -1555,8 +1536,8 @@ pub const Rehearsal = struct {
         }
         const binders = scheme.generalizedVars(defining.view);
         const receiver_root = self.emitQuietly(caller, caller_env, caller_owner_node, source.receiver.checked_ty) orelse return null;
-        const receiver = followEmittedPath(&self.store, receiver_root, &source.receiver.path) orelse return null;
-        const argument_count = receiverArgumentCount(&self.store, receiver) orelse return null;
+        const receiver = followEmittedPath(self.types, receiver_root, &source.receiver.path) orelse return null;
+        const argument_count = receiverArgumentCount(self.types, receiver) orelse return null;
         if (argument_count != binders.len) return null;
 
         const bound = self.allocator.alloc(direct_translate.BoundType, binders.len) catch {
@@ -1565,7 +1546,7 @@ pub const Rehearsal = struct {
         };
         defer self.allocator.free(bound);
         for (0..binders.len) |index| {
-            const argument = receiverArgumentAt(&self.store, receiver, index) orelse return null;
+            const argument = receiverArgumentAt(self.types, receiver, index) orelse return null;
             bound[index] = direct_translate.BoundType.of(argument);
         }
         var chain = self.copyEnvironmentChain(null, 0, .{
@@ -1580,7 +1561,7 @@ pub const Rehearsal = struct {
         const declared = self.emitQuietly(defining, chain.innermost(), scheme.owner_node, scheme.root);
         const left: ?Type.TypeId = switch (source.witness) {
             .callable => declared,
-            .receiver_at_argument => |index| if (declared) |root| functionArgumentAt(&self.store, root, index) else null,
+            .receiver_at_argument => |index| if (declared) |root| functionArgumentAt(self.types, root, index) else null,
         };
         const right: ?Type.TypeId = switch (source.witness) {
             .callable => |callable| self.emitQuietly(caller, caller_env, caller_owner_node, callable),
@@ -1600,11 +1581,11 @@ pub const Rehearsal = struct {
     fn quietWitnessAgrees(self: *Rehearsal, declared: ?Type.TypeId, requested: ?Type.TypeId) bool {
         const left = declared orelse return false;
         const right = requested orelse return false;
-        const left_digest = self.store.typeDigest(self.program_names, left);
-        const right_digest = self.store.typeDigest(self.program_names, right);
+        const left_digest = self.types.typeDigest(self.program_names, left);
+        const right_digest = self.types.typeDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) return true;
-        const left_unfolded = self.store.unfoldedDigest(self.program_names, left);
-        const right_unfolded = self.store.unfoldedDigest(self.program_names, right);
+        const left_unfolded = self.types.unfoldedDigest(self.program_names, left);
+        const right_unfolded = self.types.unfoldedDigest(self.program_names, right);
         return std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes);
     }
 
@@ -1711,8 +1692,11 @@ pub const Rehearsal = struct {
     pub fn beginSpecialization(self: *Rehearsal, start: SpecializationStart) void {
         if (self.disabled) return;
         census.bump("rehearsal_spec_attempted");
-        const trace = self.allocator.create(SealTrace) catch return self.fail();
-        trace.* = SealTrace.init(self.allocator);
+        const trace: ?*SealTrace = if (self.comparing) blk: {
+            const owned = self.allocator.create(SealTrace) catch return self.fail();
+            owned.* = SealTrace.init(self.allocator);
+            break :blk owned;
+        } else null;
         var frame = Frame{
             .trace = trace,
             .env_module_bytes = start.cursor.module_bytes,
@@ -1737,6 +1721,8 @@ pub const Rehearsal = struct {
     /// emission produces against what the graph sealed. Runs while the graph is
     /// still alive so a node's equivalence class still resolves.
     pub fn compareSpecialization(self: *Rehearsal, graph: *solve.InstGraph) void {
+        if (comptime !census.enabled) return;
+        if (!self.comparing) return;
         if (self.disabled) return;
         if (self.frames.items.len == 0) return;
         const frame = &self.frames.items[self.frames.items.len - 1];
@@ -1746,10 +1732,11 @@ pub const Rehearsal = struct {
         var positions: std.AutoHashMapUnmanaged(CheckedAddress, Occurrences) = .empty;
         defer positions.deinit(self.allocator);
 
-        var it = frame.trace.provenance.iterator();
+        const trace = frame.trace orelse return;
+        var it = trace.provenance.iterator();
         while (it.next()) |entry| {
             const root = @intFromEnum(graph.rootOf(@enumFromInt(entry.key_ptr.*)));
-            const sealed = frame.trace.sealed.get(root) orelse continue;
+            const sealed = trace.sealed.get(root) orelse continue;
             const gop = positions.getOrPut(self.allocator, entry.value_ptr.*) catch return self.fail();
             if (!gop.found_existing) gop.value_ptr.* = Occurrences.empty();
             gop.value_ptr.record(sealed);
@@ -1775,8 +1762,10 @@ pub const Rehearsal = struct {
     }
 
     fn releaseFrame(self: *Rehearsal, frame: *Frame) void {
-        frame.trace.deinit();
-        self.allocator.destroy(frame.trace);
+        if (frame.trace) |trace| {
+            trace.deinit();
+            self.allocator.destroy(trace);
+        }
         frame.chain.release(self.allocator);
     }
 
@@ -1935,7 +1924,7 @@ pub const Rehearsal = struct {
     /// The stored empty tag union, which is what an unresolved checked variable
     /// materializes to everywhere else in this rehearsal.
     fn uninhabitedStandIn(self: *Rehearsal) ?Type.TypeId {
-        return self.store.internTagUnion(self.program_names, &.{}) catch null;
+        return self.types.internTagUnion(self.program_names, &.{}) catch null;
     }
 
     /// Why one specialization's requesting edge supplied no binding. Carried to
@@ -2260,12 +2249,12 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_generated_rule_receiver_untranslatable");
             return false;
         };
-        const receiver = followEmittedPath(&self.store, receiver_root, &source.receiver.path) orelse {
+        const receiver = followEmittedPath(self.types, receiver_root, &source.receiver.path) orelse {
             outcome.receiver_unusable += 1;
             census.bump("rehearsal_generated_rule_receiver_path_absent");
             return false;
         };
-        const argument_count = receiverArgumentCount(&self.store, receiver) orelse {
+        const argument_count = receiverArgumentCount(self.types, receiver) orelse {
             outcome.receiver_unusable += 1;
             census.bump("rehearsal_generated_rule_receiver_not_named");
             return false;
@@ -2282,7 +2271,7 @@ pub const Rehearsal = struct {
         };
         defer self.allocator.free(bound);
         for (0..binders.len) |index| {
-            const argument = receiverArgumentAt(&self.store, receiver, index) orelse {
+            const argument = receiverArgumentAt(self.types, receiver, index) orelse {
                 outcome.receiver_unusable += 1;
                 census.bump("rehearsal_generated_rule_argument_untranslatable");
                 return false;
@@ -2325,7 +2314,7 @@ pub const Rehearsal = struct {
         };
         const witness_left: ?Type.TypeId = switch (source.witness) {
             .callable => declared,
-            .receiver_at_argument => |index| if (declared) |root| functionArgumentAt(&self.store, root, index) else null,
+            .receiver_at_argument => |index| if (declared) |root| functionArgumentAt(self.types, root, index) else null,
         };
         const witness_right: ?Type.TypeId = switch (source.witness) {
             .callable => requested,
@@ -2371,15 +2360,15 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_generated_rule_witness_absent");
             return false;
         };
-        const left_digest = self.store.typeDigest(self.program_names, left);
-        const right_digest = self.store.typeDigest(self.program_names, right);
+        const left_digest = self.types.typeDigest(self.program_names, left);
+        const right_digest = self.types.typeDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
             outcome.witness_agrees += 1;
             census.bump("rehearsal_generated_rule_witness_agrees");
             return true;
         }
-        const left_unfolded = self.store.unfoldedDigest(self.program_names, left);
-        const right_unfolded = self.store.unfoldedDigest(self.program_names, right);
+        const left_unfolded = self.types.unfoldedDigest(self.program_names, left);
+        const right_unfolded = self.types.unfoldedDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
             outcome.witness_agrees += 1;
             census.bump("rehearsal_generated_rule_witness_agrees_under_rerooting");
@@ -2574,14 +2563,14 @@ pub const Rehearsal = struct {
             census.bump("rehearsal_foreign_witness_absent");
             return false;
         };
-        const left_digest = self.store.typeDigest(self.program_names, left);
-        const right_digest = self.store.typeDigest(self.program_names, right);
+        const left_digest = self.types.typeDigest(self.program_names, left);
+        const right_digest = self.types.typeDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_digest.bytes, &right_digest.bytes)) {
             census.bump("rehearsal_foreign_witness_agrees");
             return true;
         }
-        const left_unfolded = self.store.unfoldedDigest(self.program_names, left);
-        const right_unfolded = self.store.unfoldedDigest(self.program_names, right);
+        const left_unfolded = self.types.unfoldedDigest(self.program_names, left);
+        const right_unfolded = self.types.unfoldedDigest(self.program_names, right);
         if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
             census.bump("rehearsal_foreign_witness_agrees_under_rerooting");
             return true;
@@ -2736,9 +2725,9 @@ pub const Rehearsal = struct {
         while (stack.pop()) |ty| {
             const gop = visited.getOrPut(ty) catch return false;
             if (gop.found_existing) continue;
-            if (HeadShape.of(&self.store, ty).isEmptyTagUnionHead()) return true;
+            if (HeadShape.of(self.types, ty).isEmptyTagUnionHead()) return true;
             var index: u32 = 0;
-            while (childAt(&self.store, ty, index)) |child| : (index += 1) {
+            while (childAt(self.types, ty, index)) |child| : (index += 1) {
                 stack.append(self.allocator, child) catch return false;
             }
         }
@@ -3300,10 +3289,10 @@ pub const Rehearsal = struct {
                 return null;
             },
             .sealed => |ty| return .{
-                .store = self.program_types,
+                .store = self.types,
                 .ty = ty,
-                .stored = self.program_types.typeDigest(self.program_names, ty),
-                .unfolded = self.program_types.unfoldedDigest(self.program_names, ty),
+                .stored = self.types.typeDigest(self.program_names, ty),
+                .unfolded = self.types.unfoldedDigest(self.program_names, ty),
                 .origin = .graph_sealed,
                 .source = null,
             },
@@ -3325,6 +3314,60 @@ pub const Rehearsal = struct {
                 };
             },
         }
+    }
+
+    /// The Monotype at one checked position of the specialization being lowered
+    /// (reunify.md sections 9.1, 9.2): directed instantiation of the checked
+    /// type under the binding the checker recorded, with no logical solving.
+    ///
+    /// `under_callee` reads the position under the innermost open callee
+    /// binding when one resolved for its module — a body lowering a CALLEE's own
+    /// checked positions reads them under the binding the checker recorded for
+    /// the edge, not under the requesting body's.
+    ///
+    /// Null means the checked data did not name a type here: the module is
+    /// outside this lowering input, or the walk left the translatable subset.
+    /// How the environment one checked position was read under resolved.
+    pub const PositionBinding = enum {
+        /// Read under the innermost open callee binding.
+        callee,
+        /// Read under the active specialization frame for the position's module.
+        frame,
+        /// No environment named the position's module.
+        none,
+    };
+
+    pub fn typeForCheckedPosition(
+        self: *Rehearsal,
+        address: CheckedAddress,
+        under_callee: bool,
+        binding: *PositionBinding,
+    ) Allocator.Error!?Type.TypeId {
+        const cursor = self.lookup.cursor(address.module_bytes) orelse return null;
+        var env: ?*const direct_translate.BindingEnvironment = null;
+        var owner_node = checked.checked_residual_disposition_module_body_owner;
+        binding.* = .none;
+        const callee = if (under_callee) self.innermostCallee(address.module_bytes) else null;
+        if (callee) |level| {
+            env = level.chain.innermost();
+            owner_node = level.owner_node;
+            binding.* = .callee;
+        } else if (self.frameForModule(address.module_bytes)) |frame| {
+            env = frame.environment();
+            owner_node = frame.owner_node;
+            binding.* = .frame;
+        }
+        var reason: direct_translate.SkipReason = undefined;
+        return self.translator.translateUnderEnvironment(
+            cursor,
+            env,
+            owner_node,
+            @enumFromInt(address.type_id),
+            &reason,
+        ) catch |err| switch (err) {
+            error.Skip => null,
+            else => |other| other,
+        };
     }
 
     /// Translate one checked position. `under_callee` reads it under the
@@ -3376,10 +3419,10 @@ pub const Rehearsal = struct {
             },
         };
         return .{
-            .store = &self.store,
+            .store = self.types,
             .ty = emitted,
-            .stored = self.store.typeDigest(self.program_names, emitted),
-            .unfolded = self.store.unfoldedDigest(self.program_names, emitted),
+            .stored = self.types.typeDigest(self.program_names, emitted),
+            .unfolded = self.types.unfoldedDigest(self.program_names, emitted),
             .origin = .checked_position,
             .source = .{
                 .view = cursor.view,
@@ -3535,11 +3578,11 @@ pub const Rehearsal = struct {
 
         _ = self.slotForEmitted(emitted, 0);
 
-        const emitted_digest = self.store.typeDigest(self.program_names, emitted);
+        const emitted_digest = self.types.typeDigest(self.program_names, emitted);
         var matched = false;
         for (occurrences.ids[0..occurrences.len]) |sealed| {
             census.bump("rehearsal_type_compared");
-            const sealed_digest = self.program_types.typeDigest(self.program_names, sealed);
+            const sealed_digest = self.types.typeDigest(self.program_names, sealed);
             if (std.mem.eql(u8, &emitted_digest.bytes, &sealed_digest.bytes)) {
                 census.bump("rehearsal_type_match");
                 matched = true;
@@ -3554,8 +3597,8 @@ pub const Rehearsal = struct {
             // Equal unfoldings say the two are the same type under a different
             // rooting, which is a deliberate difference in the emitted stored
             // form and not a content difference.
-            const emitted_unfolded = self.store.unfoldedDigest(self.program_names, emitted);
-            const sealed_unfolded = self.program_types.unfoldedDigest(self.program_names, sealed);
+            const emitted_unfolded = self.types.unfoldedDigest(self.program_names, emitted);
+            const sealed_unfolded = self.types.unfoldedDigest(self.program_names, sealed);
             if (std.mem.eql(u8, &emitted_unfolded.bytes, &sealed_unfolded.bytes)) {
                 census.bump("rehearsal_type_equal_under_rerooting");
                 matched = true;
@@ -3579,7 +3622,7 @@ pub const Rehearsal = struct {
         sealed_digest: names.TypeDigest,
     ) void {
         const representation = self.sealedCarriesRepresentation(sealed) or self.emittedCarriesRepresentation(emitted);
-        const difference = firstDifference(&self.store, emitted, self.program_types, sealed, self.program_names, 0);
+        const difference = firstDifference(self.types, emitted, self.types, sealed, self.program_names, 0);
         // A difference outside the residual-materialization class is a finding of
         // its own, so its detail is always dumped: the bounded budget exists to
         // stop the residual class from filling the file, not to hide the rest.
@@ -3630,8 +3673,8 @@ pub const Rehearsal = struct {
             .binder_count = @intCast(frame.binders.len),
             .rehearsal_digest = emitted_digest,
             .graph_digest = sealed_digest,
-            .rehearsal_head = HeadShape.of(&self.store, emitted),
-            .graph_head = HeadShape.of(self.program_types, sealed),
+            .rehearsal_head = HeadShape.of(self.types, emitted),
+            .graph_head = HeadShape.of(self.types, sealed),
             .difference = difference,
         }) catch self.fail();
     }
@@ -3774,11 +3817,11 @@ pub const Rehearsal = struct {
     }
 
     fn sealedCarriesRepresentation(self: *Rehearsal, root: Type.TypeId) bool {
-        return self.carriesRepresentation(self.program_types, root);
+        return self.carriesRepresentation(self.types, root);
     }
 
     fn emittedCarriesRepresentation(self: *Rehearsal, root: Type.TypeId) bool {
-        return self.carriesRepresentation(&self.store, root);
+        return self.carriesRepresentation(self.types, root);
     }
 
     /// Whether a type carries iterator or generated representation content
@@ -3859,7 +3902,7 @@ pub const Rehearsal = struct {
     }
 
     fn shapeFor(self: *Rehearsal, ty: Type.TypeId, token: closure.LogicalToken, depth: u32) ?closure.SlotShape {
-        switch (self.store.get(ty)) {
+        switch (self.types.get(ty)) {
             .list, .box => |elem| {
                 const child = self.slotForEmitted(elem, depth + 1) orelse return null;
                 return .{ .wrapper = child };
@@ -3867,7 +3910,7 @@ pub const Rehearsal = struct {
             .named => |named| {
                 const owner = named.builtin_owner;
                 if (owner != null and static_dispatch.isIteratorOwner(owner.?)) {
-                    const args = self.store.span(named.args);
+                    const args = self.types.span(named.args);
                     if (GuardedList.borrowLen(args) >= 1) {
                         const item = self.slotForEmitted(GuardedList.at(args, 0), depth + 1) orelse return null;
                         const backing = if (named.backing) |backing_ty|
@@ -3955,7 +3998,7 @@ pub const Rehearsal = struct {
     /// tokens are the engine's precondition for relating two slots, so the token
     /// erases exactly the representation content a rule may move.
     fn tokenFor(self: *Rehearsal, ty: Type.TypeId) ?closure.LogicalToken {
-        const digest = self.store.typeDigest(self.program_names, ty);
+        const digest = self.types.typeDigest(self.program_names, ty);
         const gop = self.logical_tokens.getOrPut(self.allocator, digest.bytes) catch return null;
         if (!gop.found_existing) {
             gop.value_ptr.* = self.next_token;

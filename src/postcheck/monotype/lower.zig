@@ -130,12 +130,14 @@ pub fn run(
     // every non-probe lowering, so seal collection stays inert.
     if (reunify_shadow.shouldRun()) program.types.committed_census = &builder.sealed_population;
 
-    // Debug-only, state-isolated per-specialization rehearsal (reunify.md
-    // sections 9/10/11, Slice 7 flip-prep step b). It runs alongside lowering
-    // because a specialization's binder environment only exists while that
-    // specialization is being lowered; it owns its own store and engine and
-    // writes nothing lowering reads.
-    builder.rehearsal = builder.createRehearsal();
+    // The per-specialization instantiation state (reunify.md sections 9/10/11).
+    // It runs alongside lowering because a specialization's binder environment
+    // only exists while that specialization is being lowered.
+    // Only the seam comparison reads this today, and that comparison is
+    // compiled out outside Debug, so building the environment chains and site
+    // indexes would be work no one reads. It becomes unconditional when
+    // directed instantiation takes over the seam.
+    if (comptime census.enabled) builder.rehearsal = try builder.createRehearsal();
     defer if (builder.rehearsal) |rehearsal| rehearsal.destroy();
 
     for (roots.requests) |request| {
@@ -719,6 +721,8 @@ const Builder = struct {
     /// The specialization graph currently being lowered. Template body
     /// requests made anywhere inside that specialization defer to its end,
     /// when its types are final and specialization keys are stable.
+    /// Bounded count of recorded seam divergences (Debug measurement only).
+    seam_divergences_noted: usize = 0,
     active_graph: ?*InstGraph = null,
     /// Debug-only census context: the reserved procedure whose deferred
     /// requests are being sealed, so a request that targets the same
@@ -2843,10 +2847,10 @@ const Builder = struct {
         return directTranslateCursor(view);
     }
 
-    /// Build the per-specialization rehearsal when the shadow is compiled in and
-    /// enabled (reunify.md Slice 7 flip-prep step b), otherwise null.
-    fn createRehearsal(self: *Builder) ?*spec_rehearsal.Rehearsal {
-        return spec_rehearsal.Rehearsal.maybeCreate(
+    /// Build the per-specialization instantiation state this lowering run reads
+    /// checked positions through (reunify.md sections 9, 11).
+    fn createRehearsal(self: *Builder) Allocator.Error!*spec_rehearsal.Rehearsal {
+        return spec_rehearsal.Rehearsal.create(
             self.allocator,
             &self.program.types,
             &self.program.names,
@@ -2858,6 +2862,140 @@ const Builder = struct {
     /// Whether a sealed Monotype type carries iterator or generated
     /// representation content anywhere, so a directed-translation mismatch on it
     /// is classified as a representation difference rather than a logical one.
+    /// Append a bounded structural rendering of one Monotype to `out`, for
+    /// locating a seam divergence. Measurement only (reunify.md section 13
+    /// Slice 7).
+    fn describeMonoType(
+        self: *Builder,
+        out: *std.ArrayList(u8),
+        ty: Type.TypeId,
+        depth: u32,
+    ) Allocator.Error!void {
+        if (depth > 3) {
+            try out.appendSlice(self.allocator, "..");
+            return;
+        }
+        const store = &self.program.types;
+        switch (store.get(ty)) {
+            .primitive => |primitive| try out.appendSlice(self.allocator, @tagName(primitive)),
+            .zst => try out.appendSlice(self.allocator, "zst"),
+            .erased => try out.appendSlice(self.allocator, "erased"),
+            .list => |elem| {
+                try out.appendSlice(self.allocator, "List<");
+                try self.describeMonoType(out, elem, depth + 1);
+                try out.appendSlice(self.allocator, ">");
+            },
+            .box => |elem| {
+                try out.appendSlice(self.allocator, "Box<");
+                try self.describeMonoType(out, elem, depth + 1);
+                try out.appendSlice(self.allocator, ">");
+            },
+            .tuple => |span| {
+                try out.appendSlice(self.allocator, "(");
+                const items = store.span(span);
+                for (0..GuardedList.borrowLen(items)) |i| {
+                    if (i != 0) try out.appendSlice(self.allocator, ",");
+                    try self.describeMonoType(out, GuardedList.at(items, i), depth + 1);
+                }
+                try out.appendSlice(self.allocator, ")");
+            },
+            .record => |span| {
+                try out.appendSlice(self.allocator, "{");
+                const fields = store.fieldSpan(span);
+                for (0..GuardedList.borrowLen(fields)) |i| {
+                    if (i != 0) try out.appendSlice(self.allocator, ",");
+                    const field = GuardedList.at(fields, i);
+                    try out.appendSlice(self.allocator, self.program.names.recordFieldLabelText(field.name));
+                    try out.appendSlice(self.allocator, ":");
+                    try self.describeMonoType(out, field.ty, depth + 1);
+                }
+                try out.appendSlice(self.allocator, "}");
+            },
+            .tag_union => |span| {
+                try out.appendSlice(self.allocator, "[");
+                const tags = store.tagSpan(span);
+                for (0..GuardedList.borrowLen(tags)) |i| {
+                    if (i != 0) try out.appendSlice(self.allocator, "|");
+                    const tag = GuardedList.at(tags, i);
+                    try out.appendSlice(self.allocator, self.program.names.tagLabelText(tag.name));
+                    const payloads = store.span(tag.payloads);
+                    for (0..GuardedList.borrowLen(payloads)) |j| {
+                        try out.appendSlice(self.allocator, " ");
+                        try self.describeMonoType(out, GuardedList.at(payloads, j), depth + 1);
+                    }
+                }
+                try out.appendSlice(self.allocator, "]");
+            },
+            .func => |fn_ty| {
+                try out.appendSlice(self.allocator, "fn(");
+                const args = store.span(fn_ty.args);
+                for (0..GuardedList.borrowLen(args)) |i| {
+                    if (i != 0) try out.appendSlice(self.allocator, ",");
+                    try self.describeMonoType(out, GuardedList.at(args, i), depth + 1);
+                }
+                try out.appendSlice(self.allocator, ")->");
+                try self.describeMonoType(out, fn_ty.ret, depth + 1);
+            },
+            .named => |named| {
+                try out.appendSlice(self.allocator, self.program.names.typeNameText(named.def.type_name));
+                const args = store.span(named.args);
+                if (GuardedList.borrowLen(args) != 0) {
+                    try out.appendSlice(self.allocator, "<");
+                    for (0..GuardedList.borrowLen(args)) |i| {
+                        if (i != 0) try out.appendSlice(self.allocator, ",");
+                        try self.describeMonoType(out, GuardedList.at(args, i), depth + 1);
+                    }
+                    try out.appendSlice(self.allocator, ">");
+                }
+                if (named.backing) |backing| {
+                    try out.appendSlice(self.allocator, "=");
+                    try self.describeMonoType(out, backing.ty, depth + 1);
+                }
+            },
+        }
+    }
+
+    /// Record one checked position whose directed instantiation differs from the
+    /// type the graph solved for it, bounded so a corpus run cannot write an
+    /// unbounded log. Measurement only (reunify.md section 13 Slice 7).
+    fn noteSeamDivergence(
+        self: *Builder,
+        view: ModuleView,
+        checked_ty: checked.CheckedTypeId,
+        direct_ty: Type.TypeId,
+        graph_ty: Type.TypeId,
+        binding: spec_rehearsal.Rehearsal.PositionBinding,
+        callee_context: bool,
+    ) void {
+        if (comptime !census.enabled) return;
+        if (self.seam_divergences_noted >= 32) return;
+        self.seam_divergences_noted += 1;
+        const raw_path = std.c.getenv("ROC_REUNIFY_CENSUS") orelse return;
+        const module_hex = std.fmt.bytesToHex(view.key.bytes[0..8].*, .lower);
+        var direct_text: std.ArrayList(u8) = .empty;
+        defer direct_text.deinit(self.allocator);
+        var graph_text: std.ArrayList(u8) = .empty;
+        defer graph_text.deinit(self.allocator);
+        self.describeMonoType(&direct_text, direct_ty, 0) catch return;
+        self.describeMonoType(&graph_text, graph_ty, 0) catch return;
+        const line = std.fmt.allocPrint(
+            self.allocator,
+            "seam_divergence module={s} name={s} checked_ty={d} payload={s} binding={s} callee_ctx={d} direct={s} graph={s}\n",
+            .{
+                &module_hex,
+                view.module_env.module_name,
+                @intFromEnum(checked_ty),
+                @tagName(checkedPayload(view, checked_ty)),
+                @tagName(binding),
+                @intFromBool(callee_context),
+                direct_text.items,
+                graph_text.items,
+            },
+        ) catch return;
+        defer self.allocator.free(line);
+        census.appendToFile(raw_path, line);
+    }
+
     fn monoTypeCarriesRepresentation(self: *Builder, root: Type.TypeId) Allocator.Error!bool {
         var visited = std.AutoHashMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -5455,9 +5593,6 @@ const Builder = struct {
     }
 
     fn functionTypeFromMonoArgs(self: *Builder, arg_tys: []const Type.TypeId, ret_ty: Type.TypeId) Allocator.Error!Type.TypeId {
-        if (self.active_graph != null) {
-            Common.invariant("active Monotype body lowering must build function types through BodyContext graph-node helpers");
-        }
         return try self.program.types.internFunc(&self.program.names, arg_tys, ret_ty);
     }
 
@@ -9211,14 +9346,42 @@ const BodyContext = struct {
 
     /// The Monotype this specialization gives a checked type: the single seam
     /// every body-lowering consumer that only wants to READ a type goes through
-    /// (reunify.md sections 9, 13 Slice 7). It is graph-backed here — instantiate
-    /// the checked type into this specialization's graph and read the node — and
-    /// that is the whole of its contract to callers: given a checked type and the
-    /// active specialization, hand back the type at that position. Consumers that
-    /// need a graph node to constrain, or a draft cell to carry, still ask for one
-    /// through `lowerTypeNode` / `lowerTypeCell`.
+    /// (reunify.md sections 9, 13 Slice 7). Directed instantiation of the checked
+    /// type under the binding the checker recorded for this specialization, with
+    /// no logical solving: given a checked type and the active specialization,
+    /// hand back the type at that position.
     fn typeForChecked(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        return try self.activeTypeFromNode(try self.instNode(checked_ty));
+        const graph_ty = try self.activeTypeFromNode(try self.instNode(checked_ty));
+        if (comptime census.enabled) {
+            if (self.builder.rehearsal) |instantiation| {
+                const address: spec_rehearsal.CheckedAddress = .{
+                    .module_bytes = self.view.key.bytes,
+                    .type_id = @intFromEnum(checked_ty),
+                };
+                var binding: spec_rehearsal.Rehearsal.PositionBinding = .none;
+                if (try instantiation.typeForCheckedPosition(address, self.callee_context, &binding)) |direct_ty| {
+                    const types = &self.builder.program.types;
+                    const name_store = &self.builder.program.names;
+                    const left = types.typeDigest(name_store, direct_ty);
+                    const right = types.typeDigest(name_store, graph_ty);
+                    if (std.mem.eql(u8, &left.bytes, &right.bytes)) {
+                        census.bump("seam_direct");
+                    } else {
+                        const left_unfolded = types.unfoldedDigest(name_store, direct_ty);
+                        const right_unfolded = types.unfoldedDigest(name_store, graph_ty);
+                        if (std.mem.eql(u8, &left_unfolded.bytes, &right_unfolded.bytes)) {
+                            census.bump("seam_direct");
+                        } else {
+                            census.bump("seam_direct_diverged");
+                            self.builder.noteSeamDivergence(self.view, checked_ty, direct_ty, graph_ty, binding, self.callee_context);
+                        }
+                    }
+                } else {
+                    census.bump("seam_direct_absent");
+                }
+            }
+        }
+        return graph_ty;
     }
 
     fn graphFunctionNode(

@@ -300,6 +300,14 @@ pub const Census = struct {
     // one per direct_translate.SkipReason. `skip_recursive` should stay near zero
     // now that recursive groups are built through the store's recursive-group
     // builder; a nonzero count is a recursion the builder could not close.
+    // The lowering seam (reunify.md section 9): how many checked positions the
+    // directed instantiation answered, and how many it could not name a type
+    // for. The second must stay zero; every checked position a body reads is one
+    // the checked data describes.
+    seam_direct: Counter = Counter.init(0),
+    seam_direct_absent: Counter = Counter.init(0),
+    seam_direct_diverged: Counter = Counter.init(0),
+
     direct_probe_population: Counter = Counter.init(0),
     direct_stored_match: Counter = Counter.init(0),
     direct_stored_mismatch: Counter = Counter.init(0),
