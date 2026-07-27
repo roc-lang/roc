@@ -3975,12 +3975,17 @@ const Pass = struct {
         args: []const Ast.ExprId,
         out: *std.ArrayList(Ast.ExprId),
     ) Allocator.Error!bool {
+        const pending_start = cloner.pending.items.len;
+        var matched = false;
+        defer if (!matched) cloner.pending.shrinkRetainingCapacity(pending_start);
+
         if (pattern.args.len != args.len) Common.invariant("call-pattern arity differed from direct call arity");
         for (pattern.args, args) |shape, arg| {
             const value = try cloner.cloneExprValue(arg);
             if (!shapeMatchesValue(self.program, shape, value)) return false;
             try cloner.appendExprsFromValue(shape, value, out);
         }
+        matched = true;
         return true;
     }
 
