@@ -4882,17 +4882,23 @@ RC helper selection is unchanged: each emitted statement carries the helper
 derived from the local's layout, and helper choice stays in this stage.
 
 Emission decisions consume one precomputed per-statement liveness table over
-the ownership-neutral statement graph. Its bit domain contains only locals
-whose committed layouts contain refcounted data, their explicit
-ownership-unit and borrow-group representatives from the solved ownership
-graph, and the explicit group and borrowed-call-result bits required by the
-equations above. Unrelated scalar locals are not ARC resources and never
+the ownership-neutral statement graph. Each proc has its own dense ARC domain,
+constructed directly from that proc's complete, unique, sorted `frame_locals`
+inventory. The domain contains only locals whose committed layouts contain
+refcounted data, their explicit ownership-unit and borrow-group representatives
+from the solved ownership graph, and the explicit group and
+borrowed-call-result bits required by the equations above. Every representative
+must belong to the same producer-authored proc inventory; a missing local is an
+invariant violation, never something ARC reconstructs from the statement graph.
+Join ownership sets use the resource prefix of this same per-proc domain.
+Consequently neither ownership nor liveness rows are widened by locals from
+other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
 initializers: a list of a million scalar elements may require a million scalar
 LIR locals, but it contributes only the list allocation and its explicit
 ownership representatives to ARC's resource-bit width. Widening every row with
-non-resource locals would make ARC memory quadratic in an input that needs only
-linear ownership work.
+non-resource or other-proc locals would make ARC memory quadratic in an input
+that needs only linear ownership work.
 
 The table carries exactly the same read-before-rebind decisions as the earlier
 on-demand forward scans. Compile-time performance work may change its storage

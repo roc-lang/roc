@@ -44,6 +44,187 @@ pub const InsertOptions = struct {
     specialize: bool = false,
 };
 
+const no_proc_local_index = std.math.maxInt(u32);
+const no_arc_bit = std.math.maxInt(u32);
+const arc_bit_needed = no_arc_bit - 1;
+
+/// Exact per-procedure ARC bit domain. `frame_locals` is the complete,
+/// producer-authored local inventory maintained by direct LIR lowering and
+/// every pre-ARC transform. ARC consumes it directly: ownership sets contain
+/// only refcounted resources and their solved representatives, and liveness
+/// rows add only the proc's solved group and borrowed-result bits.
+const ProcArcDomain = struct {
+    global_local_index: []u32,
+    frame_locals: []const LIR.LocalId,
+    resource_bit_index: []const u32,
+    resource_locals: []const LIR.LocalId,
+    refcounted_locals: []const LIR.LocalId,
+    group_bit_index: []const u32,
+    group_leaders: []const LIR.LocalId,
+    value_use_bit_index: []const u32,
+    value_use_locals: []const LIR.LocalId,
+
+    fn init(
+        allocator: Allocator,
+        store: *const LirStore,
+        solution: *const arc_solve.Solution,
+        local_contains_refcounted: []const bool,
+        borrowed_call_result: []const bool,
+        global_local_index: []u32,
+        frame_span: LIR.LocalSpan,
+    ) ResourceError!ProcArcDomain {
+        const frame = store.getLocalSpan(frame_span);
+        const frame_len = GuardedList.borrowLen(frame);
+        if (frame_len >= arc_bit_needed) arcInvariant("ARC proc-local domain exceeds its dense index representation");
+
+        const frame_locals = try allocator.alloc(LIR.LocalId, frame_len);
+        const resource_bit_index = try allocator.alloc(u32, frame_len);
+        @memset(resource_bit_index, no_arc_bit);
+        const resource_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        const refcounted_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        const group_bit_index = try allocator.alloc(u32, frame_len);
+        @memset(group_bit_index, no_arc_bit);
+        const group_leaders_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        const value_use_bit_index = try allocator.alloc(u32, frame_len);
+        @memset(value_use_bit_index, no_arc_bit);
+        const value_use_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+
+        var mapped_len: usize = 0;
+        errdefer for (frame_locals[0..mapped_len]) |local| {
+            global_local_index[@intFromEnum(local)] = no_proc_local_index;
+        };
+        for (0..frame_len) |frame_index| {
+            const local = GuardedList.at(frame, frame_index);
+            const local_index = @intFromEnum(local);
+            if (local_index >= global_local_index.len) arcInvariant("ARC frame-local inventory names an unknown local");
+            if (frame_index > 0 and @intFromEnum(frame_locals[frame_index - 1]) >= local_index) {
+                arcInvariant("ARC frame-local inventory is not unique and sorted");
+            }
+            if (global_local_index[local_index] != no_proc_local_index) {
+                arcInvariant("ARC frame-local inventory overlaps an active proc domain");
+            }
+            frame_locals[frame_index] = local;
+            global_local_index[local_index] = @intCast(frame_index);
+            mapped_len += 1;
+        }
+
+        var refcounted_count: usize = 0;
+        for (frame_locals) |local| {
+            const local_index = @intFromEnum(local);
+            if (local_index >= local_contains_refcounted.len) arcInvariant("ARC refcounted-local table did not cover frame local");
+            if (!local_contains_refcounted[local_index]) continue;
+            refcounted_locals_buffer[refcounted_count] = local;
+            refcounted_count += 1;
+
+            const resource_locals = [_]LIR.LocalId{
+                local,
+                solution.leaderOf(local),
+                solution.unitLocalOf(local),
+            };
+            for (resource_locals) |resource_local| {
+                const resource_frame_index = requiredFrameIndex(global_local_index, resource_local);
+                resource_bit_index[resource_frame_index] = arc_bit_needed;
+            }
+        }
+
+        var resource_count: usize = 0;
+        for (resource_bit_index, 0..) |*bit_index, frame_index| {
+            if (bit_index.* != arc_bit_needed) continue;
+            bit_index.* = @intCast(resource_count);
+            resource_locals_buffer[resource_count] = frame_locals[frame_index];
+            resource_count += 1;
+        }
+
+        var group_count: usize = 0;
+        for (frame_locals, 0..) |local, frame_index| {
+            const leader = solution.leaderOf(local);
+            _ = requiredFrameIndex(global_local_index, leader);
+            if (leader != local) continue;
+            const members = solution.groupMembers(leader);
+            if (members.len <= 1) continue;
+            for (members) |member| _ = requiredFrameIndex(global_local_index, @enumFromInt(member));
+            group_bit_index[frame_index] = @intCast(group_count);
+            group_leaders_buffer[group_count] = leader;
+            group_count += 1;
+        }
+
+        var value_use_count: usize = 0;
+        for (frame_locals, 0..) |local, frame_index| {
+            const local_index = @intFromEnum(local);
+            if (local_index >= borrowed_call_result.len) arcInvariant("ARC borrowed-result table did not cover frame local");
+            if (!borrowed_call_result[local_index]) continue;
+            value_use_bit_index[frame_index] = @intCast(value_use_count);
+            value_use_locals_buffer[value_use_count] = local;
+            value_use_count += 1;
+        }
+
+        return .{
+            .global_local_index = global_local_index,
+            .frame_locals = frame_locals,
+            .resource_bit_index = resource_bit_index,
+            .resource_locals = resource_locals_buffer[0..resource_count],
+            .refcounted_locals = refcounted_locals_buffer[0..refcounted_count],
+            .group_bit_index = group_bit_index,
+            .group_leaders = group_leaders_buffer[0..group_count],
+            .value_use_bit_index = value_use_bit_index,
+            .value_use_locals = value_use_locals_buffer[0..value_use_count],
+        };
+    }
+
+    fn requiredFrameIndex(global_local_index: []const u32, local: LIR.LocalId) usize {
+        const local_index = @intFromEnum(local);
+        if (local_index >= global_local_index.len) arcInvariant("ARC proc domain queried an unknown local");
+        const frame_index = global_local_index[local_index];
+        if (frame_index == no_proc_local_index) arcInvariant("ARC proc domain is missing a required frame local");
+        return frame_index;
+    }
+
+    fn frameIndexOf(self: *const ProcArcDomain, local: LIR.LocalId) usize {
+        return requiredFrameIndex(self.global_local_index, local);
+    }
+
+    fn resourceBitOf(self: *const ProcArcDomain, local: LIR.LocalId) ?usize {
+        const bit_index = self.resource_bit_index[self.frameIndexOf(local)];
+        if (bit_index == no_arc_bit) return null;
+        return bit_index;
+    }
+
+    fn requiredResourceBitOf(self: *const ProcArcDomain, local: LIR.LocalId) usize {
+        return self.resourceBitOf(local) orelse arcInvariant("ARC ownership set queried a non-resource local");
+    }
+
+    fn resourceLocalAt(self: *const ProcArcDomain, bit_index: usize) LIR.LocalId {
+        if (bit_index >= self.resource_locals.len) arcInvariant("ARC ownership bit exceeded its proc domain");
+        return self.resource_locals[bit_index];
+    }
+
+    fn groupBitOf(self: *const ProcArcDomain, leader: LIR.LocalId) ?usize {
+        const bit_index = self.group_bit_index[self.frameIndexOf(leader)];
+        if (bit_index == no_arc_bit) return null;
+        return self.resource_locals.len + bit_index;
+    }
+
+    fn valueUseBitOf(self: *const ProcArcDomain, local: LIR.LocalId) ?usize {
+        const bit_index = self.value_use_bit_index[self.frameIndexOf(local)];
+        if (bit_index == no_arc_bit) return null;
+        return self.resource_locals.len + self.group_leaders.len + bit_index;
+    }
+
+    fn livenessBitLen(self: *const ProcArcDomain) usize {
+        return self.resource_locals.len + self.group_leaders.len + self.value_use_locals.len;
+    }
+
+    fn clearGlobalIndices(self: *ProcArcDomain) void {
+        for (self.frame_locals, 0..) |local, expected_index| {
+            const local_index = @intFromEnum(local);
+            if (self.global_local_index[local_index] != expected_index) {
+                arcInvariant("ARC proc domain index changed while active");
+            }
+            self.global_local_index[local_index] = no_proc_local_index;
+        }
+    }
+};
+
 /// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
     var inserter = Inserter{
@@ -62,53 +243,13 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer solution.deinit();
     inserter.solution = &solution;
 
-    // Liveness-table bit layout: one dense raw bit per local whose layout
-    // contains refcounted data and per explicit ownership-unit/borrow-group
-    // representative selected for such a local by the solved ownership graph,
-    // then one bit per multi-member borrow group (any member reads it;
-    // definitions end the previous resource and explicit source reads transfer
-    // liveness to the new resource), then one bit per borrowed call-result
-    // local (value-use semantics: RC statements are not uses, string-match
-    // captures kill on the match edge). Unrelated scalar locals are not ARC
-    // resources and therefore do not widen every row.
-    const no_liveness_bit = std.math.maxInt(u32);
-    var raw_liveness_bit_index = try store.allocator.alloc(u32, store.localCount());
-    defer store.allocator.free(raw_liveness_bit_index);
-    @memset(raw_liveness_bit_index, no_liveness_bit);
-    var raw_liveness_needed = try store.allocator.alloc(bool, store.localCount());
-    defer store.allocator.free(raw_liveness_needed);
-    @memset(raw_liveness_needed, false);
-    for (local_contains_refcounted, 0..) |contains_refcounted, local_index| {
-        if (!contains_refcounted) continue;
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
-        raw_liveness_needed[local_index] = true;
-        raw_liveness_needed[@intFromEnum(solution.leaderOf(local))] = true;
-        raw_liveness_needed[@intFromEnum(solution.unitLocalOf(local))] = true;
-    }
-    var raw_liveness_bit_count: usize = 0;
-    for (raw_liveness_needed, 0..) |needed, local_index| {
-        if (!needed) continue;
-        raw_liveness_bit_index[local_index] = @intCast(raw_liveness_bit_count);
-        raw_liveness_bit_count += 1;
-    }
-    var group_bit_index = try store.allocator.alloc(u32, store.localCount());
-    defer store.allocator.free(group_bit_index);
-    @memset(group_bit_index, no_liveness_bit);
-    var group_leaders = std.ArrayList(LIR.LocalId).empty;
-    defer group_leaders.deinit(store.allocator);
-    for (0..store.localCount()) |local_index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(local_index)));
-        const leader = solution.leaderOf(local);
-        if (leader != local) continue;
-        if (solution.groupMembers(leader).len <= 1) continue;
-        group_bit_index[local_index] = @intCast(group_leaders.items.len);
-        try group_leaders.append(store.allocator, leader);
-    }
-    var value_use_bit_index = try store.allocator.alloc(u32, store.localCount());
-    defer store.allocator.free(value_use_bit_index);
-    @memset(value_use_bit_index, no_liveness_bit);
-    var value_use_locals = std.ArrayList(LIR.LocalId).empty;
-    defer value_use_locals.deinit(store.allocator);
+    // Borrowed call results need a separate value-use liveness bit because
+    // emitted RC statements are raw reads, not uses of the borrowed result.
+    // Record this module-wide fact once; each proc domain below selects only
+    // the results named by that proc's explicit frame-local inventory.
+    var borrowed_call_result = try store.allocator.alloc(bool, store.localCount());
+    defer store.allocator.free(borrowed_call_result);
+    @memset(borrowed_call_result, false);
     for (0..store.cfStmtCount()) |stmt_index| {
         const target = switch (store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))))) {
             .assign_call => |assign| assign.target,
@@ -116,17 +257,15 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             else => continue,
         };
         if (!solution.isBorrowed(target)) continue;
-        if (value_use_bit_index[@intFromEnum(target)] != no_liveness_bit) continue;
-        value_use_bit_index[@intFromEnum(target)] = @intCast(value_use_locals.items.len);
-        try value_use_locals.append(store.allocator, target);
+        borrowed_call_result[@intFromEnum(target)] = true;
     }
-    inserter.raw_liveness_bit_index = raw_liveness_bit_index;
-    inserter.raw_liveness_bit_count = raw_liveness_bit_count;
-    inserter.group_bit_index = group_bit_index;
-    inserter.group_leaders = group_leaders.items;
-    inserter.value_use_bit_index = value_use_bit_index;
-    inserter.value_use_locals = value_use_locals.items;
-    inserter.liveness_bit_len = raw_liveness_bit_count + group_leaders.items.len + value_use_locals.items.len;
+
+    // Domains are active one proc at a time. This reusable exact map makes
+    // global LocalId -> proc-dense index lookup O(1) without allocating and
+    // clearing a module-wide table for every proc.
+    const proc_local_index = try store.allocator.alloc(u32, store.localCount());
+    defer store.allocator.free(proc_local_index);
+    @memset(proc_local_index, no_proc_local_index);
 
     var read_cache_arena = std.heap.ArenaAllocator.init(store.allocator);
     defer read_cache_arena.deinit();
@@ -173,14 +312,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     }
     inserter.variants = &variants;
 
-    var owned_param_override = try OwnedSet.init(store.allocator, store.localCount());
-    defer owned_param_override.deinit();
-    inserter.owned_param_override = &owned_param_override;
-
-    var unique_param_override = try OwnedSet.init(store.allocator, store.localCount());
-    defer unique_param_override.deinit();
-    inserter.unique_param_override = &unique_param_override;
-
     var emit_index: usize = 0;
     while (true) {
         var emit_proc: LIR.LirProcSpecId = undefined;
@@ -201,40 +332,50 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
 
         const body = original_bodies[@intFromEnum(source_proc)] orelse continue;
+        const source_spec = store.getProcSpec(source_proc);
+        var domain_arena = std.heap.ArenaAllocator.init(store.allocator);
+        defer domain_arena.deinit();
+        var domain = try ProcArcDomain.init(
+            domain_arena.allocator(),
+            store,
+            &solution,
+            local_contains_refcounted,
+            borrowed_call_result,
+            proc_local_index,
+            source_spec.frame_locals,
+        );
+        defer domain.clearGlobalIndices();
+        inserter.current_domain = &domain;
+        defer inserter.current_domain = null;
+
         const emit_args = store.getProcSpec(emit_proc).args;
         inserter.current_sig = emit_sig;
         inserter.current_proc_body = body;
         inserter.clearReadsBeforeRebindCache();
 
+        var owned_param_override = try OwnedSet.init(store.allocator, &domain);
+        defer owned_param_override.deinit();
+        inserter.owned_param_override = &owned_param_override;
+
+        var unique_param_override = try OwnedSet.init(store.allocator, &domain);
+        defer unique_param_override.deinit();
+        inserter.unique_param_override = &unique_param_override;
+
         // Variant parameter positions demanded owned override the solved
         // borrowed binding for this emission only, and positions the demand
         // vector proves unique seed the body's born-unique view.
         const solved_sig = solution.sigOf(source_proc);
-        var override_locals_buffer: [64]LIR.LocalId = undefined;
-        var override_count: usize = 0;
-        var unique_locals_buffer: [64]LIR.LocalId = undefined;
-        var unique_count: usize = 0;
         const emit_params_for_overrides = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_overrides)) |position| {
             const param = GuardedList.at(emit_params_for_overrides, position);
             if (position >= 64) break;
             if (solved_sig.paramMode(position) == .borrowed and emit_sig.paramMode(position) == .owned) {
                 owned_param_override.set(param);
-                override_locals_buffer[override_count] = param;
-                override_count += 1;
             }
             if ((emit_sig.unique_params >> @as(u6, @intCast(position))) & 1 != 0) {
                 unique_param_override.set(param);
-                unique_locals_buffer[unique_count] = param;
-                unique_count += 1;
             }
         }
-        defer for (override_locals_buffer[0..override_count]) |param| {
-            owned_param_override.unset(param);
-        };
-        defer for (unique_locals_buffer[0..unique_count]) |param| {
-            unique_param_override.unset(param);
-        };
 
         var join_bodies = JoinBodyMap.init(store.allocator);
         defer join_bodies.deinit();
@@ -251,7 +392,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         }
         inserter.rewritten_joins = &rewritten_joins;
         defer inserter.rewritten_joins = null;
-        var owned = try OwnedSet.init(store.allocator, store.localCount());
+        var owned = try OwnedSet.init(store.allocator, &domain);
         defer owned.deinit();
         const emit_params_for_owned = store.getLocalSpan(emit_args);
         for (0..GuardedList.borrowLen(emit_params_for_owned)) |position| {
@@ -465,11 +606,11 @@ const SolveTask = union(enum) {
 
 fn cloneOwnedSetWith(allocator: Allocator, source: *const OwnedSet) ResourceError!OwnedSet {
     const bits = try source.bits.clone(allocator);
-    return .{ .allocator = allocator, .bits = bits };
+    return .{ .allocator = allocator, .domain = source.domain, .bits = bits };
 }
 
 fn assignOwnedSet(target: *OwnedSet, source: *const OwnedSet) void {
-    if (target.len() != source.len()) arcInvariant("ARC owned-set assignment length mismatch");
+    target.requireSameDomain(source);
     target.bits.unsetAll();
     target.bits.setUnion(source.bits);
 }
@@ -555,6 +696,9 @@ const Inserter = struct {
     /// Parameter locals the current variant's demand vector seeds as born
     /// unique; consumed by `uniqueArgsMask` through `isLocalUniqueHere`.
     unique_param_override: *OwnedSet = undefined,
+    /// Exact resource and liveness bit domain of the proc currently emitted.
+    /// It is built directly from that proc's explicit `frame_locals` span.
+    current_domain: ?*const ProcArcDomain = null,
     /// Ownership signature of the proc currently being rewritten.
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
     /// Per-proc cache for "which locals may be read before they are rebound
@@ -567,26 +711,6 @@ const Inserter = struct {
     reads_before_rebind_cache: *std.AutoHashMap(ReadBeforeRebindKey, std.bit_set.DynamicBitSetUnmanaged) = undefined,
     read_cache_arena: *std.heap.ArenaAllocator = undefined,
     read_cache_allocator: Allocator = undefined,
-    /// Raw liveness-bit index per local. Locals whose committed layout
-    /// contains refcounted data and their explicit solved ownership-unit /
-    /// borrow-group representatives receive bits; all others hold maxInt.
-    raw_liveness_bit_index: []const u32 = &.{},
-    raw_liveness_bit_count: usize = 0,
-    /// Group-bit index per local: leaders of multi-member borrow groups map
-    /// to a dense index (others hold maxInt). Group bits live after the raw
-    /// resource-local bits in the liveness table.
-    group_bit_index: []const u32 = &.{},
-    /// Leader local per dense group-bit index.
-    group_leaders: []const LIR.LocalId = &.{},
-    /// Value-use bit index per local: borrowed call-result locals map to a
-    /// dense index (others hold maxInt). Value-use bits live after the raw
-    /// resource-local and group bits in the liveness table.
-    value_use_bit_index: []const u32 = &.{},
-    /// Local per dense value-use bit index.
-    value_use_locals: []const LIR.LocalId = &.{},
-    /// Total liveness-table bit width: raw resource locals, then group bits,
-    /// then value-use bits.
-    liveness_bit_len: usize = 0,
     /// Live mapping from an OwnedSet address used as a loop keep-set to its
     /// explicit cache identity. IDs are never reused within one proc emission,
     /// and the map entry is removed before the keep-set storage is destroyed.
@@ -1969,7 +2093,7 @@ const Inserter = struct {
             while (summaries.next()) |summary_ptr| {
                 const summary = summary_ptr.*;
                 if (summary.body_reachable) continue;
-                var params_only = try OwnedSet.init(self.solve_allocator, self.store.localCount());
+                var params_only = try OwnedSet.init(self.solve_allocator, self.domain());
                 self.placeSolveJoinParamsInto(summary, &params_only);
                 if (params_only.eql(&summary.body_keep)) continue;
                 assignOwnedSet(&summary.body_keep, &params_only);
@@ -2113,7 +2237,7 @@ const Inserter = struct {
                             switch_summary.* = .{
                                 .start = segment.cursor,
                                 .continuation = continuation,
-                                .common = try OwnedSet.init(self.solve_allocator, self.store.localCount()),
+                                .common = try OwnedSet.init(self.solve_allocator, self.domain()),
                                 .resume_ctx = segment.ctx,
                             };
                             gop.value_ptr.* = switch_summary;
@@ -2297,9 +2421,7 @@ const Inserter = struct {
     /// the final keep, so the fixpoint descends monotonically.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
-        for (0..self.store.localCount()) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-            if (!self.localContainsRefcounted(local)) continue;
+        for (self.domain().refcounted_locals) |local| {
             if (self.groupUsedFromTable(reads, local)) summary.body_keep.set(local);
         }
         self.placeSolveJoinParamsInto(summary, &summary.body_keep);
@@ -2328,7 +2450,7 @@ const Inserter = struct {
     /// can only shrink.
     fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!BodyKeepUpdate {
         if (summary.jump_states.count() == 0) return .{ .changed = false, .purged = false };
-        var merged = try OwnedSet.init(self.solve_allocator, self.store.localCount());
+        var merged = try OwnedSet.init(self.solve_allocator, self.domain());
         var first = true;
         var sites = summary.jump_states.valueIterator();
         while (sites.next()) |state| {
@@ -2342,7 +2464,7 @@ const Inserter = struct {
         const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
         var owned_iter = merged.bits.iterator(.{});
         while (owned_iter.next()) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+            const local = merged.domain.resourceLocalAt(index);
             if (!self.groupUsedFromTable(reads, local)) merged.unset(local);
         }
         self.placeSolveJoinParamsInto(summary, &merged);
@@ -2355,11 +2477,11 @@ const Inserter = struct {
     /// Recomputes entry_keep = (entry_state filtered to units read from the
     /// remainder) | (body_keep & entry_state). Returns whether it changed.
     fn recomputeSolveEntryKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
-        var keep = try OwnedSet.init(self.solve_allocator, self.store.localCount());
+        var keep = try OwnedSet.init(self.solve_allocator, self.domain());
         const remainder_reads = try self.computeReadsBeforeRebind(summary.remainder, null, 0);
         var entry_iter = summary.entry_state.bits.iterator(.{});
         while (entry_iter.next()) |index| {
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
+            const local = summary.entry_state.domain.resourceLocalAt(index);
             if (self.groupUsedFromTable(remainder_reads, local) or summary.body_keep.contains(local)) {
                 keep.set(local);
             }
@@ -2450,7 +2572,6 @@ const Inserter = struct {
         join_stmt: anytype,
     ) ResourceError!void {
         const summaries = self.join_summaries orelse arcInvariant("ARC solver ran without a summary table");
-        const local_count = self.store.localCount();
         const gop = try summaries.getOrPut(join_stmt.id);
         if (!gop.found_existing) {
             errdefer _ = summaries.remove(join_stmt.id);
@@ -2463,8 +2584,8 @@ const Inserter = struct {
                 .remainder = join_stmt.remainder,
                 .body = join_stmt.body,
                 .entry_state = try cloneOwnedSetWith(self.solve_allocator, &segment.owned),
-                .entry_keep = try OwnedSet.init(self.solve_allocator, local_count),
-                .body_keep = try OwnedSet.init(self.solve_allocator, local_count),
+                .entry_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
+                .body_keep = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .loop_keep_id = self.next_loop_keep_id,
                 .origin_ctx = segment.ctx,
                 .jump_states = std.AutoHashMap(LIR.CFStmtId, OwnedSet).init(self.solve_allocator),
@@ -3414,7 +3535,7 @@ const Inserter = struct {
     ) ResourceError!CallArgOwnership {
         var result = CallArgOwnership{};
         errdefer result.deinit(self.store.allocator);
-        var transferred = try OwnedSet.init(self.store.allocator, owned.len());
+        var transferred = try OwnedSet.init(self.store.allocator, owned.domain);
         defer transferred.deinit();
 
         result.demanded = callee_sig;
@@ -3804,9 +3925,9 @@ const Inserter = struct {
     ) ResourceError!void {
         if (graph.indices.contains(stmt)) return;
 
-        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.liveness_bit_len);
+        var reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer reads.deinit(graph.allocator);
-        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.liveness_bit_len);
+        var exposed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph.allocator, self.domain().livenessBitLen());
         errdefer exposed.deinit(graph.allocator);
 
         const index = graph.nodes.items.len;
@@ -3843,9 +3964,7 @@ const Inserter = struct {
     /// Raw liveness-bit position for a refcounted resource local or one of
     /// its explicit solved ownership-unit / borrow-group representatives.
     fn rawLivenessBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
-        const index = self.raw_liveness_bit_index[@intFromEnum(local)];
-        if (index == std.math.maxInt(u32)) return null;
-        return index;
+        return self.domain().resourceBitOf(local);
     }
 
     fn noteReadBeforeRebindLocal(self: *const Inserter, reads: *std.bit_set.DynamicBitSetUnmanaged, local: LIR.LocalId) void {
@@ -3855,16 +3974,12 @@ const Inserter = struct {
     /// Group-bit position of a local's multi-member borrow group, if any.
     fn groupBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
         const leader = self.solution.leaderOf(local);
-        const index = self.group_bit_index[@intFromEnum(leader)];
-        if (index == std.math.maxInt(u32)) return null;
-        return self.raw_liveness_bit_count + index;
+        return self.domain().groupBitOf(leader);
     }
 
     /// Value-use bit position of a borrowed call-result local, if any.
     fn valueUseBitOf(self: *const Inserter, local: LIR.LocalId) ?usize {
-        const index = self.value_use_bit_index[@intFromEnum(local)];
-        if (index == std.math.maxInt(u32)) return null;
-        return self.raw_liveness_bit_count + self.group_leaders.len + index;
+        return self.domain().valueUseBitOf(local);
     }
 
     /// Records a value use: the raw read-before-rebind bit, the local's
@@ -3898,7 +4013,7 @@ const Inserter = struct {
         // any member is kept.
         var keep_iter = keep.bits.iterator(.{});
         while (keep_iter.next()) |kept| {
-            self.noteLivenessUseLocal(reads, @enumFromInt(@as(u32, @intCast(kept))));
+            self.noteLivenessUseLocal(reads, keep.domain.resourceLocalAt(kept));
         }
     }
 
@@ -4189,8 +4304,8 @@ const Inserter = struct {
             }
         }
 
-        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.liveness_bit_len);
-        var edge_scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.liveness_bit_len);
+        var scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.domain().livenessBitLen());
+        var edge_scratch = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, self.domain().livenessBitLen());
         var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, node_count);
         var node_work = std.ArrayList(usize).empty;
         try node_work.ensureTotalCapacity(graph_allocator, node_count);
@@ -4337,17 +4452,18 @@ const Inserter = struct {
     }
 
     fn releaseAll(self: *Inserter, owned: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
-        var keep = try OwnedSet.init(self.store.allocator, owned.len());
+        var keep = try OwnedSet.init(self.store.allocator, owned.domain);
         defer keep.deinit();
         return try self.releaseDifference(owned, &keep, next);
     }
 
     fn releaseDifference(self: *Inserter, owned: *const OwnedSet, keep: *const OwnedSet, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
+        owned.requireSameDomain(keep);
         var current = next;
         var iter = owned.bits.iterator(.{ .direction = .reverse });
         while (iter.next()) |i| {
             if (keep.bits.isSet(i)) continue;
-            const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(i)));
+            const local = owned.domain.resourceLocalAt(i);
             if (self.solution.maybeUninitializedCondition(local)) |condition| {
                 current = try self.releaseMaybeInitializedLocal(condition.local, condition.mask, local, current);
             } else {
@@ -4451,6 +4567,10 @@ const Inserter = struct {
         if (index >= self.local_contains_refcounted.len) arcInvariant("ARC local refcounted cache did not cover local");
         return self.local_contains_refcounted[index];
     }
+
+    fn domain(self: *const Inserter) *const ProcArcDomain {
+        return self.current_domain orelse arcInvariant("ARC operation ran without a proc-local domain");
+    }
 };
 
 const JoinBodyMap = std.AutoHashMap(LIR.JoinPointId, LIR.CFStmtId);
@@ -4477,11 +4597,12 @@ const RewrittenJoinMap = std.AutoHashMap(LIR.CFStmtId, RewrittenJoin);
 
 const OwnedSet = struct {
     allocator: std.mem.Allocator,
+    domain: *const ProcArcDomain,
     bits: std.bit_set.DynamicBitSetUnmanaged,
 
-    fn init(allocator: std.mem.Allocator, bit_len: usize) ResourceError!OwnedSet {
-        const bits = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, bit_len);
-        return .{ .allocator = allocator, .bits = bits };
+    fn init(allocator: std.mem.Allocator, domain: *const ProcArcDomain) ResourceError!OwnedSet {
+        const bits = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, domain.resource_locals.len);
+        return .{ .allocator = allocator, .domain = domain, .bits = bits };
     }
 
     fn deinit(self: *OwnedSet) void {
@@ -4491,33 +4612,36 @@ const OwnedSet = struct {
 
     fn clone(self: *const OwnedSet) ResourceError!OwnedSet {
         const bits = try self.bits.clone(self.allocator);
-        return .{ .allocator = self.allocator, .bits = bits };
-    }
-
-    fn len(self: *const OwnedSet) usize {
-        return self.bits.capacity();
+        return .{ .allocator = self.allocator, .domain = self.domain, .bits = bits };
     }
 
     fn set(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits.set(@intFromEnum(local));
+        self.bits.set(self.domain.requiredResourceBitOf(local));
     }
 
     fn unset(self: *OwnedSet, local: LIR.LocalId) void {
-        self.bits.unset(@intFromEnum(local));
+        // Scalars are outside the ownership lattice, so removing one is the
+        // same empty-set operation the former zeroed global bit performed.
+        if (self.domain.resourceBitOf(local)) |bit| self.bits.unset(bit);
     }
 
     fn contains(self: *const OwnedSet, local: LIR.LocalId) bool {
-        return self.bits.isSet(@intFromEnum(local));
+        const bit = self.domain.resourceBitOf(local) orelse return false;
+        return self.bits.isSet(bit);
     }
 
     fn eql(self: *const OwnedSet, other: *const OwnedSet) bool {
-        if (self.len() != other.len()) return false;
+        self.requireSameDomain(other);
         return self.bits.eql(other.bits);
     }
 
     fn intersect(self: *OwnedSet, other: *const OwnedSet) void {
-        if (self.len() != other.len()) arcInvariant("ARC owned-set intersection length mismatch");
+        self.requireSameDomain(other);
         self.bits.setIntersection(other.bits);
+    }
+
+    fn requireSameDomain(self: *const OwnedSet, other: *const OwnedSet) void {
+        if (self.domain != other.domain) arcInvariant("ARC combined ownership sets from different proc domains");
     }
 };
 
@@ -4756,10 +4880,17 @@ const ArcTest = struct {
     }
 
     fn addProc(self: *ArcTest, args: []const LIR.LocalId, body: LIR.CFStmtId, ret_layout: layout_mod.Idx) Allocator.Error!LIR.LirProcSpecId {
+        // Fixtures build the body before registering its proc. Supplying all
+        // locals allocated so far keeps the inventory explicitly complete;
+        // production lowering supplies the exact per-proc subset.
+        const frame_locals = try self.allocator.alloc(LIR.LocalId, self.store.localCount());
+        defer self.allocator.free(frame_locals);
+        for (frame_locals, 0..) |*frame_local, index| frame_local.* = @enumFromInt(@as(u32, @intCast(index)));
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
             .args = try self.span(args),
             .body = body,
+            .frame_locals = try self.span(frame_locals),
             .ret_layout = ret_layout,
         });
     }
@@ -5326,6 +5457,81 @@ fn setupMutation(reuse_after: bool) Allocator.Error!struct { fixture: ArcTest, o
     _ = try f.addProc(&.{}, body, if (reuse_after) f.list_str else .i64);
     try f.run();
     return .{ .fixture = f, .old_value = old_value, .new_value = new_value, .target = target };
+}
+
+test "ARC proc domain excludes scalar and other-proc locals" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const resource = try f.local(.str);
+    const scalar = try f.local(.i64);
+    const other_proc_resource = try f.local(.str);
+
+    const resource_ret = try f.ret(resource);
+    const resource_body = try f.assignStr(resource, "resource", resource_ret);
+    const resource_proc = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = resource_body,
+        .frame_locals = try f.span(&.{ resource, scalar }),
+        .ret_layout = .str,
+    });
+    const other_ret = try f.ret(other_proc_resource);
+    const other_body = try f.assignStr(other_proc_resource, "other", other_ret);
+    const other_proc = try f.store.addProcSpec(.{
+        .name = f.store.freshSyntheticSymbol(),
+        .args = LIR.LocalSpan.empty(),
+        .body = other_body,
+        .frame_locals = try f.span(&.{other_proc_resource}),
+        .ret_layout = .str,
+    });
+
+    const local_contains_refcounted = [_]bool{ true, false, true };
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &local_contains_refcounted, &.{});
+    defer solution.deinit();
+    const borrowed_call_result = [_]bool{ false, false, false };
+    var global_local_index = [_]u32{ no_proc_local_index, no_proc_local_index, no_proc_local_index };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    {
+        var domain = try ProcArcDomain.init(
+            arena.allocator(),
+            &f.store,
+            &solution,
+            &local_contains_refcounted,
+            &borrowed_call_result,
+            &global_local_index,
+            f.store.getProcSpec(resource_proc).frame_locals,
+        );
+        defer domain.clearGlobalIndices();
+        try testing.expectEqual(@as(usize, 2), domain.frame_locals.len);
+        try testing.expectEqual(@as(usize, 1), domain.resource_locals.len);
+        try testing.expectEqual(@as(usize, 1), domain.refcounted_locals.len);
+        try testing.expectEqual(@as(usize, 1), domain.livenessBitLen());
+        try testing.expectEqual(resource, domain.resourceLocalAt(0));
+
+        var owned = try OwnedSet.init(testing.allocator, &domain);
+        defer owned.deinit();
+        try testing.expect(!owned.contains(scalar));
+        owned.unset(scalar);
+        owned.set(resource);
+        try testing.expect(owned.contains(resource));
+    }
+
+    var other_domain = try ProcArcDomain.init(
+        arena.allocator(),
+        &f.store,
+        &solution,
+        &local_contains_refcounted,
+        &borrowed_call_result,
+        &global_local_index,
+        f.store.getProcSpec(other_proc).frame_locals,
+    );
+    defer other_domain.clearGlobalIndices();
+    try testing.expectEqual(@as(usize, 1), other_domain.frame_locals.len);
+    try testing.expectEqual(@as(usize, 1), other_domain.resource_locals.len);
+    try testing.expectEqual(other_proc_resource, other_domain.resourceLocalAt(0));
 }
 
 test "RC pass-through: non-refcounted i64 block unchanged" {
